@@ -1,0 +1,16 @@
+# OS and editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# PowerShell
+*.ps1~
+*.psm1~
+*.psd1~
+
+# Logs and outputs
+*.log
+*.tmp
+*.bak
+*.old
