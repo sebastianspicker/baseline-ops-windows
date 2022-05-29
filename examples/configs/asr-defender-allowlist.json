@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Example ASR and Defender allowlist configuration",
+  
+  "Defender": {
+    "ExclusionPaths": [
+      "C:\\Program Files\\MyTrustedApp"
+    ],
+    "ExclusionProcesses": [
+      "myapp.exe",
+      "trustedprocess.exe"
+    ],
+    "ExclusionExtensions": [
+      ".myext"
+    ]
+  },
+  
+  "ASR": {
+    "OnlyExclusions": [
+      "C:\\Program Files\\MyTrustedApp\\"
+    ]
+  },
+  
+  "CFA": {
+    "AllowedApplications": [
+      "C:\\Program Files\\MyApp\\app.exe"
+    ]
+  }
+}
