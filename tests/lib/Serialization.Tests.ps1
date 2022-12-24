@@ -1,0 +1,191 @@
+#requires -version 5.1
+
+BeforeAll {
+  Import-Module (Join-Path $PSScriptRoot '../../lib/Serialization.psm1') -Force
+}
+
+Describe 'New-V2ResultObject' {
+  It 'Creates required contract fields' {
+    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{ A = 1 } -Metadata @{}
+    $obj.SchemaVersion | Should -Be '2.0'
+    $obj.ScriptName | Should -Be 'x.ps1'
+    $obj.Mode | Should -Be 'Audit'
+    $obj.Result | Should -Be 'OK'
+  }
+
+  It 'Includes ComputerName and TimestampUtc' {
+    $obj = New-V2ResultObject -ScriptName 'y.ps1' -Mode 'Remediate' -Result 'WARN' -Findings @() -Summary @{} -Metadata @{}
+    $obj.PSObject.Properties.Name | Should -Contain 'ComputerName'
+    $obj.PSObject.Properties.Name | Should -Contain 'TimestampUtc'
+  }
+
+  It 'Stores Findings as array' {
+    $findings = @([pscustomobject]@{ Code = 'A'; Severity = 'High' })
+    $obj = New-V2ResultObject -ScriptName 'z.ps1' -Mode 'Audit' -Result 'FAIL' -Findings $findings -Summary @{} -Metadata @{}
+    @($obj.Findings).Count | Should -Be 1
+    $obj.Findings[0].Code | Should -Be 'A'
+  }
+
+  It 'Rejects invalid Mode via ValidateSet' {
+    { New-V2ResultObject -ScriptName 'z.ps1' -Mode 'Invalid' -Result 'OK' -Findings @() -Summary @{} -Metadata @{} } | Should -Throw
+  }
+
+  It 'Rejects invalid Result via ValidateSet' {
+    { New-V2ResultObject -ScriptName 'z.ps1' -Mode 'Audit' -Result 'INVALID' -Findings @() -Summary @{} -Metadata @{} } | Should -Throw
+  }
+}
+
+Describe 'Save-Json' {
+  It 'Writes JSON file' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    try {
+      Save-Json -InputObject @{ test = 1 } -Path $tmp -NoBom
+      Test-Path -LiteralPath $tmp | Should -Be $true
+      $raw = Get-Content -LiteralPath $tmp -Raw
+      $raw | Should -Match '"test"'
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  It 'Auto-creates parent directory' {
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-dir-{0}" -f [guid]::NewGuid().ToString('N'))
+    $tmp = Join-Path $tmpDir 'output.json'
+    try {
+      Save-Json -InputObject @{ auto = 'dir' } -Path $tmp -NoBom
+      Test-Path -LiteralPath $tmp | Should -Be $true
+    } finally {
+      if (Test-Path -LiteralPath $tmpDir) { Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  It 'Writes without BOM when NoBom switch is set' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-nobom-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    try {
+      Save-Json -InputObject @{ bom = 'test' } -Path $tmp -NoBom
+      $bytes = [System.IO.File]::ReadAllBytes($tmp)
+      # BOM for UTF-8 is 0xEF 0xBB 0xBF; verify it is NOT present
+      if ($bytes.Length -ge 3) {
+        ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -Be $false
+      }
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  It 'Throws for empty path' {
+    { Save-Json -InputObject @{ A = 1 } -Path '' } | Should -Throw '*Path*'
+  }
+
+  It 'Throws for path traversal attempt' {
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) 'ser-traversal-test'
+    { Save-Json -InputObject @{ A = 1 } -Path (Join-Path $tmpDir '../../escape.json') } | Should -Throw '*path traversal*'
+  }
+
+  It 'Roundtrip: write then read returns same data' {
+    Import-Module (Join-Path $PSScriptRoot '../../lib/JsonCatalog.psm1') -Force
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-rt-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    try {
+      $original = [pscustomobject]@{ Name = 'Roundtrip'; Items = @(1, 2, 3) }
+      Save-Json -InputObject $original -Path $tmp -NoBom
+      $loaded = Read-JsonFileSafe -Path $tmp
+      $loaded.Name | Should -Be 'Roundtrip'
+      $loaded.Items.Count | Should -Be 3
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+}
+
+Describe 'Save-Csv' {
+  It 'Writes CSV file with header row' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-csv-{0}.csv" -f [guid]::NewGuid().ToString('N'))
+    try {
+      $data = @(
+        [pscustomobject]@{ Name = 'Alice'; Score = 95 }
+        [pscustomobject]@{ Name = 'Bob'; Score = 87 }
+      )
+      Save-Csv -InputObject $data -Path $tmp
+      Test-Path -LiteralPath $tmp | Should -Be $true
+      $lines = Get-Content -LiteralPath $tmp
+      # First line should be header
+      $lines[0] | Should -Match 'Name'
+      $lines[0] | Should -Match 'Score'
+      # Should have header + 2 data rows
+      $lines.Count | Should -BeGreaterOrEqual 3
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  It 'Handles special characters in values' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-csv-special-{0}.csv" -f [guid]::NewGuid().ToString('N'))
+    try {
+      $data = @(
+        [pscustomobject]@{ Name = 'O''Brien'; Message = 'Hello, "World"' }
+      )
+      Save-Csv -InputObject $data -Path $tmp
+      Test-Path -LiteralPath $tmp | Should -Be $true
+      $content = Get-Content -LiteralPath $tmp -Raw
+      $content | Should -Match 'Brien'
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  It 'Auto-creates parent directory for CSV' {
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-csvdir-{0}" -f [guid]::NewGuid().ToString('N'))
+    $tmp = Join-Path $tmpDir 'output.csv'
+    try {
+      Save-Csv -InputObject @([pscustomobject]@{ A = 1 }) -Path $tmp
+      Test-Path -LiteralPath $tmp | Should -Be $true
+    } finally {
+      if (Test-Path -LiteralPath $tmpDir) { Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+  }
+}
+
+Describe 'Write-ResultObject' {
+  It 'Throws for Json without OutputPath' {
+    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+    { Write-ResultObject -ResultObject $obj -OutputFormat Json } | Should -Throw
+  }
+
+  It 'Throws for Csv without OutputPath' {
+    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+    { Write-ResultObject -ResultObject $obj -OutputFormat Csv } | Should -Throw
+  }
+
+  It 'Does not throw for None format' {
+    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+    { Write-ResultObject -ResultObject $obj -OutputFormat None } | Should -Not -Throw
+  }
+
+  It 'Does not throw for Console format' {
+    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+    { Write-ResultObject -ResultObject $obj -OutputFormat Console } | Should -Not -Throw
+  }
+
+  It 'Writes JSON file when OutputPath is provided' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("wr-json-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    try {
+      $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+      Write-ResultObject -ResultObject $obj -OutputFormat Json -OutputPath $tmp
+      Test-Path -LiteralPath $tmp | Should -Be $true
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  It 'Writes CSV file when OutputPath is provided' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("wr-csv-{0}.csv" -f [guid]::NewGuid().ToString('N'))
+    try {
+      $findings = @([pscustomobject]@{ Code = 'T1'; Severity = 'High'; Message = 'fail' })
+      $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'FAIL' -Findings $findings -Summary @{} -Metadata @{}
+      Write-ResultObject -ResultObject $obj -OutputFormat Csv -OutputPath $tmp
+      Test-Path -LiteralPath $tmp | Should -Be $true
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+}

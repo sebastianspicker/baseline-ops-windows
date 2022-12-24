@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Example local administrators allowlist configuration",
+  
+  "AllowList": [
+    {
+      "Name": "Administrator",
+      "Type": "Local",
+      "Reason": "Built-in administrator account"
+    },
+    {
+      "Name": "Domain Admins",
+      "Type": "DomainGroup",
+      "Reason": "Domain administrators group"
+    },
+    {
+      "Name": "CONTOSO\\IT-Admins",
+      "Type": "DomainGroup",
+      "Reason": "IT support team"
+    },
+    {
+      "Name": "CONTOSO\\Helpdesk",
+      "Type": "DomainGroup",
+      "Reason": "Helpdesk team with local admin rights"
+    }
+  ],
+  
+  "Settings": {
+    "AllowDomainAccounts": true,
+    "AllowDomainGroups": true,
+    "AllowLocalAccounts": true,
+    "FailSafeNoRemove": true,
+    "LogAllChanges": true
+  }
+}
