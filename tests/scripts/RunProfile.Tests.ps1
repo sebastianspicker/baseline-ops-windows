@@ -1,0 +1,82 @@
+#requires -version 5.1
+
+Describe '00-Run-Profile dependency and failure flow' {
+  It 'Marks dependent step as skipped when dependency fails' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runprofile-root-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $profilePath = Join-Path $tempRoot 'profile.json'
+
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+
+      Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value 'exit 0' -Encoding UTF8
+      Set-Content -LiteralPath (Join-Path $scriptsDir '02-Fail.ps1') -Value 'exit 1' -Encoding UTF8
+      Set-Content -LiteralPath (Join-Path $scriptsDir '03-Dependent.ps1') -Value 'exit 0' -Encoding UTF8
+
+      $profile = @{
+        ProfileName = 'test-profile'
+        Version = '2.0'
+        Defaults = @{ Mode = 'Audit'; Strict = $false; OutputFormat = 'Console'; OutputPath = $null }
+        Steps = @(
+          @{ Script = '01-Ok.ps1'; Args = @(); ContinueOnError = $true; DependsOn = @() },
+          @{ Script = '02-Fail.ps1'; Args = @(); ContinueOnError = $true; DependsOn = @() },
+          @{ Script = '03-Dependent.ps1'; Args = @(); ContinueOnError = $true; DependsOn = @('02-Fail.ps1') }
+        )
+        Integrity = @{ RequireSigned = $false; ExpectedHashes = @{} }
+      }
+      $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1'
+      $result = & $runner -ProfilePath $profilePath -RootPath $tempRoot -OutputFormat None -PassThru -Confirm:$false
+
+      $LASTEXITCODE | Should -Be 1
+      $steps = @($result.Metadata.Steps)
+      (@($steps | Where-Object { $_.Status -eq 'Failed' }).Count) | Should -Be 1
+      (@($steps | Where-Object { $_.Status -eq 'Skipped' }).Count) | Should -Be 1
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  It 'Passes -Mode Remediate to v2 step scripts when profile run mode is Remediate' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runprofile-mode-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $profilePath = Join-Path $tempRoot 'profile.json'
+
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+
+      $modeScript = @'
+param(
+  [ValidateSet('Audit','Remediate')]
+  [string]$Mode = 'Audit'
+)
+if ($Mode -eq 'Remediate') { exit 0 }
+exit 1
+'@
+      Set-Content -LiteralPath (Join-Path $scriptsDir '01-Needs-Mode.ps1') -Value $modeScript -Encoding UTF8
+
+      $profile = @{
+        ProfileName = 'test-profile-mode'
+        Version = '2.0'
+        Defaults = @{ Mode = 'Audit'; Strict = $false; OutputFormat = 'Console'; OutputPath = $null }
+        Steps = @(
+          @{ Script = '01-Needs-Mode.ps1'; Args = @(); ContinueOnError = $false; DependsOn = @() }
+        )
+        Integrity = @{ RequireSigned = $false; ExpectedHashes = @{} }
+      }
+      $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1'
+      & $runner -ProfilePath $profilePath -RootPath $tempRoot -Mode Remediate -OutputFormat None -Confirm:$false
+
+      $LASTEXITCODE | Should -Be 0
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+}

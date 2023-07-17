@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Example firewall baseline configuration",
+  
+  "Rules": [
+    {
+      "Name": "Allow-RDP-Admin",
+      "DisplayName": "Allow RDP for Admin Subnet",
+      "Group": "Security Hardening",
+      "Direction": "Inbound",
+      "Action": "Allow",
+      "Enabled": true,
+      "Protocol": "TCP",
+      "LocalPort": "3389",
+      "RemoteAddress": [
+        "10.0.0.0/8",
+        "192.168.0.0/16"
+      ],
+      "Description": "RDP access restricted to internal networks"
+    },
+    {
+      "Name": "Block-Telnet",
+      "DisplayName": "Block Telnet Inbound",
+      "Group": "Security Hardening",
+      "Direction": "Inbound",
+      "Action": "Block",
+      "Enabled": true,
+      "Protocol": "TCP",
+      "LocalPort": "23",
+      "Description": "Block insecure telnet protocol"
+    },
+    {
+      "Name": "Block-SMB-Internet",
+      "DisplayName": "Block SMB from Internet",
+      "Group": "Security Hardening",
+      "Direction": "Inbound",
+      "Action": "Block",
+      "Enabled": true,
+      "Protocol": "TCP",
+      "LocalPort": "445",
+      "RemoteAddress": [
+        "Internet"
+      ],
+      "Description": "Block SMB access from internet"
+    }
+  ],
+  
+  "Settings": {
+    "RemoveOrphans": true,
+    "UpdateExisting": true,
+    "CreateIfMissing": true
+  }
+}
