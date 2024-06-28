@@ -1,11 +1,153 @@
-name: verify
+name: ci
+
 on:
   push:
-    branches: [dev]
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    name: Static checks
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      PSSCRIPTANALYZER_VERSION: '1.24.0'
     steps:
-      - uses: actions/checkout@v4
-      - run: git status --short
-add-verification-guidanc: bootstrap
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache PowerShell modules
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~\Documents\WindowsPowerShell\Modules
+            ~\Documents\PowerShell\Modules
+          key: psmodules-${{ runner.os }}-psscriptanalyzer-${{ env.PSSCRIPTANALYZER_VERSION }}
+
+      - name: Ensure PSScriptAnalyzer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = "${env:PSSCRIPTANALYZER_VERSION}"
+          $installed = Get-Module -ListAvailable -Name PSScriptAnalyzer | Where-Object { $_.Version -eq $version }
+          if (-not $installed) {
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
+            Install-Module -Name PSScriptAnalyzer -RequiredVersion $version -Scope CurrentUser -Force
+          }
+
+      - name: Secret scan (basic)
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\secret-scan.ps1 -RootPath $env:GITHUB_WORKSPACE
+
+      - name: Static checks
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1 -RootPath $env:GITHUB_WORKSPACE
+
+  test-windows:
+    name: Pester (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    needs: verify
+    timeout-minutes: 20
+    env:
+      PESTER_VERSION: '5.7.1'
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache PowerShell modules
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~\Documents\WindowsPowerShell\Modules
+            ~\Documents\PowerShell\Modules
+          key: psmodules-${{ runner.os }}-pester-${{ env.PESTER_VERSION }}
+
+      - name: Ensure Pester
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:PESTER_VERSION
+          $installed = Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -eq $version }
+          if (-not $installed) {
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
+            Install-Module -Name Pester -RequiredVersion $version -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+
+      - name: Run Pester
+        shell: pwsh
+        run: |
+          Invoke-Pester -Path .\tests -Output Detailed -CI
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results
+          path: testResults.xml
+          if-no-files-found: warn
+
+      - name: Test summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path testResults.xml) {
+            $xml = [xml](Get-Content testResults.xml)
+            $total = $xml.'test-results'.total
+            $passed = $xml.'test-results'.passed
+            $failed = $xml.'test-results'.failures
+            "## Test Results`n| Metric | Count |`n|--------|-------|`n| Passed | $passed |`n| Failed | $failed |`n| Total | $total |" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+  test-smoke-linux:
+    # Smoke test on Linux: runs parse-only checks (no PSScriptAnalyzer) to
+    # verify scripts are syntactically valid cross-platform.
+    name: Smoke (Linux)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: verify
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Parse checks
+        shell: pwsh
+        run: |
+          ./tools/verify.ps1 -RootPath $PWD -SkipAnalyzer

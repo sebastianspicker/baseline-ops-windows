@@ -1,0 +1,4 @@
+# Require review for CI/CD and security-sensitive paths
+.github/                @sebastianspicker
+SECURITY.md             @sebastianspicker
+tools/secret-scan.ps1   @sebastianspicker
