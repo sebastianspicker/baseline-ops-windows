@@ -1,0 +1,66 @@
+{
+  "_NOTE": "PRODUCTION: Set Integrity.RequireSigned to true and populate Integrity.ExpectedHashes with per-script SHA256 hashes before deploying to production environments.",
+  "ProfileName": "incident-response",
+  "Version": "2.0",
+  "Defaults": {
+    "Mode": "Audit",
+    "Strict": false,
+    "OutputFormat": "Console",
+    "OutputPath": null
+  },
+  "Steps": [
+    {
+      "Script": "26-Get-WinEvent-FastTriage.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "11-IOC-Sweep-Defender.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "12-Suspicious-Artifact-Grabber.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "30-Service-Process-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "07-ScheduledTasks-Hygiene.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "37-Remote-Surface-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "09-SupportBundle.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": [
+        "26-Get-WinEvent-FastTriage.ps1",
+        "11-IOC-Sweep-Defender.ps1",
+        "12-Suspicious-Artifact-Grabber.ps1",
+        "30-Service-Process-Audit.ps1",
+        "07-ScheduledTasks-Hygiene.ps1",
+        "37-Remote-Surface-Audit.ps1"
+      ]
+    }
+  ],
+  "Integrity": {
+    "RequireSigned": false,
+    "ExpectedHashes": {}
+  }
+}

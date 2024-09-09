@@ -1,0 +1,251 @@
+{
+  "_NOTE": "PRODUCTION: Set Integrity.RequireSigned to true and populate Integrity.ExpectedHashes with per-script SHA256 hashes before deploying to production environments.",
+  "ProfileName": "full-audit",
+  "Version": "2.0",
+  "Defaults": {
+    "Mode": "Audit",
+    "Strict": false,
+    "OutputFormat": "Console",
+    "OutputPath": null
+  },
+  "Steps": [
+    {
+      "Script": "02-LAPS-Hygiene.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "03-LocalAdmins-Guardrail.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "28-Join-Identity-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "41-NTLM-Audit-Client.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "04-OfficeBrowser-Hardening-Proof.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "05-WUFB-Proofing.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "06-UpdateHealth-SSU-Proof.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "13-LSASS-CG-HVCI-VBS.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "33-AdvancedAuditPolicy-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "38-SecurityOptions-Drift.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "39-CredentialGuard-VBS-AuditRemediate.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "14-SecureRemoteAccessGuardrails.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "18-Firewall-Baseline.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "22-SMB-Encryption-Enforcer.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "29-Network-Config-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "32-Firewall-Logging-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "37-Remote-Surface-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "01-ASR-Defender-Allowlist.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "11-IOC-Sweep-Defender.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "15-HardwareTPM-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "16-Sysmon-Config-Updater.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "17-Sysmon-Rule-Drift-Sensor.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "27-Defender-Health-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "43-AppControlForBusiness-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "07-ScheduledTasks-Hygiene.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "26-Get-WinEvent-FastTriage.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "31-PowerShell-Logging-Baseline.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "34-TimeSync-Health.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "45-WEF-Client-Forwarding-Readiness-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "23-BitLocker-Operations-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "24-Cert-AutoEnrollment-Health.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "35-Storage-Reliability-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "36-Backup-Readiness-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "08-WinGet-SelfHeal.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "19-Software-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "25-WinGet-Config-Baseline-Runner.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "09-SupportBundle.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    }
+  ],
+  "Integrity": {
+    "RequireSigned": false,
+    "ExpectedHashes": {}
+  }
+}

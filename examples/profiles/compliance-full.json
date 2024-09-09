@@ -1,0 +1,89 @@
+{
+  "_NOTE": "PRODUCTION: Set Integrity.RequireSigned to true and populate Integrity.ExpectedHashes with per-script SHA256 hashes before deploying to production environments.",
+  "ProfileName": "compliance-full",
+  "Version": "2.0",
+  "Defaults": {
+    "Mode": "Audit",
+    "Strict": false,
+    "OutputFormat": "Console",
+    "OutputPath": null
+  },
+  "Steps": [
+    {
+      "Script": "42-Client-SecurityBaseline-Report-IntuneRef.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "33-AdvancedAuditPolicy-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "43-AppControlForBusiness-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "39-CredentialGuard-VBS-AuditRemediate.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "13-LSASS-CG-HVCI-VBS.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "31-PowerShell-Logging-Baseline.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "22-SMB-Encryption-Enforcer.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "01-ASR-Defender-Allowlist.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "23-BitLocker-Operations-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "41-NTLM-Audit-Client.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    }
+  ],
+  "Integrity": {
+    "RequireSigned": false,
+    "ExpectedHashes": {}
+  }
+}

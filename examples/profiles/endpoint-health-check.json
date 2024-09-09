@@ -1,0 +1,77 @@
+{
+  "_NOTE": "PRODUCTION: Set Integrity.RequireSigned to true and populate Integrity.ExpectedHashes with per-script SHA256 hashes before deploying to production environments.",
+  "ProfileName": "endpoint-health-check",
+  "Version": "2.0",
+  "Defaults": {
+    "Mode": "Audit",
+    "Strict": false,
+    "OutputFormat": "Console",
+    "OutputPath": null
+  },
+  "Steps": [
+    {
+      "Script": "27-Defender-Health-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "15-HardwareTPM-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "23-BitLocker-Operations-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "05-WUFB-Proofing.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "06-UpdateHealth-SSU-Proof.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "34-TimeSync-Health.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "35-Storage-Reliability-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "29-Network-Config-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "28-Join-Identity-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "42-Client-SecurityBaseline-Report-IntuneRef.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    }
+  ],
+  "Integrity": {
+    "RequireSigned": false,
+    "ExpectedHashes": {}
+  }
+}

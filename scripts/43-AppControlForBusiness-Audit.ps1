@@ -1,0 +1,492 @@
+#requires -version 5.1
+<#
+.SYNOPSIS
+Audit WDAC / App Control for Business indicators (best-effort).
+
+.DESCRIPTION
+- Reads Code Integrity Operational events (recent).
+- Scans for deployed policy files in common OS and EFI locations (EFI best-effort).
+- Supports optional JSON config overrides (safe defaults if missing/invalid).
+- Optional CSV export.
+- Prints a console summary at the end.
+
+Pipeline output: structured objects only.
+Console output: Write-Host (and optional Write-Information) only.
+
+PowerShell: Windows PowerShell 5.1 compatible.
+
+.PARAMETER HoursBack
+How far back to query Code Integrity events.
+
+.PARAMETER ExportPath
+Optional CSV export path.
+
+.PARAMETER ConfigJsonPath
+Optional JSON config path for overrides.
+
+.PARAMETER MaxEvents
+Maximum number of CI events to read.
+
+.PARAMETER RecurseMaxDepth
+Maximum recursion depth when scanning policy locations.
+
+.PARAMETER MaxPolicyFiles
+Maximum policy files to enumerate.
+
+.PARAMETER ExportEventsTop
+Max number of events to include in export.
+
+.EXAMPLE
+  .\43-AppControlForBusiness-Audit.ps1
+
+#>
+
+
+[CmdletBinding()]
+param(
+  [ValidateRange(1, 720)]
+  [int]$HoursBack = 24,
+
+  [string]$ExportPath,
+
+  [string]$ConfigJsonPath = $null,
+
+  [ValidateRange(1, 50000)]
+  [int]$MaxEvents = 5000,
+
+  [ValidateRange(0, 10)]
+  [int]$RecurseMaxDepth = 4,
+
+  [ValidateRange(1, 20000)]
+  [int]$MaxPolicyFiles = 5000,
+
+  [ValidateRange(1, 2000)]
+  [int]$ExportEventsTop = 200
+)
+
+$script:LibPath = Join-Path $PSScriptRoot 'lib'
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+# --------------------------
+# Findings
+# --------------------------
+$script:Findings = New-FindingsList
+
+# --------------------------
+# Helpers
+# --------------------------
+
+function ConvertTo-BooleanOrNull {
+  [CmdletBinding()]
+  param([object]$Value)
+
+  if ($null -eq $Value) { return $null }
+
+  if ($Value -is [bool]) { return [bool]$Value }
+
+  $s = [string]$Value
+  if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+
+  switch -Regex ($s.Trim()) {
+    '^(true|1|yes|y)$'  { return $true }
+    '^(false|0|no|n)$'  { return $false }
+    default            { return $null }
+  }
+}
+
+function Get-EfiBootPaths {
+  [CmdletBinding()]
+  param()
+
+  $paths = New-Object 'System.Collections.Generic.List[string]'
+
+  try {
+    # Best-effort: EFI is often not mounted; we only see mounted FAT32 volumes with drive letters.
+    $vols = Get-Volume -ErrorAction Stop
+    foreach ($v in $vols) {
+      if ($null -ne $v.DriveLetter -and $v.FileSystemType -eq 'FAT32') {
+        $paths.Add(("{0}:\Microsoft\Boot" -f $v.DriveLetter)) | Out-Null
+      }
+    }
+  } catch {
+    Add-Finding -Code 'AC-EFIVolumeEnumFailed' -Severity 'Info' -Message ("EFI volumes could not be enumerated (best-effort): {0}" -f $_.Exception.Message)
+  }
+
+  return @($paths.ToArray())
+}
+
+function Get-ChildItemDepthLimited {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [ValidateRange(0, 10)][int]$MaxDepth = 4
+  )
+
+  $results = New-Object 'System.Collections.Generic.List[object]'
+
+  if ($MaxDepth -le 0) {
+    try {
+      foreach ($f in @(Get-ChildItem -LiteralPath $Path -File -ErrorAction SilentlyContinue)) {
+        $results.Add($f) | Out-Null
+      }
+    } catch {}
+    return @($results.ToArray())
+  }
+
+  # BFS to implement depth limit (PS 5.1 has no -Depth on Get-ChildItem)
+  $q = New-Object 'System.Collections.Generic.Queue[object]'
+  $q.Enqueue([pscustomobject]@{ Dir = $Path; Depth = 0 })
+
+  while ($q.Count -gt 0) {
+    $node = $q.Dequeue()
+
+    $files = @()
+    try { $files = @(Get-ChildItem -LiteralPath $node.Dir -File -ErrorAction SilentlyContinue) } catch { $files = @() }
+    foreach ($f in $files) { $results.Add($f) | Out-Null }
+
+    if ($node.Depth -ge $MaxDepth) { continue }
+
+    $dirs = @()
+    try { $dirs = @(Get-ChildItem -LiteralPath $node.Dir -Directory -ErrorAction SilentlyContinue) } catch { $dirs = @() }
+    foreach ($d in $dirs) {
+      $q.Enqueue([pscustomobject]@{ Dir = $d.FullName; Depth = ($node.Depth + 1) })
+    }
+  }
+
+  return @($results.ToArray())
+}
+
+function Get-PolicyFilesFromRoots {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string[]]$Roots,
+    [ValidateRange(0, 10)][int]$MaxDepth = 4,
+    [bool]$IncludeCip = $true,
+    [bool]$IncludeP7b = $true,
+    [bool]$IncludeXml = $true,
+    [ValidateRange(1, 20000)][int]$MaxFiles = 5000
+  )
+
+  $allowedExt = @()
+  if ($IncludeCip) { $allowedExt += '.cip' }
+  if ($IncludeP7b) { $allowedExt += '.p7b' }
+  if ($IncludeXml) { $allowedExt += '.xml' }
+
+  $out = New-Object 'System.Collections.Generic.List[object]'
+
+  foreach ($root in ($Roots | Where-Object { $_ } | Sort-Object -Unique)) {
+    if (-not (Test-Path -LiteralPath $root)) { continue }
+
+    $items = Get-ChildItemDepthLimited -Path $root -MaxDepth $MaxDepth
+
+    foreach ($i in $items) {
+      if ($out.Count -ge $MaxFiles) {
+        Add-Finding -Code 'AC-PolicyScanTruncated' -Severity 'Warning' -Message ("Policy scan truncated at MaxPolicyFiles={0}." -f $MaxFiles)
+        return @($out.ToArray())
+      }
+
+      if (($allowedExt.Count -gt 0 -and $i.Extension -in $allowedExt) -or $i.Name -ieq 'SiPolicy.p7b') {
+
+        $policyId = $null
+        if ($i.Name -match '^\{[0-9A-Fa-f-]{36}\}\.cip$') { $policyId = ($i.Name -replace '\.cip$','') }
+        elseif ($i.BaseName -match '^\{[0-9A-Fa-f-]{36}\}$') { $policyId = $i.BaseName }
+
+        $kind = 'Unknown'
+        if ($i.Name -ieq 'SiPolicy.p7b') { $kind = 'SinglePolicyFormat' }
+        elseif ($i.Extension -ieq '.cip' -and $policyId) { $kind = 'MultiplePolicyFormat' }
+
+        # Output only lightweight records
+        $out.Add([pscustomobject]@{
+          Path          = $i.FullName
+          Name          = $i.Name
+          Extension     = $i.Extension
+          Length        = [int64]$i.Length
+          LastWriteTime = $i.LastWriteTime
+          PolicyIdHint  = $policyId
+          KindHint      = $kind
+          Root          = $root
+        }) | Out-Null
+      }
+    }
+  }
+
+  return @($out.ToArray())
+}
+
+function Write-ConsoleSummary {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]$Summary,
+    [Parameter(Mandatory)]$Indicators,
+    [Parameter(Mandatory)][object[]]$PolicyFiles,
+    [Parameter(Mandatory)][object[]]$Events,
+    [Parameter(Mandatory)][object[]]$Findings,
+    [bool]$AlsoWriteInformation = $false
+  )
+
+  $policyByKind = @($PolicyFiles | Group-Object KindHint | Sort-Object Name)
+  $sevCounts    = @($Findings   | Group-Object Severity | Sort-Object Name)
+
+  $lines = New-Object 'System.Collections.Generic.List[string]'
+  $lines.Add("====== App Control for Business (WDAC) Audit Summary ======") | Out-Null
+  $lines.Add(("ComputerName      : {0}" -f $Summary.ComputerName)) | Out-Null
+  $lines.Add(("Timestamp         : {0}" -f $Summary.Timestamp)) | Out-Null
+  $lines.Add(("RunningAsAdmin    : {0}" -f $Indicators.RunningAsAdmin)) | Out-Null
+  $lines.Add(("CI Log Enabled    : {0}" -f $Indicators.CILogEnabled)) | Out-Null
+  $lines.Add(("Lookback (Hours)  : {0}" -f $Indicators.LookbackHours)) | Out-Null
+  $lines.Add(("CI Events (Found) : {0}" -f $Indicators.RecentCIEventsCount)) | Out-Null
+  $lines.Add(("Policies (Found)  : {0}" -f $Indicators.PolicyFilesCount)) | Out-Null
+  $lines.Add(("LikelyActive      : {0}" -f $Summary.LikelyActive)) | Out-Null
+
+  if ($policyByKind.Count -gt 0) {
+    $lines.Add("") | Out-Null
+    $lines.Add("Policy files by kind:") | Out-Null
+    foreach ($g in $policyByKind) {
+      $lines.Add(("- {0}: {1}" -f $g.Name, $g.Count)) | Out-Null
+    }
+  }
+
+  if ($sevCounts.Count -gt 0) {
+    $lines.Add("") | Out-Null
+    $lines.Add("Findings by severity:") | Out-Null
+    foreach ($g in $sevCounts) {
+      $lines.Add(("- {0}: {1}" -f $g.Name, $g.Count)) | Out-Null
+    }
+  }
+
+  if ($Events.Count -gt 0) {
+    $latest = $Events | Select-Object -First 1
+    $lines.Add("") | Out-Null
+    $lines.Add(("Latest CI event    : {0} (Id {1}, {2})" -f $latest.TimeCreated, $latest.Id, $latest.LevelDisplayName)) | Out-Null
+  }
+
+  $lines.Add("==========================================================") | Out-Null
+
+  Write-Host ""
+  foreach ($l in $lines) {
+    if ($l -like "======*") { Write-Host $l -ForegroundColor Cyan }
+    elseif ($l -like "==========================================================") { Write-Host $l -ForegroundColor Cyan }
+    else { Write-Host $l }
+  }
+  Write-Host ""
+
+  # Write-Information is controlled by $InformationPreference (default is SilentlyContinue). [web:90][web:74]
+  if ($AlsoWriteInformation) {
+    foreach ($l in $lines) {
+      Write-Information $l -InformationAction Continue
+    }
+  }
+}
+
+# --------------------------
+# Main
+# --------------------------
+$configDefaults = @{
+  Enabled               = $true
+  AdditionalPolicyRoots = @()     # e.g. ["PATH/TO/CUSTOM/POLICYROOT"]
+  IncludeEfiScan        = $true
+  IncludeXmlFiles       = $true
+  IncludeP7bFiles       = $true
+  IncludeCipFiles       = $true
+  ExportDelimiter       = ','
+  PreferWriteInformation= $false  # if true: summary uses Write-Information additionally
+}
+
+$cfgResult = Read-ConfigWithDefaults -Path $ConfigJsonPath -Defaults $configDefaults
+$config = $cfgResult.Config
+
+if (-not $cfgResult.Meta.Provided) {
+  Add-Finding -Code 'AC-ConfigMissing' -Severity 'Info' -Message 'No config JSON provided; using defaults.'
+} elseif (-not $cfgResult.Meta.Loaded) {
+  if ($cfgResult.Meta.Error -eq 'ConfigPath not found.') {
+    Add-Finding -Code 'AC-ConfigNotFound' -Severity 'Warning' -Message 'Config JSON not found at PATH/TO/JSON; using defaults.'
+  } elseif ($cfgResult.Meta.Error -eq 'Config file is empty.') {
+    Add-Finding -Code 'AC-ConfigEmpty' -Severity 'Warning' -Message 'Config JSON is empty; using defaults.'
+  } else {
+    Add-Finding -Code 'AC-ConfigInvalidJson' -Severity 'Warning' -Message ("Config JSON could not be parsed; using defaults. Error: {0}" -f $cfgResult.Meta.Error)
+  }
+}
+
+$b = ConvertTo-BooleanOrNull $config.Enabled
+if ($null -ne $b) { $config.Enabled = $b } else { $config.Enabled = $configDefaults.Enabled }
+
+$b = ConvertTo-BooleanOrNull $config.IncludeEfiScan
+if ($null -ne $b) { $config.IncludeEfiScan = $b } else { $config.IncludeEfiScan = $configDefaults.IncludeEfiScan }
+
+$b = ConvertTo-BooleanOrNull $config.IncludeXmlFiles
+if ($null -ne $b) { $config.IncludeXmlFiles = $b } else { $config.IncludeXmlFiles = $configDefaults.IncludeXmlFiles }
+
+$b = ConvertTo-BooleanOrNull $config.IncludeP7bFiles
+if ($null -ne $b) { $config.IncludeP7bFiles = $b } else { $config.IncludeP7bFiles = $configDefaults.IncludeP7bFiles }
+
+$b = ConvertTo-BooleanOrNull $config.IncludeCipFiles
+if ($null -ne $b) { $config.IncludeCipFiles = $b } else { $config.IncludeCipFiles = $configDefaults.IncludeCipFiles }
+
+$b = ConvertTo-BooleanOrNull $config.PreferWriteInformation
+if ($null -ne $b) { $config.PreferWriteInformation = $b } else { $config.PreferWriteInformation = $configDefaults.PreferWriteInformation }
+
+if ($null -ne $config.ExportDelimiter -and [string]$config.ExportDelimiter) {
+  $d = [string]$config.ExportDelimiter
+  if ($d.Length -eq 1) { $config.ExportDelimiter = $d }
+  else {
+    Add-Finding -Code 'AC-ConfigBadDelimiter' -Severity 'Warning' -Message 'ExportDelimiter must be a single character; using default.'
+    $config.ExportDelimiter = $configDefaults.ExportDelimiter
+  }
+}
+
+if ($null -ne $config.AdditionalPolicyRoots) {
+  $roots = @()
+  foreach ($r in @($config.AdditionalPolicyRoots)) {
+    $s = [string]$r
+    if (-not [string]::IsNullOrWhiteSpace($s)) { $roots += $s }
+  }
+  $config.AdditionalPolicyRoots = $roots
+} else {
+  $config.AdditionalPolicyRoots = @()
+}
+
+if (-not $config.Enabled) {
+  Add-Finding -Code 'AC-DisabledByConfig' -Severity 'Info' -Message 'Audit disabled by config; exiting.'
+
+  $summary = [pscustomobject]@{
+    ComputerName  = $env:COMPUTERNAME
+    LikelyActive  = $null
+    FindingsCount = $script:Findings.Count
+    Timestamp     = Get-Date
+  }
+
+  $emptyIndicators = [pscustomobject]@{
+    CodeIntegrityLogName = 'Microsoft-Windows-CodeIntegrity/Operational'
+    LookbackHours        = $HoursBack
+    RunningAsAdmin       = Test-IsAdministrator
+    CILogEnabled         = $null
+    RecentCIEventsCount  = 0
+    PolicyFilesCount     = 0
+    LikelyActive         = $null
+    ScannedRootsCount    = 0
+  }
+
+  $findingsArr = @($script:Findings.ToArray())
+
+  Write-ConsoleSummary -Summary $summary -Indicators $emptyIndicators -PolicyFiles @() -Events @() -Findings $findingsArr -AlsoWriteInformation:$config.PreferWriteInformation
+
+  Write-Output ([pscustomobject]@{
+    Summary      = $summary
+    Findings     = $findingsArr
+    Indicators   = $emptyIndicators
+    PolicyFiles  = @()
+    RecentEvents = @()
+  })
+  return
+}
+
+$runningAsAdmin = Test-IsAdministrator
+if (-not $runningAsAdmin) {
+  Add-Finding -Code 'AC-NotElevated' -Severity 'Info' -Message 'Not running elevated; log/file access may be incomplete.'
+}
+
+# 1) Code Integrity events
+$ciLog = 'Microsoft-Windows-CodeIntegrity/Operational'
+$ciLogInfo = $null
+try {
+  $ciLogInfo = Get-WinEvent -ListLog $ciLog -ErrorAction Stop
+} catch {
+  Add-Finding -Code 'AC-CILogNotFoundOrNoAccess' -Severity 'Warning' -Message ("CI Operational log not available or no access: {0}" -f $_.Exception.Message)
+}
+
+$events = @()
+if ($ciLogInfo -and $ciLogInfo.IsEnabled) {
+  try {
+    $startTime = (Get-Date).AddHours(-1 * $HoursBack)
+    $events = Get-WinEvent -FilterHashtable @{ LogName = $ciLog; StartTime = $startTime } -MaxEvents $MaxEvents -ErrorAction Stop |
+      Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message |
+      Sort-Object TimeCreated -Descending
+  } catch {
+    Add-Finding -Code 'AC-CILogReadFailed' -Severity 'Warning' -Message ("CI events could not be read: {0}" -f $_.Exception.Message)
+  }
+} elseif ($ciLogInfo -and -not $ciLogInfo.IsEnabled) {
+  Add-Finding -Code 'AC-CILogDisabled' -Severity 'Info' -Message 'CI Operational log is disabled.'
+}
+
+# 2) Policy files
+$osRoots = @(
+  "$env:windir\System32\CodeIntegrity\CiPolicies\Active",
+  "$env:windir\System32\CodeIntegrity",
+  "$env:windir\System32\CodeIntegrity\CiPolicies"
+)
+
+$efiRoots = @()
+if ($config.IncludeEfiScan) {
+  $efiRoots = Get-EfiBootPaths
+}
+
+$roots = @($osRoots + $efiRoots + @($config.AdditionalPolicyRoots)) | Where-Object { $_ }
+
+$policyFiles = Get-PolicyFilesFromRoots -Roots $roots -MaxDepth $RecurseMaxDepth `
+  -IncludeCip $config.IncludeCipFiles -IncludeP7b $config.IncludeP7bFiles -IncludeXml $config.IncludeXmlFiles `
+  -MaxFiles $MaxPolicyFiles
+
+$policyFiles = @($policyFiles)
+
+if ($policyFiles.Count -eq 0) {
+  Add-Finding -Code 'AC-NoPolicyFilesFound' -Severity 'Info' -Message 'No policy files found in scanned roots (deployment can still exist via other mechanisms).'
+}
+
+# 3) Indicators + Summary
+$eventsCount  = ($events | Measure-Object).Count
+$likelyActive = ($policyFiles.Count -gt 0) -or ($eventsCount -gt 0)
+
+$indicators = [pscustomobject]@{
+  CodeIntegrityLogName = $ciLog
+  LookbackHours        = $HoursBack
+  RunningAsAdmin       = $runningAsAdmin
+  CILogEnabled         = if ($ciLogInfo) { [bool]$ciLogInfo.IsEnabled } else { $null }
+  RecentCIEventsCount  = $eventsCount
+  PolicyFilesCount     = $policyFiles.Count
+  LikelyActive         = $likelyActive
+  ScannedRootsCount    = ($roots | Sort-Object -Unique | Measure-Object).Count
+}
+
+$summary = [pscustomobject]@{
+  ComputerName  = $env:COMPUTERNAME
+  LikelyActive  = $likelyActive
+  FindingsCount = $script:Findings.Count
+  Timestamp     = Get-Date
+}
+
+# 4) Export
+if ($ExportPath) {
+  $folder = Split-Path -Path $ExportPath -Parent
+  if (-not $folder) { $folder = (Get-Location).Path }
+  if (-not (Test-Path -LiteralPath $folder)) {
+    New-Item -Path $folder -ItemType Directory -Force | Out-Null
+  }
+
+  $base  = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
+  $delim = $config.ExportDelimiter
+
+  $summary                 | Export-Csv -Path (Join-Path $folder ($base + "_summary.csv"))          -NoTypeInformation -Encoding UTF8 -Delimiter $delim
+  $indicators              | Export-Csv -Path (Join-Path $folder ($base + "_indicators.csv"))       -NoTypeInformation -Encoding UTF8 -Delimiter $delim
+  @($script:Findings.ToArray()) | Export-Csv -Path (Join-Path $folder ($base + "_findings.csv"))    -NoTypeInformation -Encoding UTF8 -Delimiter $delim
+  $policyFiles             | Export-Csv -Path (Join-Path $folder ($base + "_policyfiles.csv"))      -NoTypeInformation -Encoding UTF8 -Delimiter $delim
+  ($events | Select-Object -First $ExportEventsTop) | Export-Csv -Path (Join-Path $folder ($base + "_recent_ci_events.csv")) -NoTypeInformation -Encoding UTF8 -Delimiter $delim
+}
+
+# 5) Console summary
+$findingsArr = @($script:Findings.ToArray())
+Write-ConsoleSummary -Summary $summary -Indicators $indicators -PolicyFiles $policyFiles -Events @($events) -Findings $findingsArr -AlsoWriteInformation:$config.PreferWriteInformation
+
+# 6) Pipeline output (structured objects only) [web:65]
+#Write-Output ([pscustomobject]@{
+#  Summary      = $summary
+#  Findings     = $findingsArr
+#  Indicators   = $indicators
+#  PolicyFiles  = @($policyFiles)
+#  RecentEvents = @($events | Select-Object -First $ExportEventsTop)
+#})
