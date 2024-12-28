@@ -19,6 +19,12 @@ Typical use cases:
 - Administrator rights for scripts that change system settings.
 - Optional: Sysmon, Microsoft Defender, BitLocker, WinGet (depending on script).
 
+## Shared modules (lib)
+Common helper functions live in `lib/` to keep scripts consistent and deduplicated:
+- `Common.psm1`, `Output.psm1`, `Registry.psm1`, `Config.psm1`, `EventLog.psm1`, `Results.psm1`
+- Findings are standardized via `Results.psm1` (Code/Severity/Message + optional metadata)
+See `lib/README.md` for details and the recommended import pattern.
+
 ## Quick start (safe defaults)
 ### 1) Clone
 ```
@@ -44,6 +50,19 @@ Stop-Transcript
 ```
 # Example: run a single script
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NAME_OF_SCRIPT.ps1
+```
+
+## Deployment helpers
+Two helper scripts are included to pull the latest repo and run scripts from a local staging path:
+- `scripts/00-Copy-Local.ps1`: Pulls the latest repo (default URL) into `C:\install\mdm\ps1\_repo` and copies `scripts/` + `lib/` to `C:\install\mdm\ps1\`.
+- `scripts/00-Run-Local.ps1`: Runs a script from `C:\install\mdm\ps1\scripts\` by name or number.
+
+Examples:
+```
+.\scripts\00-Copy-Local.ps1
+.\scripts\00-Copy-Local.ps1 -RepoUrl https://github.com/org/repo.git
+.\scripts\00-Run-Local.ps1 -ScriptNumber 18
+.\scripts\00-Run-Local.ps1 -ScriptName 31-PowerShell-Logging-Baseline.ps1 -ScriptArgs @('-Mode','AuditOnly')
 ```
 
 ### Batch wrapper (CMD)
