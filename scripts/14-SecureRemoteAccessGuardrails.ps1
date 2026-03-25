@@ -56,6 +56,25 @@
   - Only execution errors or failed remediation attempts cause EventId 4850.
   - Pure audit drift may still be reported, but can remain informational.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   One PSCustomObject (exactly one object is written to the pipeline), containing:
 
@@ -125,19 +144,54 @@
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
   [string]$CatalogPath,
-  [switch]$Remediate,
   [switch]$Strict,
-  [string]$ConfigPath = "PATH/TO/JSON/global-config.json",
-  [string]$ProofPath  = "PATH/TO/JSON/proof/14-SecureRemoteAccessGuardrails.json"
+  [string]$ConfigPath,
+  [string]$ProofPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+$ErrorActionPreference = 'Stop'
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 # ----------------------------
 # Constants / defaults
@@ -175,29 +229,8 @@ $DefaultCatalogJson = @"
 # UI helpers (console only)
 # ----------------------------
 
-function Write-UiSeparator {
-  param([string]$Title = '')
-  $line = ('-' * 72)
-  Write-UiLine -Text $line -Color DarkGray
-  if ($Title) { Write-UiLine -Text $Title -Color Cyan }
-}
 
-function Write-UiKeyValue {
-  param([string]$Key,[string]$Value,[string]$Color='Gray')
-  Write-UiLine -Text ("{0,-12}: {1}" -f $Key, $Value) -Color $Color
-}
 
-function Write-UiList {
-  param(
-    [string]$Header,
-    [string[]]$Items,
-    [ValidateSet('Gray','Green','Yellow','Red','Cyan','Magenta','White','DarkGray')][string]$Color = 'Gray'
-  )
-  if (-not $Header) { $Header = 'Items' }
-  if (@($Items).Count -eq 0) { return }
-  Write-UiLine -Text $Header -Color White
-  foreach ($i in @($Items)) { Write-UiLine -Text ("  - {0}" -f $i) -Color $Color }
-}
 
 # ----------------------------
 # Generic helpers (no console formatting here)
@@ -211,16 +244,7 @@ function Test-IsElevated {
   } catch { return $false }
 }
 
-function Ensure-FolderForFile {
-  param([string]$FilePath)
-  try {
-    $dir = Split-Path -Parent $FilePath
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-      New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
-    return $true
-  } catch { return $false }
-}
+# Ensure-DirectoryForFile imported from lib/Common.psm1
 
 function Normalize-Array {
   param([object]$Value)
@@ -229,27 +253,10 @@ function Normalize-Array {
   return @("$Value".Trim()) | Where-Object { $_ }
 }
 
-function Get-RegDword {
-  param([string]$Path,[string]$Name)
-  try { return (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name }
-  catch { return $null }
-}
-
-
 function ConvertFrom-JsonSafe {
   param([string]$JsonText)
   try { return ($JsonText | ConvertFrom-Json -ErrorAction Stop) }
   catch { return $null }
-}
-
-function Read-JsonFileSafe {
-  param([string]$Path)
-  try {
-    if (-not $Path) { return $null }
-    if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
-    return (ConvertFrom-JsonSafe -JsonText $raw)
-  } catch { return $null }
 }
 
 function Get-DefaultCatalog {
@@ -330,11 +337,11 @@ function Remove-LocalFirewallRuleByDisplayName {
 
 function Disable-LocalBuiltinRdpInbound {
   try {
-    $rules = Get-NetFirewallRule -PolicyStore PersistentStore -DisplayGroup 'Remote Desktop' -Direction Inbound -ErrorAction SilentlyContinue
+    $rules = Get-NetFirewallRule -PolicyStore PersistentStore -DisplayGroup 'Remote Desktop' -Direction Inbound -ErrorAction Stop
     foreach ($r in @($rules)) {
-      try { $r | Disable-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null } catch { }
+      try { $r | Disable-NetFirewallRule -ErrorAction Stop | Out-Null } catch { <# best-effort: individual rule disable may fail #> }
     }
-  } catch { }
+  } catch { <# best-effort: built-in RDP rules may not exist on all editions #> }
 }
 
 function Ensure-RdpFirewallRules {
@@ -365,7 +372,10 @@ function Ensure-RdpFirewallRules {
   $nameUDPBlock = "Guardrails RDP UDP-In Blocked"
   $group        = "Guardrails RDP Scoped"
 
-  Disable-LocalBuiltinRdpInbound
+  # Only disable built-in RDP inbound rules when remediating and catalog specifies RDP disabled (§1/§16)
+  if ($Remediate -and -not [bool]$Rdp.Enable) {
+    Disable-LocalBuiltinRdpInbound
+  }
 
   if (-not [bool]$Rdp.Enable) {
     if ($Remediate) {
@@ -712,7 +722,7 @@ try {
   foreach ($x in @($ra)) { if ($x -match '^(Failed|RemoteAssistance)') { $drifts += $x } else { $changes += $x } }
 
   # Result object (pipeline)
-  Ensure-FolderForFile -FilePath $ProofPath | Out-Null
+  Ensure-DirectoryForFile -FilePath $ProofPath | Out-Null
 
   $resultObject = [pscustomobject]@{
     TimestampUtc = (Get-Date).ToUniversalTime().ToString('o')
@@ -761,15 +771,15 @@ try {
   else { Write-HealthEvent -Id 4840 -Message $msg -Level 'Information' -Source $ScriptEventSource }
 
   # Pretty console output (no pipeline pollution)
-  Write-Host ""
+  Write-UiLine ""
   Write-UiSeparator -Title "Secure Remote Access Guardrails"
-  Write-UiKeyValue -Key "Computer"  -Value $env:COMPUTERNAME -Color Gray
-  Write-UiKeyValue -Key "Elevated"  -Value ($isElevated.ToString()) -Color $(if ($isElevated) { 'Green' } else { 'Yellow' })
-  Write-UiKeyValue -Key "Remediate" -Value ([bool]$Remediate) -Color $(if ($Remediate) { 'Yellow' } else { 'Gray' })
-  Write-UiKeyValue -Key "Strict"    -Value ([bool]$Strict) -Color $(if ($Strict) { 'Yellow' } else { 'Gray' })
-  Write-UiKeyValue -Key "EventId"   -Value $resultObject.EventId -Color $(if ($eventIsBad) { 'Yellow' } else { 'Green' })
-  Write-UiKeyValue -Key "Proof"     -Value $ProofPath -Color Cyan
-  Write-UiKeyValue -Key "Duration"  -Value ("{0:00}:{1:00}:{2:00}" -f $duration.Hours, $duration.Minutes, $duration.Seconds) -Color Gray
+  Write-KeyValue -Key "Computer"  -Value $env:COMPUTERNAME -Color Gray
+  Write-KeyValue -Key "Elevated"  -Value ($isElevated.ToString()) -Color $(if ($isElevated) { 'Green' } else { 'Yellow' })
+  Write-KeyValue -Key "Remediate" -Value ([bool]$Remediate) -Color $(if ($Remediate) { 'Yellow' } else { 'Gray' })
+  Write-KeyValue -Key "Strict"    -Value ([bool]$Strict) -Color $(if ($Strict) { 'Yellow' } else { 'Gray' })
+  Write-KeyValue -Key "EventId"   -Value $resultObject.EventId -Color $(if ($eventIsBad) { 'Yellow' } else { 'Green' })
+  Write-KeyValue -Key "Proof"     -Value $ProofPath -Color Cyan
+  Write-KeyValue -Key "Duration"  -Value ("{0:00}:{1:00}:{2:00}" -f $duration.Hours, $duration.Minutes, $duration.Seconds) -Color Gray
   Write-UiSeparator
 
   $statusColor = 'Green'
@@ -778,11 +788,11 @@ try {
   if ($hadError) { $statusColor = 'Red'; $statusText = 'ERROR' }
 
   Write-UiLine -Text ("Status: {0}" -f $statusText) -Color $statusColor
-  Write-UiKeyValue -Key "Changes" -Value (@($changes).Count) -Color $(if (@($changes).Count -gt 0) { 'Yellow' } else { 'Gray' })
-  Write-UiKeyValue -Key "Drifts"  -Value (@($drifts).Count) -Color $(if (@($drifts).Count -gt 0) { 'Yellow' } else { 'Green' })
-  Write-UiKeyValue -Key "Notes"   -Value (@($notes).Count) -Color $(if (@($notes).Count -gt 0) { 'Cyan' } else { 'Gray' })
+  Write-KeyValue -Key "Changes" -Value (@($changes).Count) -Color $(if (@($changes).Count -gt 0) { 'Yellow' } else { 'Gray' })
+  Write-KeyValue -Key "Drifts"  -Value (@($drifts).Count) -Color $(if (@($drifts).Count -gt 0) { 'Yellow' } else { 'Green' })
+  Write-KeyValue -Key "Notes"   -Value (@($notes).Count) -Color $(if (@($notes).Count -gt 0) { 'Cyan' } else { 'Gray' })
 
-  Write-Host ""
+  Write-UiLine ""
   Write-UiList -Header "Changes" -Items @($changes) -Color Yellow
   Write-UiList -Header "Drift"   -Items @($drifts)  -Color Yellow
   Write-UiList -Header "Notes"   -Items @($notes)   -Color Cyan
@@ -791,23 +801,25 @@ try {
   Write-Information -MessageData ("Guardrails done. EventId={0}, Proof={1}" -f $resultObject.EventId, $ProofPath) -InformationAction Continue
 
   # Pipeline output (single object)
-  #$resultObject
+  $resultObject
 }
 catch {
   $err = $_.Exception.Message
 
   Write-HealthEvent -Id 4850 -Message ("Guardrail error - " + $err) -Level 'Error' -Source $ScriptEventSource
 
-  Ensure-FolderForFile -FilePath $ProofPath | Out-Null
+  Ensure-DirectoryForFile -FilePath $ProofPath | Out-Null
   try {
     [pscustomobject]@{
       TimestampUtc = (Get-Date).ToUniversalTime().ToString('o')
       ComputerName = $env:COMPUTERNAME
       Error        = $err
-    } | ConvertTo-Json -Depth 4 | Set-Content -Path $ProofPath -Encoding UTF8 -ErrorAction SilentlyContinue
-  } catch { }
+    } | ConvertTo-Json -Depth 4 | Set-Content -Path $ProofPath -Encoding UTF8 -ErrorAction Stop
+  } catch {
+    Write-Warning "Could not write proof file: $($_.Exception.Message)"
+  }
 
-  Write-Host ""
+  Write-UiLine ""
   Write-UiSeparator -Title "Secure Remote Access Guardrails"
   Write-UiLine -Text "Status: ERROR" -Color Red
   Write-UiLine -Text ("Message: {0}" -f $err) -Color Red
@@ -832,3 +844,25 @@ catch {
     HasDrift     = $false
   }
 }
+
+# C10: populate canonical findings from drifts
+foreach ($d in @($drifts)) {
+  $code = 'RDP-Drift'
+  $sev = 'Medium'
+  if ($d -match 'fDenyTSConnections|UserAuthentication|NLA')            { $code = 'RDP-ConfigDrift' }
+  if ($d -match 'SecurityLayer|MinEncryption')                          { $code = 'RDP-EncryptionDrift' }
+  if ($d -match 'DisableRestrictedAdmin|DisablePasswordSaving')         { $code = 'RDP-SecurityDrift' }
+  if ($d -match 'PortNumber')                                           { $code = 'RDP-PortDrift' }
+  if ($d -match 'Failed|Missing|Unexpected')                            { $sev = 'High' }
+  if ($d -match 'RemoteAssistance')                                     { $code = 'RDP-RemoteAssistDrift' }
+  if ($d -match 'rule|firewall' -or $d -match 'TCP|UDP')               { $code = 'RDP-FirewallDrift' }
+  if ($d -match 'member')                                               { $code = 'RDP-GroupDrift' }
+  Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $d
+}
+
+# V2 output contract
+$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

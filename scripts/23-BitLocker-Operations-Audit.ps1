@@ -1,3 +1,4 @@
+#Requires -RunAsAdministrator
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -55,6 +56,28 @@ If the file is missing, empty, unreadable, or invalid JSON, built-in defaults ar
 .INPUTS
 None. This script does not accept pipeline input.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 System.Management.Automation.PSCustomObject
 
@@ -106,7 +129,7 @@ Adds manage-bde status text (truncated) to the output object and converts it to 
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [ValidateNotNullOrEmpty()]
   [string]$MountPoint = $env:SystemDrive,
@@ -116,27 +139,54 @@ param(
   [switch]$IncludeManageBdeText,
 
   [string]$ConfigPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 
-function Ensure-Cmdlet {
-  param(
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$Name
-  )
-  if (-not (Get-Command -Name $Name -ErrorAction SilentlyContinue)) {
-    throw "Required cmdlet not found: $Name. Verify BitLocker feature/module availability."
-  }
-}
+# Ensure-Cmdlet imported from lib/External.psm1
 
 function Normalize-MountPoint {
   param(
@@ -183,7 +233,7 @@ function Import-JsonConfigOrDefault {
   try {
     if (-not (Test-Path -LiteralPath $Path)) { return $cfg }
 
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($raw)) { return $cfg }
 
     # ConvertFrom-Json should be guarded via try/catch for invalid JSON. [web:56]
@@ -242,21 +292,6 @@ function Get-StatusColor {
   }
 }
 
-function Write-Kv {
-  param(
-    [Parameter(Mandatory)][string]$Key,
-    [AllowNull()][object]$Value,
-    [ConsoleColor]$ValueColor = [ConsoleColor]::Gray,
-    [int]$KeyWidth = 28
-  )
-  $k = ($Key + ':').PadRight($KeyWidth)
-  Write-Host $k -NoNewline -ForegroundColor DarkGray
-  if ($null -eq $Value -or ([string]$Value).Length -eq 0) {
-    Write-Host "<null>" -ForegroundColor DarkGray
-  } else {
-    Write-Host ([string]$Value) -ForegroundColor $ValueColor
-  }
-}
 
 function Write-SummaryToConsole {
   param(
@@ -272,69 +307,69 @@ function Write-SummaryToConsole {
   $titleColor = if ($PrettyConsole) { [ConsoleColor]::White } else { [ConsoleColor]::Gray }
   $lineColor  = if ($PrettyConsole) { [ConsoleColor]::DarkGray } else { [ConsoleColor]::Gray }
 
-  Write-Host ""
-  Write-Host ("=" * 60) -ForegroundColor $lineColor
-  Write-Host "BitLocker audit summary" -ForegroundColor $titleColor
-  Write-Host ("=" * 60) -ForegroundColor $lineColor
+  Write-UiLine ""
+  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
+  Write-UiLine "BitLocker audit summary" -ForegroundColor $titleColor
+  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
 
-  Write-Kv -Key 'ComputerName'         -Value $Result.ComputerName -ValueColor ([ConsoleColor]::Gray)
-  Write-Kv -Key 'MountPoint'           -Value $Result.MountPoint -ValueColor ([ConsoleColor]::Gray)
+  Write-KeyValue -Key 'ComputerName'         -Value $Result.ComputerName -ValueColor ([ConsoleColor]::Gray)
+  Write-KeyValue -Key 'MountPoint'           -Value $Result.MountPoint -ValueColor ([ConsoleColor]::Gray)
 
-  Write-Kv -Key 'VolumeType'           -Value $Result.VolumeType -ValueColor ([ConsoleColor]::Cyan)
-  Write-Kv -Key 'VolumeStatus'         -Value $Result.VolumeStatus -ValueColor (Get-StatusColor -Value $Result.VolumeStatus)
-  Write-Kv -Key 'ProtectionStatus'     -Value $Result.ProtectionStatus -ValueColor (Get-StatusColor -Value $Result.ProtectionStatus)
-  Write-Kv -Key 'EncryptionPercentage' -Value $Result.EncryptionPercentage -ValueColor ([ConsoleColor]::Cyan)
-  Write-Kv -Key 'EncryptionMethod'     -Value $Result.EncryptionMethod -ValueColor ([ConsoleColor]::Cyan)
-  Write-Kv -Key 'LockStatus'           -Value $Result.LockStatus -ValueColor ([ConsoleColor]::Cyan)
-  Write-Kv -Key 'AutoUnlockEnabled'    -Value $Result.AutoUnlockEnabled -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'VolumeType'           -Value $Result.VolumeType -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'VolumeStatus'         -Value $Result.VolumeStatus -ValueColor (Get-StatusColor -Value $Result.VolumeStatus)
+  Write-KeyValue -Key 'ProtectionStatus'     -Value $Result.ProtectionStatus -ValueColor (Get-StatusColor -Value $Result.ProtectionStatus)
+  Write-KeyValue -Key 'EncryptionPercentage' -Value $Result.EncryptionPercentage -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'EncryptionMethod'     -Value $Result.EncryptionMethod -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'LockStatus'           -Value $Result.LockStatus -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'AutoUnlockEnabled'    -Value $Result.AutoUnlockEnabled -ValueColor ([ConsoleColor]::Cyan)
 
-  Write-Kv -Key 'KeyProtectorTypes'    -Value $Result.KeyProtectorTypes -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'KeyProtectorTypes'    -Value $Result.KeyProtectorTypes -ValueColor ([ConsoleColor]::Cyan)
   if ($null -ne $Result.KeyProtectorCount) {
     $countColor = if ($Result.KeyProtectorCount -gt 0) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }
-    Write-Kv -Key 'KeyProtectorCount'  -Value $Result.KeyProtectorCount -ValueColor $countColor
+    Write-KeyValue -Key 'KeyProtectorCount'  -Value $Result.KeyProtectorCount -ValueColor $countColor
   }
 
   if (-not [string]::IsNullOrWhiteSpace($Result.Findings)) {
-    Write-Host ("-" * 60) -ForegroundColor $lineColor
-    Write-Kv -Key 'Finding(s)' -Value $Result.Findings -ValueColor ([ConsoleColor]::Yellow) -KeyWidth 28
+    Write-UiLine ("-" * 60) -ForegroundColor $lineColor
+    Write-KeyValue -Key 'Finding(s)' -Value $Result.Findings -ValueColor ([ConsoleColor]::Yellow) -KeyWidth 28
   }
 
-  Write-Host ("-" * 60) -ForegroundColor $lineColor
+  Write-UiLine ("-" * 60) -ForegroundColor $lineColor
 
   $gbvState = if ([string]::IsNullOrWhiteSpace($Result.GetBitLockerVolumeError)) { 'OK' } else { 'ERROR' }
   $gbvColor = if ($gbvState -eq 'OK') { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
-  Write-Kv -Key 'Get-BitLockerVolume' -Value $gbvState -ValueColor $gbvColor
+  Write-KeyValue -Key 'Get-BitLockerVolume' -Value $gbvState -ValueColor $gbvColor
   if (-not [string]::IsNullOrWhiteSpace($Result.GetBitLockerVolumeError)) {
-    Write-Kv -Key 'GBV error' -Value $Result.GetBitLockerVolumeError -ValueColor ([ConsoleColor]::Red)
+    Write-KeyValue -Key 'GBV error' -Value $Result.GetBitLockerVolumeError -ValueColor ([ConsoleColor]::Red)
   }
 
   $mbState = if ([string]::IsNullOrWhiteSpace($Result.ManageBdeError)) { 'OK' } else { 'ERROR' }
   $mbColor = if ($mbState -eq 'OK') { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
-  Write-Kv -Key 'manage-bde' -Value $mbState -ValueColor $mbColor
+  Write-KeyValue -Key 'manage-bde' -Value $mbState -ValueColor $mbColor
   if (-not [string]::IsNullOrWhiteSpace($Result.ManageBdeError)) {
-    Write-Kv -Key 'manage-bde error' -Value $Result.ManageBdeError -ValueColor ([ConsoleColor]::Red)
+    Write-KeyValue -Key 'manage-bde error' -Value $Result.ManageBdeError -ValueColor ([ConsoleColor]::Red)
   }
 
   if ($null -ne $Result.ManageBdeProtectionExitCode) {
     $exitColor = if ($Result.ManageBdeProtectionExitCode -in 0,1) { [ConsoleColor]::Cyan } else { [ConsoleColor]::Yellow }
-    Write-Kv -Key 'mb protect exit' -Value $Result.ManageBdeProtectionExitCode -ValueColor $exitColor
-    Write-Kv -Key 'mb protected'    -Value $Result.ManageBdeIsProtected -ValueColor ([ConsoleColor]::Cyan)
+    Write-KeyValue -Key 'mb protect exit' -Value $Result.ManageBdeProtectionExitCode -ValueColor $exitColor
+    Write-KeyValue -Key 'mb protected'    -Value $Result.ManageBdeIsProtected -ValueColor ([ConsoleColor]::Cyan)
   }
 
   if (-not [string]::IsNullOrWhiteSpace($EffectiveExportPath)) {
-    Write-Kv -Key 'CSV export' -Value $EffectiveExportPath -ValueColor ([ConsoleColor]::Gray)
+    Write-KeyValue -Key 'CSV export' -Value $EffectiveExportPath -ValueColor ([ConsoleColor]::Gray)
   }
 
-  Write-Kv -Key 'Timestamp' -Value $Result.Timestamp -ValueColor ([ConsoleColor]::Gray)
+  Write-KeyValue -Key 'Timestamp' -Value $Result.Timestamp -ValueColor ([ConsoleColor]::Gray)
 
-  Write-Host ("=" * 60) -ForegroundColor $lineColor
-  Write-Host ""
+  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
+  Write-UiLine ""
 }
 
 # -------------------------
 # Pre-flight
 # -------------------------
-if (-not (Test-IsAdmin)) { throw "Administrative privileges are required." }
+Require-Admin
 
 $cfg = Import-JsonConfigOrDefault -Path $ConfigPath
 $mp  = Normalize-MountPoint -Value $MountPoint
@@ -497,9 +532,13 @@ if (-not [string]::IsNullOrWhiteSpace($effectiveExportPath)) {
 # Console summary (no pipeline pollution)
 # -------------------------
 if ($cfg.SummaryToHost) {
-  # Write-Host supports ForegroundColor/BackgroundColor for human-friendly output. [web:154]
+  # Write-UiLine supports ForegroundColor/BackgroundColor for human-friendly output. [web:154]
   Write-SummaryToConsole -Result $result -EffectiveExportPath $effectiveExportPath -PrettyConsole $cfg.PrettyConsole
 }
 
-# Final pipeline output (structured object only)
-# $result
+# V2 output contract
+$resultToken = if ($Strict -and $findings.Count -gt 0) { 'FAIL' } elseif ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '23-BitLocker-Operations-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($findings) -Summary $result -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

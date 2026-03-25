@@ -6,7 +6,7 @@ WEF client readiness audit (Windows PowerShell 5.1).
 .DESCRIPTION
 Best-practice output model:
 - Pipeline: structured objects only (safe for Export-Csv / ConvertTo-Json / Where-Object).
-- Console: pretty human-readable output via Write-Host / Write-Information only.
+- Console: pretty human-readable output via Write-UiLine / Write-Information only.
 
 Checks:
 - WinRM service status and start mode.
@@ -43,22 +43,55 @@ PowerShell 5.1 compatible.
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$ExportPath,
   [switch]$IncludeWecutilCheck,
-  [string]$ConfigPath = 'PATH/TO/JSON/wef-audit.json',
+  [string]$ConfigPath,
   [switch]$PassThru
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Continue'
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+$ErrorActionPreference = 'Stop'
 
 # ----------------------------
 # Defaults (used if JSON is missing/invalid)
@@ -71,7 +104,7 @@ $Defaults = @{
 
   ConsoleSummary                 = $true
   ConsoleUseWriteInformation     = $false  # If true, relies on Information stream settings. [web:73][web:77]
-  ConsoleColor                   = $true   # Only applies to Write-Host.
+  ConsoleColor                   = $true   # Only applies to Write-UiLine.
 }
 
 # Script state
@@ -122,6 +155,8 @@ function Get-WinRmState {
   }
 
   try {
+    # S11 note: 'WinRM' is a hardcoded literal, safe from WQL injection.
+    # If refactored to a variable, apply: $escaped = $name -replace "'", "''"
     $startMode = (Get-CimInstance -ClassName Win32_Service -Filter "Name='WinRM'" -ErrorAction Stop).StartMode
     if ($startMode -eq 'Disabled') {
       Add-Finding -Code 'WEF-WinRMDisabled' -Severity 'High' -Message 'WinRM start mode is Disabled; client is not WEF-ready.'
@@ -356,11 +391,9 @@ if ($script:Config.ConsoleSummary) {
   Write-PrettySummary -Result $result
 }
 
-# Pipeline output (structured objects only)
-if ($PassThru) {
-  $result.Summary
-  $result.Findings
-  $result.Indicators
-} else {
-  $result
-}
+# V2 output contract
+$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings.ToArray()) -Summary $result.Summary -Metadata @{ Indicators = $result.Indicators }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

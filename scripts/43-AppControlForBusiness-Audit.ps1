@@ -11,7 +11,7 @@ Audit WDAC / App Control for Business indicators (best-effort).
 - Prints a console summary at the end.
 
 Pipeline output: structured objects only.
-Console output: Write-Host (and optional Write-Information) only.
+Console output: Write-UiLine (and optional Write-Information) only.
 
 PowerShell: Windows PowerShell 5.1 compatible.
 
@@ -36,19 +36,53 @@ Maximum policy files to enumerate.
 .PARAMETER ExportEventsTop
 Max number of events to include in export.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
+
+.OUTPUTS
+  None by default.
+  When -PassThru is used, emits a PSCustomObject v2 result with Script, Mode, Result, Findings, Summary, and Metadata properties.
+
 .EXAMPLE
   .\43-AppControlForBusiness-Audit.ps1
 
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
+  [ValidateSet('Audit','Remediate')]
+  [string]$Mode = 'Audit',
+
   [ValidateRange(1, 720)]
   [int]$HoursBack = 24,
 
   [string]$ExportPath,
 
+  [Alias('ConfigPath')]
   [string]$ConfigJsonPath = $null,
 
   [ValidateRange(1, 50000)]
@@ -61,22 +95,71 @@ param(
   [int]$MaxPolicyFiles = 5000,
 
   [ValidateRange(1, 2000)]
-  [int]$ExportEventsTop = 200
+  [int]$ExportEventsTop = 200,
+
+  [ValidateSet('Console','Json','Csv','None')]
+  [string]$OutputFormat = 'Console',
+
+  [string]$OutputPath,
+
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
+
+,
+  [string]$ConfigPath
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($OutputPath) -and -not [string]::IsNullOrWhiteSpace($ExportPath)) {
+  $OutputPath = $ExportPath
+}
 
 # --------------------------
 # Findings
 # --------------------------
 $script:Findings = New-FindingsList
+$strictModeEnabled = [bool]$Strict
+$noColorEnabled = [bool]$NoColor
+
+if ($Mode -eq 'Remediate') {
+  Add-Finding -Code 'AC-ModeDowngradeToAudit' -Severity 'Warning' -Message 'Remediate mode is not supported by this script; running in audit behavior.'
+}
 
 # --------------------------
 # Helpers
@@ -135,7 +218,7 @@ function Get-ChildItemDepthLimited {
       foreach ($f in @(Get-ChildItem -LiteralPath $Path -File -ErrorAction SilentlyContinue)) {
         $results.Add($f) | Out-Null
       }
-    } catch {}
+    } catch { <# best-effort: directory enumeration may fail due to permissions #> }
     return @($results.ToArray())
   }
 
@@ -268,13 +351,13 @@ function Write-ConsoleSummary {
 
   $lines.Add("==========================================================") | Out-Null
 
-  Write-Host ""
+  Write-UiLine ""
   foreach ($l in $lines) {
-    if ($l -like "======*") { Write-Host $l -ForegroundColor Cyan }
-    elseif ($l -like "==========================================================") { Write-Host $l -ForegroundColor Cyan }
-    else { Write-Host $l }
+    if ($l -like "======*") { Write-UiLine $l -ForegroundColor Cyan }
+    elseif ($l -like "==========================================================") { Write-UiLine $l -ForegroundColor Cyan }
+    else { Write-UiLine $l }
   }
-  Write-Host ""
+  Write-UiLine ""
 
   # Write-Information is controlled by $InformationPreference (default is SilentlyContinue). [web:90][web:74]
   if ($AlsoWriteInformation) {
@@ -298,7 +381,8 @@ $configDefaults = @{
   PreferWriteInformation= $false  # if true: summary uses Write-Information additionally
 }
 
-$cfgResult = Read-ConfigWithDefaults -Path $ConfigJsonPath -Defaults $configDefaults
+$sanitized = Sanitize-Path -Path $ConfigJsonPath -MustExist
+$cfgResult = Read-ConfigWithDefaults -Path $sanitized -Defaults $configDefaults
 $config = $cfgResult.Config
 
 if (-not $cfgResult.Meta.Provided) {
@@ -364,7 +448,7 @@ if (-not $config.Enabled) {
   $emptyIndicators = [pscustomobject]@{
     CodeIntegrityLogName = 'Microsoft-Windows-CodeIntegrity/Operational'
     LookbackHours        = $HoursBack
-    RunningAsAdmin       = Test-IsAdministrator
+    RunningAsAdmin       = Test-IsAdmin
     CILogEnabled         = $null
     RecentCIEventsCount  = 0
     PolicyFilesCount     = 0
@@ -374,19 +458,24 @@ if (-not $config.Enabled) {
 
   $findingsArr = @($script:Findings.ToArray())
 
-  Write-ConsoleSummary -Summary $summary -Indicators $emptyIndicators -PolicyFiles @() -Events @() -Findings $findingsArr -AlsoWriteInformation:$config.PreferWriteInformation
+  if (-not $Quiet) {
+    Write-ConsoleSummary -Summary $summary -Indicators $emptyIndicators -PolicyFiles @() -Events @() -Findings $findingsArr -AlsoWriteInformation:$config.PreferWriteInformation
+  }
 
-  Write-Output ([pscustomobject]@{
-    Summary      = $summary
-    Findings     = $findingsArr
-    Indicators   = $emptyIndicators
-    PolicyFiles  = @()
-    RecentEvents = @()
-  })
-  return
+  $disabledResult = New-V2ResultObject `
+    -ScriptName '43-AppControlForBusiness-Audit.ps1' `
+    -Mode 'Audit' `
+    -Result 'WARN' `
+    -Findings $findingsArr `
+    -Summary $summary `
+    -Metadata @{ Indicators = $emptyIndicators; PolicyFiles = @(); RecentEvents = @() }
+
+  Write-ResultObject -ResultObject $disabledResult -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $disabledResult }
+  exit 2
 }
 
-$runningAsAdmin = Test-IsAdministrator
+$runningAsAdmin = Test-IsAdmin
 if (-not $runningAsAdmin) {
   Add-Finding -Code 'AC-NotElevated' -Severity 'Info' -Message 'Not running elevated; log/file access may be incomplete.'
 }
@@ -436,6 +525,8 @@ $policyFiles = @($policyFiles)
 
 if ($policyFiles.Count -eq 0) {
   Add-Finding -Code 'AC-NoPolicyFilesFound' -Severity 'Info' -Message 'No policy files found in scanned roots (deployment can still exist via other mechanisms).'
+} else {
+    Add-Finding -Code 'AC-PoliciesDetected' -Severity 'Low' -Message "Detected $($policyFiles.Count) App Control policy files." -Extra @{ Files = $policyFiles.Path }
 }
 
 # 3) Indicators + Summary
@@ -480,13 +571,27 @@ if ($ExportPath) {
 
 # 5) Console summary
 $findingsArr = @($script:Findings.ToArray())
-Write-ConsoleSummary -Summary $summary -Indicators $indicators -PolicyFiles $policyFiles -Events @($events) -Findings $findingsArr -AlsoWriteInformation:$config.PreferWriteInformation
+if (-not $Quiet) {
+  Write-ConsoleSummary -Summary $summary -Indicators $indicators -PolicyFiles $policyFiles -Events @($events) -Findings $findingsArr -AlsoWriteInformation:$config.PreferWriteInformation
+}
 
-# 6) Pipeline output (structured objects only) [web:65]
-#Write-Output ([pscustomobject]@{
-#  Summary      = $summary
-#  Findings     = $findingsArr
-#  Indicators   = $indicators
-#  PolicyFiles  = @($policyFiles)
-#  RecentEvents = @($events | Select-Object -First $ExportEventsTop)
-#})
+$resultToken = if ($strictModeEnabled -and $findingsArr.Count -gt 0) { 'FAIL' } elseif ($findingsArr.Count -gt 0) { 'WARN' } else { 'OK' }
+$resultObject = New-V2ResultObject `
+  -ScriptName '43-AppControlForBusiness-Audit.ps1' `
+  -Mode 'Audit' `
+  -Result $resultToken `
+  -Findings $findingsArr `
+  -Summary $summary `
+  -Metadata @{ Indicators = $indicators; PolicyFiles = @($policyFiles); RecentEvents = @($events | Select-Object -First $ExportEventsTop); Strict = $strictModeEnabled; NoColor = $noColorEnabled }
+
+Write-ResultObject -ResultObject $resultObject -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) {
+  $resultObject
+}
+
+if ($resultToken -eq 'WARN') { exit 2 }
+exit 0
+
+
+
+

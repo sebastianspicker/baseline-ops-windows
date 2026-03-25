@@ -34,7 +34,7 @@
   Path to a JSON file that will receive an audit record of the run.
   If the directory does not exist, it is created.
 
-.PARAMETER Passthru
+.PARAMETER PassThru
   If specified, outputs exactly one structured object to the pipeline containing:
   - Metadata about the run (time, computer, mode, JSON source)
   - Per-category diffs (current/desired/add/remove/rejected)
@@ -53,10 +53,29 @@
 
   The baseline mode used is shown in the console summary and included in the structured output.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   None by default.
 
-  When -Passthru is used:
+  When -PassThru is used:
   - A single PSCustomObject with properties such as:
     Timestamp, ComputerName, Remediate, SourceJson, AuditPath,
     JsonLoaded, JsonError, BaselineUsed, Notes,
@@ -84,11 +103,11 @@
 
 .EXAMPLE
   # Emit structured output for reporting
-  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -Passthru | ConvertTo-Json -Depth 6
+  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -PassThru | ConvertTo-Json -Depth 6
 
 .EXAMPLE
   # Emit structured output and export a compact report
-  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -Passthru |
+  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -PassThru |
     Select-Object Timestamp,ComputerName,Result,TotalAdd,TotalRemove,TotalRejected,TotalErrors,SourceJson |
     Export-Csv -NoTypeInformation -Path "PATH/TO/REPORT.csv"
 
@@ -105,27 +124,59 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [switch]$Remediate,
 
-  # Generic placeholders for GitHub
-  [string]$ConfigPath = "PATH/TO/CONFIG.json",
+  # Optional config paths - use $null to skip, or provide actual paths
+  [string]$ConfigPath,
   [string]$ExceptionsPath,
-  [string]$AuditPath  = "PATH/TO/AUDIT.json",
+  [string]$AuditPath,
 
-  [switch]$Passthru,
+  [switch]$PassThru,
   [switch]$StrictJson,
 
   [ValidateSet('Current','Minimum')]
   [string]$BaselineMode = 'Minimum'
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # ----------------------------- Helpers --------------------------------------------
@@ -211,14 +262,16 @@ function Get-Config {
   param([Parameter(Mandatory=$true)][string]$Path)
 
   try {
-    if (Test-Path -LiteralPath $Path) {
-      return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+    $sanitized = Sanitize-Path -Path $Path -MustExist
+    if ($sanitized) {
+      return Get-Content -Raw -LiteralPath $sanitized -Encoding UTF8 | ConvertFrom-Json
     }
 
     $here = Split-Path -Parent $MyInvocation.MyCommand.Path
     $alt  = Join-Path (Split-Path -Parent $here) "config\CONFIG.json"
-    if (Test-Path -LiteralPath $alt) {
-      return Get-Content -Raw -LiteralPath $alt | ConvertFrom-Json
+    $sanitizedAlt = Sanitize-Path -Path $alt -MustExist
+    if ($sanitizedAlt) {
+      return Get-Content -Raw -LiteralPath $sanitizedAlt -Encoding UTF8 | ConvertFrom-Json
     }
   } catch {
     return $null
@@ -266,8 +319,10 @@ function To-NormList {
 
     switch ($Kind) {
       'path' {
-        $t = $s.TrimEnd('\')
+        $t = $s.TrimEnd('\','/')
         if ($t.Length -eq 2 -and $t -match '^[a-zA-Z]:$') { $t = $t + '\' }
+        # For UNC paths, ensure we don't accidentally trim the root if it was just \\server\share\
+        if ($s -like '\\*\*' -and $t -notlike '\\*\*') { $t = $s } 
         $arr.Add($t.ToLowerInvariant())
       }
       'process' { $arr.Add($s.ToLowerInvariant()) }
@@ -406,16 +461,6 @@ function Write-ConsoleSummary {
     [Parameter(Mandatory=$true)][pscustomobject]$Result
   )
 
-  function Write-Kv {
-    param(
-      [string]$Key,
-      [string]$Value,
-      [ConsoleColor]$KeyColor = [ConsoleColor]::DarkGray,
-      [ConsoleColor]$ValueColor = [ConsoleColor]::Gray
-    )
-    Write-Host ("{0,-12}: " -f $Key) -ForegroundColor $KeyColor -NoNewline
-    Write-Host $Value -ForegroundColor $ValueColor
-  }
 
   $modeColor = if ($Result.Remediate) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Cyan }
   $resColor = switch ($Result.Result) {
@@ -427,58 +472,58 @@ function Write-ConsoleSummary {
     default                { [ConsoleColor]::Gray }
   }
 
-  Write-Host ""
-  Write-Host "============================================================" -ForegroundColor DarkGray
-  Write-Host "Defender / ASR / CFA Allowlist Sync" -ForegroundColor White
-  Write-Host "============================================================" -ForegroundColor DarkGray
+  Write-UiLine ""
+  Write-UiLine "============================================================" -ForegroundColor DarkGray
+  Write-UiLine "Defender / ASR / CFA Allowlist Sync" -ForegroundColor White
+  Write-UiLine "============================================================" -ForegroundColor DarkGray
 
-  Write-Kv "Mode"       ($(if ($Result.Remediate) { "Remediate" } else { "AuditOnly" })) DarkGray $modeColor
-  Write-Kv "Baseline"   $Result.BaselineUsed DarkGray ($(if ($Result.BaselineUsed -eq 'None') { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }))
-  Write-Kv "Computer"   $Result.ComputerName
-  Write-Kv "Timestamp"  $Result.Timestamp
-  Write-Kv "JSON"       $Result.SourceJson
-  Write-Kv "Audit"      $Result.AuditPath
+  Write-KeyValue "Mode"       ($(if ($Result.Remediate) { "Remediate" } else { "Audit" })) DarkGray $modeColor
+  Write-KeyValue "Baseline"   $Result.BaselineUsed DarkGray ($(if ($Result.BaselineUsed -eq 'None') { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }))
+  Write-KeyValue "Computer"   $Result.ComputerName
+  Write-KeyValue "Timestamp"  $Result.Timestamp
+  Write-KeyValue "JSON"       $Result.SourceJson
+  Write-KeyValue "Audit"      $Result.AuditPath
 
-  Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
-  Write-Kv "JsonLoaded" ([string]$Result.JsonLoaded) DarkGray ($(if ($Result.JsonLoaded) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }))
-  if ($Result.JsonError) { Write-Kv "JsonError" $Result.JsonError DarkGray Yellow }
+  Write-UiLine "------------------------------------------------------------" -ForegroundColor DarkGray
+  Write-KeyValue "JsonLoaded" ([string]$Result.JsonLoaded) DarkGray ($(if ($Result.JsonLoaded) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }))
+  if ($Result.JsonError) { Write-KeyValue "JsonError" $Result.JsonError DarkGray Yellow }
 
-  Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
-  Write-Kv "Add"        ([string]$Result.TotalAdd)      DarkGray ($(if ($Result.TotalAdd -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Green }))
-  Write-Kv "Remove"     ([string]$Result.TotalRemove)   DarkGray ($(if ($Result.TotalRemove -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Green }))
-  Write-Kv "Rejected"   ([string]$Result.TotalRejected) DarkGray ($(if ($Result.TotalRejected -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::DarkGray }))
-  Write-Kv "Errors"     ([string]$Result.TotalErrors)   DarkGray ($(if ($Result.TotalErrors -gt 0) { [ConsoleColor]::Red } else { [ConsoleColor]::DarkGray }))
-  Write-Kv "Result"     $Result.Result                 DarkGray $resColor
+  Write-UiLine "------------------------------------------------------------" -ForegroundColor DarkGray
+  Write-KeyValue "Add"        ([string]$Result.TotalAdd)      DarkGray ($(if ($Result.TotalAdd -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Green }))
+  Write-KeyValue "Remove"     ([string]$Result.TotalRemove)   DarkGray ($(if ($Result.TotalRemove -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Green }))
+  Write-KeyValue "Rejected"   ([string]$Result.TotalRejected) DarkGray ($(if ($Result.TotalRejected -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::DarkGray }))
+  Write-KeyValue "Errors"     ([string]$Result.TotalErrors)   DarkGray ($(if ($Result.TotalErrors -gt 0) { [ConsoleColor]::Red } else { [ConsoleColor]::DarkGray }))
+  Write-KeyValue "Result"     $Result.Result                 DarkGray $resColor
 
   if ($Result.Notes -and $Result.Notes.Count -gt 0) {
-    Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "Notes:" -ForegroundColor DarkGray
-    foreach ($n in $Result.Notes) { Write-Host ("- " + $n) -ForegroundColor DarkGray }
+    Write-UiLine "------------------------------------------------------------" -ForegroundColor DarkGray
+    Write-UiLine "Notes:" -ForegroundColor DarkGray
+    foreach ($n in $Result.Notes) { Write-UiLine ("- " + $n) -ForegroundColor DarkGray }
   }
 
   if ($Result.PerCategory -and $Result.PerCategory.Count -gt 0) {
-    Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-Host "Per-category diff:" -ForegroundColor DarkGray
+    Write-UiLine "------------------------------------------------------------" -ForegroundColor DarkGray
+    Write-UiLine "Per-category diff:" -ForegroundColor DarkGray
     foreach ($row in ($Result.PerCategory | Sort-Object Name)) {
-      Write-Host ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f $row.Name,$row.Add,$row.Remove,$row.Rejected) -ForegroundColor Gray
+      Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f $row.Name,$row.Add,$row.Remove,$row.Rejected) -ForegroundColor Gray
       if ($row.Add -gt 0 -or $row.Remove -gt 0 -or $row.Rejected -gt 0) {
         # Optional: highlight lines with changes (second line in color to avoid pipeline)
-        Write-Host ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f "",$row.Add,$row.Remove,$row.Rejected) -ForegroundColor DarkGray
-        Write-Host ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f "",$row.Add,$row.Remove,$row.Rejected) -ForegroundColor DarkGray
+        Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f "",$row.Add,$row.Remove,$row.Rejected) -ForegroundColor DarkGray
+        Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f "",$row.Add,$row.Remove,$row.Rejected) -ForegroundColor DarkGray
       }
 
-      # Keep it simple: single line; colors per field are not possible without multiple Write-Host calls.
+      # Keep it simple: single line; colors per field are not possible without multiple Write-UiLine calls.
       # We already color the totals and overall result.
     }
   }
 
-  Write-Host "============================================================" -ForegroundColor DarkGray
-  Write-Host ""
+  Write-UiLine "============================================================" -ForegroundColor DarkGray
+  Write-UiLine ""
 }
 
 # ----------------------------- Main ------------------------------------------------
-
-$eventLogReady = Ensure-EventSource
+$script:Findings = New-FindingsList
+$null = Ensure-EventSource
 
 try {
   if (-not (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)) {
@@ -493,7 +538,7 @@ try {
     elseif ($cfg -and $cfg.DefenderAllowListPath) { $ExceptionsPath = [string]$cfg.DefenderAllowListPath }
   }
 
-  $sourceJson = $(if ($ExceptionsPath) { $ExceptionsPath } else { "PATH/TO/JSON (not provided)" })
+  $sourceJson = $(if ($ExceptionsPath) { $ExceptionsPath } else { "(not provided)" })
 
   $jsonLoaded   = $false
   $jsonError    = $null
@@ -503,7 +548,7 @@ try {
 
   if ($ExceptionsPath -and (Test-Path -LiteralPath $ExceptionsPath)) {
     try {
-      $raw = Get-Content -Raw -LiteralPath $ExceptionsPath
+      $raw = Get-Content -Raw -LiteralPath $ExceptionsPath -Encoding UTF8
       if ([string]::IsNullOrWhiteSpace($raw)) {
         $jsonError = "Allowlist JSON file is empty."
         if ($StrictJson) { throw $jsonError }
@@ -564,11 +609,16 @@ try {
 
   if (($totalAdd + $totalRem + $totalBad) -eq 0) {
     $resultCode = "OK_NO_DRIFT"
-    Write-HealthEvent -Id 3200 -Msg "Defender/ASR allowlist OK: no drift. JSON=$sourceJson Audit=$AuditPath" -Level Information -EventLogReady:$eventLogReady
+    Write-HealthEvent -Id 3200 -Msg "Defender/ASR allowlist OK: no drift. JSON=$sourceJson Audit=$AuditPath" -Level Information
   }
   elseif (-not $Remediate) {
     $resultCode = "DRIFT_NO_REMEDIATION"
-    Write-HealthEvent -Id 3210 -Msg "Defender/ASR allowlist drift: add=$totalAdd remove=$totalRem rejected=$totalBad (no remediation). JSON=$sourceJson Audit=$AuditPath" -Level Warning -EventLogReady:$eventLogReady
+    Write-HealthEvent -Id 3210 -Msg "Defender/ASR allowlist drift: add=$totalAdd remove=$totalRem rejected=$totalBad (no remediation). JSON=$sourceJson Audit=$AuditPath" -Level Warning
+    foreach ($d in $diffs) {
+        if ($d.ToAdd.Count -gt 0) { Add-Finding -Code 'ASR-Drift-Add' -Severity 'Low' -Message "ASR drift (missing): $($d.Name)" -Extra @{ Missing = $d.ToAdd } }
+        if ($d.ToRemove.Count -gt 0) { Add-Finding -Code 'ASR-Drift-Remove' -Severity 'Low' -Message "ASR drift (extra): $($d.Name)" -Extra @{ Extra = $d.ToRemove } }
+        if ($d.Rejected.Count -gt 0) { Add-Finding -Code 'ASR-Rejected' -Severity 'Medium' -Message "ASR risky entry rejected: $($d.Name)" -Extra @{ Rejected = $d.Rejected } }
+    }
   }
   else {
     foreach ($d in $diffs) { $results += Apply-Diff -Diff $d -Remediate:$true }
@@ -576,10 +626,10 @@ try {
 
     if ($errsFlat.Count -gt 0) {
       $resultCode = "REMEDIATION_ERRORS"
-      Write-HealthEvent -Id 3210 -Msg ("Defender/ASR allowlist sync completed with errors. add=$totalAdd remove=$totalRem rejected=$totalBad JSON=$sourceJson Audit=$AuditPath`r`nErrors: " + ($errsFlat -join ' | ')) -Level Error -EventLogReady:$eventLogReady
+      Write-HealthEvent -Id 3210 -Msg ("Defender/ASR allowlist sync completed with errors. add=$totalAdd remove=$totalRem rejected=$totalBad JSON=$sourceJson Audit=$AuditPath`r`nErrors: " + ($errsFlat -join ' | ')) -Level Error
     } else {
       $resultCode = "REMEDIATION_OK"
-      Write-HealthEvent -Id 3200 -Msg "Defender/ASR allowlist sync OK. add=$totalAdd remove=$totalRem rejected=$totalBad JSON=$sourceJson Audit=$AuditPath" -Level Information -EventLogReady:$eventLogReady
+      Write-HealthEvent -Id 3200 -Msg "Defender/ASR allowlist sync OK. add=$totalAdd remove=$totalRem rejected=$totalBad JSON=$sourceJson Audit=$AuditPath" -Level Information
     }
   }
 
@@ -618,17 +668,16 @@ try {
   Write-AuditJson -Path $AuditPath -Object $final
   Write-ConsoleSummary -Result $final
 
-  if ($Passthru) { $final }
 }
 catch {
   $msg = "Defender/ASR allowlist failed: $($_.Exception.Message)"
-  Write-HealthEvent -Id 3210 -Msg $msg -Level Error -EventLogReady:$eventLogReady
+  Write-HealthEvent -Id 3210 -Msg $msg -Level Error
 
   $final = [pscustomobject]@{
     Timestamp     = (Get-Date).ToString("o")
     ComputerName  = $env:COMPUTERNAME
     Remediate     = [bool]$Remediate
-    SourceJson    = $(if ($ExceptionsPath) { $ExceptionsPath } else { "PATH/TO/JSON (unknown)" })
+    SourceJson    = $(if ($ExceptionsPath) { $ExceptionsPath } else { "(not provided)" })
     AuditPath     = $AuditPath
     JsonLoaded    = $false
     JsonError     = $msg
@@ -649,6 +698,11 @@ catch {
 
   Write-AuditJson -Path $AuditPath -Object $final
   Write-ConsoleSummary -Result $final
-
-  if ($Passthru) { $final }
 }
+
+# V2 output contract
+$resultToken = if ($final.Result -eq 'FAILED') { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $final -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

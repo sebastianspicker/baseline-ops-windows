@@ -6,7 +6,7 @@ Triggers certificate autoenrollment, queries AutoEnrollment-related events, and 
 .DESCRIPTION
 Output model (best practice):
 - Pipeline output: structured object(s) only (PSCustomObject) unless -Quiet is used.
-- Console output: pretty summary via Write-Host only (no "pretty text" in the pipeline). [web:142][web:102]
+- Console output: pretty summary via Write-UiLine only (no "pretty text" in the pipeline). [web:142][web:102]
 
 .PARAMETER WarnDays
 Certificates expiring within <= WarnDays are reported.
@@ -34,13 +34,37 @@ Do not print the console summary block.
 
 .PARAMETER Quiet
 Do not write the result object to the success output stream (console summary still shown unless suppressed).
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER NoColor
+  Disable colored output.
+
+
+.OUTPUTS
+  None by default.
+  When -PassThru is used, emits a PSCustomObject v2 result with Script, Mode, Result, Findings, Summary, and Metadata properties.
+
 .EXAMPLE
   .\24-Cert-AutoEnrollment-Health.ps1
 
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [ValidateRange(1, 3650)]
   [int]$WarnDays = 30,
@@ -50,7 +74,7 @@ param(
 
   [string]$ExportPath,
 
-  [string]$ConfigPath = "PATH/TO/JSON/config.json",
+  [string]$ConfigPath,
 
   [switch]$IncludeExpired,
 
@@ -61,15 +85,53 @@ param(
   [switch]$NoConsoleSummary,
 
   [switch]$Quiet
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 3.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 function Get-ConfigValueInt {
   param(
@@ -200,19 +262,6 @@ function Get-HealthStatus {
   'OK'
 }
 
-function Write-ColorValue {
-  param(
-    [Parameter(Mandatory)][string]$Label,
-    [Parameter(Mandatory)][string]$Value,
-    [ConsoleColor]$LabelColor = 'Gray',
-    [ConsoleColor]$ValueColor = 'Gray'
-  )
-
-  $pad = 28
-  $left = ($Label + ':').PadRight($pad)
-  Write-Host $left -NoNewline -ForegroundColor $LabelColor
-  Write-Host $Value -ForegroundColor $ValueColor
-}
 
 function Show-ConsoleSummary {
   param([Parameter(Mandatory)]$ResultObject)
@@ -226,92 +275,92 @@ function Show-ConsoleSummary {
   $headline = "Certificate AutoEnrollment Health"
   $line = ('=' * ($headline.Length + 10))
 
-  Write-Host ""
-  Write-Host $line -ForegroundColor DarkGray
-  Write-Host ("===  {0}  ===" -f $headline) -ForegroundColor Cyan
-  Write-Host $line -ForegroundColor DarkGray
+  Write-UiLine ""
+  Write-UiLine $line -ForegroundColor DarkGray
+  Write-UiLine ("===  {0}  ===" -f $headline) -ForegroundColor Cyan
+  Write-UiLine $line -ForegroundColor DarkGray
 
-  Write-ColorValue -Label 'Status' -Value $status -LabelColor Gray -ValueColor $statusColor
-  Write-ColorValue -Label 'ComputerName' -Value $ResultObject.ComputerName -LabelColor Gray -ValueColor White
-  Write-ColorValue -Label 'Timestamp' -Value ([string]$ResultObject.Timestamp) -LabelColor Gray -ValueColor White
+  Write-KeyValue -Label 'Status' -Value $status -LabelColor Gray -ValueColor $statusColor
+  Write-KeyValue -Label 'ComputerName' -Value $ResultObject.ComputerName -LabelColor Gray -ValueColor White
+  Write-KeyValue -Label 'Timestamp' -Value ([string]$ResultObject.Timestamp) -LabelColor Gray -ValueColor White
 
-  Write-Host ""
-  Write-Host "Configuration" -ForegroundColor Cyan
-  Write-Host ('-' * 40) -ForegroundColor DarkGray
+  Write-UiLine ""
+  Write-UiLine "Configuration" -ForegroundColor Cyan
+  Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
-  $cfgLoadedColor = 'DarkYellow'
+  $cfgLoadedColor = 'Warning'
   if ($ResultObject.ConfigLoaded) { $cfgLoadedColor = 'Green' }
-  Write-ColorValue -Label 'ConfigLoaded' -Value ([string]$ResultObject.ConfigLoaded) -ValueColor $cfgLoadedColor
+  Write-KeyValue -Label 'ConfigLoaded' -Value ([string]$ResultObject.ConfigLoaded) -ValueColor $cfgLoadedColor
 
   if ($ResultObject.ConfigPath) {
-    Write-ColorValue -Label 'ConfigPath' -Value $ResultObject.ConfigPath -ValueColor DarkGray
+    Write-KeyValue -Label 'ConfigPath' -Value $ResultObject.ConfigPath -ValueColor DarkGray
   }
 
-  Write-Host ""
-  Write-Host "AutoEnrollment" -ForegroundColor Cyan
-  Write-Host ('-' * 40) -ForegroundColor DarkGray
+  Write-UiLine ""
+  Write-UiLine "AutoEnrollment" -ForegroundColor Cyan
+  Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
   if ($ResultObject.NoPulse) {
-    Write-ColorValue -Label 'Pulse' -Value 'Skipped (NoPulse)' -ValueColor DarkGray
+    Write-KeyValue -Label 'Pulse' -Value 'Skipped (NoPulse)' -ValueColor DarkGray
   } else {
     $pulseColor = 'Red'
     if ($ResultObject.AutoEnrollmentTriggered) { $pulseColor = 'Green' }
-    Write-ColorValue -Label 'PulseTriggered' -Value ([string]$ResultObject.AutoEnrollmentTriggered) -ValueColor $pulseColor
+    Write-KeyValue -Label 'PulseTriggered' -Value ([string]$ResultObject.AutoEnrollmentTriggered) -ValueColor $pulseColor
 
     if ($ResultObject.AutoEnrollmentError) {
-      Write-ColorValue -Label 'PulseError' -Value $ResultObject.AutoEnrollmentError -ValueColor Red
+      Write-KeyValue -Label 'PulseError' -Value $ResultObject.AutoEnrollmentError -ValueColor Red
     }
   }
 
-  Write-Host ""
-  Write-Host "Event Log" -ForegroundColor Cyan
-  Write-Host ('-' * 40) -ForegroundColor DarkGray
+  Write-UiLine ""
+  Write-UiLine "Event Log" -ForegroundColor Cyan
+  Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
-  $modeColor = 'DarkYellow'
+  $modeColor = 'Warning'
   if ($ResultObject.EventQueryMode -eq 'Operational') { $modeColor = 'Green' }
   if ($ResultObject.EventQueryMode -eq 'None') { $modeColor = 'Red' }
-  Write-ColorValue -Label 'QueryMode' -Value $ResultObject.EventQueryMode -ValueColor $modeColor
+  Write-KeyValue -Label 'QueryMode' -Value $ResultObject.EventQueryMode -ValueColor $modeColor
 
-  Write-ColorValue -Label 'LogNameUsed' -Value ([string]$ResultObject.LogNameUsed) -ValueColor White
-  Write-ColorValue -Label 'HoursBack' -Value ([string]$ResultObject.HoursBack) -ValueColor White
+  Write-KeyValue -Label 'LogNameUsed' -Value ([string]$ResultObject.LogNameUsed) -ValueColor White
+  Write-KeyValue -Label 'HoursBack' -Value ([string]$ResultObject.HoursBack) -ValueColor White
 
   $eventsColor = 'Gray'
-  if ($ResultObject.EventsFound -gt 0) { $eventsColor = 'DarkYellow' }
-  Write-ColorValue -Label 'EventsFound' -Value ([string]$ResultObject.EventsFound) -ValueColor $eventsColor
+  if ($ResultObject.EventsFound -gt 0) { $eventsColor = 'Warning' }
+  Write-KeyValue -Label 'EventsFound' -Value ([string]$ResultObject.EventsFound) -ValueColor $eventsColor
 
   if ($ResultObject.EventQueryError) {
-    Write-ColorValue -Label 'EventQueryError' -Value $ResultObject.EventQueryError -ValueColor DarkYellow
+    Write-KeyValue -Label 'EventQueryError' -Value $ResultObject.EventQueryError -ValueColor DarkYellow
   }
 
-  Write-Host ""
-  Write-Host "Certificates (LocalMachine\\My)" -ForegroundColor Cyan
-  Write-Host ('-' * 40) -ForegroundColor DarkGray
+  Write-UiLine ""
+  Write-UiLine "Certificates (LocalMachine\\My)" -ForegroundColor Cyan
+  Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
-  Write-ColorValue -Label 'WarnDays' -Value ([string]$ResultObject.WarnDays) -ValueColor White
-  Write-ColorValue -Label 'IncludeExpired' -Value ([string]$ResultObject.IncludeExpired) -ValueColor White
-  Write-ColorValue -Label 'RequirePrivateKey' -Value ([string]$ResultObject.RequirePrivateKey) -ValueColor White
+  Write-KeyValue -Label 'WarnDays' -Value ([string]$ResultObject.WarnDays) -ValueColor White
+  Write-KeyValue -Label 'IncludeExpired' -Value ([string]$ResultObject.IncludeExpired) -ValueColor White
+  Write-KeyValue -Label 'RequirePrivateKey' -Value ([string]$ResultObject.RequirePrivateKey) -ValueColor White
 
   $expColor = 'Green'
   if ($ResultObject.ExpiringCertsFound -gt 0) { $expColor = 'Yellow' }
-  Write-ColorValue -Label 'ExpiringCertsFound' -Value ([string]$ResultObject.ExpiringCertsFound) -ValueColor $expColor
+  Write-KeyValue -Label 'ExpiringCertsFound' -Value ([string]$ResultObject.ExpiringCertsFound) -ValueColor $expColor
 
   if ($ResultObject.CertificateReadError) {
-    Write-ColorValue -Label 'CertificateReadError' -Value $ResultObject.CertificateReadError -ValueColor Red
+    Write-KeyValue -Label 'CertificateReadError' -Value $ResultObject.CertificateReadError -ValueColor Red
   }
 
-  Write-Host ""
-  Write-Host "Export" -ForegroundColor Cyan
-  Write-Host ('-' * 40) -ForegroundColor DarkGray
+  Write-UiLine ""
+  Write-UiLine "Export" -ForegroundColor Cyan
+  Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
   if ($ResultObject.ExportBasePath) {
-    Write-ColorValue -Label 'CSV Export' -Value 'Enabled' -ValueColor Green
-    Write-ColorValue -Label 'ExportBasePath' -Value $ResultObject.ExportBasePath -ValueColor White
+    Write-KeyValue -Label 'CSV Export' -Value 'Enabled' -ValueColor Green
+    Write-KeyValue -Label 'ExportBasePath' -Value $ResultObject.ExportBasePath -ValueColor White
   } else {
-    Write-ColorValue -Label 'CSV Export' -Value 'Disabled' -ValueColor DarkGray
+    Write-KeyValue -Label 'CSV Export' -Value 'Disabled' -ValueColor DarkGray
   }
 
-  Write-Host $line -ForegroundColor DarkGray
-  Write-Host ""
+  Write-UiLine $line -ForegroundColor DarkGray
+  Write-UiLine ""
 }
 
 # Defaults + optional JSON config
@@ -324,7 +373,7 @@ $defaults = [pscustomobject]@{
   LogName           = 'Microsoft-Windows-CertificateServicesClient-AutoEnrollment/Operational'
 }
 
-$configObj = Read-JsonConfig -Path $ConfigPath
+$configObj = Read-JsonFileSafe -Path $ConfigPath
 
 $WarnDays  = Get-ConfigValueInt -ConfigObject $configObj -Name 'WarnDays'  -DefaultValue $WarnDays  -Min 1 -Max 3650
 $HoursBack = Get-ConfigValueInt -ConfigObject $configObj -Name 'HoursBack' -DefaultValue $HoursBack -Min 1 -Max 168
@@ -342,10 +391,15 @@ if (-not $PSBoundParameters.ContainsKey('ExportPath')) {
 $logName = Get-ConfigValueString -ConfigObject $configObj -Name 'LogName' -DefaultValue $defaults.LogName
 
 # Preconditions
-if (-not (Test-IsAdmin)) { throw "Administrative privileges are required." }
+Require-Admin
 
 if (-not (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
-  throw "Cert: drive is not available. The Microsoft.PowerShell.Security provider/module may be missing."
+  $msg = "Cert: drive is not available. The Microsoft.PowerShell.Security provider/module may be missing."
+  Write-Warning $msg
+  $v2Result = New-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $msg } -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit 1
 }
 
 # 1) Trigger autoenrollment (optional)
@@ -431,6 +485,27 @@ $result = [pscustomobject]@{
   ExpiringCertificates      = $certOut
 }
 
+# C10: populate structured findings from result
+if ($certReadError) {
+  Add-Finding -FindingList $script:Findings -Code 'CERT-ReadError' -Severity 'High' `
+    -Message ("Certificate read error: {0}" -f $certReadError)
+}
+if ($eventQuery.Mode -eq 'None') {
+  Add-Finding -FindingList $script:Findings -Code 'CERT-EventQueryFailed' -Severity 'Medium' `
+    -Message ("Event log query failed: {0}" -f $eventQuery.Error)
+}
+if (-not $NoPulse -and -not $autoEnrollTriggered) {
+  Add-Finding -FindingList $script:Findings -Code 'CERT-PulseFailed' -Severity 'Medium' `
+    -Message ("AutoEnrollment pulse failed: {0}" -f $autoEnrollError)
+}
+foreach ($cert in @($certOut)) {
+  $daysLeft = [math]::Round(($cert.NotAfter - (Get-Date)).TotalDays, 0)
+  $sev = if ($daysLeft -le 7) { 'High' } elseif ($daysLeft -le 14) { 'Medium' } else { 'Low' }
+  Add-Finding -FindingList $script:Findings -Code 'CERT-Expiring' -Severity $sev `
+    -Message ("Certificate expiring in {0} days: {1} (Thumbprint: {2})" -f $daysLeft, $cert.Subject, $cert.Thumbprint) `
+    -Extra @{ Subject = $cert.Subject; Thumbprint = $cert.Thumbprint; NotAfter = $cert.NotAfter; DaysLeft = $daysLeft }
+}
+
 # 5) Optional CSV export
 if ($ExportPath) {
   $folder = Split-Path -Path $ExportPath -Parent
@@ -460,7 +535,9 @@ if (-not $NoConsoleSummary) {
   Show-ConsoleSummary -ResultObject $result
 }
 
-# Pipeline output (optional)
-#if (-not $Quiet) {
-#  $result
-#}
+# V2 output contract
+$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

@@ -5,7 +5,7 @@ Audit device identity (hostname, domain/workgroup, domain role, OS base data).
 
 .DESCRIPTION
 Pipeline: emits exactly one structured object (no strings, no formatting objects).
-Console: prints a human-readable summary using Write-Host only (not the pipeline). [web:135]
+Console: prints a human-readable summary using Write-UiLine only (not the pipeline). [web:135]
 
 .PARAMETER ExpectedDomain
 Optional. If provided (or loaded from JSON), deviations are reported as findings.
@@ -19,6 +19,28 @@ Optional JSON configuration file path (placeholder: PATH/TO/JSON\identity-audit.
 .PARAMETER NoConsoleSummary
 Suppress the console summary output.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 PSCustomObject with:
 - Flattened top-level properties for a clean default view
@@ -29,18 +51,54 @@ PSCustomObject with:
 
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$ExpectedDomain,
   [string]$ExportPath,
-  [string]$ConfigPath = 'PATH/TO/JSON\identity-audit.json',
+  [string]$ConfigPath,
   [switch]$NoConsoleSummary
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # region Helpers
@@ -80,7 +138,7 @@ function Import-JsonConfig {
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
     $raw | ConvertFrom-Json
   }
@@ -90,39 +148,7 @@ function Import-JsonConfig {
   }
 }
 
-function Write-ColorLine {
-  [CmdletBinding()]
-  param(
-    # Allow empty lines for pretty console output without validation errors.
-    [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
-    [ValidateSet('Gray','DarkGray','Green','Yellow','Red','Cyan','White')][string]$Color = 'Gray'
-  )
 
-  Write-Host $Text -ForegroundColor $Color
-}
-
-function Write-KeyValue {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Key,
-    [AllowNull()][object]$Value,
-    [ValidateSet('Gray','DarkGray','Green','Yellow','Red','Cyan','White')][string]$ValueColor = 'Gray'
-  )
-
-  $v = if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { '<none>' } else { [string]$Value }
-  Write-Host ("{0,-14}: " -f $Key) -NoNewline -ForegroundColor DarkGray
-  Write-Host $v -ForegroundColor $ValueColor
-}
-
-function Get-SeverityRank {
-  param([string]$Severity)
-  switch ($Severity) {
-    'High'   { 0 }
-    'Medium' { 1 }
-    'Low'    { 2 }
-    default  { 9 }
-  }
-}
 
 # endregion Helpers
 
@@ -333,7 +359,7 @@ if (-not $NoConsoleSummary) {
   if ($Findings.Count -gt 0) {
     Write-ColorLine '' 'Gray'
     Write-ColorLine 'Findings:' 'Yellow'
-    foreach ($f in ($Findings | Sort-Object @{Expression={ Get-SeverityRank $_.Severity }}, Code)) {
+    foreach ($f in ($Findings | Sort-Object @{Expression={ Get-SeverityRank -Severity $_.Severity }; Descending = $true }, Code)) {
       $c = switch ($f.Severity) { 'High' { 'Red' } 'Medium' { 'Yellow' } default { 'Gray' } }
       Write-ColorLine ("- [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) $c
     }
@@ -344,5 +370,9 @@ if (-not $NoConsoleSummary) {
 
 # endregion Pretty console output
 
-# Pipeline output: exactly one structured object
-#$result
+# V2 output contract
+$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary $result.Summary -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

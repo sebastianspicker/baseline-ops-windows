@@ -3,6 +3,8 @@
 Thumbs.db
 .vscode/
 .idea/
+.cursor/
+.codex/
 
 # PowerShell
 *.ps1~
@@ -14,3 +16,73 @@ Thumbs.db
 *.tmp
 *.bak
 *.old
+
+# Generated artifacts (may contain sensitive data)
+*.csv
+*.tsv
+*.zip
+*.evtx
+*.cab
+*.etl
+
+# Common output folders (support bundles / proofs)
+support/
+proof/
+proofs/
+evidence/
+reports/
+!reports/
+reports/*
+!reports/screenshots/
+reports/screenshots/*
+!reports/screenshots/launcher-gui-preview.png
+eventlogs/
+defender/
+defender-support/
+_extracted/
+
+# Environment files and credentials
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.cer
+id_rsa
+id_ed25519
+*.keystore
+
+# Local docs (findings/logs/decisions)
+DECISIONS.md
+FINDINGS.md
+LOG.md
+REFACTOR_PLAN.md
+PHYSICS_AUDIT.md
+validation.md
+HANDOFF.md
+progress.md
+
+# Development artifacts
+ralph-loop/
+plans/
+.claude/
+
+# CI/test artifacts
+coverage/
+test-results/
+testResults.xml
+junit.xml
+*.trx
+*.coverage
+*.coveragexml
+.nyc_output/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.terraform/
+node_modules/
+dist/
+build/
+out/

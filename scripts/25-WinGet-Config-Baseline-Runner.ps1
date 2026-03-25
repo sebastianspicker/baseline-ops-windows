@@ -7,7 +7,7 @@ a human-friendly console summary, and a reliable process exit code (PowerShell 5
 .DESCRIPTION
 Best-practice output model:
 - Pipeline output: structured objects only (safe for Export-Csv / ConvertTo-Json / Where-Object).
-- Console output: all separators/pretty formatting via Write-Host / Write-Information only. [web:61]
+- Console output: all separators/pretty formatting via Write-UiLine / Write-Information only. [web:61]
 
 JSON sidecar (optional):
 - If -SummaryJsonPath is not provided, the script tries:
@@ -44,12 +44,36 @@ Suppress console summary output.
 .PARAMETER ExtraArgs
 Additional raw arguments passed to WinGet (alias: Args).
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
+
+.OUTPUTS
+  None by default.
+  When -PassThru is used, emits a PSCustomObject v2 result with Script, Mode, Result, Findings, Summary, and Metadata properties.
+
 .EXAMPLE
   .\25-WinGet-Config-Baseline-Runner.ps1
 
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [Parameter(Mandatory = $false)]
   [string]$ConfigPath,
@@ -73,14 +97,52 @@ param(
 
   [Alias('Args')]
   [string[]]$ExtraArgs
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 function Ensure-File {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -148,31 +210,8 @@ function Get-EffectiveSetting {
   return $DefaultValue
 }
 
-function Write-Info {
-  param([Parameter(Mandatory = $true)][string]$Message)
-  Write-Information -MessageData $Message -InformationAction Continue  # [web:61]
-}
 
-function Write-Title { param([string]$Text) Write-Host $Text -ForegroundColor Cyan }
-function Write-Good  { param([string]$Text) Write-Host $Text -ForegroundColor Green }
-function Write-Warn  { param([string]$Text) Write-Host $Text -ForegroundColor Yellow }
-function Write-Bad   { param([string]$Text) Write-Host $Text -ForegroundColor Red }
 
-function Write-KeyValue {
-  param(
-    [Parameter(Mandatory = $true)][string]$Key,
-    [AllowNull()][string]$Value,
-    [System.ConsoleColor]$KeyColor = [System.ConsoleColor]::Gray,
-    [System.ConsoleColor]$ValueColor = [System.ConsoleColor]::White
-  )
-
-  Write-Host ("{0,-22}: " -f $Key) -ForegroundColor $KeyColor -NoNewline
-  if ([string]::IsNullOrWhiteSpace($Value)) {
-    Write-Host "(empty)" -ForegroundColor DarkGray
-  } else {
-    Write-Host $Value -ForegroundColor $ValueColor
-  }
-}
 
 function Get-BoolColor {
   param(
@@ -259,7 +298,7 @@ function Write-ConsoleSummary {
   $colorNoInteract = Get-BoolColor -Value $Summary.DisableInteractivity -TrueColor Green -FalseColor Yellow
   $colorFailFast   = Get-BoolColor -Value $Summary.FailFast -TrueColor Yellow -FalseColor White
 
-  Write-Host ''
+  Write-UiLine ''
   Write-Title '=== WinGet Configuration Summary ==='
 
   Write-KeyValue -Key 'ComputerName'    -Value $Summary.ComputerName
@@ -268,13 +307,13 @@ function Write-ConsoleSummary {
   Write-KeyValue -Key 'LogPath'         -Value $Summary.LogPath
   Write-KeyValue -Key 'Timestamp'       -Value ($Summary.Timestamp.ToString('s'))
 
-  Write-Host ''
+  Write-UiLine ''
   Write-KeyValue -Key 'TestOnly'             -Value ([string]$Summary.TestOnly)             -ValueColor $colorTestOnly
   Write-KeyValue -Key 'AcceptAgreements'     -Value ([string]$Summary.AcceptAgreements)     -ValueColor $colorAccept
   Write-KeyValue -Key 'DisableInteractivity' -Value ([string]$Summary.DisableInteractivity) -ValueColor $colorNoInteract
   Write-KeyValue -Key 'FailFast'             -Value ([string]$Summary.FailFast)             -ValueColor $colorFailFast
 
-  Write-Host ''
+  Write-UiLine ''
   if ($Summary.ExtraArgs -and $Summary.ExtraArgs.Count -gt 0) {
     Write-KeyValue -Key 'ExtraArgs' -Value ($Summary.ExtraArgs -join ' ')
   } else {
@@ -282,11 +321,11 @@ function Write-ConsoleSummary {
   }
 
   if ($Summary.ErrorMessage) {
-    Write-Host ''
+    Write-UiLine ''
     Write-Bad ("ERROR: {0}" -f $Summary.ErrorMessage)
   }
 
-  Write-Host ''
+  Write-UiLine ''
   Write-Title 'Phases'
   if ($Summary.Results -and $Summary.Results.Count -gt 0) {
     foreach ($r in $Summary.Results) {
@@ -297,12 +336,12 @@ function Write-ConsoleSummary {
     Write-Warn "- (no phases executed)"
   }
 
-  Write-Host ''
+  Write-UiLine ''
   if ($Summary.FinalExitCode -eq 0) { Write-Good ("FinalExitCode: {0}" -f $Summary.FinalExitCode) }
   else { Write-Bad ("FinalExitCode: {0}" -f $Summary.FinalExitCode) }
 
   Write-Title '==================================='
-  Write-Host ''
+  Write-UiLine ''
 }
 
 function Stop-UserFriendly {
@@ -324,7 +363,7 @@ function Stop-UserFriendly {
 
   if (-not $QuietConsoleEffective) {
     Write-Bad ("ERROR: {0}" -f $Message)
-    Write-Host "Hint: Provide -ConfigPath 'PATH/TO/config.dsc.yaml' or set 'ConfigPath' in PATH/TO/JSON." -ForegroundColor DarkYellow
+    Write-UiLine "Hint: Provide -ConfigPath 'PATH/TO/config.dsc.yaml' or set 'ConfigPath' in PATH/TO/JSON." -Style 'Warning'
   }
 
   $safeResults = $Results
@@ -403,6 +442,27 @@ elseif ($jsonSettings.ContainsKey('Args')) {
   elseif ($j -is [System.Collections.IEnumerable]) { $ExtraArgsEffective = @($j) }
 }
 
+# S12 fix: validate ExtraArgs against a blocklist of dangerous winget flags
+if ($ExtraArgsEffective -and $ExtraArgsEffective.Count -gt 0) {
+  $blockedFlags = @('--override', '--custom', '--ignore-security-hash', '--location',
+                     '--log', '-o', '-h', '--header', '--authentication-account',
+                     '--authentication-mode')
+  foreach ($arg in $ExtraArgsEffective) {
+    $argStr = [string]$arg
+    # Block shell metacharacters
+    if ($argStr -match '[;&|`$(){}<>]') {
+      throw "ExtraArgs contains shell metacharacters: '$argStr'. Aborting."
+    }
+    # Block dangerous flags (case-insensitive, matching the flag portion before any '=' or space)
+    $flagPart = ($argStr -split '[= ]', 2)[0]
+    foreach ($blocked in $blockedFlags) {
+      if ($flagPart -ieq $blocked) {
+        throw "ExtraArgs contains blocked flag '$argStr'. The flag '$blocked' is not allowed for safety reasons."
+      }
+    }
+  }
+}
+
 if ((-not $ExtraArgsEffective) -or ($ExtraArgsEffective.Count -eq 0)) {
   if (-not $QuietConsoleEffective) { Write-Info "Info: No extra -Args provided. Continuing without additional winget arguments." }
 }
@@ -472,5 +532,24 @@ $summary = New-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $r
   -ErrorMessage (if ($finalExitCode -ne 0) { "WinGet finished with a non-zero exit code." } else { $null })
 
 Write-ConsoleSummary -Summary $summary
-if ($PassThruEffective) { $summary }
+
+# C10: populate findings from phase results
+foreach ($phaseResult in @($results.ToArray())) {
+  if ($phaseResult.ExitCode -ne 0) {
+    $sev = if ($phaseResult.Phase -eq 'apply') { 'High' } else { 'Medium' }
+    Add-Finding -FindingList $script:Findings -Code ("WINGET-{0}Failed" -f $phaseResult.Phase) -Severity $sev `
+      -Message ("WinGet phase '{0}' failed with exit code {1}" -f $phaseResult.Phase, $phaseResult.ExitCode) `
+      -Extra @{ Phase = $phaseResult.Phase; ExitCode = $phaseResult.ExitCode; DurationS = $phaseResult.DurationS }
+  }
+}
+
+# V2 output contract
+$resultToken = if ($finalExitCode -ne 0) { 'FAIL' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $summary -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
 exit $finalExitCode
+
+
+
+

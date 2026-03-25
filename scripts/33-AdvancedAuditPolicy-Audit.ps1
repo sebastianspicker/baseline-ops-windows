@@ -1,3 +1,4 @@
+#Requires -RunAsAdministrator
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -6,20 +7,47 @@ optionally compares against a desired-state JSON and can remediate.
 
 .DESCRIPTION
 - Pipeline output: single structured object (Summary, Findings, ParsedPolicies).
-- Console output: pretty, human-friendly blocks via Write-Host only.
+- Console output: pretty, human-friendly blocks via Write-UiLine only.
 - Desired policy:
   - If JSON is missing/unreadable/invalid => built-in defaults are used for drift checks only.
   - Remediate requires a valid JSON file.
 - PowerShell 5.1 safe: avoids Generic.List binder edge-cases.
 
 .PARAMETER Mode
-AuditOnly | Remediate
+Audit | Remediate
 
 .PARAMETER DesiredPolicyJson
 Path to JSON with desired subcategory settings (example: PATH/TO/JSON/auditpolicy.json).
 
 .PARAMETER ExportPath
 Optional base path for CSV export. Creates: *_summary.csv, *_findings.csv, *_policies.csv
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
+
+.OUTPUTS
+  None by default.
+  When -PassThru is used, emits a PSCustomObject v2 result with Script, Mode, Result, Findings, Summary, and Metadata properties.
+
 .EXAMPLE
   .\33-AdvancedAuditPolicy-Audit.ps1
 
@@ -28,49 +56,72 @@ Optional base path for CSV export. Creates: *_summary.csv, *_findings.csv, *_pol
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [ValidateSet('AuditOnly','Remediate')]
-  [string]$Mode = 'AuditOnly',
+  [ValidateSet('Audit','Remediate')]
+  [string]$Mode = 'Audit',
 
   [string]$DesiredPolicyJson,
 
   [string]$ExportPath
+
+,
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
-# Findings are kept in ArrayList to avoid PS 5.1 DLR binder edge-cases with Generic.List.
-$script:Findings = New-Object System.Collections.ArrayList
+# C10: use canonical New-FindingsList from Results.psm1
+$script:Findings = New-FindingsList
 
 # -------------------- Helpers --------------------
 
 
-function Ensure-Exe {
-  param([Parameter(Mandatory=$true)][string]$Name)
-  $cmd = Get-Command -Name $Name -ErrorAction SilentlyContinue
-  if (-not $cmd) { throw "Executable not found: $Name" }
-}
-
-function Get-FindingStats {
-  param([Parameter(Mandatory=$true)][System.Collections.ArrayList]$Findings)
-
-  $h = @{ Info = 0; Low = 0; Medium = 0; High = 0 }
-  foreach ($f in $Findings) {
-    if ($null -eq $f) { continue }
-    $sev = [string]$f.Severity
-    if ($h.ContainsKey($sev)) { $h[$sev]++ }
-  }
-  [pscustomobject]$h
-}
+# Get-FindingStats imported from lib/Console.psm1
 
 function Get-AuditPolText {
-  $raw = & auditpol.exe /get /category:* 2>&1
-  ($raw | Out-String)
+  # Use /r flag for CSV output (locale-independent)
+  $r = Invoke-Auditpol -Arguments @('/get', '/category:*', '/r') -CaptureOutput
+  if ($r -and $r.Output) { return ($r.Output | Out-String) }
+  return ''
 }
 
 function Parse-AuditPolText {
@@ -79,37 +130,32 @@ function Parse-AuditPolText {
   # Return policies as object[] (arrays behave best in PS pipeline and serializers).
   $policies = @()
 
-  $lines = $Text -split "`r?`n"
-  $currentCategory = $null
+  if ([string]::IsNullOrWhiteSpace($Text)) { return ,$policies }
 
-  foreach ($l in $lines) {
-    $line = $l.TrimEnd()
-    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  # Parse CSV output from auditpol /get /category:* /r (locale-independent)
+  $lines = $Text -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  if ($lines.Count -lt 2) { return ,$policies }
 
-    # Category line heuristic (locale dependent).
-    if ($line -notmatch '\s{2,}' -and $line -notmatch '^-{2,}$') {
-      if ($line -match 'Subcategory' -or $line -match 'Category' -or $line -match 'Setting') { continue }
-      $currentCategory = $line.Trim()
-      continue
+  $csvRows = $lines | ConvertFrom-Csv
+  foreach ($row in $csvRows) {
+    $sub = $null
+    $cat = $null
+    $set = $null
+
+    # CSV columns from auditpol /r: Machine Name, Policy Target, Subcategory, Subcategory GUID, Inclusion Setting, Exclusion Setting
+    foreach ($p in $row.PSObject.Properties) {
+      $name = $p.Name
+      if ($name -match '(?i)^Subcategory$' -and $null -eq $sub) { $sub = [string]$p.Value }
+      if ($name -match '(?i)Category') { $cat = [string]$p.Value }
+      if ($name -match '(?i)Inclusion Setting') { $set = [string]$p.Value }
     }
 
-    # Data line heuristic: 2+ spaces as column delimiter.
-    if ($line -match '\s{2,}') {
-      $parts = $line -split '\s{2,}'
-      if ($parts.Count -ge 2) {
-        $sub = ($parts[0]).Trim()
-        $set = ($parts[$parts.Count - 1]).Trim()
-
-        if ([string]::IsNullOrWhiteSpace($sub) -or [string]::IsNullOrWhiteSpace($set)) { continue }
-        if ($sub -match 'Subcategory' -or $set -match 'Setting') { continue }
-
-        if ([string]::IsNullOrWhiteSpace($currentCategory)) { $currentCategory = '(Unknown)' }
-
-        $policies += [pscustomobject]@{
-          Category    = $currentCategory
-          Subcategory = $sub
-          Setting     = $set
-        }
+    if (-not [string]::IsNullOrWhiteSpace($sub) -and -not [string]::IsNullOrWhiteSpace($set)) {
+      if ([string]::IsNullOrWhiteSpace($cat)) { $cat = '(Unknown)' }
+      $policies += [pscustomobject]@{
+        Category    = $cat
+        Subcategory = $sub
+        Setting     = $set
       }
     }
   }
@@ -157,16 +203,13 @@ function Get-DefaultDesiredPolicy {
 function Try-ReadDesiredPolicyJson {
   param([string]$Path)
 
-  if ([string]::IsNullOrWhiteSpace($Path)) {
-    return [pscustomobject]@{ Desired = $null; Source = 'None'; Error = $null }
-  }
-
-  if (-not (Test-Path -LiteralPath $Path)) {
-    return [pscustomobject]@{ Desired = $null; Source = 'Missing'; Error = "DesiredPolicyJson not found: $Path" }
+  $sanitized = Sanitize-Path -Path $Path -MustExist
+  if (-not $sanitized) {
+    return [pscustomobject]@{ Desired = $null; Source = 'Missing'; Error = "DesiredPolicyJson not found or invalid: $Path" }
   }
 
   try {
-    $desired = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $desired = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($null -eq $desired -or $desired -isnot [psobject]) { throw "Invalid JSON root object." }
 
     # Validate values up-front (prevents remediation surprises).
@@ -190,64 +233,15 @@ function Try-ReadDesiredPolicyJson {
   }
 }
 
-# -------------------- Console UI --------------------
-
-function Get-SeverityColor {
-  param([Parameter(Mandatory=$true)][ValidateSet('Info','Low','Medium','High')][string]$Severity)
-
-  switch ($Severity) {
-    'High'   { 'Red' }
-    'Medium' { 'Yellow' }
-    'Low'    { 'Cyan' }
-    default  { 'Gray' }
-  }
-}
-
-function Write-Rule {
-  param([string]$Title)
-
-  $line = ('=' * 62)
-  Write-Host ''
-  Write-Host $line -ForegroundColor DarkCyan
-  if ($Title) { Write-Host ("{0}" -f $Title) -ForegroundColor Cyan }
-  Write-Host $line -ForegroundColor DarkCyan
-}
-
-function Write-ConsoleSummary {
-  param(
-    [Parameter(Mandatory=$true)][psobject]$Summary,
-    [Parameter(Mandatory=$true)][System.Collections.ArrayList]$Findings,
-    [Parameter(Mandatory=$true)][string]$DesiredPolicySource,
-    [string]$DesiredPolicyError
-  )
-
-  $stats = Get-FindingStats -Findings $Findings
-
-  Write-Rule -Title 'Advanced Audit Policy - Summary'
-
-  Write-Host ("ComputerName     : {0}" -f $Summary.ComputerName)
-  Write-Host ("Mode             : {0}" -f $Summary.Mode)
-  Write-Host ("Policies parsed  : {0}" -f $Summary.PoliciesParsed)
-
-  $countLine = ("Findings         : {0} (High={1}, Medium={2}, Low={3}, Info={4})" -f $Findings.Count, $stats.High, $stats.Medium, $stats.Low, $stats.Info)
-  $countColor = if ($stats.High -gt 0) { 'Red' } elseif ($stats.Medium -gt 0) { 'Yellow' } elseif ($Findings.Count -gt 0) { 'Cyan' } else { 'Green' }
-  Write-Host $countLine -ForegroundColor $countColor
-
-  Write-Host ("Desired policy   : {0}" -f $DesiredPolicySource)
-  if ($DesiredPolicyError) {
-    Write-Host ("DesiredPolicyError: {0}" -f $DesiredPolicyError) -ForegroundColor Yellow
-  }
-
-  Write-Host ("Timestamp        : {0}" -f $Summary.Timestamp)
-}
+# -------------------- Console UI (Write-ConsoleSummary / Get-SeverityColor from lib/Console.psm1) --------------------
 
 function Write-FindingsConsole {
-  param([Parameter(Mandatory=$true)][System.Collections.ArrayList]$Findings)
+  param([Parameter(Mandatory=$true)][System.Collections.IList]$Findings)
 
-  Write-Rule -Title ("Findings ({0})" -f $Findings.Count)
+  Write-DecorativeRule -Title ("Findings ({0})" -f $Findings.Count)
 
   if ($Findings.Count -eq 0) {
-    Write-Host 'No findings.' -ForegroundColor Green
+    Write-UiLine 'No findings.' -ForegroundColor Green
     return
   }
 
@@ -257,19 +251,19 @@ function Write-FindingsConsole {
     if ($items.Count -eq 0) { continue }
 
     $color = Get-SeverityColor -Severity $sev
-    Write-Host ("{0} ({1})" -f $sev.ToUpperInvariant(), $items.Count) -ForegroundColor $color
+    Write-UiLine ("{0} ({1})" -f $sev.ToUpperInvariant(), $items.Count) -ForegroundColor $color
 
     foreach ($f in $items) {
-      Write-Host ("  [{0}] {1}" -f $f.Code, $f.Message) -ForegroundColor $color
+      Write-UiLine ("  [{0}] {1}" -f $f.Code, $f.Message) -ForegroundColor $color
     }
 
-    Write-Host ''
+    Write-UiLine ''
   }
 }
 
 # -------------------- Main --------------------
 
-if (-not (Test-IsAdmin)) { throw "Administrative privileges are required." }
+Require-Admin
 Ensure-Exe -Name 'auditpol.exe'
 
 $txt = Get-AuditPolText
@@ -330,7 +324,7 @@ foreach ($catProp in $desired.PSObject.Properties) {
     }
 
     if ([string]$current.Setting -ne $wanted) {
-      Add-Finding -Code 'AUD-Drift' -Severity 'Medium' -Message ("Drift: '{0} -> {1}' is '{2}', expected '{3}'." -f $catName, $subName, $current.Setting, $wanted)
+      Add-Finding -Code 'AUD-Drift' -Severity 'Medium' -Message ("Drift: '{0} -> {1}' is '{2}', expected '{3}'." -f $catName, $subName, $current.Setting, $wanted) -Extra @{ Category = $catName; Subcategory = $subName; Current = $current.Setting; Desired = $wanted }
     }
   }
 }
@@ -338,7 +332,13 @@ foreach ($catProp in $desired.PSObject.Properties) {
 # Remediation: only with valid JSON (never with defaults).
 if ($Mode -eq 'Remediate') {
   if ($desiredInfo.Source -ne 'Json') {
-    throw "Mode=Remediate requires a valid -DesiredPolicyJson (not defaults). Example: PATH/TO/JSON/auditpolicy.json"
+    $msg = "Mode=Remediate requires a valid -DesiredPolicyJson (not defaults). Example: PATH/TO/JSON/auditpolicy.json"
+    Write-Warning $msg
+    Add-Finding -Code 'AuditPol-NoDesiredPolicy' -Severity 'Critical' -Message $msg
+    $v2Result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings @($script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+    Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+    if ($PassThru) { $v2Result }
+    exit 1
   }
 
   foreach ($catProp in $desired.PSObject.Properties) {
@@ -348,6 +348,12 @@ if ($Mode -eq 'Remediate') {
       $subName   = $subProp.Name
       $setWanted = [string]$subProp.Value
 
+      # S6 fix: validate subcategory name to prevent argument injection via auditpol.exe
+      if ($subName -notmatch '^[a-zA-Z0-9 \-\/]+$') {
+        Add-Finding -Code 'AuditPol-InvalidSubcategory' -Severity 'High' -Message ("Subcategory name contains invalid characters, skipped: {0}" -f $subName)
+        continue
+      }
+
       $flags      = Convert-DesiredSettingToFlags -SettingString $setWanted
       $successArg = if ($flags.Success) { '/success:enable' } else { '/success:disable' }
       $failureArg = if ($flags.Failure) { '/failure:enable' } else { '/failure:disable' }
@@ -355,8 +361,11 @@ if ($Mode -eq 'Remediate') {
       # auditpol /set syntax [page:1]
       $operation = ('auditpol.exe /set /subcategory:"{0}" {1} {2}' -f $subName, $successArg, $failureArg)
       if ($PSCmdlet.ShouldProcess($subName, $operation)) {
-        $auditArgs = @('/set', "/subcategory:$subName", $successArg, $failureArg)
-        & auditpol.exe @auditArgs | Out-Null
+        $auditArgs = @('/set', "/subcategory:`"$subName`"", $successArg, $failureArg)
+        $res = Invoke-Auditpol -Arguments $auditArgs
+        if ($res -ne $true) {
+          Add-Finding -Code 'AuditPol-SetFailed' -Severity 'High' -Message ("auditpol /set failed for subcategory: {0}" -f $subName)
+        }
       }
     }
   }
@@ -392,12 +401,20 @@ if ($ExportPath) {
 }
 
 # Pretty console output (does not touch pipeline).
-Write-ConsoleSummary -Summary $summary -Findings $script:Findings -DesiredPolicySource $desiredSource -DesiredPolicyError $desiredError
+$customFields = [ordered]@{
+  'Mode'          = $summary.Mode
+  'Parsed'        = [string]$summary.PoliciesParsed
+  'DesiredPolicy' = $desiredSource
+}
+if ($desiredError) { $customFields['PolicyError'] = $desiredError }
+Write-ConsoleSummary -Summary $summary -Findings $script:Findings `
+  -Title 'Advanced Audit Policy - Summary' `
+  -CustomFields $customFields
 Write-FindingsConsole -Findings $script:Findings
 
-# Pipeline output (structured only).
-#[pscustomobject]@{
-#  Summary        = $summary
-#  Findings       = @($script:Findings)
-#  ParsedPolicies = $policies
-#}
+# V2 output contract
+$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $summary -Metadata @{ ParsedPolicies = $policies }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

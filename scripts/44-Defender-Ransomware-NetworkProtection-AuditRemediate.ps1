@@ -7,9 +7,31 @@ Audit + optional remediation for Microsoft Defender (PowerShell 5.1):
 
 .DESCRIPTION
 - Pipeline outputs ONLY structured objects (one final result object).
-- Human-friendly console output uses Write-Host only (colors, sections).
+- Human-friendly console output uses Write-UiLine only (colors, sections).
 - Optional JSON config; safe defaults if JSON is missing/invalid/empty.
 - Optional CSV export of the summary object.
+
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
 Defender.AuditResult with properties:
@@ -47,8 +69,8 @@ Optional CSV export path.
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [ValidateSet('AuditOnly','Remediate')]
-  [string]$Mode = 'AuditOnly',
+  [ValidateSet('Audit','Remediate')]
+  [string]$Mode = 'Audit',
 
   [ValidateSet('Disabled','Enabled','AuditMode','BlockDiskModificationOnly','AuditDiskModificationOnly')]
   [string]$EnableControlledFolderAccess = 'Enabled',
@@ -63,14 +85,50 @@ param(
   [string]$ConfigJsonPath,
 
   [string]$ExportPath
+
+,
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -----------------------------
@@ -78,12 +136,7 @@ $ErrorActionPreference = 'Stop'
 # -----------------------------
 
 
-function Ensure-Cmdlet {
-  param([Parameter(Mandatory)][string]$Name)
-  if (-not (Get-Command -Name $Name -ErrorAction SilentlyContinue)) {
-    throw "Required cmdlet not found: $Name. Ensure Microsoft Defender cmdlets are available."
-  }
-}
+# Ensure-Cmdlet imported from lib/External.psm1
 
 function Normalize-OptionalPath {
   param([string]$Path)
@@ -158,13 +211,13 @@ function Load-ConfigFromJson {
     [System.Collections.Generic.List[object]]$FindingList
   )
 
-  $Path = Normalize-OptionalPath -Path $Path
-  if (-not $Path) { return @{ Config = $null; FindingList = $FindingList } }
+  $sanitized = Sanitize-Path -Path $Path -MustExist
+  if (-not $sanitized) { return @{ Config = $null; FindingList = $FindingList } }
 
   try {
-    if (-not (Test-Path -LiteralPath $Path)) { return @{ Config = $null; FindingList = $FindingList } }
+    if (-not $sanitized) { return @{ Config = $null; FindingList = $FindingList } }
 
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($raw)) { return @{ Config = $null; FindingList = $FindingList } }
 
     $cfg = ($raw | ConvertFrom-Json)
@@ -173,22 +226,11 @@ function Load-ConfigFromJson {
   catch {
     $FindingList = Add-Finding -FindingList $FindingList -Code 'CFG-JSON-LoadFailed' -Severity 'Low' -Message (
       "JSON config could not be loaded; using safe defaults/CLI. Path='{0}'. Error='{1}'" -f 'PATH/TO/JSON', $_.Exception.Message
-    ) -TypeName 'Defender.AuditFinding'
+    )
     return @{ Config = $null; FindingList = $FindingList }
   }
 }
 
-function Write-ColoredLine {
-  param(
-    # FIX: allow empty string so callers can print blank lines safely. [web:55]
-    [Parameter(Mandatory)]
-    [AllowEmptyString()]
-    [string]$Text,
-
-    [ConsoleColor]$Color = ([ConsoleColor]::Gray)
-  )
-  Write-Host $Text -ForegroundColor $Color
-}
 
 function Write-ConsoleReport {
   param(
@@ -209,33 +251,33 @@ function Write-ConsoleReport {
 
   $headerLine = ("=" * 54)
 
-  Write-ColoredLine -Text "" -Color $cInfo
-  Write-ColoredLine -Text $headerLine -Color $cDim
-  Write-ColoredLine -Text "Defender Audit/Remediation" -Color $cTitle
-  Write-ColoredLine -Text $headerLine -Color $cDim
+  Write-ColorLine -Text "" -Color $cInfo
+  Write-ColorLine -Text $headerLine -Color $cDim
+  Write-ColorLine -Text "Defender Audit/Remediation" -Color $cTitle
+  Write-ColorLine -Text $headerLine -Color $cDim
 
-  Write-ColoredLine -Text ("Computer : {0}" -f $Summary.ComputerName) -Color $cInfo
-  Write-ColoredLine -Text ("OS       : {0}" -f $Summary.OS) -Color $cInfo
-  Write-ColoredLine -Text ("Mode     : {0}" -f $Summary.Mode) -Color $cInfo
-  Write-ColoredLine -Text ("Time     : {0}" -f $Summary.Timestamp) -Color $cInfo
+  Write-ColorLine -Text ("Computer : {0}" -f $Summary.ComputerName) -Color $cInfo
+  Write-ColorLine -Text ("OS       : {0}" -f $Summary.OS) -Color $cInfo
+  Write-ColorLine -Text ("Mode     : {0}" -f $Summary.Mode) -Color $cInfo
+  Write-ColorLine -Text ("Time     : {0}" -f $Summary.Timestamp) -Color $cInfo
 
   $findColor = if ($Summary.FindingsCount -eq 0) { $cOk } elseif ($Summary.FindingsCount -lt 3) { $cWarn } else { $cBad }
-  Write-ColoredLine -Text ("Findings : {0}" -f $Summary.FindingsCount) -Color $findColor
+  Write-ColorLine -Text ("Findings : {0}" -f $Summary.FindingsCount) -Color $findColor
 
-  Write-ColoredLine -Text "" -Color $cInfo
-  Write-ColoredLine -Text "Desired configuration:" -Color $cTitle
-  Write-ColoredLine -Text ("  CFA            : {0}" -f $Summary.DesiredCFA) -Color $cInfo
-  Write-ColoredLine -Text ("  NP             : {0}" -f $Summary.DesiredNP) -Color $cInfo
-  Write-ColoredLine -Text ("  NP prereqs     : {0}" -f $Summary.ApplyNPPrereqs) -Color $cInfo
-  Write-ColoredLine -Text ("  Disable UDP srv: {0}" -f $(if ($Summary.IsServer) { $Summary.DisableDatagram } else { "n/a" })) -Color $cInfo
+  Write-ColorLine -Text "" -Color $cInfo
+  Write-ColorLine -Text "Desired configuration:" -Color $cTitle
+  Write-ColorLine -Text ("  CFA            : {0}" -f $Summary.DesiredCFA) -Color $cInfo
+  Write-ColorLine -Text ("  NP             : {0}" -f $Summary.DesiredNP) -Color $cInfo
+  Write-ColorLine -Text ("  NP prereqs     : {0}" -f $Summary.ApplyNPPrereqs) -Color $cInfo
+  Write-ColorLine -Text ("  Disable UDP srv: {0}" -f $(if ($Summary.IsServer) { $Summary.DisableDatagram } else { "n/a" })) -Color $cInfo
 
-  Write-ColoredLine -Text "" -Color $cInfo
-  Write-ColoredLine -Text "Before -> After:" -Color $cTitle
+  Write-ColorLine -Text "" -Color $cInfo
+  Write-ColorLine -Text "Before -> After:" -Color $cTitle
 
   function Write-StateDelta {
     param([string]$Name, [string]$From, [string]$To)
     $color = if ($From -eq $To) { $cOk } else { $cWarn }
-    Write-ColoredLine -Text ("  {0,-14}: {1} -> {2}" -f $Name, $From, $To) -Color $color
+    Write-ColorLine -Text ("  {0,-14}: {1} -> {2}" -f $Name, $From, $To) -Color $color
   }
 
   Write-StateDelta -Name 'CFA' -From $Before.ControlledFolderAccess -To $After.ControlledFolderAccess
@@ -248,8 +290,8 @@ function Write-ConsoleReport {
   }
 
   if ($findings.Count -gt 0) {
-    Write-ColoredLine -Text "" -Color $cInfo
-    Write-ColoredLine -Text "Findings (top 20):" -Color $cTitle
+    Write-ColorLine -Text "" -Color $cInfo
+    Write-ColorLine -Text "Findings (top 20):" -Color $cTitle
 
     foreach ($f in ($findings | Select-Object -First 20)) {
       $sevColor = switch ($f.Severity) {
@@ -257,27 +299,27 @@ function Write-ConsoleReport {
         'Medium' { $cWarn }
         default  { $cInfo }
       }
-      Write-ColoredLine -Text ("  [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -Color $sevColor
+      Write-ColorLine -Text ("  [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -Color $sevColor
     }
 
     if ($findings.Count -gt 20) {
-      Write-ColoredLine -Text ("  (Only first 20 shown; total findings: {0})" -f $findings.Count) -Color $cDim
+      Write-ColorLine -Text ("  (Only first 20 shown; total findings: {0})" -f $findings.Count) -Color $cDim
     }
   }
 
   if ($Summary.ExportPath) {
-    Write-ColoredLine -Text "" -Color $cInfo
-    Write-ColoredLine -Text ("CSV export : {0}" -f $Summary.ExportPath) -Color $cDim
+    Write-ColorLine -Text "" -Color $cInfo
+    Write-ColorLine -Text ("CSV export : {0}" -f $Summary.ExportPath) -Color $cDim
   }
 
-  Write-ColoredLine -Text "" -Color $cInfo
+  Write-ColorLine -Text "" -Color $cInfo
 }
 
 # -----------------------------
 # Preconditions
 # -----------------------------
 
-if (-not (Test-IsAdmin)) { throw "Administrative privileges are required." }
+Require-Admin
 
 Ensure-Cmdlet -Name 'Get-MpPreference'
 Ensure-Cmdlet -Name 'Set-MpPreference'
@@ -354,13 +396,13 @@ $before = [pscustomobject]@{
 if ($EnableControlledFolderAccess -ne $before.ControlledFolderAccess) {
   $findingList = Add-Finding -FindingList $findingList -Code 'DEF-CFA-NotDesired' -Severity 'Medium' -Message (
     "ControlledFolderAccess is '{0}', desired '{1}'." -f $before.ControlledFolderAccess, $EnableControlledFolderAccess
-  ) -TypeName 'Defender.AuditFinding'
+  ) -Extra @{ Current = $before.ControlledFolderAccess; Desired = $EnableControlledFolderAccess }
 }
 
 if ($EnableNetworkProtection -ne $before.NetworkProtection) {
   $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-NotDesired' -Severity 'Medium' -Message (
     "NetworkProtection is '{0}', desired '{1}'." -f $before.NetworkProtection, $EnableNetworkProtection
-  ) -TypeName 'Defender.AuditFinding'
+  ) -Extra @{ Current = $before.NetworkProtection; Desired = $EnableNetworkProtection }
 }
 
 if ($isServer -and $ApplyNetworkProtectionServerPrereqs) {
@@ -464,10 +506,9 @@ Write-ConsoleReport -Summary $summary -Before $before -After $after -FindingList
 # Pipeline output (objects only)
 # -----------------------------
 
-# [pscustomobject]@{
-#   PSTypeName = 'Defender.AuditResult'
-#   Summary    = $summary
-#   Findings   = @($findingList)
-#   Before     = $before
-#   After      = $after
-# }
+# V2 output contract
+$resultToken = if ($Strict -and $findingList.Count -gt 0) { 'FAIL' } elseif ($findingList.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings @($findingList) -Summary $summary -Metadata @{ Before = $before; After = $after }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

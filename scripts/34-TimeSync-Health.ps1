@@ -9,7 +9,7 @@ creates structured findings, and optionally exports CSV + raw TXT dumps.
 
 Best-practice goals (PowerShell 5.1, 2025):
 - Pipeline output: structured objects only (Export-Csv / ConvertTo-Json / Where-Object safe).
-- Console output: all formatting via Write-Host / Write-Information only (no formatting objects on the pipeline).
+- Console output: all formatting via Write-UiLine / Write-Information only (no formatting objects on the pipeline).
 - StrictMode-safe counting patterns (.Count pitfalls). [web:92]
 
 .PARAMETER ExportPath
@@ -24,6 +24,31 @@ Optional JSON file path (e.g. PATH/TO/JSON\TimeSyncHealth.json). If missing/inva
 .PARAMETER NoConsoleSummary
 Suppresses pretty console summary (pipeline output still returned).
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 One object: Summary, Findings, Raw, ConfigUsed, ConfigMeta.
 .EXAMPLE
@@ -32,21 +57,57 @@ One object: Summary, Findings, Raw, ConfigUsed, ConfigMeta.
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$ExportPath,
   [switch]$AutoStartService,
   [string]$ConfigJsonPath,
   [switch]$NoConsoleSummary
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # ----------------------------
@@ -138,7 +199,7 @@ function Load-Config {
   }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     $obj = $raw | ConvertFrom-Json -ErrorAction Stop
   } catch {
     $result.LoadDetail = 'JSON config could not be loaded/parsed; using defaults.'
@@ -171,16 +232,6 @@ function Load-Config {
   return $result
 }
 
-function Get-SeverityRank {
-  param([string]$Severity)
-  switch ($Severity) {
-    'High'   { 3 }
-    'Medium' { 2 }
-    'Low'    { 1 }
-    default  { 0 }
-  }
-}
-
 function Get-CountSafe {
   param($Value)
   @($Value).Count
@@ -199,78 +250,9 @@ function Get-OutputFolderAndBase {
   }
 }
 
-function Write-UiBlankLine {
-  param([switch]$UseWriteInformation)
-  if ($UseWriteInformation) { Write-Information '' } else { Write-Host '' }
-}
 
 
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][pscustomobject]$Result,
-    [switch]$UseWriteInformation
-  )
-
-  $sum = $Result.Summary
-  $f   = @($Result.Findings)
-
-  $high   = Get-CountSafe ($f | Where-Object { $_.Severity -eq 'High' })
-  $medium = Get-CountSafe ($f | Where-Object { $_.Severity -eq 'Medium' })
-  $low    = Get-CountSafe ($f | Where-Object { $_.Severity -eq 'Low' })
-  $total  = Get-CountSafe $f
-
-  $stateColor = if ($sum.W32TimeServiceState -eq 'Running') { 'Green' } else { 'Red' }
-  $cfgColor   = if ($Result.ConfigMeta.LoadState -eq 'Loaded') { 'Green' } else { 'Yellow' }
-
-  Write-UiBlankLine -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text '=============================' -Color Cyan -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text '   TimeSync Health Summary' -Color Cyan -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text '=============================' -Color Cyan -UseWriteInformation:$UseWriteInformation
-
-  Write-UiLine -Text ("ComputerName        : {0}" -f $sum.ComputerName) -Color White -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text ("Timestamp           : {0}" -f $sum.Timestamp) -Color Gray -UseWriteInformation:$UseWriteInformation
-
-  Write-UiLine -Text "W32TimeServiceState : " -NoNewLine -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text ("{0}" -f $sum.W32TimeServiceState) -Color $stateColor -UseWriteInformation:$UseWriteInformation
-
-  Write-UiLine -Text ("Source              : {0}" -f ($(if ($sum.Source) { $sum.Source } else { '<n/a>' }))) -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text ("Type (registry)     : {0}" -f ($(if ($sum.Type) { $sum.Type } else { '<n/a>' }))) -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text ("NtpServer (registry): {0}" -f ($(if ($sum.NtpServer) { $sum.NtpServer } else { '<n/a>' }))) -UseWriteInformation:$UseWriteInformation
-
-  Write-UiLine -Text "Config load         : " -NoNewLine -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text ("{0}" -f $Result.ConfigMeta.LoadState) -Color $cfgColor -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text ("Details             : {0}" -f $Result.ConfigMeta.LoadDetail) -Color Gray -UseWriteInformation:$UseWriteInformation
-
-  Write-UiBlankLine -UseWriteInformation:$UseWriteInformation
-  Write-UiLine -Text ("Findings            : High={0} Medium={1} Low={2} Total={3}" -f $high, $medium, $low, $total) -UseWriteInformation:$UseWriteInformation
-
-  if ($high -gt 0) {
-    Write-UiLine -Text "Health              : ATTENTION REQUIRED" -Color Red -UseWriteInformation:$UseWriteInformation
-  } elseif ($medium -gt 0) {
-    Write-UiLine -Text "Health              : WARNINGS" -Color Yellow -UseWriteInformation:$UseWriteInformation
-  } else {
-    Write-UiLine -Text "Health              : OK" -Color Green -UseWriteInformation:$UseWriteInformation
-  }
-
-  if ($total -gt 0) {
-    Write-UiBlankLine -UseWriteInformation:$UseWriteInformation
-    Write-UiLine -Text 'Top findings (up to 10):' -Color Cyan -UseWriteInformation:$UseWriteInformation
-
-    $top = @(
-      $f |
-        Sort-Object @{ Expression = { Get-SeverityRank $_.Severity }; Descending = $true }, Code |
-        Select-Object -First 10 Code, Severity, Message
-    )
-
-    if ((Get-CountSafe $top) -gt 0) {
-      $top | Format-Table -AutoSize | Out-String | ForEach-Object {
-        $line = $_.TrimEnd()
-        if ($line) { Write-UiLine -Text $line -UseWriteInformation:$UseWriteInformation }
-      }
-    }
-  }
-}
+# Write-ConsoleSummary imported from lib/Console.psm1
 
 # ----------------------------
 # Main
@@ -312,9 +294,9 @@ if ($svc.Status -ne 'Running') {
 $regParams    = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters'
 $regNtpClient = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpClient'
 
-$typeValue        = Get-RegValueSafe -Path $regParams -Name 'Type'
-$ntpServerValue   = Get-RegValueSafe -Path $regParams -Name 'NtpServer'
-$ntpClientEnabled = Get-RegValueSafe -Path $regNtpClient -Name 'Enabled'
+$typeValue        = Get-RegValue -Path $regParams -Name 'Type'
+$ntpServerValue   = Get-RegValue -Path $regParams -Name 'NtpServer'
+$ntpClientEnabled = Get-RegValue -Path $regNtpClient -Name 'Enabled'
 
 if ($typeValue -eq 'NoSync') {
   Add-Finding -FindingList $script:Findings -Code 'TIME-TypeNoSync' -Severity 'High' -Message 'Registry Type=NoSync: time service will not synchronize.'
@@ -420,7 +402,27 @@ if ($ExportPath) {
 }
 
 if (-not $NoConsoleSummary) {
-  Write-ConsoleSummary -Result $result -UseWriteInformation:([bool]$ConfigUsed.Console.UseWriteInformation)
+  $healthLabel = if (($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'ATTENTION REQUIRED' }
+    elseif (($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARNINGS' }
+    else { 'OK' }
+
+  $customFields = [ordered]@{
+    'W32Time'    = [string]$result.Summary.W32TimeServiceState
+    'Source'     = $(if ($result.Summary.Source) { $result.Summary.Source } else { '<n/a>' })
+    'Type'       = $(if ($result.Summary.Type) { $result.Summary.Type } else { '<n/a>' })
+    'NtpServer'  = $(if ($result.Summary.NtpServer) { $result.Summary.NtpServer } else { '<n/a>' })
+    'ConfigLoad' = $result.ConfigMeta.LoadState
+    'Health'     = $healthLabel
+  }
+
+  $findingsAL = [System.Collections.ArrayList]@($Findings)
+  Write-ConsoleSummary -Summary $result.Summary -Findings $findingsAL `
+    -Title 'TimeSync Health Summary' `
+    -CustomFields $customFields
 }
 
-# $result
+$resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' } elseif ($findingsCount -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result $resultToken -Findings $Findings -Summary $result.Summary -Metadata @{ Raw = $result.Raw; ConfigUsed = $result.ConfigUsed; ConfigMeta = $result.ConfigMeta }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

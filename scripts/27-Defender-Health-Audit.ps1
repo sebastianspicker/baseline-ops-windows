@@ -5,7 +5,7 @@ Create a Microsoft Defender health report (status, signatures, RTP, tamper prote
 
 .DESCRIPTION
 Pipeline output is structured objects only (safe for Export-Csv / ConvertTo-Json / filtering).
-All human-friendly formatting is written via Write-Host / Write-Information only.
+All human-friendly formatting is written via Write-UiLine / Write-Information only.
 Primary data source is Get-MpComputerStatus. [page:1]
 Tamper protection can be checked via IsTamperProtected when present. [page:1]
 
@@ -34,6 +34,28 @@ Do not print the console summary.
 .PARAMETER PassThru
 Return the structured result object to the pipeline.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 If -PassThru is used: PSCustomObject with Summary, Findings, EffectiveConfig.
 Otherwise: no pipeline output (console summary only).
@@ -43,7 +65,7 @@ Otherwise: no pipeline output (console summary only).
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [Parameter(Mandatory = $false)]
   [ValidateNotNullOrEmpty()]
@@ -51,7 +73,7 @@ param(
 
   [Parameter(Mandatory = $false)]
   [ValidateNotNullOrEmpty()]
-  [string]$SettingsJsonPath = 'PATH/TO/JSON/defender-audit.json',
+  [string]$SettingsJsonPath,
 
   [Parameter(Mandatory = $false)]
   [ValidateRange(0, 3650)]
@@ -73,28 +95,55 @@ param(
 
   [Parameter(Mandatory = $false)]
   [switch]$PassThru
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 
-function Ensure-Cmdlet {
-  param(
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$Name
-  )
-
-  if (-not (Get-Command -Name $Name -ErrorAction SilentlyContinue)) {
-    throw "Required cmdlet missing: $Name. Verify Microsoft Defender module/feature."
-  }
-}
+# Ensure-Cmdlet imported from lib/External.psm1
 
 function Get-DefaultConfig {
   param(
@@ -155,7 +204,7 @@ function Try-LoadJsonConfig {
   if (-not $Config.JsonPathExists) { return $Config }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($raw)) { return $Config }
 
     $json = $raw | ConvertFrom-Json
@@ -192,160 +241,23 @@ function Get-ScanAgeLabel {
   return [string]$Age
 }
 
-function Get-SeverityRank {
-  param([string]$Severity)
-
-  switch ($Severity) {
-    'High'   { 1 }
-    'Medium' { 2 }
-    'Low'    { 3 }
-    'Info'   { 4 }
-    default  { 9 }
-  }
-}
-
 function Get-HighestSeverity {
   param([System.Collections.Generic.List[object]]$Findings)
 
   if ($null -eq $Findings -or $Findings.Count -eq 0) { return 'None' }
 
-  $ranks = $Findings | ForEach-Object { Get-SeverityRank $_.Severity }
-  $min = ($ranks | Measure-Object -Minimum).Minimum
+  $ranks = $Findings | ForEach-Object { Get-SeverityRank -Severity $_.Severity }
+  $max = ($ranks | Measure-Object -Maximum).Maximum
 
-  switch ($min) {
-    1 { 'High' }
-    2 { 'Medium' }
-    3 { 'Low' }
-    4 { 'Info' }
-    default { 'Unknown' }
-  }
+  if ($max -ge 4) { return 'Critical' }
+  if ($max -ge 3) { return 'High' }
+  if ($max -ge 2) { return 'Medium' }
+  if ($max -ge 1) { return 'Low' }
+  if ($max -ge 0) { return 'Info' }
+  return 'Unknown'
 }
 
-function Get-ColorForSeverity {
-  param([string]$Severity)
-
-  switch ($Severity) {
-    'High'   { 'Red' }
-    'Medium' { 'Yellow' }
-    'Low'    { 'Cyan' }
-    'Info'   { 'Gray' }
-    'None'   { 'Green' }
-    default  { 'White' }
-  }
-}
-
-function Write-PrettyLine {
-  param(
-    [Parameter(Mandatory = $true)][string]$Label,
-    [Parameter(Mandatory = $true)][string]$Value,
-    [Parameter(Mandatory = $false)][string]$ValueColor = 'Gray',
-    [Parameter(Mandatory = $false)][string]$LabelColor = 'DarkGray'
-  )
-
-  Write-Host ($Label.PadRight(28) + ': ') -NoNewline -ForegroundColor $LabelColor
-  Write-Host $Value -ForegroundColor $ValueColor
-}
-
-function Write-ConsoleSummary {
-  param(
-    [Parameter(Mandatory = $true)]
-    $Result
-  )
-
-  # Note: In Windows PowerShell 5.1, Write-Host writes to the Information stream. [page:0]
-  # We keep all formatting in host output to preserve pipeline purity.
-
-  $s = $Result.Summary
-  $f = $Result.Findings
-  $cfg = $Result.EffectiveConfig
-
-  $highest = Get-HighestSeverity -Findings $f
-  $highestColor = Get-ColorForSeverity $highest
-
-  Write-Host ''
-  Write-Host ('=' * 60) -ForegroundColor DarkGray
-  Write-Host ' Microsoft Defender Health Audit ' -ForegroundColor White
-  Write-Host ('=' * 60) -ForegroundColor DarkGray
-  Write-Host ''
-
-  Write-PrettyLine -Label 'ComputerName' -Value ([string]$s.ComputerName) -ValueColor White
-  Write-PrettyLine -Label 'Timestamp' -Value ([string]$s.Timestamp) -ValueColor Gray
-
-  Write-Host ''
-  Write-Host 'Core status' -ForegroundColor White
-  Write-Host ('-' * 60) -ForegroundColor DarkGray
-
-  $boolColor = { param($b) if ($b -eq $true) { 'Green' } else { 'Red' } }
-
-  Write-PrettyLine -Label 'AMRunningMode' -Value ([string]$s.AMRunningMode) -ValueColor Gray
-  Write-PrettyLine -Label 'AMServiceEnabled' -Value ([string]$s.AMServiceEnabled) -ValueColor (& $boolColor $s.AMServiceEnabled)
-  Write-PrettyLine -Label 'AntivirusEnabled' -Value ([string]$s.AntivirusEnabled) -ValueColor (& $boolColor $s.AntivirusEnabled)
-  Write-PrettyLine -Label 'RealTimeProtection' -Value ([string]$s.RealTimeProtectionEnabled) -ValueColor (& $boolColor $s.RealTimeProtectionEnabled)
-
-  $sigColor = if ($s.DefenderSignaturesOutOfDate -eq $true) { 'Red' } else { 'Green' }
-  Write-PrettyLine -Label 'SignaturesOutOfDate' -Value ([string]$s.DefenderSignaturesOutOfDate) -ValueColor $sigColor
-
-  Write-Host ''
-  Write-Host 'Ages (days)' -ForegroundColor White
-  Write-Host ('-' * 60) -ForegroundColor DarkGray
-
-  $sigAgeColor = if (($null -ne $s.AntivirusSignatureAge) -and ($s.AntivirusSignatureAge -ge $cfg.WarnSignatureAgeDays)) { 'Yellow' } else { 'Green' }
-  Write-PrettyLine -Label 'AntivirusSignatureAge' -Value ([string]$s.AntivirusSignatureAge) -ValueColor $sigAgeColor
-
-  $qa = Get-ScanAgeLabel (Normalize-UInt32Age $s.QuickScanAge)
-  $fa = Get-ScanAgeLabel (Normalize-UInt32Age $s.FullScanAge)
-
-  $quickAgeColor = if ($qa -eq 'never') { 'Yellow' } elseif (($qa -as [int]) -ge $cfg.WarnQuickScanAgeDays) { 'Cyan' } else { 'Green' }
-  $fullAgeColor  = if ($fa -eq 'never') { 'Yellow' } elseif (($fa -as [int]) -ge $cfg.WarnFullScanAgeDays) { 'Cyan' } else { 'Green' }
-
-  Write-PrettyLine -Label 'QuickScanAge' -Value ("{0} (warn >= {1})" -f $qa, $cfg.WarnQuickScanAgeDays) -ValueColor $quickAgeColor
-  Write-PrettyLine -Label 'FullScanAge'  -Value ("{0} (warn >= {1})" -f $fa, $cfg.WarnFullScanAgeDays) -ValueColor $fullAgeColor
-
-  if ($s.PSObject.Properties.Name -contains 'IsTamperProtected') {
-    $tpColor = if ($s.IsTamperProtected -eq $true) { 'Green' } else { 'Yellow' }
-    Write-Host ''
-    Write-Host 'Tamper protection' -ForegroundColor White
-    Write-Host ('-' * 60) -ForegroundColor DarkGray
-    Write-PrettyLine -Label 'IsTamperProtected' -Value ([string]$s.IsTamperProtected) -ValueColor $tpColor
-  }
-
-  Write-Host ''
-  Write-Host 'Meta' -ForegroundColor White
-  Write-Host ('-' * 60) -ForegroundColor DarkGray
-
-  if ($cfg.LoadedFromJson) {
-    Write-PrettyLine -Label 'ConfigSource' -Value ('JSON: ' + $cfg.SettingsJsonPath) -ValueColor Gray
-  } elseif ($cfg.JsonLoadError) {
-    Write-PrettyLine -Label 'ConfigSource' -Value ('Defaults (JSON error: ' + $cfg.JsonLoadError + ')') -ValueColor Yellow
-  } elseif ($cfg.JsonPathExists) {
-    Write-PrettyLine -Label 'ConfigSource' -Value ('Defaults (JSON empty)') -ValueColor Yellow
-  } else {
-    Write-PrettyLine -Label 'ConfigSource' -Value ('Defaults (no JSON found: ' + $cfg.SettingsJsonPath + ')') -ValueColor Gray
-  }
-
-  if ($cfg.ExportPath) {
-    Write-PrettyLine -Label 'CsvExport' -Value $cfg.ExportPath -ValueColor Gray
-  }
-
-  Write-PrettyLine -Label 'FindingsCount' -Value ([string]$s.FindingsCount) -ValueColor $highestColor
-  Write-PrettyLine -Label 'HighestSeverity' -Value $highest -ValueColor $highestColor
-
-  Write-Host ''
-  if ($f.Count -gt 0) {
-    Write-Host 'Findings' -ForegroundColor White
-    Write-Host ('-' * 60) -ForegroundColor DarkGray
-
-    foreach ($item in ($f | Sort-Object @{ Expression = { Get-SeverityRank $_.Severity } }, Code)) {
-      $c = Get-ColorForSeverity $item.Severity
-      Write-Host ('[{0}] {1} - {2}' -f $item.Severity.ToUpper(), $item.Code, $item.Message) -ForegroundColor $c
-    }
-  }
-  else {
-    Write-Host 'No findings.' -ForegroundColor Green
-  }
-
-  Write-Host ''
-}
+# Write-ConsoleSummary imported from lib/Console.psm1
 
 # ----- Effective configuration (built-in defaults + optional JSON overlay)
 $effective = Get-DefaultConfig `
@@ -368,7 +280,12 @@ if ($PSBoundParameters.ContainsKey('SettingsJsonPath'))     { $effective.Setting
 
 # ----- Preconditions
 if (-not $effective.SkipAdminCheck -and -not (Test-IsAdmin)) {
-  throw 'Administrative rights required. Use -SkipAdminCheck if your environment allows it.'
+  $msg = 'Administrative rights required. Use -SkipAdminCheck if your environment allows it.'
+  Write-Warning $msg
+  $v2Result = New-V2ResultObject -ScriptName '27-Defender-Health-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $msg } -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit 1
 }
 
 Ensure-Cmdlet -Name 'Get-MpComputerStatus'  # Defender status cmdlet. [page:1]
@@ -453,10 +370,38 @@ if ($effective.ExportPath) {
 
 # ----- Console summary at the end (pretty, host-only)
 if (-not $NoConsoleSummary) {
-  Write-ConsoleSummary -Result $result
+  $highest = Get-HighestSeverity -Findings $Findings
+  $qa = Get-ScanAgeLabel (Normalize-UInt32Age $summary.QuickScanAge)
+  $fa = Get-ScanAgeLabel (Normalize-UInt32Age $summary.FullScanAge)
+
+  $configSource = if ($effective.LoadedFromJson) { 'JSON: ' + $effective.SettingsJsonPath }
+    elseif ($effective.JsonLoadError) { 'Defaults (JSON error: ' + $effective.JsonLoadError + ')' }
+    elseif ($effective.JsonPathExists) { 'Defaults (JSON empty)' }
+    else { 'Defaults (no JSON found: ' + $effective.SettingsJsonPath + ')' }
+
+  $customFields = [ordered]@{
+    'AMRunning'  = [string]$summary.AMRunningMode
+    'AMService'  = [string]$summary.AMServiceEnabled
+    'Antivirus'  = [string]$summary.AntivirusEnabled
+    'RTP'        = [string]$summary.RealTimeProtectionEnabled
+    'SigsStale'  = [string]$summary.DefenderSignaturesOutOfDate
+    'SigAge'     = [string]$summary.AntivirusSignatureAge
+    'QuickScan'  = ("{0} (warn >= {1})" -f $qa, $effective.WarnQuickScanAgeDays)
+    'FullScan'   = ("{0} (warn >= {1})" -f $fa, $effective.WarnFullScanAgeDays)
+    'Tamper'     = [string]$summary.IsTamperProtected
+    'Severity'   = $highest
+    'Config'     = $configSource
+  }
+
+  $findingsAL = [System.Collections.ArrayList]@($Findings)
+  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+    -Title 'Microsoft Defender Health Audit' `
+    -CustomFields $customFields
 }
 
-# ----- Pipeline output (structured object only)
-if ($PassThru) {
-  $result
-}
+# V2 output contract
+$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '27-Defender-Health-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings) -Summary $result.Summary -Metadata @{ EffectiveConfig = $result.EffectiveConfig }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

@@ -58,7 +58,7 @@ Use this if the extracted directory is incomplete or stale.
 
 .PARAMETER ConsoleMode
 Controls how the human-readable summary is printed:
-- Host: Uses Write-Host (supports colors when -NoColor is not set).
+- Host: Uses Write-UiLine (supports colors when -NoColor is not set).
 - Information: Uses Write-Information only (no colors, easier to redirect/collect).
 
 Default: Host
@@ -69,6 +69,25 @@ Has no effect when -ConsoleMode Information is used.
 
 .INPUTS
 None. You cannot pipe objects into this script.
+
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
 
 .OUTPUTS
 System.Management.Automation.PSCustomObject
@@ -169,19 +188,19 @@ Forces re-extraction and prints a plain (non-colored) console summary.
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [Parameter()]
   [ValidateNotNullOrEmpty()]
-  [string]$SupportDir = "PATH/TO/SUPPORT",
+  [string]$SupportDir,
 
   [Parameter()]
   [ValidateNotNullOrEmpty()]
-  [string]$ConfigPath = "PATH/TO/JSON/config.json",
+  [string]$ConfigPath,
 
   [Parameter()]
   [ValidateNotNullOrEmpty()]
-  [string]$ExtractRoot = "PATH/TO/SUPPORT/_extracted",
+  [string]$ExtractRoot,
 
   [Parameter()]
   [switch]$ForceExtract,
@@ -192,13 +211,54 @@ param(
 
   [Parameter()]
   [switch]$NoColor
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+$ErrorActionPreference = 'Stop'
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 # -------------------- Console helpers (no pipeline output) --------------------
 
@@ -301,44 +361,9 @@ function Coalesce-Bool {
 
 # -------------------- File/JSON helpers --------------------
 
-function Ensure-Folder {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$Path
-  )
+# Ensure-Directory imported from lib/Common.psm1
 
-  if (Test-Path -LiteralPath $Path -PathType Container) { return $true }
-
-  try {
-    New-Item -ItemType Directory -Path $Path -Force -ErrorAction Stop | Out-Null
-    return $true
-  }
-  catch {
-    Write-Warning ("Cannot create folder: {0} ({1})" -f (ConvertTo-SafeDisplayPath $Path), $_.Exception.Message)
-    return $false
-  }
-}
-
-function Load-JsonFile {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$Path
-  )
-
-  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
-
-  try {
-    return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
-  }
-  catch {
-    Write-Warning ("Failed to parse JSON: {0} ({1})" -f (ConvertTo-SafeDisplayPath $Path), $_.Exception.Message)
-    return $null
-  }
-}
+# Load-JsonFile replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
 
 function Get-LatestSupportBundleZip {
   [CmdletBinding()]
@@ -364,7 +389,7 @@ function Resolve-SummaryFromZip {
 
   $adjacentSummaryPath = "$($Zip.FullName).summary.json"
   if (Test-Path -LiteralPath $adjacentSummaryPath -PathType Leaf) {
-    $summary = Load-JsonFile -Path $adjacentSummaryPath
+    $summary = Read-JsonFileSafe -Path $adjacentSummaryPath
     if ($summary) {
       return [pscustomobject]@{
         SummaryPath = $adjacentSummaryPath
@@ -392,11 +417,11 @@ function Ensure-ExtractedWorkDir {
   )
 
   if (-not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) { return $null }
-  [void](Ensure-Folder -Path $ExtractRoot)
+  [void](Ensure-Directory -Path $ExtractRoot)
 
   $zipItem = Get-Item -LiteralPath $ZipPath -ErrorAction Stop
   $dest = Join-Path -Path $ExtractRoot -ChildPath $zipItem.BaseName
-  [void](Ensure-Folder -Path $dest)
+  [void](Ensure-Directory -Path $dest)
 
   $needsExtract = $Force.IsPresent
   if (-not $needsExtract) {
@@ -453,7 +478,7 @@ function Resolve-WorkDirAndSummary {
   if ($workDir -and (Test-Path -LiteralPath $workDir -PathType Container)) {
     $workSummaryPath = Join-Path -Path $workDir -ChildPath 'Summary.json'
     if (Test-Path -LiteralPath $workSummaryPath -PathType Leaf) {
-      $summary = Load-JsonFile -Path $workSummaryPath
+      $summary = Read-JsonFileSafe -Path $workSummaryPath
       if ($summary) {
         return [pscustomobject]@{
           ZipPath     = $Zip.FullName
@@ -634,7 +659,7 @@ function Get-KBStatusSummary {
     }
   }
 
-  $kb = Load-JsonFile -Path $kbStatusPath
+  $kb = Read-JsonFileSafe -Path $kbStatusPath
   if (-not $kb) {
     return [pscustomobject]@{
       KbStatusPath    = $kbStatusPath
@@ -656,7 +681,7 @@ function Get-KBStatusSummary {
   }
 }
 
-function New-Findings {
+function Invoke-FindingsCheck {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]
@@ -674,26 +699,41 @@ function New-Findings {
     $KbStatus
   )
 
-  $findings = @()
+  # C10: populate $script:Findings via Add-Finding; also return legacy string array for backward compat
+  $legacyFindings = @()
 
   if (-not $ZipMarkerPresent) {
-    $findings += "ZIP marker (ZIP:*) not found in Outputs; bundle may be incomplete or formatted differently."
+    $msg = "ZIP marker (ZIP:*) not found in Outputs; bundle may be incomplete or formatted differently."
+    Add-Finding -FindingList $script:Findings -Code 'SB-ZipMarker' -Severity 'Medium' -Message $msg
+    $legacyFindings += $msg
   }
 
   if ($Proofs -and (@($Proofs | Where-Object { -not $_.Present }).Count -gt 0)) {
-    $findings += "At least one expected proof file is missing."
+    $msg = "At least one expected proof file is missing."
+    Add-Finding -FindingList $script:Findings -Code 'SB-MissingProof' -Severity 'Medium' -Message $msg
+    $legacyFindings += $msg
   }
 
   if (-not $WorkDirExists) {
-    $findings += "WorkDir not found; event logs and KB status may be incomplete."
+    $msg = "WorkDir not found; event logs and KB status may be incomplete."
+    Add-Finding -FindingList $script:Findings -Code 'SB-NoWorkDir' -Severity 'Low' -Message $msg
+    $legacyFindings += $msg
   }
 
   if ($KbStatus -and $KbStatus.Present) {
-    if (@($KbStatus.MissingZeroDay).Count -gt 0) { $findings += "Missing zero-day KBs reported by KBStatus.json." }
-    if (@($KbStatus.MissingCritical).Count -gt 0) { $findings += "Missing critical KBs reported by KBStatus.json." }
+    if (@($KbStatus.MissingZeroDay).Count -gt 0) {
+      $msg = "Missing zero-day KBs reported by KBStatus.json."
+      Add-Finding -FindingList $script:Findings -Code 'SB-MissingZeroDayKB' -Severity 'High' -Message $msg
+      $legacyFindings += $msg
+    }
+    if (@($KbStatus.MissingCritical).Count -gt 0) {
+      $msg = "Missing critical KBs reported by KBStatus.json."
+      Add-Finding -FindingList $script:Findings -Code 'SB-MissingCriticalKB' -Severity 'Medium' -Message $msg
+      $legacyFindings += $msg
+    }
   }
 
-  return $findings
+  return $legacyFindings
 }
 
 # -------------------- Main --------------------
@@ -701,8 +741,8 @@ function New-Findings {
 $script:ConsoleMode = $ConsoleMode
 $script:NoColor     = [bool]$NoColor
 
-[void](Ensure-Folder -Path $SupportDir)
-[void](Ensure-Folder -Path $ExtractRoot)
+[void](Ensure-Directory -Path $SupportDir)
+[void](Ensure-Directory -Path $ExtractRoot)
 
 $runNotes = New-Object System.Collections.Generic.List[string]
 
@@ -732,7 +772,7 @@ $summaryErrors   = Get-PropArrayStrings -Object $summary -Name 'Errors'
 $summaryNotes    = Get-PropArrayStrings -Object $summary -Name 'Notes'
 $outputs         = @((Get-PropArrayStrings -Object $summary -Name 'Outputs'))
 
-$conf = Load-JsonFile -Path $ConfigPath
+$conf = Read-JsonFileSafe -Path $ConfigPath
 if (-not $conf) {
   $runNotes.Add(("Config not loaded; using defaults (ConfigPath={0})." -f (ConvertTo-SafeDisplayPath $ConfigPath)))
 }
@@ -765,7 +805,7 @@ if ($outputs.Count -gt 0) {
   $zipMarkerPresent = [bool]($outputs | Where-Object { $_ -like 'ZIP:*' } | Select-Object -First 1)
 }
 
-$findings = New-Findings -ZipMarkerPresent $zipMarkerPresent -Proofs $proofStatus -WorkDirExists $workDirExists -KbStatus $kbInfo
+$findings = Invoke-FindingsCheck -ZipMarkerPresent $zipMarkerPresent -Proofs $proofStatus -WorkDirExists $workDirExists -KbStatus $kbInfo
 
 $result = [pscustomobject]@{
   Hostname          = $summaryHostname
@@ -795,7 +835,7 @@ $result = [pscustomobject]@{
 }
 
 # Pipeline output: only the structured object.
-#$result
+$result
 
 # -------------------- Pretty console summary --------------------
 
@@ -838,25 +878,25 @@ if ($result.KbStatus -and $result.KbStatus.Present) {
 
 Write-ConsoleHeader -Title "SupportBundle summary"
 
-Write-ConsoleKV -Key "Hostname" -Value $result.Hostname -ValueRole Value
-Write-ConsoleKV -Key "Time"     -Value $result.Time     -ValueRole Value
-if ($result.Reason) { Write-ConsoleKV -Key "Reason" -Value $result.Reason -ValueRole Value }
-Write-ConsoleKV -Key "User"     -Value $result.User     -ValueRole Value
-Write-ConsoleKV -Key "Admin"    -Value ($result.Admin.ToString()) -ValueRole $adminRole
+Write-KeyValue -Key "Hostname" -Value $result.Hostname -ValueRole Value
+Write-KeyValue -Key "Time"     -Value $result.Time     -ValueRole Value
+if ($result.Reason) { Write-KeyValue -Key "Reason" -Value $result.Reason -ValueRole Value }
+Write-KeyValue -Key "User"     -Value $result.User     -ValueRole Value
+Write-KeyValue -Key "Admin"    -Value ($result.Admin.ToString()) -ValueRole $adminRole
 
 Write-ConsoleLine -Text "" -Role Muted
-Write-ConsoleKV -Key "ZIP"      -Value $result.BundleZipName -ValueRole Value
-Write-ConsoleKV -Key "ZIPpath"  -Value (ConvertTo-SafeDisplayPath $result.BundleZipPath) -ValueRole Muted
-Write-ConsoleKV -Key "WorkDir"  -Value (ConvertTo-SafeDisplayPath $result.WorkDir) -ValueRole Value
-Write-ConsoleKV -Key "Summary"  -Value (ConvertTo-SafeDisplayPath $result.SummaryPath) -ValueRole Muted
+Write-KeyValue -Key "ZIP"      -Value $result.BundleZipName -ValueRole Value
+Write-KeyValue -Key "ZIPpath"  -Value (ConvertTo-SafeDisplayPath $result.BundleZipPath) -ValueRole Muted
+Write-KeyValue -Key "WorkDir"  -Value (ConvertTo-SafeDisplayPath $result.WorkDir) -ValueRole Value
+Write-KeyValue -Key "Summary"  -Value (ConvertTo-SafeDisplayPath $result.SummaryPath) -ValueRole Muted
 
 Write-ConsoleLine -Text "" -Role Muted
-Write-ConsoleKV -Key "Errors"    -Value $errorsCount  -ValueRole $errorsRole
-Write-ConsoleKV -Key "Notes"     -Value $notesCount   -ValueRole $notesRole
-Write-ConsoleKV -Key "Outputs"   -Value $outputsCount -ValueRole $outputsRole
-Write-ConsoleKV -Key "Proofs"    -Value ("{0}/{1} present" -f $presentProofsCount, @($result.Proofs).Count) -ValueRole $proofRole
-Write-ConsoleKV -Key "EventLogs" -Value ("{0} (dir: {1})" -f $eventLogsCount, $result.EventLogDirExists) -ValueRole $eventRole
-Write-ConsoleKV -Key "KBStatus"  -Value $kbText -ValueRole $kbRole
+Write-KeyValue -Key "Errors"    -Value $errorsCount  -ValueRole $errorsRole
+Write-KeyValue -Key "Notes"     -Value $notesCount   -ValueRole $notesRole
+Write-KeyValue -Key "Outputs"   -Value $outputsCount -ValueRole $outputsRole
+Write-KeyValue -Key "Proofs"    -Value ("{0}/{1} present" -f $presentProofsCount, @($result.Proofs).Count) -ValueRole $proofRole
+Write-KeyValue -Key "EventLogs" -Value ("{0} (dir: {1})" -f $eventLogsCount, $result.EventLogDirExists) -ValueRole $eventRole
+Write-KeyValue -Key "KBStatus"  -Value $kbText -ValueRole $kbRole
 
 Write-ConsoleLine -Text "" -Role Muted
 if ($findingsCount -gt 0) {
@@ -879,3 +919,10 @@ else {
 }
 
 Write-ConsoleLine -Text "============================================================" -Role Header
+
+# V2 output contract
+$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '10-SupportBundle-Parser.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

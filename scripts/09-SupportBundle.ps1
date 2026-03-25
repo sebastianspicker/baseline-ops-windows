@@ -1,3 +1,5 @@
+# TODO: This script exceeds 800 lines (970 lines). Decompose into smaller modules
+# (e.g., separate diagnostics collection, event log export, and ZIP packaging into dedicated files).
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -15,7 +17,7 @@
   If the JSON file is missing or invalid, the script continues with built-in defaults.
 
   Output streams are separated by design:
-  - Console: human-friendly status, separators, and colored messages are written via Write-Host or Write-Information.
+  - Console: human-friendly status, separators, and colored messages are written via Write-UiLine or Write-Information.
   - Pipeline: only structured objects are emitted, and only when -EmitObject is specified (enables clean Export-Csv/ConvertTo-Json/Where-Object usage).
 
 .PARAMETER Force
@@ -43,8 +45,33 @@
   If not set (default), nothing is emitted to the pipeline (console-only run).
 
 .PARAMETER UseInformationStream
-  When set, writes console UI to the Information stream instead of using Write-Host.
+  When set, writes console UI to the Information stream instead of using Write-UiLine.
   This can be useful if the calling environment wants to suppress/capture informational UI separately.
+
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
   By default, the script writes no objects to the pipeline.
@@ -100,7 +127,7 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [switch]$Force,
 
@@ -117,15 +144,55 @@ param(
 
   # Optional: write UI to information stream instead of host.
   [switch]$UseInformationStream
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -------------------- Defaults (anonymized) --------------------
-$DefaultConfigPath = 'PATH/TO/JSON/config.json'
-$DefaultProofDir   = 'PATH/TO/PROOF'
-$DefaultKbFeedPath = 'PATH/TO/CRITICAL-KB-FEED/critical-kb-feed.json'
+$DefaultConfigPath = $null
+$DefaultProofDir   = $null
+$DefaultKbFeedPath = $null
 
 # Registry trigger (anonymized)
 $FlagKey     = 'HKLM:\SOFTWARE\Company\Product\SupportBundle'
@@ -152,9 +219,9 @@ function SB_WriteUi {
   }
 
   if ($NoNewline) {
-    Write-Host $Message -ForegroundColor $Color -NoNewline
+    Write-UiLine $Message -ForegroundColor $Color -NoNewline
   } else {
-    Write-Host $Message -ForegroundColor $Color
+    Write-UiLine $Message -ForegroundColor $Color
   }
 }
 
@@ -195,7 +262,7 @@ function SB_EnsureEventSource {
     if (-not [System.Diagnostics.EventLog]::SourceExists($EventSource)) {
       New-EventLog -LogName Application -Source $EventSource -ErrorAction SilentlyContinue | Out-Null
     }
-  } catch { }
+  } catch { <# best-effort: event source registration commonly needs admin #> }
 }
 
 function SB_WriteHealthEvent {
@@ -411,7 +478,7 @@ function SB_LoadJsonConfig {
 
   try {
     if (-not (Test-Path -LiteralPath $Path)) { return $DefaultConfig }
-    $raw = Get-Content -LiteralPath $Path -Raw
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultConfig }
 
     $cfg = $raw | ConvertFrom-Json
@@ -503,12 +570,11 @@ function SB_ExportEventLogEvtx {
 
   $ms    = [int64]($DaysBack * 24 * 60 * 60 * 1000)
   $xpath = "*[System[TimeCreated[timediff(@SystemTime) <= $ms]]]"
-  $qArg  = '/q:"{0}"' -f $xpath
-  $wevt  = Join-Path $env:WINDIR 'System32\wevtutil.exe'
 
   try {
-    & $wevt epl $LogName $OutFile $qArg /ow:true 2>$null
-    if ($LASTEXITCODE -ne 0) { throw "wevtutil ExitCode $LASTEXITCODE" }
+    # S13 fix: use Invoke-Wevtutil wrapper with array-based args instead of direct wevtutil call
+    $wevtArgs = @('epl', $LogName, $OutFile, "/q:$xpath", '/ow:true')
+    Invoke-Wevtutil -Arguments $wevtArgs -ThrowOnError | Out-Null
     return (SB_NewRecord -Name ("EVTX:{0}" -f $LogName) -Ok $true -ArtifactPath $OutFile -Note $null -Error $null)
   } catch {
     return (SB_NewRecord -Name ("EVTX:{0}" -f $LogName) -Ok $false -ArtifactPath $OutFile -Note $null -Error $_.Exception.Message)
@@ -623,7 +689,7 @@ function SB_ExportKbStatus {
   }
 
   try {
-    $kbfeed = Get-Content -LiteralPath $KbFeedPath -Raw | ConvertFrom-Json
+    $kbfeed = Get-Content -LiteralPath $KbFeedPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $installedKB = @(Get-HotFix | Select-Object -ExpandProperty HotFixID)
 
     $missingCritical = @()
@@ -793,6 +859,7 @@ try {
   $ConfigPath    = $DefaultConfigPath
   $Config        = SB_LoadJsonConfig -Path $ConfigPath -DefaultConfig $DefaultConfig
   $ProofDir      = [string]$Config.Paths.ProofDir
+  Assert-NoPathTraversal -Path $ProofDir -ParameterName 'Config.Paths.ProofDir'
 
   $Summary.ConfigPath = $ConfigPath
   $Summary.ProofDir   = $ProofDir
@@ -822,6 +889,7 @@ try {
   ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
   foreach ($p in $proofCandidates) {
+    Assert-NoPathTraversal -Path $p -ParameterName 'Config.ProofOutFiles'
     SB_AddRecord -Summary $Summary -Record (SB_CopyIfExists -Path $p -DestDir $proofDest)
   }
 
@@ -880,7 +948,7 @@ try {
   Compress-Archive -Path (Join-Path $workDir '*') -DestinationPath $zipPath -Force
   SB_AddRecord -Summary $Summary -Record (SB_NewRecord -Name 'Bundle:Zip' -Ok $true -ArtifactPath $zipPath -Note $null -Error $null)
 
-  try { SB_SaveJsonFile -Path ($zipPath + '.summary.json') -Object $Summary } catch { }
+  try { SB_SaveJsonFile -Path ($zipPath + '.summary.json') -Object $Summary } catch { <# best-effort: summary JSON write after zip #> }
 
   SB_AddRecord -Summary $Summary -Record (SB_ResetRegistryTrigger -KeyPath $FlagKey -ZipPath $zipPath)
 
@@ -893,9 +961,12 @@ try {
 }
 finally {
   # Must never throw: this is best-effort UI in finally.
-  try { SB_ShowSummary -Summary $Summary } catch { }
+  try { SB_ShowSummary -Summary $Summary } catch { <# best-effort: console summary in finally block #> }
 
-  if ($EmitObject) {
-    $Summary
-  }
 }
+
+# V2 output contract
+$v2Result = New-V2ResultObject -ScriptName '09-SupportBundle.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $Summary -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

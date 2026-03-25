@@ -1,3 +1,4 @@
+#Requires -RunAsAdministrator
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -11,7 +12,7 @@ Optionally reads a JSON config. If JSON is missing/unreadable/invalid, safe defa
 Computer Configuration policies (HKLM) take precedence over User Configuration (HKCU). [page:1]
 
 .PARAMETER Mode
-AuditOnly | Remediate
+Audit | Remediate
 
 .PARAMETER ConfigJsonPath
 Optional JSON path, e.g. "PATH/TO/JSON/powershell-logging.json".
@@ -45,7 +46,29 @@ Modules to log (ModuleNames subkey values 1..N). Use @('*') for all.
 Optional CSV export of the Summary object.
 
 .PARAMETER QuietConsole
-If set, suppresses pretty console output (no Write-Host summary).
+If set, suppresses pretty console output (no Write-UiLine summary).
+
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
 Exactly one structured object to the pipeline:
@@ -65,8 +88,8 @@ ConvertFrom-Json in Windows PowerShell 5.1 fails on JSON comments. [web:55]
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [ValidateSet('AuditOnly', 'Remediate')]
-  [string]$Mode = 'AuditOnly',
+  [ValidateSet('Audit', 'Remediate')]
+  [string]$Mode = 'Audit',
 
   [string]$ConfigJsonPath,
 
@@ -85,16 +108,52 @@ param(
   [string]$ExportPath,
 
   [switch]$QuietConsole
+
+,
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # ---------------------------
@@ -102,16 +161,8 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------
 
 
-function Ensure-Key {
-  param([string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) { $null = New-Item -Path $Path -Force }
-}
-
-
-function Set-RegString {
-  param([string]$Path, [string]$Name, [string]$Value)
-  $null = New-ItemProperty -Path $Path -Name $Name -PropertyType String -Value $Value -Force
-}
+# Ensure-Key replaced by Ensure-RegistryKey from lib/Registry.psm1
+# Set-RegString replaced by lib/Registry.psm1::Set-RegString (has full error handling and validation)
 
 function Get-ModuleNamesConfigured {
   param([string]$ModuleNamesKeyPath)
@@ -136,7 +187,11 @@ function Remove-AllModuleNames {
   $obj = Get-ItemProperty -Path $ModuleNamesKeyPath
   $props = $obj | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
   foreach ($p in $props) {
-    Remove-ItemProperty -Path $ModuleNamesKeyPath -Name $p -ErrorAction SilentlyContinue
+    try {
+      Remove-ItemProperty -Path $ModuleNamesKeyPath -Name $p -ErrorAction Stop
+    } catch {
+      Write-Warning "Could not remove module name property '$p': $($_.Exception.Message)"
+    }
   }
 }
 
@@ -278,100 +333,14 @@ function Format-PolicyValue {
   return [string]$Value
 }
 
-function Write-ColorLine {
-  param(
-    [string]$Text,
-    [ValidateSet('Gray','White','Green','Yellow','Red','Cyan','Magenta')]
-    [string]$Color = 'Gray'
-  )
-  Write-Host $Text -ForegroundColor $Color
-}
 
-function Severity-ToColor {
-  param([string]$Severity)
-  switch ($Severity) {
-    'High'   { 'Red' }
-    'Medium' { 'Yellow' }
-    'Low'    { 'Cyan' }
-    'Info'   { 'Gray' }
-    default  { 'Gray' }
-  }
-}
-
-function Write-ConsoleSummary {
-  param(
-    [pscustomobject]$Summary,
-    [object[]]$Findings,
-    [pscustomobject]$EffectiveAfter
-  )
-
-  Write-Host ''
-  Write-ColorLine '=== PowerShell Logging Baseline ===' 'White'
-  Write-ColorLine ("ComputerName : {0}" -f $Summary.ComputerName) 'Gray'
-  Write-ColorLine ("Mode         : {0}" -f $Summary.Mode) 'Gray'
-  Write-ColorLine ("Timestamp    : {0}" -f $Summary.Timestamp) 'Gray'
-  Write-Host ''
-
-  $statusColor = if ($Summary.FindingsCount -gt 0) { 'Yellow' } else { 'Green' }
-  Write-ColorLine ("Findings     : {0}" -f $Summary.FindingsCount) $statusColor
-  Write-Host ''
-
-  Write-ColorLine 'Configured (target) settings:' 'White'
-  Write-ColorLine ("- Transcription            : {0}" -f $Summary.Target_EnableTranscription) 'Gray'
-  Write-ColorLine ("- InvocationHeader         : {0}" -f $Summary.Target_EnableInvocationHeader) 'Gray'
-  Write-ColorLine ("- ScriptBlockLogging       : {0}" -f $Summary.Target_EnableScriptBlockLogging) 'Gray'
-  Write-ColorLine ("- ScriptBlockInvocationLog : {0}" -f $Summary.Target_EnableScriptBlockInvocationLogging) 'Gray'
-  Write-ColorLine ("- ModuleLogging            : {0}" -f $Summary.Target_EnableModuleLogging) 'Gray'
-  Write-ColorLine ("- TranscriptDirectory      : {0}" -f $Summary.Target_TranscriptOutputDirectory) 'Gray'
-  Write-ColorLine ("- ModuleNames              : {0}" -f ($Summary.Target_ModuleNames -join ', ')) 'Gray'
-  Write-Host ''
-
-  Write-ColorLine 'Effective policy (after run):' 'White'
-  $t = Format-PolicyValue $EffectiveAfter.Transcription_EnableTranscripting
-  $sb = Format-PolicyValue $EffectiveAfter.ScriptBlock_EnableScriptBlockLogging
-  $ml = Format-PolicyValue $EffectiveAfter.Module_EnableModuleLogging
-
-  Write-ColorLine ("- Transcription enabled    : {0}" -f $t) ($(if ($t -eq '1') { 'Green' } elseif ($t -eq 'NotConfigured') { 'Yellow' } else { 'Red' }))
-  Write-ColorLine ("- Transcript directory     : {0}" -f (Format-PolicyValue $EffectiveAfter.Transcription_OutputDirectory)) 'Gray'
-  Write-ColorLine ("- InvocationHeader         : {0}" -f (Format-PolicyValue $EffectiveAfter.Transcription_EnableInvocationHeader)) 'Gray'
-  Write-ColorLine ("- ScriptBlockLogging       : {0}" -f $sb) ($(if ($sb -eq '1') { 'Green' } elseif ($sb -eq 'NotConfigured') { 'Yellow' } else { 'Red' }))
-  Write-ColorLine ("- ScriptBlockInvocationLog : {0}" -f (Format-PolicyValue $EffectiveAfter.ScriptBlock_EnableScriptBlockInvocationLogging)) 'Gray'
-  Write-ColorLine ("- ModuleLogging            : {0}" -f $ml) ($(if ($ml -eq '1') { 'Green' } elseif ($ml -eq 'NotConfigured') { 'Yellow' } else { 'Red' }))
-
-  if ($EffectiveAfter.ModuleNames_Configured) {
-    $vals = @()
-    foreach ($p in $EffectiveAfter.ModuleNames_Configured.PSObject.Properties) {
-      $vals += ("{0}={1}" -f $p.Name, $p.Value)
-    }
-    Write-ColorLine ("- ModuleNames              : {0}" -f ($vals -join '; ')) 'Gray'
-  } else {
-    Write-ColorLine '- ModuleNames              : NotConfigured' 'Yellow'
-  }
-
-  Write-Host ''
-  if ($Findings.Count -gt 0) {
-    Write-ColorLine 'Findings (top 10):' 'White'
-    $top = $Findings | Select-Object -First 10
-    foreach ($f in $top) {
-      $c = Severity-ToColor $f.Severity
-      Write-ColorLine ("- [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) $c
-    }
-    if ($Findings.Count -gt 10) {
-      Write-ColorLine ("(Only first 10 shown; total: {0})" -f $Findings.Count) 'Gray'
-    }
-  } else {
-    Write-ColorLine 'Findings: none' 'Green'
-  }
-
-  Write-Host ''
-  Write-ColorLine '================================' 'White'
-  Write-Host ''
-}
+# Severity-ToColor replaced by Get-SeverityColor from lib/Console.psm1
+# Write-ConsoleSummary imported from lib/Console.psm1
 
 # ---------------------------
 # Main
 # ---------------------------
-if (-not (Test-IsAdmin)) { throw 'Administrative privileges required.' }
+Require-Admin
 
 $Findings = New-FindingsList
 
@@ -386,12 +355,16 @@ $defaults = @{
   ModuleNames                        = @('*')
 }
 
-$cfgResult = Read-ConfigWithDefaults -Path $ConfigJsonPath -Defaults $defaults
+$sanitized = Sanitize-Path -Path $ConfigJsonPath -MustExist
+if (-not $sanitized -and -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)) {
+  Add-Finding -FindingList $Findings -Code 'PSLOG-ConfigJsonMissing' -Severity 'Info' -Message 'Config JSON not found; using defaults.'
+}
+$cfgResult = Read-ConfigWithDefaults -Path $sanitized -Defaults $defaults
 $config = $cfgResult.Config
 if ($cfgResult.Meta.Provided -and -not $cfgResult.Meta.Loaded) {
   $code = 'PSLOG-ConfigJsonInvalid'
   $msg = 'Config JSON could not be loaded/parsed; using defaults.'
-  if ($cfgResult.Meta.Error -eq 'ConfigPath not found.') {
+  if ($cfgResult.Meta.Error -eq 'ConfigPath not found or invalid.') {
     $code = 'PSLOG-ConfigJsonMissing'
     $msg = 'Config JSON not found; using defaults.'
   } elseif ($cfgResult.Meta.Error -eq 'Config file is empty.') {
@@ -431,23 +404,23 @@ $effectiveBefore = if ($IncludeHKCU -and $currentHKCU) { Get-EffectiveSettings -
 
 # Audit findings (effective)
 if ($targetEnableTranscription -and $effectiveBefore.Transcription_EnableTranscripting -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-TranscriptionOff' -Severity 'Medium' -Message 'Transcription is not enabled (effective policy).'
+  Add-Finding -Code 'PSLOG-TranscriptionOff' -Severity 'Medium' -Message 'Transcription is not enabled (effective policy).'
 }
 if ($targetEnableInvocationHeader -and $targetEnableTranscription -and $effectiveBefore.Transcription_EnableInvocationHeader -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-InvocationHeaderOff' -Severity 'Low' -Message 'Invocation Header is not enabled (effective policy).'
+  Add-Finding -Code 'PSLOG-InvocationHeaderOff' -Severity 'Low' -Message 'Invocation Header is not enabled (effective policy).'
 }
 if ($targetEnableScriptBlockLogging -and $effectiveBefore.ScriptBlock_EnableScriptBlockLogging -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-ScriptBlockOff' -Severity 'Medium' -Message 'Script Block Logging is not enabled (effective policy).'
+  Add-Finding -Code 'PSLOG-ScriptBlockOff' -Severity 'Medium' -Message 'Script Block Logging is not enabled (effective policy).'
 }
 if ($targetEnableScriptBlockInvocationLogging -and $targetEnableScriptBlockLogging -and $effectiveBefore.ScriptBlock_EnableScriptBlockInvocationLogging -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-ScriptBlockInvocationOff' -Severity 'Low' -Message 'Script Block Invocation Logging is not enabled (effective policy).'
+  Add-Finding -Code 'PSLOG-ScriptBlockInvocationOff' -Severity 'Low' -Message 'Script Block Invocation Logging is not enabled (effective policy).'
 }
 if ($targetEnableModuleLogging -and $effectiveBefore.Module_EnableModuleLogging -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-ModuleLoggingOff' -Severity 'Low' -Message 'Module Logging is not enabled (effective policy).'
+  Add-Finding -Code 'PSLOG-ModuleLoggingOff' -Severity 'Low' -Message 'Module Logging is not enabled (effective policy).'
 }
 
-if ($targetEnableScriptBlockLogging -and $Mode -eq 'AuditOnly') {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-Recommend-ProtectedEventLogging' -Severity 'Info' -Message 'Consider enabling Protected Event Logging when using Script Block Logging beyond diagnostics.'
+if ($targetEnableScriptBlockLogging -and $Mode -eq 'Audit') {
+  Add-Finding -Code 'PSLOG-Recommend-ProtectedEventLogging' -Severity 'Info' -Message 'Consider enabling Protected Event Logging when using Script Block Logging beyond diagnostics.'
 }
 
 # Remediate (HKLM only)
@@ -459,11 +432,11 @@ if ($Mode -eq 'Remediate') {
     $modPath   = Join-Path $hklmBase 'ModuleLogging'
     $modNames  = Join-Path $modPath 'ModuleNames'
 
-    Ensure-Key -Path $hklmBase
-    Ensure-Key -Path $transPath
-    Ensure-Key -Path $sbPath
-    Ensure-Key -Path $modPath
-    Ensure-Key -Path $modNames
+    Ensure-RegistryKey -Path $hklmBase
+    Ensure-RegistryKey -Path $transPath
+    Ensure-RegistryKey -Path $sbPath
+    Ensure-RegistryKey -Path $modPath
+    Ensure-RegistryKey -Path $modNames
 
     if ($targetEnableTranscription) {
       Set-RegDword  -Path $transPath -Name 'EnableTranscripting' -Value 1
@@ -523,16 +496,30 @@ if ($ExportPath) {
 }
 
 if (-not $QuietConsole) {
-  Write-ConsoleSummary -Summary $summary -Findings @($Findings) -EffectiveAfter $effectiveAfter
+  $t  = Format-PolicyValue $effectiveAfter.Transcription_EnableTranscripting
+  $sb = Format-PolicyValue $effectiveAfter.ScriptBlock_EnableScriptBlockLogging
+  $ml = Format-PolicyValue $effectiveAfter.Module_EnableModuleLogging
+  $modNamesStr = if ($effectiveAfter.ModuleNames_Configured) {
+    $vals = @(); foreach ($p in $effectiveAfter.ModuleNames_Configured.PSObject.Properties) { $vals += ("{0}={1}" -f $p.Name, $p.Value) }; $vals -join '; '
+  } else { 'NotConfigured' }
+
+  $customFields = [ordered]@{
+    'Mode'          = $summary.Mode
+    'Transcript'    = ("{0} (target={1})" -f $t, $summary.Target_EnableTranscription)
+    'SBLogging'     = ("{0} (target={1})" -f $sb, $summary.Target_EnableScriptBlockLogging)
+    'ModuleLog'     = ("{0} (target={1})" -f $ml, $summary.Target_EnableModuleLogging)
+    'ModuleNames'   = $modNamesStr
+    'TranscriptDir' = Format-PolicyValue $effectiveAfter.Transcription_OutputDirectory
+  }
+  $findingsAL = [System.Collections.ArrayList]@($Findings)
+  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+    -Title 'PowerShell Logging Baseline' `
+    -CustomFields $customFields
 }
 
-# Pipeline output: exactly one object, no "pretty" strings.
-#[pscustomobject]@{
-#  Summary  = $summary
-#  Findings = @($Findings)
-#  Current  = [pscustomobject]@{
-#    HKLM      = [pscustomobject]@{ Before = $currentHKLM; After = $afterHKLM }
-#    HKCU      = if ($IncludeHKCU) { [pscustomobject]@{ Before = $currentHKCU; After = $afterHKCU } } else { $null }
-#    Effective = [pscustomobject]@{ Before = $effectiveBefore; After = $effectiveAfter }
-#  }
-#}
+# V2 output contract
+$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings) -Summary $summary -Metadata @{ Current = [pscustomobject]@{ HKLM = [pscustomobject]@{ Before = $currentHKLM; After = $afterHKLM }; HKCU = if ($IncludeHKCU) { [pscustomobject]@{ Before = $currentHKCU; After = $afterHKCU } } else { $null }; Effective = [pscustomobject]@{ Before = $effectiveBefore; After = $effectiveAfter } } }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

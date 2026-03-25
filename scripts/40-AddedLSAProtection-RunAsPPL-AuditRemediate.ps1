@@ -21,7 +21,7 @@ Optional JSON config:
 
 Example JSON:
 {
-  "Mode": "AuditOnly",
+  "Mode": "Audit",
   "TargetRunAsPPL": 1,
   "ManageRunAsPPLBoot": false,
   "DisableMethod": "SetZero",
@@ -36,10 +36,10 @@ Example JSON:
 .USAGE (positional args)
   .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1
   .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 Remediate 2 Boot Verify 168 CI 168 SetZero Export PATH/TO/JSON
-  .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 AuditOnly 1 x x 24 x 24 SetZero x x Config PATH/TO/JSON Quiet
+  .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 Audit 1 x x 24 x 24 SetZero x x Config PATH/TO/JSON Quiet
 
 ARGS (positional)
-  0: Mode                 AuditOnly | Remediate
+  0: Mode                 Audit | Remediate
   1: TargetRunAsPPL       0 | 1 | 2
   2: Boot                 literal "Boot" to also set RunAsPPLBoot
   3: Verify               literal "Verify"
@@ -52,19 +52,91 @@ ARGS (positional)
  10: Config               literal "Config"
  11: ConfigPath           PATH/TO/JSON
  12: Quiet                literal "Quiet"
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
+
+.OUTPUTS
+  None by default.
+  When -PassThru is used, emits a PSCustomObject v2 result with Script, Mode, Result, Findings, Summary, and Metadata properties.
+
 .EXAMPLE
   .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1
 
 #>
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+param(
+  [ValidateSet('Audit','Remediate')]
+  [string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')]
+  [string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor,
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$LegacyArgs
+)
+
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 3.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # ----------------------------
@@ -78,13 +150,9 @@ function Write-Badge {
     [ConsoleColor]$Color = [ConsoleColor]::Gray
   )
 
-  Write-Host ("{0,-20}: {1}" -f $Label, $Value) -ForegroundColor $Color
+  Write-UiLine ("{0,-20}: {1}" -f $Label, $Value) -ForegroundColor $Color
 }
 
-function Write-WarnLine {
-  param([Parameter(Mandatory)][string]$Message)
-  Write-Host ("[WARN] {0}" -f $Message) -ForegroundColor Yellow
-}
 
 # ----------------------------
 # Common helpers
@@ -223,7 +291,7 @@ function Get-CodeIntegrityLsaEvents {
 # ----------------------------
 function New-DefaultConfig {
   return @{
-    Mode                 = 'AuditOnly'
+    Mode                 = 'Audit'
     TargetRunAsPPL       = 1
     ManageRunAsPPLBoot   = $false
     DisableMethod        = 'SetZero'
@@ -273,21 +341,59 @@ function Apply-ArgsOverlay {
 
   if ($null -eq $ArgsList -or $ArgsList.Count -eq 0) { return $Config }
 
-  if ($ArgsList.Count -ge 1 -and $ArgsList[0]) { $Config['Mode'] = [string]$ArgsList[0] }
-  if ($ArgsList.Count -ge 2 -and $ArgsList[1]) { $Config['TargetRunAsPPL'] = [int]$ArgsList[1] }
-
-  if ($ArgsList.Count -ge 3 -and $ArgsList[2]) { if ([string]$ArgsList[2] -ieq 'Boot') { $Config['ManageRunAsPPLBoot'] = $true } }
-  if ($ArgsList.Count -ge 4 -and $ArgsList[3]) { if ([string]$ArgsList[3] -ieq 'Verify') { $Config['Verify'] = $true } }
-  if ($ArgsList.Count -ge 5 -and $ArgsList[4]) { $Config['VerifyLookbackHours'] = [int]$ArgsList[4] }
-  if ($ArgsList.Count -ge 6 -and $ArgsList[5]) { if ([string]$ArgsList[5] -ieq 'CI') { $Config['CollectCodeIntegrity'] = $true } }
-  if ($ArgsList.Count -ge 7 -and $ArgsList[6]) { $Config['CILookbackHours'] = [int]$ArgsList[6] }
-  if ($ArgsList.Count -ge 8 -and $ArgsList[7]) { $Config['DisableMethod'] = [string]$ArgsList[7] }
-
-  if ($ArgsList.Count -ge 10 -and $ArgsList[8] -and $ArgsList[9]) {
-    if ([string]$ArgsList[8] -ieq 'Export') { $Config['ExportPath'] = [string]$ArgsList[9] }
+  if ($ArgsList.Count -ge 1 -and $ArgsList[0]) {
+    if ([string]$ArgsList[0] -notin @('Audit', 'Remediate')) {
+      throw "Invalid Mode '$([string]$ArgsList[0])'. Must be 'Audit' or 'Remediate'."
+    }
+    Write-Warning "LegacyArgs overriding parameter 'Mode' to value '$([string]$ArgsList[0])'"
+    $Config['Mode'] = [string]$ArgsList[0]
+  }
+  if ($ArgsList.Count -ge 2 -and $ArgsList[1]) {
+    try {
+      $parsedTarget = [int]$ArgsList[1]
+    } catch {
+      throw "Invalid TargetRunAsPPL '$($ArgsList[1])'. Must be an integer (0, 1, or 2)."
+    }
+    Write-Warning "LegacyArgs overriding parameter 'TargetRunAsPPL' to value '$parsedTarget'"
+    $Config['TargetRunAsPPL'] = $parsedTarget
   }
 
-  if (Has-Token -ArgsList $ArgsList -Token 'Quiet') { $Config['Quiet'] = $true }
+  if ($ArgsList.Count -ge 3 -and $ArgsList[2]) { if ([string]$ArgsList[2] -ieq 'Boot') {
+    Write-Warning "LegacyArgs overriding parameter 'ManageRunAsPPLBoot' to value 'True'"
+    $Config['ManageRunAsPPLBoot'] = $true
+  } }
+  if ($ArgsList.Count -ge 4 -and $ArgsList[3]) { if ([string]$ArgsList[3] -ieq 'Verify') {
+    Write-Warning "LegacyArgs overriding parameter 'Verify' to value 'True'"
+    $Config['Verify'] = $true
+  } }
+  if ($ArgsList.Count -ge 5 -and $ArgsList[4]) {
+    Write-Warning "LegacyArgs overriding parameter 'VerifyLookbackHours' to value '$([int]$ArgsList[4])'"
+    $Config['VerifyLookbackHours'] = [int]$ArgsList[4]
+  }
+  if ($ArgsList.Count -ge 6 -and $ArgsList[5]) { if ([string]$ArgsList[5] -ieq 'CI') {
+    Write-Warning "LegacyArgs overriding parameter 'CollectCodeIntegrity' to value 'True'"
+    $Config['CollectCodeIntegrity'] = $true
+  } }
+  if ($ArgsList.Count -ge 7 -and $ArgsList[6]) {
+    Write-Warning "LegacyArgs overriding parameter 'CILookbackHours' to value '$([int]$ArgsList[6])'"
+    $Config['CILookbackHours'] = [int]$ArgsList[6]
+  }
+  if ($ArgsList.Count -ge 8 -and $ArgsList[7]) {
+    Write-Warning "LegacyArgs overriding parameter 'DisableMethod' to value '$([string]$ArgsList[7])'"
+    $Config['DisableMethod'] = [string]$ArgsList[7]
+  }
+
+  if ($ArgsList.Count -ge 10 -and $ArgsList[8] -and $ArgsList[9]) {
+    if ([string]$ArgsList[8] -ieq 'Export') {
+      Write-Warning "LegacyArgs overriding parameter 'ExportPath' to value '$([string]$ArgsList[9])'"
+      $Config['ExportPath'] = [string]$ArgsList[9]
+    }
+  }
+
+  if (Has-Token -ArgsList $ArgsList -Token 'Quiet') {
+    Write-Warning "LegacyArgs overriding parameter 'Quiet' to value 'True'"
+    $Config['Quiet'] = $true
+  }
   return $Config
 }
 
@@ -310,7 +416,8 @@ function Normalize-ConfigTypes {
 function Validate-Config {
   param([Parameter(Mandatory)][hashtable]$Config)
 
-  if ($Config['Mode'] -notin @('AuditOnly','Remediate')) { throw "Mode must be AuditOnly or Remediate. Got: $($Config['Mode'])" }
+  if ($Config['Mode'] -eq 'AuditOnly') { $Config['Mode'] = 'Audit' }
+  if ($Config['Mode'] -notin @('Audit','Remediate')) { throw "Mode must be Audit or Remediate. Got: $($Config['Mode'])" }
   if ($Config['TargetRunAsPPL'] -notin @(0,1,2)) { throw "TargetRunAsPPL must be 0, 1, or 2. Got: $($Config['TargetRunAsPPL'])" }
   if ($Config['VerifyLookbackHours'] -lt 1 -or $Config['VerifyLookbackHours'] -gt 168) { throw "VerifyLookbackHours must be 1..168. Got: $($Config['VerifyLookbackHours'])" }
   if ($Config['CILookbackHours'] -lt 1 -or $Config['CILookbackHours'] -gt 168) { throw "CILookbackHours must be 1..168. Got: $($Config['CILookbackHours'])" }
@@ -372,7 +479,7 @@ function Write-PrettySummary {
 
   if ($s.Changes -and $s.Changes.Count -gt 0) {
     Write-Section -Title 'Changes'
-    foreach ($c in $s.Changes) { Write-Host ("  + {0}" -f $c) -ForegroundColor Cyan }
+    foreach ($c in $s.Changes) { Write-UiLine ("  + {0}" -f $c) -ForegroundColor Cyan }
   }
 
   if ($Result.Findings -and $Result.Findings.Count -gt 0) {
@@ -381,28 +488,28 @@ function Write-PrettySummary {
       $c = [ConsoleColor]::Yellow
       if ([string]$f.Severity -ieq 'High') { $c = [ConsoleColor]::Red }
       elseif ([string]$f.Severity -ieq 'Low') { $c = [ConsoleColor]::Gray }
-      Write-Host ("  ! [{0}] {1} - {2}" -f $f.Severity, $f.Code, $f.Message) -ForegroundColor $c
+      Write-UiLine ("  ! [{0}] {1} - {2}" -f $f.Severity, $f.Code, $f.Message) -ForegroundColor $c
     }
   }
 
   if ($null -ne $Result.Verification) {
     Write-Section -Title 'Verify (Wininit Event 12)'
     if ($Result.Verification.Found) {
-      Write-Host "  OK Wininit event found indicating PPL level 4." -ForegroundColor Green
-      Write-Host ("  TimeCreated   : {0}" -f $Result.Verification.TimeCreated) -ForegroundColor DarkGray
-      Write-Host ("  EventRecordId : {0}" -f $Result.Verification.EventRecordId) -ForegroundColor DarkGray
+      Write-UiLine "  OK Wininit event found indicating PPL level 4." -ForegroundColor Green
+      Write-UiLine ("  TimeCreated   : {0}" -f $Result.Verification.TimeCreated) -ForegroundColor DarkGray
+      Write-UiLine ("  EventRecordId : {0}" -f $Result.Verification.EventRecordId) -ForegroundColor DarkGray
     } else {
-      Write-Host "  WARN No matching Wininit event found in lookback window." -ForegroundColor Yellow
-      if ($Result.Verification.Error) { Write-Host ("  Error: {0}" -f $Result.Verification.Error) -ForegroundColor Yellow }
+      Write-UiLine "  WARN No matching Wininit event found in lookback window." -ForegroundColor Yellow
+      if ($Result.Verification.Error) { Write-UiLine ("  Error: {0}" -f $Result.Verification.Error) -ForegroundColor Yellow }
     }
   }
 
   if ($null -ne $Result.CodeIntegrity) {
     Write-Section -Title 'CodeIntegrity (Operational)'
     if ($Result.CodeIntegrity.Error) {
-      Write-Host ("  WARN Unable to read log: {0}" -f $Result.CodeIntegrity.Error) -ForegroundColor Yellow
+      Write-UiLine ("  WARN Unable to read log: {0}" -f $Result.CodeIntegrity.Error) -ForegroundColor Yellow
     } else {
-      Write-Host ("  Events (lsass.exe) in last {0}h: {1}" -f $Result.CodeIntegrity.LookbackHrs, $Result.CodeIntegrity.Count) -ForegroundColor Gray
+      Write-UiLine ("  Events (lsass.exe) in last {0}h: {1}" -f $Result.CodeIntegrity.LookbackHrs, $Result.CodeIntegrity.Count) -ForegroundColor Gray
     }
   }
 }
@@ -410,12 +517,15 @@ function Write-PrettySummary {
 # ----------------------------
 # MAIN
 # ----------------------------
-if (-not (Test-IsAdmin)) { throw 'Administrative privileges required.' }
+Require-Admin
 
-$configPath = Get-TokenValue -ArgsList $args -Token 'Config'
+$configPath = if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath } else { Get-TokenValue -ArgsList $LegacyArgs -Token 'Config' }
 $cfgResult = Read-ConfigWithDefaults -Path $configPath -Defaults (New-DefaultConfig) -AsHashtable -OnWarning { param($m) Write-WarnLine $m }
 $config = $cfgResult.Config
-$config = Apply-ArgsOverlay -Config $config -ArgsList $args
+$config = Apply-ArgsOverlay -Config $config -ArgsList $LegacyArgs
+$config['Mode'] = if ($Mode -eq 'Remediate') { 'Remediate' } else { 'Audit' }
+if ($PSBoundParameters.ContainsKey('Quiet')) { $config['Quiet'] = [bool]$Quiet }
+if (-not [string]::IsNullOrWhiteSpace($OutputPath)) { $config['ExportPath'] = $OutputPath }
 $config = Normalize-ConfigTypes -Config $config
 Validate-Config -Config $config
 
@@ -430,7 +540,7 @@ $CILookbackHours = $config['CILookbackHours']
 $ExportPath = $config['ExportPath']
 $Quiet = $config['Quiet']
 
-$Findings = New-Object 'System.Collections.Generic.List[object]'
+$Findings = New-FindingsList
 $Changes  = New-Object 'System.Collections.Generic.List[string]'
 $rebootRequired = $false
 
@@ -442,11 +552,11 @@ $current = [pscustomobject]@{
 }
 
 if ($null -eq $current.RunAsPPL) {
-  $Findings.Add([pscustomobject]@{ Code='LSA-PPL-Missing'; Severity='High'; Message='RunAsPPL is not set (effectively disabled).' }) | Out-Null
+  Add-Finding -FindingList $Findings -Code 'LSA-PPL-Missing' -Severity 'High' -Message 'RunAsPPL is not set (effectively disabled).'
 } elseif ($current.RunAsPPL -eq 0) {
-  $Findings.Add([pscustomobject]@{ Code='LSA-PPL-Off'; Severity='High'; Message='RunAsPPL is 0 (Added LSA protection disabled).' }) | Out-Null
+  Add-Finding -FindingList $Findings -Code 'LSA-PPL-Off' -Severity 'High' -Message 'RunAsPPL is 0 (Added LSA protection disabled).'
 } elseif ($current.RunAsPPL -notin @(1,2)) {
-  $Findings.Add([pscustomobject]@{ Code='LSA-PPL-Invalid'; Severity='Medium'; Message=("RunAsPPL has unexpected value: {0}" -f $current.RunAsPPL) }) | Out-Null
+  Add-Finding -FindingList $Findings -Code 'LSA-PPL-Invalid' -Severity 'Medium' -Message ("RunAsPPL has unexpected value: {0}" -f $current.RunAsPPL)
 }
 
 if ($Mode -eq 'Remediate') {
@@ -455,40 +565,50 @@ if ($Mode -eq 'Remediate') {
 
     if ($DisableMethod -ieq 'DeleteValue') {
       if ($null -ne $current.RunAsPPL) {
-        if (Remove-RegValueIfExists -Path $lsaPath -Name 'RunAsPPL') {
-          $rebootRequired = $true
-          $Changes.Add(("RunAsPPL: {0} -> <deleted>" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
+        if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Remove registry value")) {
+          if (Remove-RegValueIfExists -Path $lsaPath -Name 'RunAsPPL') {
+            $rebootRequired = $true
+            $Changes.Add(("RunAsPPL: {0} -> <deleted>" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
+          }
         }
       }
     } else {
       if ($current.RunAsPPL -ne 0) {
-        Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value 0
-        $rebootRequired = $true
-        $Changes.Add(("RunAsPPL: {0} -> 0" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
+        if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Set registry value to 0")) {
+          Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value 0
+          $rebootRequired = $true
+          $Changes.Add(("RunAsPPL: {0} -> 0" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
+        }
       }
     }
 
     if ($ManageBoot) {
       if ($current.RunAsPPLBoot -ne 0) {
-        Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0
-        $rebootRequired = $true
-        $Changes.Add(("RunAsPPLBoot: {0} -> 0" -f (Format-Nullable $current.RunAsPPLBoot))) | Out-Null
+        if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPLBoot", "Set registry value to 0")) {
+          Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0
+          $rebootRequired = $true
+          $Changes.Add(("RunAsPPLBoot: {0} -> 0" -f (Format-Nullable $current.RunAsPPLBoot))) | Out-Null
+        }
       }
     }
 
   } else {
 
     if ($current.RunAsPPL -ne $TargetRunAsPPL) {
-      Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value $TargetRunAsPPL
-      $rebootRequired = $true
-      $Changes.Add(("RunAsPPL: {0} -> {1}" -f (Format-Nullable $current.RunAsPPL), $TargetRunAsPPL)) | Out-Null
+      if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Set registry value to $TargetRunAsPPL")) {
+        Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value $TargetRunAsPPL
+        $rebootRequired = $true
+        $Changes.Add(("RunAsPPL: {0} -> {1}" -f (Format-Nullable $current.RunAsPPL), $TargetRunAsPPL)) | Out-Null
+      }
     }
 
     if ($ManageBoot) {
       if ($current.RunAsPPLBoot -ne $TargetRunAsPPL) {
-        Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value $TargetRunAsPPL
-        $rebootRequired = $true
-        $Changes.Add(("RunAsPPLBoot: {0} -> {1}" -f (Format-Nullable $current.RunAsPPLBoot), $TargetRunAsPPL)) | Out-Null
+        if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPLBoot", "Set registry value to $TargetRunAsPPL")) {
+          Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value $TargetRunAsPPL
+          $rebootRequired = $true
+          $Changes.Add(("RunAsPPLBoot: {0} -> {1}" -f (Format-Nullable $current.RunAsPPLBoot), $TargetRunAsPPL)) | Out-Null
+        }
       }
     }
 
@@ -529,7 +649,15 @@ $result = [pscustomobject]@{
   CodeIntegrity = $codeIntegrity
 }
 
-if ($ExportPath) { Export-ResultJson -Result $result -Path $ExportPath }
-if (-not $Quiet) { Write-PrettySummary -Result $result }
+if ($ExportPath) {
+  Export-ResultJson -Result $result -Path $ExportPath
+}
 
-# $result
+if ($OutputFormat -eq 'Console' -and -not $Quiet) { Write-PrettySummary -Result $result }
+
+# V2 output contract
+$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

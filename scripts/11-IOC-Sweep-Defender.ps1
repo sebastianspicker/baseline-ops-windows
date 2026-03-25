@@ -69,6 +69,22 @@
   - Export-Csv
   - Where-Object filtering
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   By default: none (no objects are written to the success pipeline).
   With -PassThru: a single structured object (the Proof object) containing:
@@ -135,113 +151,82 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$CatalogPath,
-  [switch]$Remediate,
   [switch]$CollectEvidence,
   [ValidateSet('Quick','Full','None')] [string]$ScanType = 'Full',
   [string[]]$CustomScanPaths,
   [switch]$Strict,
-  [string]$ConfigPath = "PATH/TO/JSON/config.json",
-  [switch]$PassThru
+  [string]$ConfigPath,
+  [switch]$PassThru,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Evidence.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 
 # -----------------------------
 # Globals / Defaults (anonymized)
 # -----------------------------
-$DefaultProofOutFile = "PATH/TO/PROOF/IOC-Sweep.json"
-$DefaultEvidenceDir  = "PATH/TO/EVIDENCE"
+$DefaultProofOutFile = $null
+$DefaultEvidenceDir  = $null
 
 # -----------------------------
 # Console helpers (host-only)
 # -----------------------------
 
-function Write-UiRule {
-  param([ConsoleColor]$Color = [ConsoleColor]::DarkGray)
-  Write-UiLine ("=" * 78) $Color
-}
 
-function Write-UiHeader {
-  param([string]$Text)
-  Write-Host ""
-  Write-UiRule DarkGray
-  Write-UiLine ("  " + $Text) Cyan
-  Write-UiRule DarkGray
-}
 
-function Write-UiKV {
-  param(
-    [string]$Key,
-    [string]$Value,
-    [ConsoleColor]$ValueColor = [ConsoleColor]::Gray
-  )
-  $k = ("{0,-14}" -f ($Key + ":"))
-  Write-UiLine $k DarkGray -NoNewLine
-  Write-UiLine $Value $ValueColor
-}
 
-function Write-UiStatus {
-  param(
-    [string]$Label,
-    [ValidateSet('OK','WARN','FAIL','INFO')] [string]$State,
-    [string]$Detail = ""
-  )
 
-  $stateColor = [ConsoleColor]::Gray
-  switch ($State) {
-    'OK'   { $stateColor = [ConsoleColor]::Green }
-    'WARN' { $stateColor = [ConsoleColor]::Yellow }
-    'FAIL' { $stateColor = [ConsoleColor]::Red }
-    'INFO' { $stateColor = [ConsoleColor]::Cyan }
-  }
 
-  Write-UiLine ("[{0}]" -f $State) $stateColor -NoNewLine
-  Write-UiLine (" {0}" -f $Label) White -NoNewLine
-  if ($Detail) { Write-UiLine (" - {0}" -f $Detail) DarkGray } else { Write-Host "" }
-}
-
-function Write-UiBullet {
-  param([string]$Text,[ConsoleColor]$Color = [ConsoleColor]::Gray)
-  Write-UiLine ("  - " + $Text) $Color
-}
-
-function Write-Info {
-  param([string]$Message)
-  # In Windows PowerShell 5.1 the information stream is often suppressed by default; force visibility.
-  Write-Information -MessageData $Message -InformationAction Continue
-}
 
 # -----------------------------
 # Core helpers
 # -----------------------------
 
 
-function Save-Json([object]$Obj,[string]$Path){
-  Ensure-Dir (Split-Path -Parent $Path)
-  ($Obj | ConvertTo-Json -Depth 50) | Out-File -FilePath $Path -Encoding UTF8
-}
+# Save-Json: using canonical Save-Json from lib/Serialization.psm1
 
-function Expand-Env([string]$p){
-  try { return [Environment]::ExpandEnvironmentVariables($p) } catch { return $p }
-}
+# Expand-Env imported from lib/Evidence.psm1
 
-function Read-Json([string]$Path){
-  try {
-    if ($Path -and (Test-Path -LiteralPath $Path)) {
-      return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -ErrorAction Stop
-    }
-  } catch { return $null }
-  return $null
-}
+# Read-Json replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
 
 function Get-ObjPropValue {
   param(
@@ -252,7 +237,7 @@ function Get-ObjPropValue {
     if ($null -eq $Obj) { return $null }
     $p = $Obj.PSObject.Properties[$Name]
     if ($p) { return $p.Value }
-  } catch { }
+  } catch { <# best-effort: property access on dynamic object #> }
   return $null
 }
 
@@ -283,30 +268,43 @@ function Load-Catalog {
 
   $res = [ordered]@{ Catalog = $null; Source = 'Default'; Errors = @() }
 
-  if ($CatalogPath) {
-    $c = Read-Json $CatalogPath
+  $sanitizedCatalog = Sanitize-Path -Path $CatalogPath -MustExist
+  if ($sanitizedCatalog) {
+    $c = Read-JsonFileSafe -Path $sanitizedCatalog
     if ($c) { $res.Catalog = $c; $res.Source = 'CatalogPath'; return $res }
-    $res.Errors += ("CatalogPath not loaded: {0}" -f $CatalogPath)
+    $res.Errors += ("CatalogPath not loaded: {0}" -f $sanitizedCatalog)
   }
 
   $cfg = $null
-  if ($ConfigPath) {
-    $cfg = Read-Json $ConfigPath
-    if (-not $cfg) { $res.Errors += ("ConfigPath not loaded: {0}" -f $ConfigPath) }
+  $sanitizedConfig = Sanitize-Path -Path $ConfigPath -MustExist
+  if ($sanitizedConfig) {
+    $cfg = Read-JsonFileSafe -Path $sanitizedConfig
+    if (-not $cfg) { $res.Errors += ("ConfigPath not loaded: {0}" -f $sanitizedConfig) }
   }
 
   $p = $null
   try { if ($cfg -and $cfg.IOC -and $cfg.IOC.CatalogPath) { $p = [string]$cfg.IOC.CatalogPath } } catch { $p = $null }
 
   if ($p) {
-    $c2 = Read-Json $p
-    if ($c2) { $res.Catalog = $c2; $res.Source = 'Config->IOC.CatalogPath'; return $res }
-    $res.Errors += ("Config IOC.CatalogPath not loaded: {0}" -f $p)
+    $sanitizedP = Sanitize-Path -Path $p -MustExist
+    if ($sanitizedP) {
+      $c2 = Read-JsonFileSafe -Path $sanitizedP
+      if ($c2) { $res.Catalog = $c2; $res.Source = 'Config->IOC.CatalogPath'; return $res }
+      $res.Errors += ("Config IOC.CatalogPath not loaded: {0}" -f $sanitizedP)
+    }
   }
 
   $res.Catalog = (New-DefaultCatalog)
   $res.Source  = 'Default'
   return $res
+}
+
+function Get-ProcessImageSha256([int]$ProcessId){
+  try {
+    $p = Get-Process -Id $ProcessId -ErrorAction Stop
+    if ($p.Path) { return Get-FileSha256 -Path $p.Path }
+  } catch { <# best-effort: process may have exited or path may be inaccessible #> }
+  return $null
 }
 
 function Get-FilePublisher([string]$File){
@@ -316,25 +314,6 @@ function Get-FilePublisher([string]$File){
     return $sig.SignerCertificate.Subject, ($sig.Status -eq 'Valid')
   } catch {
     return $null, $false
-  }
-}
-
-function Get-FileSha256([string]$File){
-  try { return (Get-FileHash -Path $File -Algorithm SHA256 -ErrorAction Stop).Hash } catch { return $null }
-}
-
-function Copy-ToEvidence([string]$Src,[string]$BaseDir){
-  try {
-    if (-not (Test-Path -LiteralPath $Src)) { return $false, "missing" }
-    if (-not $BaseDir) { return $false, "no evidence dir" }
-
-    $rel = $Src.Replace(':','').TrimStart('\') -replace '[\\/:*?"<>|]','_'
-    $dst = Join-Path $BaseDir $rel
-    Ensure-Dir (Split-Path -Parent $dst)
-    Copy-Item -LiteralPath $Src -Destination $dst -Force -ErrorAction Stop
-    return $true, $dst
-  } catch {
-    return $false, $_.Exception.Message
   }
 }
 
@@ -353,9 +332,10 @@ function Convert-RegProviderToRegExePath([string]$KeyPath){
 
 function Export-Reg([string]$RegPath,[string]$OutFile){
   try {
-    Ensure-Dir (Split-Path -Parent $OutFile)
-    & reg.exe export $RegPath $OutFile /y | Out-Null
-    return $true, $OutFile
+    Ensure-Directory (Split-Path -Parent $OutFile)
+    $res = Invoke-RegExe -Arguments @('export', $RegPath, $OutFile, '/y')
+    if ($res -eq $true) { return $true, $OutFile }
+    return $false, 'reg-export-failed'
   } catch {
     return $false, $_.Exception.Message
   }
@@ -405,6 +385,7 @@ $Proof = [ordered]@{
   Summary   = @{}
 }
 
+$script:Findings = New-FindingsList
 Ensure-EventSource
 
 $ok       = $true
@@ -426,8 +407,8 @@ try {
   $evDir = Get-OrDefault (Get-ObjPropValue $cat 'EvidenceDir') $DefaultEvidenceDir
   $evDir = [string]$evDir
 
-  if ($CollectEvidence) { Ensure-Dir $evDir }
-  Ensure-Dir (Split-Path -Parent $outFile)
+  if ($CollectEvidence) { Ensure-Directory $evDir }
+  Ensure-Directory (Split-Path -Parent $outFile)
 
   # Defender scan
   try {
@@ -477,7 +458,7 @@ try {
     if (-not $p) { continue }
     if (-not (Test-Path -LiteralPath $p)) { continue }
 
-    $sha = Get-FileSha256 $p
+    $sha = Get-FileSha256 -Path $p
     $pub,$valid = Get-FilePublisher $p
 
     $fSha    = [string](Get-ObjPropValue $f 'Sha256')
@@ -495,11 +476,11 @@ try {
       $foundAny = $true
       $evPath = $null
       if ($CollectEvidence) {
-        $okc,$ev = Copy-ToEvidence -Src $p -BaseDir $evDir
+        $okc,$ev = Copy-ToEvidence -SourcePath $p -EvidenceBaseDir $evDir
         if ($okc) { $evPath = $ev } else { $Proof.Errors += "Evidence copy failed ($p): $ev"; $ok = $false }
       }
 
-      $Proof.Findings.Files += [ordered]@{
+      $finding = [ordered]@{
         Kind      = 'File'
         Path      = $p
         Sha256    = $sha
@@ -509,6 +490,8 @@ try {
         Action    = (Get-ObjPropValue $f 'Action')
         Match     = [ordered]@{ Sha256 = $matchSha; Signer = $matchSig }
       }
+      $Proof.Findings.Files += $finding
+      Add-Finding -Code 'IOC-FileMatch' -Severity 'High' -Message "IOC file match: $p" -Extra $finding
     }
   }
 
@@ -523,7 +506,7 @@ try {
 
     $hits = Get-ChildItem -LiteralPath $dir -Filter $pat -File -ErrorAction SilentlyContinue
     foreach ($h in $hits) {
-      $sha = Get-FileSha256 $h.FullName
+      $sha = Get-FileSha256 -Path $h.FullName
       $pub,$valid = Get-FilePublisher $h.FullName
 
       $gSha    = [string](Get-ObjPropValue $g 'Sha256')
@@ -536,7 +519,7 @@ try {
       $foundAny = $true
       $evPath = $null
       if ($CollectEvidence) {
-        $okc,$ev = Copy-ToEvidence -Src $h.FullName -BaseDir $evDir
+        $okc,$ev = Copy-ToEvidence -SourcePath $h.FullName -EvidenceBaseDir $evDir
         if ($okc) { $evPath = $ev } else { $Proof.Errors += "Evidence copy failed ($($h.FullName)): $ev"; $ok = $false }
       }
 
@@ -589,12 +572,14 @@ try {
           if ($okx) { $regExp = $exportOut } else { $Proof.Errors += "Reg export failed ($key): $exportOut"; $ok = $false }
         }
 
-        $Proof.Findings.Registry += [ordered]@{
+        $finding = [ordered]@{
           Path     = $path
           Data     = $data
           Evidence = $regExp
           Action   = (Get-ObjPropValue $r 'Action')
         }
+        $Proof.Findings.Registry += $finding
+        Add-Finding -Code 'IOC-RegistryMatch' -Severity 'High' -Message "IOC registry match: $path" -Extra $finding
 
         if ($Remediate -and ((Get-ObjPropValue $r 'Action') -eq 'neutralize')) {
           try {
@@ -615,7 +600,8 @@ try {
     if (-not $name) { continue }
 
     try {
-      $svc = Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f $name) -ErrorAction Stop
+      $escapedSvcName = $name -replace "'", "''"
+      $svc = Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f $escapedSvcName) -ErrorAction Stop
       $img = $svc.PathName
 
       $match = $true
@@ -626,7 +612,7 @@ try {
         $foundAny = $true
         $action = [string](Get-ObjPropValue $s 'Action')
 
-        $Proof.Findings.Services += [ordered]@{
+        $finding = [ordered]@{
           Name        = $svc.Name
           DisplayName = $svc.DisplayName
           State       = $svc.State
@@ -634,11 +620,13 @@ try {
           ImagePath   = $img
           Action      = $action
         }
+        $Proof.Findings.Services += $finding
+        Add-Finding -Code 'IOC-ServiceMatch' -Severity 'High' -Message "IOC service match: $($svc.Name)" -Extra $finding
 
         if ($Remediate -and ($action -in @('disable','stop'))) {
           try {
-            if ($svc.State -ne 'Stopped') { Stop-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue }
-            if ($action -eq 'disable')    { Set-Service -Name $svc.Name -StartupType Disabled -ErrorAction SilentlyContinue }
+            if ($svc.State -ne 'Stopped') { Stop-Service -Name $svc.Name -Force -ErrorAction Stop }
+            if ($action -eq 'disable')    { Set-Service -Name $svc.Name -StartupType Disabled -ErrorAction Stop }
             $Proof.Actions += "Service remediated: $($svc.Name) ($action)"
           } catch {
             $Proof.Errors += "Service remediation failed ($($svc.Name)): $($_.Exception.Message)"
@@ -646,7 +634,7 @@ try {
           }
         }
       }
-    } catch { }
+    } catch { Write-Warning "IOC service sweep error: $($_.Exception.Message)" }
   }
 
   # Scheduled tasks
@@ -670,16 +658,18 @@ try {
 
         $action = [string](Get-ObjPropValue $t 'Action')
 
-        $Proof.Findings.Tasks += [ordered]@{
+        $finding = [ordered]@{
           Path    = $full
           Enabled = [bool]$task.Enabled
           State   = $state
           Action  = $action
         }
+        $Proof.Findings.Tasks += $finding
+        Add-Finding -Code 'IOC-TaskMatch' -Severity 'High' -Message "IOC task match: $full" -Extra $finding
 
         if ($Remediate -and ($action -eq 'disable')) {
           try {
-            Disable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue | Out-Null
+            Disable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction Stop | Out-Null
             $Proof.Actions += "Task disabled: $full"
           } catch {
             $Proof.Errors += "Task disable failed ($full): $($_.Exception.Message)"
@@ -702,19 +692,23 @@ try {
       if (-not $img) { continue }
 
       if ($img -match $imgRx) {
+        $sha = Get-ProcessImageSha256 -ProcessId $pr.Id
         $pub,$valid = Get-FilePublisher $img
         $signer = [string](Get-ObjPropValue $pRule 'Signer')
         if ($signer -and $pub -and ($pub -notlike ("*{0}*" -f $signer))) { continue }
 
         $foundAny = $true
-        $Proof.Findings.Processes += [ordered]@{
+        $finding = [ordered]@{
           Name      = $pr.Name
           Id        = $pr.Id
           Path      = $img
+          Sha256    = $sha
           Publisher = $pub
           Signed    = $valid
           Action    = (Get-ObjPropValue $pRule 'Action')
         }
+        $Proof.Findings.Processes += $finding
+        Add-Finding -Code 'IOC-ProcessMatch' -Severity 'High' -Message "IOC process match: $($pr.Name) ($($pr.Id))" -Extra $finding
       }
     }
   }
@@ -733,7 +727,7 @@ try {
           $pName = $null
           try { $pName = (Get-Process -Id $c.OwningProcess -ErrorAction Stop).Name } catch { $pName = $null }
 
-          $nFind += [ordered]@{
+          $finding = [ordered]@{
             Kind          = 'IP'
             Remote        = $c.RemoteAddress
             Local         = $c.LocalAddress
@@ -743,6 +737,8 @@ try {
             OwningProcess = $c.OwningProcess
             ProcessName   = $pName
           }
+          $nFind += $finding
+          Add-Finding -Code 'IOC-NetworkIPMatch' -Severity 'High' -Message "IOC network match: IP $($c.RemoteAddress)" -Extra $finding
         }
       }
     }
@@ -763,22 +759,24 @@ try {
               if (-not $typ) { $typ = Get-ObjPropValue $h 'RecordType' }
               $dat = Get-ObjPropValue $h 'Data'
 
-              $nFind += [ordered]@{
+              $finding = [ordered]@{
                 Kind  = 'Domain'
                 Entry = $entry
                 Type  = $typ
                 Data  = $dat
               }
+              $nFind += $finding
+              Add-Finding -Code 'IOC-NetworkDomainMatch' -Severity 'High' -Message "IOC network match: Domain $entry" -Extra $finding
             }
           }
         }
-      } catch { }
+      } catch { Write-Warning "IOC network DNS cache check error: $($_.Exception.Message)" }
     }
-  } catch { }
+  } catch { Write-Warning "IOC network sweep error: $($_.Exception.Message)" }
 
   if ($nFind.Count -gt 0) { $Proof.Findings.Network = $nFind }
 
-  Save-Json -Obj $Proof -Path $outFile
+  Save-Json -InputObject $Proof -Path $outFile -Depth 50
 
   if ($foundAny -or (@($Proof.Errors).Count -gt 0) -or $Strict) {
     $msg = "IOC sweep: findings/errors detected. Proof: $outFile"
@@ -793,7 +791,7 @@ try {
   $err = "IOC sweep failed: $($_.Exception.Message)"
   $Proof.Errors += $err
 
-  try { Save-Json -Obj $Proof -Path $outFile } catch { }
+  try { Save-Json -InputObject $Proof -Path $outFile -Depth 50 } catch { <# best-effort: attempt to save partial proof on fatal error #> }
   Write-HealthEvent -Id 10010 -Msg $err -Level 'Error'
 }
 
@@ -831,17 +829,17 @@ $Proof.Summary = @{
 
 # Pretty output
 Write-UiHeader "IOC Sweep (Defender) - Result"
-Write-UiKV "Time"     $Proof.Time     Gray
-Write-UiKV "Host"     $Proof.Hostname Gray
-Write-UiKV "User"     $Proof.User     Gray
+Write-KeyValue "Time"     $Proof.Time     Gray
+Write-KeyValue "Host"     $Proof.Hostname Gray
+Write-KeyValue "User"     $Proof.User     Gray
 
 $adminColor = [ConsoleColor]::Yellow
 if ($Proof.IsAdmin) { $adminColor = [ConsoleColor]::Green }
-Write-UiKV "Admin" ([string]$Proof.IsAdmin) $adminColor
+Write-KeyValue "Admin" ([string]$Proof.IsAdmin) $adminColor
 
 $catColor = [ConsoleColor]::Green
 if ($Proof.Catalog.Source -eq 'Default') { $catColor = [ConsoleColor]::Yellow }
-Write-UiKV "Catalog" $Proof.Catalog.Source $catColor
+Write-KeyValue "Catalog" $Proof.Catalog.Source $catColor
 
 if (@($Proof.Catalog.Errors).Count -gt 0) {
   Write-UiStatus -Label "Catalog warnings" -State "WARN" -Detail ("{0} issue(s)" -f @($Proof.Catalog.Errors).Count)
@@ -852,11 +850,11 @@ if (@($Proof.Catalog.Errors).Count -gt 0) {
 
 $scanReq = Get-OrDefault $Proof.Scan.Requested "n/a"
 $scanRes = Get-OrDefault $Proof.Scan.Result "n/a"
-Write-UiKV "Scan" ("{0} -> {1}" -f $scanReq, $scanRes) Cyan
-Write-UiKV "Proof" $outFile Gray
-Write-UiKV "Evidence" $evDir Gray
+Write-KeyValue "Scan" ("{0} -> {1}" -f $scanReq, $scanRes) Cyan
+Write-KeyValue "Proof" $outFile Gray
+Write-KeyValue "Evidence" $evDir Gray
 
-Write-Host ""
+Write-UiLine ""
 if ($exitCode -eq 0) {
   Write-UiStatus -Label "Overall status" -State "OK" -Detail "No findings and no errors"
 } elseif ($errCount -gt 0) {
@@ -865,7 +863,7 @@ if ($exitCode -eq 0) {
   Write-UiStatus -Label "Overall status" -State "WARN" -Detail "Findings detected (check proof file)"
 }
 
-Write-Host ""
+Write-UiLine ""
 Write-UiLine "Findings breakdown:" DarkGray
 
 $fc = [ConsoleColor]::Green; if ($filesCount -gt 0) { $fc = [ConsoleColor]::Yellow }
@@ -882,22 +880,28 @@ Write-UiBullet ("Tasks:     {0}" -f $taskCount)  $tc
 Write-UiBullet ("Processes: {0}" -f $procCount)  $pc
 Write-UiBullet ("Network:   {0}" -f $netCount)   $nc
 
-Write-Host ""
+Write-UiLine ""
 $actColor = [ConsoleColor]::Green; if ($actCount -gt 0) { $actColor = [ConsoleColor]::Yellow }
 $errColor = [ConsoleColor]::Green; if ($errCount -gt 0) { $errColor = [ConsoleColor]::Red }
 $exitColor = [ConsoleColor]::Green; if ($exitCode -ne 0) { $exitColor = [ConsoleColor]::Yellow }
 
-Write-UiKV "Actions"  ([string]$actCount) $actColor
-Write-UiKV "Errors"   ([string]$errCount) $errColor
-Write-UiKV "ExitCode" ([string]$exitCode) $exitColor
+Write-KeyValue "Actions"  ([string]$actCount) $actColor
+Write-KeyValue "Errors"   ([string]$errCount) $errColor
+Write-KeyValue "ExitCode" ([string]$exitCode) $exitColor
 
 if ($errCount -gt 0) {
-  Write-Host ""
+  Write-UiLine ""
   Write-UiStatus -Label "Error details" -State "FAIL"
   foreach ($e in $Proof.Errors) { Write-UiBullet $e Red }
 }
 
-# Pipeline output only when explicitly requested
-if ($PassThru) { $Proof }
+# V2 output contract
+$resultToken = if ($exitCode -ne 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '11-IOC-Sweep-Defender.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $Proof -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
 
 exit $exitCode
+
+
+

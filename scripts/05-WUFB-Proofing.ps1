@@ -52,6 +52,22 @@
   The object includes the overall result, counts, proof path, evidence snapshot, the loaded catalog, and lists of
   drift/changes/notes.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   By default, this script outputs nothing to the pipeline (console output only).
 
@@ -102,78 +118,64 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$CatalogPath,
-  [string]$ConfigPath = "PATH/TO/CONFIG.json",
-  [switch]$Remediate,
+  [string]$ConfigPath,
   [switch]$Strict,
   [switch]$PassThru
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 # -----------------------------
 # Console helpers (no pipeline)
 # -----------------------------
 
-function Write-Console {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [AllowEmptyString()]
-    [string]$Message,
 
-    [ConsoleColor]$ForegroundColor = [ConsoleColor]::Gray,
 
-    [switch]$NoNewline
-  )
-  if ($NoNewline) {
-    Write-Host $Message -ForegroundColor $ForegroundColor -NoNewline
-  } else {
-    Write-Host $Message -ForegroundColor $ForegroundColor
-  }
-}
 
-function Write-ConsoleInfo {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [AllowEmptyString()]
-    [string]$Message
-  )
-  Write-Information $Message -InformationAction Continue
-}
-
-function Write-Rule {
-  [CmdletBinding()]
-  param(
-    [string]$Title,
-    [ConsoleColor]$Color = [ConsoleColor]::DarkCyan
-  )
-  $line = ('=' * 78)
-  Write-Console $line -ForegroundColor $Color
-  if ($Title) { Write-Console $Title -ForegroundColor $Color }
-  Write-Console $line -ForegroundColor $Color
-}
-
-function Write-KV {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$Key,
-    [AllowEmptyString()][string]$Value,
-    [ConsoleColor]$KeyColor = [ConsoleColor]::DarkGray,
-    [ConsoleColor]$ValueColor = [ConsoleColor]::Gray
-  )
-  Write-Console ("{0,-12}: " -f $Key) -ForegroundColor $KeyColor -NoNewline
-  Write-Console ("{0}" -f $Value) -ForegroundColor $ValueColor
-}
 
 function Write-ConsoleSummary {
   [CmdletBinding()]
@@ -191,38 +193,38 @@ function Write-ConsoleSummary {
   elseif ($result -eq 'WARNING') { $resColor = [ConsoleColor]::Yellow }
   elseif ($result -eq 'ERROR') { $resColor = [ConsoleColor]::Red }
 
-  Write-Console ""
-  Write-Rule -Title "WUfB Proofing Summary" -Color ([ConsoleColor]::DarkCyan)
+  Write-UiLine ""
+  Write-DecorativeRule -Title "WUfB Proofing Summary" -Color 'Header'
 
-  Write-KV -Key 'Result'    -Value $Summary.Result -ValueColor $resColor
-  Write-KV -Key 'Elevated'  -Value $Summary.Elevated
-  Write-KV -Key 'Remediate' -Value $Summary.Remediate
-  Write-KV -Key 'Strict'    -Value $Summary.Strict
-  Write-KV -Key 'Changes'   -Value $Summary.ChangesCount
-  Write-KV -Key 'Drift'     -Value $Summary.DriftCount
-  Write-KV -Key 'Notes'     -Value $Summary.NotesCount
-  Write-KV -Key 'EventLog'  -Value $Summary.EventLogStatus
-  Write-KV -Key 'Proof JSON'-Value $Summary.ProofPath
+  Write-KeyValue -Key 'Result'    -Value $Summary.Result -ValueColor $resColor
+  Write-KeyValue -Key 'Elevated'  -Value $Summary.Elevated
+  Write-KeyValue -Key 'Remediate' -Value $Summary.Remediate
+  Write-KeyValue -Key 'Strict'    -Value $Summary.Strict
+  Write-KeyValue -Key 'Changes'   -Value $Summary.ChangesCount
+  Write-KeyValue -Key 'Drift'     -Value $Summary.DriftCount
+  Write-KeyValue -Key 'Notes'     -Value $Summary.NotesCount
+  Write-KeyValue -Key 'EventLog'  -Value $Summary.EventLogStatus
+  Write-KeyValue -Key 'Proof JSON'-Value $Summary.ProofPath
 
   if ($Changes -and $Changes.Count -gt 0) {
-    Write-Console ""
-    Write-Console "Changes:" -ForegroundColor ([ConsoleColor]::Green)
-    foreach ($c in $Changes) { Write-Console ("- {0}" -f $c) -ForegroundColor ([ConsoleColor]::Gray) }
+    Write-UiLine ""
+    Write-UiLine "Changes:" -ForegroundColor ([ConsoleColor]::Green)
+    foreach ($c in $Changes) { Write-UiLine ("- {0}" -f $c) -ForegroundColor ([ConsoleColor]::Gray) }
   }
 
   if ($Drift -and $Drift.Count -gt 0) {
-    Write-Console ""
-    Write-Console "Drift:" -ForegroundColor ([ConsoleColor]::Yellow)
-    foreach ($d in $Drift) { Write-Console ("- {0}" -f $d) -ForegroundColor ([ConsoleColor]::Gray) }
+    Write-UiLine ""
+    Write-UiLine "Drift:" -ForegroundColor ([ConsoleColor]::Yellow)
+    foreach ($d in $Drift) { Write-UiLine ("- {0}" -f $d) -ForegroundColor ([ConsoleColor]::Gray) }
   }
 
   if ($Notes -and $Notes.Count -gt 0) {
-    Write-Console ""
-    Write-Console "Notes:" -ForegroundColor ([ConsoleColor]::Cyan)
-    foreach ($n in $Notes) { Write-Console ("- {0}" -f $n) -ForegroundColor ([ConsoleColor]::Gray) }
+    Write-UiLine ""
+    Write-UiLine "Notes:" -ForegroundColor ([ConsoleColor]::Cyan)
+    foreach ($n in $Notes) { Write-UiLine ("- {0}" -f $n) -ForegroundColor ([ConsoleColor]::Gray) }
   }
 
-  Write-Console ""
+  Write-UiLine ""
 }
 
 # -----------------------------
@@ -234,23 +236,9 @@ function Write-ConsoleSummary {
 # Security / registry / file helpers
 # -----------------------------
 
-function Is-Admin {
-  [CmdletBinding()]
-  param()
-  try {
-    $p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  } catch { return $false }
-}
+# Test-IsAdmin imported from lib/Common.psm1
 
-
-function Ensure-Key {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -Path $Path -Force | Out-Null
-  }
-}
+# Ensure-Key replaced by Ensure-RegistryKey from lib/Registry.psm1
 
 function Get-REG {
   [CmdletBinding()]
@@ -261,7 +249,7 @@ function Get-REG {
   try { (Get-ItemProperty -Path $Path -ErrorAction Stop).$Name } catch { $null }
 }
 
-function Set-REGDWORD {
+function Set-WufbDword {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$Path,
@@ -270,7 +258,8 @@ function Set-REGDWORD {
     [switch]$Remediate
   )
 
-  Ensure-Key -Path $Path
+  # Only ensure key exists when remediating (§2/§17)
+  if ($Remediate) { Ensure-RegistryKey -Path $Path }
   $cur = Get-REG -Path $Path -Name $Name
 
   if ($cur -eq $Value) {
@@ -298,7 +287,8 @@ function Set-REGSZ {
     [switch]$Remediate
   )
 
-  Ensure-Key -Path $Path
+  # Only ensure key exists when remediating (§2/§17)
+  if ($Remediate) { Ensure-RegistryKey -Path $Path }
   $cur = Get-REG -Path $Path -Name $Name
 
   if ($cur -eq $Value) {
@@ -325,7 +315,8 @@ function Remove-REGValue {
     [switch]$Remediate
   )
 
-  Ensure-Key -Path $Path
+  # Only ensure key exists when remediating (§2/§17)
+  if ($Remediate) { Ensure-RegistryKey -Path $Path }
   $cur = Get-REG -Path $Path -Name $Name
 
   if ($null -eq $cur) {
@@ -344,29 +335,7 @@ function Remove-REGValue {
   }
 }
 
-function Save-JsonNoBom {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][object]$Obj,
-    [Parameter(Mandatory)][string]$Path
-  )
-
-  if ([string]::IsNullOrWhiteSpace($Path)) { throw "Proof path is empty." }
-
-  $fullPath = $Path
-  try { $fullPath = [System.IO.Path]::GetFullPath($Path) } catch {}
-
-  $parent = Split-Path -Parent $fullPath
-  if ([string]::IsNullOrWhiteSpace($parent)) { throw "Invalid proof path (no parent folder): $fullPath" }
-
-  Ensure-Dir -Path $parent
-
-  $json = $Obj | ConvertTo-Json -Depth 12
-  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-  [System.IO.File]::WriteAllText($fullPath, $json, $utf8NoBom)
-
-  return $fullPath
-}
+# Save-JsonNoBom: replaced by canonical Save-Json from lib/Serialization.psm1
 
 function Add-Result {
   [CmdletBinding()]
@@ -421,7 +390,7 @@ function Load-Catalog {
 
   if ($CatalogPath) {
     if (Test-Path -LiteralPath $CatalogPath) {
-      try { $Notes.Add("Catalog loaded from CatalogPath.") | Out-Null; return (Get-Content -Raw -LiteralPath $CatalogPath | ConvertFrom-Json -ErrorAction Stop) }
+      try { $Notes.Add("Catalog loaded from CatalogPath.") | Out-Null; return (Get-Content -Raw -LiteralPath $CatalogPath -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop) }
       catch { $Notes.Add("CatalogPath JSON invalid. Using defaults. Error: $($_.Exception.Message)") | Out-Null; return $default }
     } else {
       $Notes.Add("CatalogPath not found. Using defaults.") | Out-Null
@@ -431,13 +400,13 @@ function Load-Catalog {
 
   if ($ConfigPath -and (Test-Path -LiteralPath $ConfigPath)) {
     try {
-      $cfg = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json -ErrorAction Stop
+      $cfg = Get-Content -Raw -LiteralPath $ConfigPath -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
       $p = $null
       if ($cfg -and $cfg.WUfB -and $cfg.WUfB.CatalogPath) { $p = [string]$cfg.WUfB.CatalogPath }
 
       if ($p) {
         if (Test-Path -LiteralPath $p) {
-          try { $Notes.Add("Catalog loaded from ConfigPath reference.") | Out-Null; return (Get-Content -Raw -LiteralPath $p | ConvertFrom-Json -ErrorAction Stop) }
+          try { $Notes.Add("Catalog loaded from ConfigPath reference.") | Out-Null; return (Get-Content -Raw -LiteralPath $p -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop) }
           catch { $Notes.Add("Referenced catalog JSON invalid. Using defaults. Error: $($_.Exception.Message)") | Out-Null; return $default }
         } else {
           $Notes.Add("Referenced catalog path not found. Using defaults.") | Out-Null
@@ -535,16 +504,16 @@ $Proof = [ordered]@{
 $modeText = 'Audit'
 if ($Remediate) { $modeText = 'Remediate' }
 
-Write-Rule -Title ("WUfB Proofing - {0}" -f $env:COMPUTERNAME) -Color ([ConsoleColor]::DarkCyan)
-Write-KV -Key 'Start' -Value (Get-Date).ToString()
-Write-KV -Key 'Mode'  -Value $modeText
-Write-Console ""
+Write-DecorativeRule -Title ("WUfB Proofing - {0}" -f $env:COMPUTERNAME) -Color 'Header'
+Write-KeyValue -Key 'Start' -Value (Get-Date).ToString()
+Write-KeyValue -Key 'Mode'  -Value $modeText
+Write-UiLine ""
 
 try {
   $eventSourceReady = Ensure-EventSource
   if (-not $eventSourceReady) { $notes.Add("Event source not ensured. EventLog write may fail.") | Out-Null }
 
-  $isAdmin = Is-Admin
+  $isAdmin = Test-IsAdmin
   $Proof.Result.Elevated = $isAdmin
 
   if (-not $isAdmin) {
@@ -564,7 +533,7 @@ try {
   $doPol = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'
 
   if (([string]$cat.UpdateSource) -eq 'WSUS') {
-    $r = Set-REGDWORD -Path $auPol -Name 'UseWUServer' -Value 1 -Remediate:$Remediate
+    $r = Set-WufbDword -Path $auPol -Name 'UseWUServer' -Value 1 -Remediate:$Remediate
     Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
 
     if ([string]::IsNullOrWhiteSpace([string]$cat.WSUS.WUServer)) {
@@ -583,7 +552,7 @@ try {
       Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
     }
   } else {
-    $r = Set-REGDWORD -Path $auPol -Name 'UseWUServer' -Value 0 -Remediate:$Remediate
+    $r = Set-WufbDword -Path $auPol -Name 'UseWUServer' -Value 0 -Remediate:$Remediate
     Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
 
     $r = Remove-REGValue -Path $wuPol -Name 'WUServer' -Remediate:$Remediate
@@ -602,16 +571,16 @@ try {
   if ($featureDays -lt 0 -or $featureDays -gt 365) { $notes.Add("Deferrals.FeatureDays out of range (0-365). Using default 30.") | Out-Null; $featureDays = 30 }
   if ($qualityDays -lt 0 -or $qualityDays -gt 35) { $notes.Add("Deferrals.QualityDays out of range (0-35). Using default 7.") | Out-Null; $qualityDays = 7 }
 
-  $r = Set-REGDWORD -Path $wuPol -Name 'DeferFeatureUpdates' -Value 1 -Remediate:$Remediate
+  $r = Set-WufbDword -Path $wuPol -Name 'DeferFeatureUpdates' -Value 1 -Remediate:$Remediate
   Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
 
-  $r = Set-REGDWORD -Path $wuPol -Name 'DeferFeatureUpdatesPeriodInDays' -Value $featureDays -Remediate:$Remediate
+  $r = Set-WufbDword -Path $wuPol -Name 'DeferFeatureUpdatesPeriodInDays' -Value $featureDays -Remediate:$Remediate
   Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
 
-  $r = Set-REGDWORD -Path $wuPol -Name 'DeferQualityUpdates' -Value 1 -Remediate:$Remediate
+  $r = Set-WufbDword -Path $wuPol -Name 'DeferQualityUpdates' -Value 1 -Remediate:$Remediate
   Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
 
-  $r = Set-REGDWORD -Path $wuPol -Name 'DeferQualityUpdatesPeriodInDays' -Value $qualityDays -Remediate:$Remediate
+  $r = Set-WufbDword -Path $wuPol -Name 'DeferQualityUpdatesPeriodInDays' -Value $qualityDays -Remediate:$Remediate
   Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
 
   $trEnable = $false
@@ -625,7 +594,7 @@ try {
       $notes.Add("TargetRelease enabled but missing ProductVersion/TargetReleaseVersionInfo. Disabling pinning.") | Out-Null
       $trEnable = $false
     } else {
-      $r = Set-REGDWORD -Path $wuPol -Name 'TargetReleaseVersion' -Value 1 -Remediate:$Remediate
+      $r = Set-WufbDword -Path $wuPol -Name 'TargetReleaseVersion' -Value 1 -Remediate:$Remediate
       Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
 
       $r = Set-REGSZ -Path $wuPol -Name 'ProductVersion' -Value $prod -Remediate:$Remediate
@@ -637,7 +606,7 @@ try {
   }
 
   if (-not $trEnable) {
-    $r = Set-REGDWORD -Path $wuPol -Name 'TargetReleaseVersion' -Value 0 -Remediate:$Remediate
+    $r = Set-WufbDword -Path $wuPol -Name 'TargetReleaseVersion' -Value 0 -Remediate:$Remediate
     Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
 
     $r = Remove-REGValue -Path $wuPol -Name 'ProductVersion' -Remediate:$Remediate
@@ -649,7 +618,7 @@ try {
 
   if ($null -ne $cat.DeliveryOptimization -and $null -ne $cat.DeliveryOptimization.DownloadMode) {
     try {
-      $r = Set-REGDWORD -Path $doPol -Name 'DODownloadMode' -Value ([int]$cat.DeliveryOptimization.DownloadMode) -Remediate:$Remediate
+      $r = Set-WufbDword -Path $doPol -Name 'DODownloadMode' -Value ([int]$cat.DeliveryOptimization.DownloadMode) -Remediate:$Remediate
       Add-Result -Result $r -Changes $changes -Drifts $drifts -Ok ([ref]$ok) -Ops $ops
     } catch {
       $notes.Add("DeliveryOptimization.DownloadMode invalid. Skipped.") | Out-Null
@@ -682,7 +651,8 @@ try {
   $Proof.Drift   = @($drifts.ToArray())
   $Proof.Notes   = @($notes.ToArray())
 
-  $proofWrittenPath = Save-JsonNoBom -Obj $Proof -Path $outFile
+  Save-Json -InputObject $Proof -Path $outFile -Depth 12 -NoBom
+  $proofWrittenPath = $outFile
   $changes.Add("Proof JSON: $proofWrittenPath") | Out-Null
 
   $eventId = 4980
@@ -701,8 +671,9 @@ try {
 
   try {
     $fallback = Join-Path $env:ProgramData 'WUfB-Proofing\proof-error.json'
-    $proofWrittenPath = Save-JsonNoBom -Obj $Proof -Path $fallback
-  } catch {}
+    Save-Json -InputObject $Proof -Path $fallback -Depth 12 -NoBom
+    $proofWrittenPath = $fallback
+  } catch { <# best-effort: fallback proof save on fatal error #> }
 } finally {
   $hasDriftFinal = ($drifts.Count -gt 0)
 
@@ -754,3 +725,22 @@ try {
   if (-not $ok) { exit 1 }
   if ($Strict -and $hasDriftFinal) { exit 2 }
 }
+
+# C10: populate canonical findings from drifts
+foreach ($d in @($drifts)) {
+  $code = 'WUFB-Drift'
+  $sev = 'Medium'
+  if ($d -match 'WSUS')           { $code = 'WUFB-WsusDrift' }
+  if ($d -match 'Deferral')       { $code = 'WUFB-DeferralDrift' }
+  if ($d -match 'TargetRelease')  { $code = 'WUFB-TargetReleaseDrift' }
+  if ($d -match 'DeliveryOpt')    { $code = 'WUFB-DeliveryOptDrift' }
+  if ($d -match 'Failed')         { $sev = 'High' }
+  Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $d
+}
+
+# V2 output contract
+$resultToken = if (-not $ok) { 'FAIL' } elseif ($hasDriftFinal) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Ok = $ok; HasDrift = $hasDriftFinal; Timestamp = Get-Date }) -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

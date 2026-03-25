@@ -8,10 +8,10 @@ Microsoft notes that deleting the registry values may not disable Credential Gua
 
 Best-practice output model (PowerShell 5.1):
 - Pipeline: exactly one structured object (safe for Export-Csv / ConvertTo-Json / Where-Object).
-- Console: pretty output only via Write-Host (host output) so the pipeline stays clean. [web:86]
+- Console: pretty output only via Write-UiLine (host output) so the pipeline stays clean. [web:86]
 
 .PARAMETER Mode
-AuditOnly | Remediate
+Audit | Remediate
 
 .PARAMETER ConfigPath
 Optional JSON config path, e.g. "PATH/TO/JSON/config.json".
@@ -41,6 +41,25 @@ Optional CSV export directory (summary.csv and findings.csv).
 .PARAMETER ShowSummary
 Write a human-friendly console summary at the end (default: $true).
 
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 PSCustomObject with Summary, Current, After, Findings, Config.
 .EXAMPLE
@@ -51,8 +70,8 @@ PSCustomObject with Summary, Current, After, Findings, Config.
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [ValidateSet('AuditOnly', 'Remediate')]
-  [string]$Mode = 'AuditOnly',
+  [ValidateSet('Audit', 'Remediate')]
+  [string]$Mode = 'Audit',
 
   [string]$ConfigPath,
 
@@ -67,16 +86,51 @@ param(
   [string]$ExportCsvBasePath,
 
   [bool]$ShowSummary = $true
+
+,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -----------------------------
@@ -84,13 +138,7 @@ $ErrorActionPreference = 'Stop'
 # -----------------------------
 
 
-function Ensure-Key {
-  param([Parameter(Mandatory)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -Path $Path -Force | Out-Null
-  }
-}
-
+# Ensure-Key removed; Ensure-RegistryKey available from lib/Registry.psm1
 
 
 function Apply-ConfigOverrides {
@@ -142,18 +190,7 @@ function Write-PrettySummary {
   $cBad    = 'Red'
   $cInfo   = 'Cyan'
   $cDim    = 'DarkGray'
-  $cHeader = 'White'
-
-  function Write-Rule { Write-Host ('=' * 60) -ForegroundColor $cDim }
-
-  function Show-Section {
-    param([string]$Title)
-    Write-Host ''
-    Write-Rule
-    Write-Host $Title -ForegroundColor $cHeader
-    Write-Rule
-  }
-
+  
   function Show-Kv {
     param(
       [string]$Key,
@@ -161,19 +198,11 @@ function Write-PrettySummary {
       [string]$Color
     )
     if (-not $Color) { $Color = 'Gray' }
-    Write-Host ("{0,-30}: " -f $Key) -NoNewline -ForegroundColor $cDim
-    Write-Host $Value -ForegroundColor $Color
+    Write-UiLine ("{0,-30}: " -f $Key) -NoNewline -ForegroundColor $cDim
+    Write-UiLine $Value -ForegroundColor $Color
   }
 
-  function Get-SeverityColor {
-    param([string]$Severity)
-    switch ($Severity) {
-      'High'   { return $cBad }
-      'Medium' { return $cWarn }
-      'Low'    { return $cInfo }
-      default  { return 'Gray' }
-    }
-  }
+  # Get-SeverityColor from lib/Console.psm1
 
   # Precompute colors/strings (avoid inline if-expressions in argument position in PS 5.1).
   $compliant = [bool]$Result.Summary.Compliant
@@ -186,19 +215,19 @@ function Write-PrettySummary {
   $findingsCount = [int]$Result.Summary.FindingsCount
   $findingsColor = if ($findingsCount -gt 0) { $cWarn } else { $cGood }
 
-  Show-Section -Title 'Credential Guard / VBS'
+  Write-Section -Title 'Credential Guard / VBS'
   Show-Kv -Key 'ComputerName' -Value ([string]$Result.Summary.ComputerName) -Color $cInfo
   Show-Kv -Key 'Mode' -Value ([string]$Result.Summary.Mode) -Color $modeColor
   Show-Kv -Key 'Compliant (registry)' -Value ([string]$compliant) -Color $compliantColor
   Show-Kv -Key 'Reboot required' -Value ([string]$reboot) -Color $rebootColor
   Show-Kv -Key 'Findings count' -Value ([string]$findingsCount) -Color $findingsColor
 
-  Show-Section -Title 'Target (effective)'
+  Write-Section -Title 'Target (effective)'
   Show-Kv -Key 'EnableVBS' -Value '1' -Color $cInfo
   Show-Kv -Key 'RequirePlatformSecurityFeatures' -Value ([string]$Result.Summary.Target.RequirePlatformSecurityFeatures) -Color $cInfo
   Show-Kv -Key 'LsaCfgFlags' -Value ([string]$Result.Summary.Target.LsaCfgFlags) -Color $cInfo
 
-  Show-Section -Title 'State (before -> after)'
+  Write-Section -Title 'State (before -> after)'
   $b = $Result.Current
   $a = $Result.After
 
@@ -215,35 +244,35 @@ function Write-PrettySummary {
   Show-Kv -Key 'LsaCfgFlags' -Value $lsaLine -Color $lsaColor
 
   if ($Result.Config -and $Result.Config.Warnings -and $Result.Config.Warnings.Count -gt 0) {
-    Show-Section -Title 'Config warnings'
+    Write-Section -Title 'Config warnings'
     foreach ($w in $Result.Config.Warnings) {
-      Write-Host ("- {0}" -f $w) -ForegroundColor $cWarn
+      Write-UiLine ("- {0}" -f $w) -ForegroundColor $cWarn
     }
   }
 
   if ($Result.Summary.Changes -and $Result.Summary.Changes.Count -gt 0) {
-    Show-Section -Title 'Changes'
+    Write-Section -Title 'Changes'
     foreach ($c in $Result.Summary.Changes) {
-      Write-Host ("- {0}" -f $c) -ForegroundColor $cInfo
+      Write-UiLine ("- {0}" -f $c) -ForegroundColor $cInfo
     }
   }
 
   if ($Result.Findings -and $Result.Findings.Count -gt 0) {
-    Show-Section -Title 'Findings'
+    Write-Section -Title 'Findings'
     foreach ($f in $Result.Findings) {
       $sevColor = Get-SeverityColor -Severity ([string]$f.Severity)
-      Write-Host ("- [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -ForegroundColor $sevColor
+      Write-UiLine ("- [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -ForegroundColor $sevColor
     }
   }
 
-  Write-Host ''
+  Write-UiLine ''
 }
 
 # -----------------------------
 # Start
 # -----------------------------
 
-if (-not (Test-IsAdmin)) { throw "Administrative rights required." }
+Require-Admin
 
 $Findings       = New-FindingsList
 $Changes        = New-Object System.Collections.Generic.List[string]
@@ -280,16 +309,20 @@ $current = [pscustomobject]@{
 # Audit
 # -----------------------------
 
-if ($current.EnableVirtualizationBasedSecurity -ne 1) {
+if ($null -eq $current.EnableVirtualizationBasedSecurity) {
+  Add-Finding -Code 'CG-VBS-NotConfigured' -Severity 'High' -Message 'VBS not configured (registry key absent).'
+} elseif ($current.EnableVirtualizationBasedSecurity -ne 1) {
   Add-Finding -Code 'CG-VBS-NotEnabled' -Severity 'High' -Message 'EnableVirtualizationBasedSecurity is not 1.'
 }
 
-if ($current.RequirePlatformSecurityFeatures -notin 1, 3) {
+if ($null -eq $current.RequirePlatformSecurityFeatures) {
+  Add-Finding -Code 'CG-PlatformSecurityFeatures-NotConfigured' -Severity 'Medium' -Message 'RequirePlatformSecurityFeatures not configured (registry key absent).'
+} elseif ($current.RequirePlatformSecurityFeatures -notin 1, 3) {
   Add-Finding -Code 'CG-PlatformSecurityFeatures-Invalid' -Severity 'Medium' -Message 'RequirePlatformSecurityFeatures is not 1 or 3.'
 }
 
 if ($null -eq $current.LsaCfgFlags) {
-  Add-Finding -Code 'CG-LsaCfgFlags-Missing' -Severity 'Medium' -Message 'LsaCfgFlags is missing (Credential Guard not configured via registry).'
+  Add-Finding -Code 'CG-LsaCfgFlags-NotConfigured' -Severity 'Medium' -Message 'LsaCfgFlags not configured (registry key absent).'
 } elseif ($current.LsaCfgFlags -notin 0, 1, 2) {
   Add-Finding -Code 'CG-LsaCfgFlags-Invalid' -Severity 'Medium' -Message ("LsaCfgFlags has an unexpected value: {0}" -f $current.LsaCfgFlags)
 } elseif ($current.LsaCfgFlags -eq 0) {
@@ -416,4 +449,9 @@ if ($effective.ShowSummary) {
   Write-PrettySummary -Result $result
 }
 
-# $result
+# V2 output contract
+$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After; Config = $result.Config }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

@@ -5,7 +5,7 @@ Lightweight client "Security Baseline" report (read-only).
 
 .DESCRIPTION
 - Pipeline output: ONLY structured objects. [web:162]
-- Console output: formatting via Write-Host / Write-Information only. [web:114][web:162]
+- Console output: formatting via Write-UiLine / Write-Information only. [web:114][web:162]
 - Optional JSON reference ("PATH/TO/JSON/...") for expected values; safe defaults when missing/invalid.
 
 .PARAMETER ExportPath
@@ -22,6 +22,28 @@ Disable the human-readable summary block at the end.
 .PARAMETER Quiet
 Suppress informational console output (still returns objects).
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 - BaselineReport.Summary
 - BaselineReport.Row
@@ -31,67 +53,64 @@ Suppress informational console output (still returns objects).
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$ExportPath,
   [string]$ReferenceJsonPath,
   [switch]$NoConsoleSummary,
   [switch]$Quiet
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 $script:Quiet = [bool]$Quiet
 $script:NoConsoleSummary = [bool]$NoConsoleSummary
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 #region Helpers
 
-function Write-Info {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Message)
 
-  if ($script:Quiet) { return }
 
-  Write-Information -MessageData $Message -InformationAction Continue
-}
-
-function Write-PrettyHeader {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Title)
-
-  if ($script:Quiet) { return }
-
-  Write-Host ''
-  Write-Host $Title -ForegroundColor Cyan
-  Write-Host ('-' * $Title.Length) -ForegroundColor DarkGray
-}
-
-function Write-PrettyKeyValue {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$Key,
-    [Parameter(Mandatory)][string]$Value,
-    [ValidateSet('Info','Good','Warn','Bad','Dim')][string]$Level = 'Info'
-  )
-
-  if ($Quiet) { return }
-
-  $fg = 'Gray'
-  switch ($Level) {
-    'Good' { $fg = 'Green' }
-    'Warn' { $fg = 'Yellow' }
-    'Bad'  { $fg = 'Red' }
-    'Dim'  { $fg = 'DarkGray' }
-    default { $fg = 'Gray' }
-  }
-
-  Write-Host ("{0}: {1}" -f $Key.PadRight(28), $Value) -ForegroundColor $fg
-}
 
 
 function Test-RegKey {
@@ -100,14 +119,7 @@ function Test-RegKey {
   try { Test-Path -Path $Path } catch { $false }
 }
 
-function Ensure-Folder {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Path)
-
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -Path $Path -ItemType Directory -Force | Out-Null
-  }
-}
+# Ensure-Directory imported from lib/Common.psm1
 
 function ConvertTo-ScalarString {
   [CmdletBinding()]
@@ -206,7 +218,7 @@ function Load-ReferenceJson {
       return [pscustomobject]$result
     }
 
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($raw)) {
       $result.Error = "Reference JSON is empty: $Path"
       $result.Reference = New-ReferenceDefaults
@@ -340,35 +352,35 @@ function Write-ConsoleSummary {
   $cgRunLevel = 'Dim'
   if ($cgRunTxt -eq 'Running') { $cgRunLevel = 'Warn' } else { $cgRunLevel = 'Good' }
 
-  Write-PrettyHeader -Title 'Security Baseline Report'
-  Write-PrettyKeyValue -Key 'ComputerName'   -Value $Summary.ComputerName -Level 'Info'
-  Write-PrettyKeyValue -Key 'Timestamp'      -Value (ConvertTo-DisplayString $Summary.Timestamp) -Level 'Info'
-  Write-PrettyKeyValue -Key 'Rows'           -Value (ConvertTo-DisplayString $Summary.Rows) -Level 'Info'
-  Write-PrettyKeyValue -Key 'Reference JSON' -Value $refText -Level $refLevel
+  Write-UiHeader -Title 'Security Baseline Report'
+  Write-KeyValue -Key 'ComputerName'   -Value $Summary.ComputerName -Level 'Info'
+  Write-KeyValue -Key 'Timestamp'      -Value (ConvertTo-DisplayString $Summary.Timestamp) -Level 'Info'
+  Write-KeyValue -Key 'Rows'           -Value (ConvertTo-DisplayString $Summary.Rows) -Level 'Info'
+  Write-KeyValue -Key 'Reference JSON' -Value $refText -Level $refLevel
 
-  Write-PrettyHeader -Title 'VBS / Credential Guard'
-  Write-PrettyKeyValue -Key 'VBS intent (registry)' -Value $vbsRegText -Level (Get-LevelForMatch $vbsMatch)
-  Write-PrettyKeyValue -Key 'CG intent (registry)'  -Value $cgRegText  -Level (Get-LevelForMatch $cgMatch)
-  Write-PrettyKeyValue -Key 'VBS status (CIM)'      -Value ("{0} ({1})" -f (ConvertTo-DisplayString $vbsCimVal), $vbsCimTxt) -Level 'Info'
-  Write-PrettyKeyValue -Key 'CG running (CIM)'      -Value $cgRunTxt -Level $cgRunLevel
+  Write-UiHeader -Title 'VBS / Credential Guard'
+  Write-KeyValue -Key 'VBS intent (registry)' -Value $vbsRegText -Level (Get-LevelForMatch $vbsMatch)
+  Write-KeyValue -Key 'CG intent (registry)'  -Value $cgRegText  -Level (Get-LevelForMatch $cgMatch)
+  Write-KeyValue -Key 'VBS status (CIM)'      -Value ("{0} ({1})" -f (ConvertTo-DisplayString $vbsCimVal), $vbsCimTxt) -Level 'Info'
+  Write-KeyValue -Key 'CG running (CIM)'      -Value $cgRunTxt -Level $cgRunLevel
 
-  Write-PrettyHeader -Title 'LSA Protection'
-  Write-PrettyKeyValue -Key 'RunAsPPL' -Value $runAsPplText -Level (Get-LevelForMatch $pplMatch)
+  Write-UiHeader -Title 'LSA Protection'
+  Write-KeyValue -Key 'RunAsPPL' -Value $runAsPplText -Level (Get-LevelForMatch $pplMatch)
 
-  Write-PrettyHeader -Title 'Firewall (first 3 profiles)'
+  Write-UiHeader -Title 'Firewall (first 3 profiles)'
   $fw = $Rows | Where-Object { $_.Section -eq 'FirewallProfile' -and $_.Name } | Select-Object -First 3
   if ($fw) {
     foreach ($p in $fw) {
       $profileText = "{0}: Enabled={1}, LogAllowed={2}, LogBlocked={3}" -f $p.Name, $p.Enabled, $p.LogAllowed, $p.LogBlocked
       $profileLevel = 'Info'
       if ($p.Enabled -ne $true) { $profileLevel = 'Bad' }
-      Write-PrettyKeyValue -Key 'Profile' -Value $profileText -Level $profileLevel
+      Write-KeyValue -Key 'Profile' -Value $profileText -Level $profileLevel
     }
   } else {
-    Write-PrettyKeyValue -Key 'Profiles' -Value 'No data' -Level 'Dim'
+    Write-KeyValue -Key 'Profiles' -Value 'No data' -Level 'Dim'
   }
 
-  Write-Host ''
+  Write-UiLine ''
 }
 
 #endregion Helpers
@@ -539,7 +551,7 @@ $summary.PSObject.TypeNames.Insert(0, 'BaselineReport.Summary')
 if ($ExportPath) {
   $folder = Split-Path -Path $ExportPath -Parent
   if (-not $folder) { $folder = (Get-Location).Path }
-  Ensure-Folder -Path $folder
+  Ensure-Directory -Path $folder
 
   $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
   $base = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
@@ -548,8 +560,10 @@ if ($ExportPath) {
 
 Write-ConsoleSummary -Summary $summary -Rows $rows.ToArray() -RefInfo $refInfo
 
-# Pipeline output: objects only
-#$summary
-#$rows.ToArray()
+# V2 output contract
+$v2Result = New-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ Rows = @($rows.ToArray()); RefInfo = $refInfo }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
 
 #endregion Main
+exit 0

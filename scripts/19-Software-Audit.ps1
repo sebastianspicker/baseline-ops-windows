@@ -54,6 +54,25 @@
 .INPUTS
   None. 
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   System.Management.Automation.PSCustomObject. 
   The script outputs exactly one object with high-level metadata, counts, status, and the full classified software lists (Whitelisted/Unknown/Blacklisted), designed to work cleanly with the pipeline. 
@@ -97,20 +116,57 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$CatalogPath,
   [string]$StatePath  = "PATH\TO\PROOF\sw-inventory.json",
   [switch]$Strict,
   [string]$ConfigPath = "PATH\TO\JSON\config.json"
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+$ErrorActionPreference = 'Stop'
 
 # -------------------- Settings --------------------
 $Script:EventLogName     = 'Application'
@@ -163,22 +219,7 @@ function Get-PropInt {
 
 # -------------------- Helpers: filesystem + JSON --------------------
 
-function Read-JsonFile {
-  [CmdletBinding()]
-  param([Parameter(Mandatory=$true)][string]$Path)
-
-  try {
-    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
-    if (-not (Test-Path -LiteralPath $Path)) { return $null }
-
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-
-    $raw | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    return $null
-  }
-}
+# Read-JsonFile replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
 
 function ConvertFrom-JsonSafe {
   [CmdletBinding()]
@@ -227,16 +268,16 @@ function Load-Catalog {
   )
 
   if (-not [string]::IsNullOrWhiteSpace($CatalogPath)) {
-    $cat = Read-JsonFile -Path $CatalogPath
+    $cat = Read-JsonFileSafe -Path $CatalogPath
     if ($cat) { return (New-CatalogWrapper -Source 'CatalogPath' -Loaded $true -CatalogObject $cat) }
   }
 
   if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $cfg = Read-JsonFile -Path $ConfigPath
+    $cfg = Read-JsonFileSafe -Path $ConfigPath
     if ($cfg -and (Test-HasProperty $cfg 'Software') -and $cfg.Software -and (Test-HasProperty $cfg.Software 'CatalogPath')) {
       $p = [string]$cfg.Software.CatalogPath
       if (-not [string]::IsNullOrWhiteSpace($p)) {
-        $cat = Read-JsonFile -Path $p
+        $cat = Read-JsonFileSafe -Path $p
         if ($cat) { return (New-CatalogWrapper -Source 'ConfigPath:Software.CatalogPath' -Loaded $true -CatalogObject $cat) }
       }
     }
@@ -408,96 +449,38 @@ function New-SummaryLines {
 }
 
 # -------------------- Console output (host only) --------------------
-function Get-ColorForLevel {
-  [CmdletBinding()]
-  param([Parameter(Mandatory=$true)][string]$Level)
-
-  switch ($Level) {
-    'Error'   { 'Red' }
-    'Warning' { 'Yellow' }
-    default   { 'Green' }
-  }
-}
-
-function Write-ConsoleBanner {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)][string]$Title,
-    [ConsoleColor]$Color = 'Cyan'
-  )
-  Write-Host ""
-  Write-Host ("=" * 62) -ForegroundColor $Color
-  Write-Host $Title -ForegroundColor $Color
-  Write-Host ("=" * 62) -ForegroundColor $Color
-}
-
-function Write-ConsoleKeyValue {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)][string]$Key,
-    [Parameter(Mandatory=$true)][string]$Value,
-    [ConsoleColor]$KeyColor = 'DarkGray',
-    [ConsoleColor]$ValueColor = 'Gray'
-  )
-  Write-Host ("{0,-16}: " -f $Key) -NoNewline -ForegroundColor $KeyColor
-  Write-Host $Value -ForegroundColor $ValueColor
-}
-
-function Write-ConsoleList {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)][string]$Header,
-    [AllowEmptyCollection()][string[]]$Items,
-    [ConsoleColor]$HeaderColor = 'Gray',
-    [ConsoleColor]$ItemColor = 'Gray',
-    [int]$MaxItems = 20
-  )
-
-  # Empty lists are valid: do nothing.
-  if (-not $Items -or $Items.Count -eq 0) { return }
-
-  Write-Host $Header -ForegroundColor $HeaderColor
-  $take = [Math]::Min($Items.Count, $MaxItems)
-  for ($i = 0; $i -lt $take; $i++) {
-    Write-Host ("  - " + [string]$Items[$i]) -ForegroundColor $ItemColor
-  }
-  if ($Items.Count -gt $MaxItems) {
-    Write-Host ("  ... ({0} more)" -f ($Items.Count - $MaxItems)) -ForegroundColor 'DarkGray'
-  }
-}
-
 function Write-ConsoleSummary {
   [CmdletBinding()]
   param([Parameter(Mandatory=$true)][pscustomobject]$ResultObject)
 
-  $statusColor = Get-ColorForLevel -Level $ResultObject.Status.Level
+  $statusColor = Get-StatusColor -Status $ResultObject.Status.Level
 
   Write-ConsoleBanner -Title "Software Audit" -Color 'Cyan'
-  Write-ConsoleKeyValue -Key 'Timestamp' -Value ([string]$ResultObject.Time)
-  Write-ConsoleKeyValue -Key 'Host' -Value ([string]$ResultObject.Host)
-  Write-ConsoleKeyValue -Key 'Catalog' -Value ([string]$ResultObject.Catalog.Meta.Source)
-  Write-ConsoleKeyValue -Key 'EventSource' -Value ("{0} (ready={1})" -f $ResultObject.EventSource.Name, $ResultObject.EventSource.Ready)
+  Write-KeyValue -Key 'Timestamp' -Value ([string]$ResultObject.Time)
+  Write-KeyValue -Key 'Host' -Value ([string]$ResultObject.Host)
+  Write-KeyValue -Key 'Catalog' -Value ([string]$ResultObject.Catalog.Meta.Source)
+  Write-KeyValue -Key 'EventSource' -Value ("{0} (ready={1})" -f $ResultObject.EventSource.Name, $ResultObject.EventSource.Ready)
 
-  Write-Host ""
-  Write-Host ("Status          : {0} ({1})" -f $ResultObject.Status.EventId, $ResultObject.Status.Level) -ForegroundColor $statusColor
-  Write-Host ("Counts          : Total={0}  Whitelisted={1}  Unknown={2}  Blacklisted={3}" -f `
+  Write-UiLine ""
+  Write-UiLine ("Status          : {0} ({1})" -f $ResultObject.Status.EventId, $ResultObject.Status.Level) -ForegroundColor $statusColor
+  Write-UiLine ("Counts          : Total={0}  Whitelisted={1}  Unknown={2}  Blacklisted={3}" -f `
     $ResultObject.Total, $ResultObject.CountWhitelisted, $ResultObject.CountUnknown, $ResultObject.CountBlacklisted) -ForegroundColor 'Gray'
 
-  Write-Host ""
-  Write-Host "Summary:" -ForegroundColor 'Gray'
+  Write-UiLine ""
+  Write-UiLine "Summary:" -ForegroundColor 'Gray'
   foreach ($l in @($ResultObject.Summary)) {
-    Write-Host ("  " + [string]$l) -ForegroundColor 'Gray'
+    Write-UiLine ("  " + [string]$l) -ForegroundColor 'Gray'
   }
 
   $blNames = @($ResultObject.Blacklisted | Select-Object -ExpandProperty Name | Sort-Object)
   $ukNames = @($ResultObject.Unknown     | Select-Object -ExpandProperty Name | Sort-Object)
 
-  Write-Host ""
+  Write-UiLine ""
   Write-ConsoleList -Header "Blacklisted items:" -Items $blNames -HeaderColor 'Red' -ItemColor 'Red' -MaxItems 20
   Write-ConsoleList -Header "Unknown items:"     -Items $ukNames -HeaderColor 'Yellow' -ItemColor 'Yellow' -MaxItems 20
 
-  Write-Host ("=" * 62) -ForegroundColor 'Cyan'
-  Write-Host ""
+  Write-UiLine ("=" * 62) -ForegroundColor 'Cyan'
+  Write-UiLine ""
 }
 
 # -------------------- MAIN --------------------
@@ -542,7 +525,7 @@ try {
       $dir = Split-Path -Parent $StatePath
       if ($dir) { Ensure-Directory -Path $dir | Out-Null }
       ($result | ConvertTo-Json -Depth 7) | Set-Content -Encoding UTF8 -LiteralPath $StatePath
-    } catch {}
+    } catch { <# best-effort: state file write may fail if path is inaccessible #> }
   }
 
   # Event (best effort)
@@ -553,7 +536,7 @@ try {
   Write-ConsoleSummary -ResultObject $result
 
   # Pipeline output (structured object only)
-  #$result
+  $result
 
   if     ($status.EventId -eq 4902) { exit 2 }
   elseif ($status.EventId -eq 4901) { exit 1 }
@@ -565,13 +548,19 @@ try {
   Write-HealthEvent -Id 4902 -Msg $errMsg -Level 'Error' | Out-Null
 
   Write-ConsoleBanner -Title "Software Audit (FAILED)" -Color 'Red'
-  Write-Host ("Error: {0}" -f $errMsg) -ForegroundColor 'Red'
+  Write-UiLine ("Error: {0}" -f $errMsg) -ForegroundColor 'Red'
 
   if ($_.InvocationInfo) {
-    Write-Host ("Line:    {0}" -f $_.InvocationInfo.ScriptLineNumber) -ForegroundColor 'DarkGray'
-    Write-Host ("Cmd:     {0}" -f $_.InvocationInfo.Line.Trim()) -ForegroundColor 'DarkGray'
+    Write-UiLine ("Line:    {0}" -f $_.InvocationInfo.ScriptLineNumber) -ForegroundColor 'DarkGray'
+    Write-UiLine ("Cmd:     {0}" -f $_.InvocationInfo.Line.Trim()) -ForegroundColor 'DarkGray'
   }
 
-  Write-Host ""
+  Write-UiLine ""
   exit 2
 }
+
+# V2 output contract
+$v2Result = New-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

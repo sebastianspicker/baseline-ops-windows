@@ -31,6 +31,28 @@
 .INPUTS
   None. This script does not accept pipeline input.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   System.Management.Automation.PSCustomObject
 
@@ -106,19 +128,51 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [switch]$Remediate,
   [int]$MinDaysBeforeRotate = 0,
-  [string]$ConfigPath = "PATH/TO/JSON/config.json"
+  [string]$ConfigPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+$ErrorActionPreference = 'Stop'
 
 # --------------------------- Defaults / Config -------------------------------------
 
@@ -140,7 +194,7 @@ $Defaults = [pscustomobject]@{
   }
   Console = [pscustomobject]@{
     Enabled            = $true
-    UseWriteInformation= $false  # colors only via Write-Host
+    UseWriteInformation= $false  # colors only via Write-UiLine
     ShowConfigPath     = $false
     Width              = 60
   }
@@ -204,7 +258,9 @@ function Get-ConfigFromJson {
   if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $cfg }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $sanitized = Sanitize-Path -Path $Path -MustExist
+    if (-not $sanitized) { return $cfg }
+    $raw = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8 -ErrorAction Stop
     if (-not $raw -or -not $raw.Trim()) { return $cfg }
     $j = $raw | ConvertFrom-Json -ErrorAction Stop
     return (Merge-ConfigObject -Base $cfg -Override $j)
@@ -248,26 +304,7 @@ function ConvertTo-BoolSafe {
 }
 
 
-function Write-UiSeparator {
-  [CmdletBinding()]
-  param([string]$Char = '-', [int]$Width = 60, [string]$Style = 'Dim')
-  if ($Width -lt 10) { $Width = 10 }
-  Write-UiLine -Text ($Char * $Width) -Style $Style
-}
 
-function Write-UiKv {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$Key,
-    [AllowNull()]
-    [AllowEmptyString()]
-    [string]$Value = '',
-    [ValidateSet('Default','Good','Warn','Bad','Dim')]
-    [string]$ValueStyle = 'Default'
-  )
-  if ($null -eq $Value) { $Value = '' }
-  Write-UiLine -Text ("{0,-18}: {1}" -f $Key, $Value) -Style $ValueStyle
-}
 
 function Get-StyleForOk {
   param([AllowNull()]$Ok)
@@ -342,7 +379,7 @@ function Get-ActiveLapsPolicy {
           }
         }
       }
-    } catch { }
+    } catch { <# best-effort: registry path may not exist or be accessible #> }
   }
 
   $legacyRoot = 'HKLM:\Software\Policies\Microsoft Services\AdmPwd'
@@ -358,7 +395,7 @@ function Get-ActiveLapsPolicy {
         }
       }
     }
-  } catch { }
+  } catch { <# best-effort: legacy LAPS registry may not exist #> }
 
   return $null
 }
@@ -371,7 +408,7 @@ function Get-BuiltInAdminNameRid500 {
     try {
       $acc2 = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND SID LIKE '%-500'" -ErrorAction Stop | Select-Object -First 1
       if ($acc2) { return $acc2.Name }
-    } catch { }
+    } catch { <# best-effort: CIM fallback for admin name discovery #> }
   }
   return 'Administrator'
 }
@@ -388,7 +425,7 @@ function Get-ManagedAdminAccountName {
         $n = [string]$PolicyObject.AdministratorAccountName
         if ($n -and $n.Trim().Length -gt 0) { return $n.Trim() }
       }
-    } catch { }
+    } catch { <# best-effort: policy property may not exist or be castable #> }
   }
 
   if ($PolicyType -eq 'LegacyLAPS') {
@@ -397,7 +434,7 @@ function Get-ManagedAdminAccountName {
         $n = [string]$PolicyObject.AdminAccountName
         if ($n -and $n.Trim().Length -gt 0) { return $n.Trim() }
       }
-    } catch { }
+    } catch { <# best-effort: legacy policy property may not exist or be castable #> }
   }
 
   return (Get-BuiltInAdminNameRid500)
@@ -416,7 +453,8 @@ function Get-LocalAdminInfo {
     }
   } catch {
     try {
-      $u2 = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND Name='$Name'" -ErrorAction Stop | Select-Object -First 1
+      $escapedName = $Name -replace "'", "''"
+      $u2 = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND Name='$escapedName'" -ErrorAction Stop | Select-Object -First 1
       if ($u2) {
         return [pscustomobject]@{
           Exists          = $true
@@ -425,7 +463,7 @@ function Get-LocalAdminInfo {
           Source          = 'CIM'
         }
       }
-    } catch { }
+    } catch { <# best-effort: CIM fallback for local user info #> }
 
     return [pscustomobject]@{
       Exists          = $false
@@ -496,7 +534,7 @@ function Try-CollectLapsDiagnostics {
     $cmd = Get-Command Get-LapsDiagnostics -ErrorAction SilentlyContinue
     if (-not $cmd) { return $false, "Get-LapsDiagnostics not available" }
 
-    $null = New-Item -ItemType Directory -Path $OutputFolder -Force -ErrorAction SilentlyContinue
+    $null = New-Item -ItemType Directory -Path $OutputFolder -Force -ErrorAction Stop
     $out = Get-LapsDiagnostics -OutputFolder $OutputFolder -ErrorAction Stop
     return $true, (($out | Out-String).Trim())
   } catch {
@@ -513,7 +551,7 @@ function Get-PolicyPasswordAgeDays {
 
   if ($PolicyType -eq 'WindowsLAPS') {
     if ($PolicyObject -and $PolicyObject.PSObject.Properties['PasswordAgeDays']) {
-      try { return [int]$PolicyObject.PasswordAgeDays } catch { }
+      try { return [int]$PolicyObject.PasswordAgeDays } catch { <# best-effort: property cast may fail #> }
     }
     return $DefaultAgeDays
   }
@@ -523,7 +561,7 @@ function Get-PolicyPasswordAgeDays {
       try {
         $hours = [int]$PolicyObject.PasswordAge
         return [math]::Ceiling($hours / 24)
-      } catch { }
+      } catch { <# best-effort: legacy policy hours-to-days cast may fail #> }
     }
     return $DefaultAgeDays
   }
@@ -535,7 +573,7 @@ function Get-PolicyComplexity {
   param($PolicyObject)
   try {
     if ($PolicyObject -and $PolicyObject.PSObject.Properties['PasswordComplexity']) { return [int]$PolicyObject.PasswordComplexity }
-  } catch { }
+  } catch { <# best-effort: policy property cast may fail #> }
   return $null
 }
 
@@ -543,7 +581,7 @@ function Get-WindowsLapsBackupDirectory {
   param($PolicyObject)
   try {
     if ($PolicyObject -and $PolicyObject.PSObject.Properties['BackupDirectory']) { return [int]$PolicyObject.BackupDirectory }
-  } catch { }
+  } catch { <# best-effort: policy property cast may fail #> }
   return $null
 }
 
@@ -560,6 +598,7 @@ function Convert-BackupDirectoryToText {
 if ($Config.EventLog.Enabled) {
   Ensure-EventSource -Source $Config.EventLog.Source -LogName $Config.EventLog.LogName
 }
+$script:Findings = New-FindingsList
 
 $reasonsList = New-Object System.Collections.Generic.List[string]
 
@@ -632,7 +671,7 @@ try {
   $result.PasswordLastSet       = $adminInfo.PasswordLastSet
 
   if ($adminInfo.PasswordLastSet) {
-    try { $result.PasswordAgeDays = [math]::Floor((New-TimeSpan -Start $adminInfo.PasswordLastSet -End (Get-Date)).TotalDays) } catch { $result.PasswordAgeDays = $null }
+    try { $result.PasswordAgeDays = [math]::Floor((New-TimeSpan -Start $adminInfo.PasswordLastSet -End (Get-Date)).TotalDays) } catch { <# best-effort: date arithmetic may fail on invalid timestamps #> $result.PasswordAgeDays = $null }
   }
 
   $result.AADJoined = [bool](Get-AADJoin)
@@ -668,27 +707,28 @@ try {
 
     if ($isWin -and ($null -eq $result.BackupDirectoryRaw -or $result.BackupDirectoryRaw -eq 0)) {
       $reasonsList.Add("BackupDirectory is not configured or disabled")
+      Add-Finding -Code 'LAPS-MissingBackup' -Severity 'High' -Message "Windows LAPS backup directory is not configured or is disabled."
     }
   }
 
   if ($result.NeedsRotate -and $Remediate -and $isWin) {
-    $tmp = Try-RotateWindowsLAPS -DoIt
-    $result.Rotated = [bool]$tmp[0]
-    $result.RotationMethod = [string]$tmp[1]
+    $tmp = @(Try-RotateWindowsLAPS -DoIt)
+    $result.Rotated = ($tmp.Count -ge 1) -and ([bool]$tmp[0])
+    $result.RotationMethod = if ($tmp.Count -ge 2) { [string]$tmp[1] } else { '' }
 
     if (-not $result.Rotated) {
       $result.RotationError = $result.RotationMethod
       if ($Config.Remediation.CollectDiagnosticsOnFail) {
-        $dtmp = Try-CollectLapsDiagnostics -DoIt -OutputFolder $Config.Remediation.DiagnosticsFolder
-        $result.DiagnosticsCollected = [bool]$dtmp[0]
-        $result.DiagnosticsInfo = [string]$dtmp[1]
+        $dtmp = @(Try-CollectLapsDiagnostics -DoIt -OutputFolder $Config.Remediation.DiagnosticsFolder)
+        $result.DiagnosticsCollected = ($dtmp.Count -ge 1) -and ([bool]$dtmp[0])
+        $result.DiagnosticsInfo = if ($dtmp.Count -ge 2) { [string]$dtmp[1] } else { '' }
       }
     } else {
       Start-Sleep -Seconds $Config.Remediation.SleepAfterRotateSec
       $adminInfo2 = Get-LocalAdminInfo -Name $result.ManagedAccount
       $result.PasswordLastSet = $adminInfo2.PasswordLastSet
       if ($adminInfo2.PasswordLastSet) {
-        try { $result.PasswordAgeDays = [math]::Floor((New-TimeSpan -Start $adminInfo2.PasswordLastSet -End (Get-Date)).TotalDays) } catch { }
+        try { $result.PasswordAgeDays = [math]::Floor((New-TimeSpan -Start $adminInfo2.PasswordLastSet -End (Get-Date)).TotalDays) } catch { <# best-effort: date arithmetic may fail #> }
       }
     }
   }
@@ -700,10 +740,14 @@ try {
   if ($Remediate -and $isLeg -and $result.NeedsRotate) { $ok = $false; $reasonsList.Add("Remediation for Legacy LAPS is not implemented") }
 
   $result.OkOverall = $ok
-
+  if (-not $result.OkOverall) {
+      Add-Finding -Code 'LAPS-NotCompliant' -Severity 'Medium' -Message "LAPS health check failed: $([string]::Join('; ', $result.Reasons))" -Extra @{ Reasons = $result.Reasons }
+  }
 } catch {
   $result.OkOverall = $false
-  $reasonsList.Add("Unhandled error: $($_.Exception.Message)")
+  $msg = "Unhandled error: $($_.Exception.Message)"
+  $reasonsList.Add($msg)
+  Add-Finding -Code 'LAPS-Error' -Severity 'High' -Message $msg
 }
 
 $result.Reasons = @($reasonsList)
@@ -736,34 +780,34 @@ Write-UiSeparator -Char '=' -Width $Config.Console.Width -Style 'Dim'
 Write-UiLine -Text "LAPS Hygiene (Windows PowerShell 5.1)" -Style 'Title'
 Write-UiSeparator -Char '=' -Width $Config.Console.Width -Style 'Dim'
 
-Write-UiKv -Key "Time (UTC)"     -Value ((Get-Date $result.TimestampUtc -Format s) + "Z") -ValueStyle 'Dim'
-if ($Config.Console.ShowConfigPath) { Write-UiKv -Key "ConfigPath" -Value $ConfigPath -ValueStyle 'Dim' }
+Write-KeyValue -Key "Time (UTC)"     -Value ((Get-Date $result.TimestampUtc -Format s) + "Z") -ValueStyle 'Dim'
+if ($Config.Console.ShowConfigPath) { Write-KeyValue -Key "ConfigPath" -Value $ConfigPath -ValueStyle 'Dim' }
 
-Write-UiKv -Key "Policy"         -Value ("{0} ({1})" -f $result.PolicyType, $result.PolicyMechanism) -ValueStyle 'Default'
-Write-UiKv -Key "Policy root"    -Value $result.PolicyRoot -ValueStyle 'Dim'
-
-Write-UiSeparator -Char '-' -Width $Config.Console.Width -Style 'Dim'
-
-Write-UiKv -Key "Managed account" -Value ([string]$result.ManagedAccount) -ValueStyle 'Default'
-Write-UiKv -Key "Account exists"  -Value ([string]$result.ManagedAccountExists) -ValueStyle (Get-StyleForBool $result.ManagedAccountExists)
-Write-UiKv -Key "Account enabled" -Value ([string]$result.ManagedAccountEnabled) -ValueStyle (Get-StyleForBool $result.ManagedAccountEnabled)
-
-Write-UiKv -Key "Pwd last set"    -Value ([string](To-Iso $result.PasswordLastSet)) -ValueStyle 'Dim'
-Write-UiKv -Key "Pwd age (days)"  -Value ([string]($(if ($null -ne $result.PasswordAgeDays) { $result.PasswordAgeDays } else { 'n/a' }))) -ValueStyle 'Default'
+Write-KeyValue -Key "Policy"         -Value ("{0} ({1})" -f $result.PolicyType, $result.PolicyMechanism) -ValueStyle 'Default'
+Write-KeyValue -Key "Policy root"    -Value $result.PolicyRoot -ValueStyle 'Dim'
 
 Write-UiSeparator -Char '-' -Width $Config.Console.Width -Style 'Dim'
 
-Write-UiKv -Key "Policy age (d)"  -Value ([string]$result.PolicyPasswordAgeDays) -ValueStyle 'Default'
-Write-UiKv -Key "Threshold (d)"   -Value ([string]($(if ($null -ne $result.ThresholdDays) { $result.ThresholdDays } else { 'n/a' }))) -ValueStyle 'Default'
+Write-KeyValue -Key "Managed account" -Value ([string]$result.ManagedAccount) -ValueStyle 'Default'
+Write-KeyValue -Key "Account exists"  -Value ([string]$result.ManagedAccountExists) -ValueStyle (Get-StyleForBool $result.ManagedAccountExists)
+Write-KeyValue -Key "Account enabled" -Value ([string]$result.ManagedAccountEnabled) -ValueStyle (Get-StyleForBool $result.ManagedAccountEnabled)
+
+Write-KeyValue -Key "Pwd last set"    -Value ([string](To-Iso $result.PasswordLastSet)) -ValueStyle 'Dim'
+Write-KeyValue -Key "Pwd age (days)"  -Value ([string]($(if ($null -ne $result.PasswordAgeDays) { $result.PasswordAgeDays } else { 'n/a' }))) -ValueStyle 'Default'
+
+Write-UiSeparator -Char '-' -Width $Config.Console.Width -Style 'Dim'
+
+Write-KeyValue -Key "Policy age (d)"  -Value ([string]$result.PolicyPasswordAgeDays) -ValueStyle 'Default'
+Write-KeyValue -Key "Threshold (d)"   -Value ([string]($(if ($null -ne $result.ThresholdDays) { $result.ThresholdDays } else { 'n/a' }))) -ValueStyle 'Default'
 
 $bdStyle = 'Dim'
 if ($result.PolicyType -eq 'WindowsLAPS') {
   if ($null -eq $result.BackupDirectoryRaw -or $result.BackupDirectoryRaw -eq 0) { $bdStyle = 'Bad' } else { $bdStyle = 'Good' }
 }
-Write-UiKv -Key "BackupDirectory" -Value $result.BackupDirectory -ValueStyle $bdStyle
+Write-KeyValue -Key "BackupDirectory" -Value $result.BackupDirectory -ValueStyle $bdStyle
 
-Write-UiKv -Key "AAD joined"      -Value ([string]$result.AADJoined) -ValueStyle (Get-StyleForBool $result.AADJoined)
-Write-UiKv -Key "AD joined"       -Value ([string]$result.ADJoined)  -ValueStyle (Get-StyleForBool $result.ADJoined)
+Write-KeyValue -Key "AAD joined"      -Value ([string]$result.AADJoined) -ValueStyle (Get-StyleForBool $result.AADJoined)
+Write-KeyValue -Key "AD joined"       -Value ([string]$result.ADJoined)  -ValueStyle (Get-StyleForBool $result.ADJoined)
 
 Write-UiSeparator -Char '-' -Width $Config.Console.Width -Style 'Dim'
 
@@ -772,12 +816,12 @@ if ($result.NeedsRotate -and -not $result.Rotated -and $result.Remediate) { $rot
 elseif ($result.NeedsRotate -and $result.Rotated) { $rotateStyle = 'Good' }
 elseif ($result.NeedsRotate -and -not $result.Remediate) { $rotateStyle = 'Warn' }
 
-Write-UiKv -Key "Needs rotate"    -Value ([string]$result.NeedsRotate) -ValueStyle $rotateStyle
-Write-UiKv -Key "Remediate"       -Value ([string]$result.Remediate) -ValueStyle (Get-StyleForBool $result.Remediate)
-Write-UiKv -Key "Rotated"         -Value ("{0} ({1})" -f $result.Rotated, $result.RotationMethod) -ValueStyle $rotateStyle
+Write-KeyValue -Key "Needs rotate"    -Value ([string]$result.NeedsRotate) -ValueStyle $rotateStyle
+Write-KeyValue -Key "Remediate"       -Value ([string]$result.Remediate) -ValueStyle (Get-StyleForBool $result.Remediate)
+Write-KeyValue -Key "Rotated"         -Value ("{0} ({1})" -f $result.Rotated, $result.RotationMethod) -ValueStyle $rotateStyle
 
 Write-UiSeparator -Char '=' -Width $Config.Console.Width -Style 'Dim'
-Write-UiKv -Key "Overall"         -Value ($(if ($result.OkOverall) { 'OK' } else { 'NOT OK' })) -ValueStyle (Get-StyleForOk $result.OkOverall)
+Write-KeyValue -Key "Overall"         -Value ($(if ($result.OkOverall) { 'OK' } else { 'NOT OK' })) -ValueStyle (Get-StyleForOk $result.OkOverall)
 
 if ($result.Reasons.Count -gt 0) {
   Write-UiLine -Text "" -Style 'Default'
@@ -791,8 +835,15 @@ if ($result.DiagnosticsCollected) {
   Write-UiLine -Text (" {0}" -f $result.DiagnosticsInfo) -Style 'Dim'
 }
 
-# Pipeline output: ONE object only
-#$result
+# V2 output contract
+$resultToken = if (-not $result.OkOverall) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
 
 # Exit code for CI/MDM
 if ($result.OkOverall) { exit 0 } else { exit 1 }
+
+
+
+

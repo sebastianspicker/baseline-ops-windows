@@ -71,6 +71,25 @@ The script still writes the event log entry (best effort) and can still emit the
 Suppresses the structured pipeline output object.
 Use this for interactive runs or scheduled executions where only console/event log output is desired.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 LocalAdmins.Guardrail.Result (PSCustomObject)
 
@@ -126,22 +145,52 @@ All nested properties are structured to support filtering and exporting.
 
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='High')]
 param(
-  [switch]$Remediate,
   [switch]$AllowDomainRemediation,
-  [string]$ConfigPath = "PATH/TO/JSON/global.config.json",
+  [string]$ConfigPath,
   [string]$AllowListPath,
   [string[]]$ExtraAllow,
   [switch]$Quiet,
   [switch]$NoPipelineOutput
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 $script:Quiet = [bool]$Quiet
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor, $NoPipelineOutput
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # ---------------- Constants / Defaults ----------------
@@ -163,9 +212,9 @@ function Try-ReadJsonFile {
 
   try {
     if ($Path -and (Test-Path -LiteralPath $Path)) {
-      return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+      return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
     }
-  } catch {}
+  } catch { <# best-effort: JSON file may be missing or invalid #> }
 
   return $null
 }
@@ -186,7 +235,7 @@ function Get-Config {
       $cfg2 = Try-ReadJsonFile -Path $alt
       if ($cfg2) { return $cfg2 }
     }
-  } catch {}
+  } catch { <# best-effort: fallback config path may not exist #> }
 
   return $null
 }
@@ -203,7 +252,7 @@ function Read-AllowListFromJson {
     } elseif ($Json -and $Json.Allowed) {
       foreach ($x in @($Json.Allowed)) { if ($null -ne $x) { [void]$all.Add($x.ToString()) } }
     }
-  } catch {}
+  } catch { <# best-effort: JSON shape may not match expected allow-list format #> }
 
   return $all.ToArray()
 }
@@ -263,7 +312,7 @@ function Resolve-ToSid {
         $lu = Get-LocalUser -Name $name -ErrorAction Stop
         return $lu.SID.Value
       }
-    } catch {}
+    } catch { <# best-effort: local user shorthand resolution may fail #> }
   }
 
   return $null
@@ -277,7 +326,7 @@ function Get-BuiltinAdministratorSid {
   try {
     $adm = Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' } | Select-Object -First 1
     if ($adm) { return $adm.SID.Value }
-  } catch {}
+  } catch { <# best-effort: LocalAccounts module may not be available #> }
 
   return $null
 }
@@ -300,18 +349,18 @@ function ConvertTo-AdminMemberRecord {
   )
 
   $sidString = $null
-  try { if ($RawMember.SID -and $RawMember.SID.Value) { $sidString = [string]$RawMember.SID.Value } } catch {}
-  if (-not $sidString) { try { if ($RawMember.SID) { $sidString = [string]$RawMember.SID } } catch {} }
+  try { if ($RawMember.SID -and $RawMember.SID.Value) { $sidString = [string]$RawMember.SID.Value } } catch { <# best-effort: SID property may vary by provider #> }
+  if (-not $sidString) { try { if ($RawMember.SID) { $sidString = [string]$RawMember.SID } } catch { <# best-effort: SID fallback #> } }
 
   $name = $null
-  try { $name = [string]$RawMember.Name } catch {}
-  if ([string]::IsNullOrWhiteSpace($name)) { try { $name = [string]$RawMember.ToString() } catch {} }
+  try { $name = [string]$RawMember.Name } catch { <# best-effort: Name property may not exist #> }
+  if ([string]::IsNullOrWhiteSpace($name)) { try { $name = [string]$RawMember.ToString() } catch { <# best-effort: ToString fallback #> } }
 
   $principalSource = $null
-  try { $principalSource = [string]$RawMember.PrincipalSource } catch {}
+  try { $principalSource = [string]$RawMember.PrincipalSource } catch { <# best-effort: PrincipalSource may not exist on all OS versions #> }
 
   $objectClass = $null
-  try { $objectClass = [string]$RawMember.ObjectClass } catch {}
+  try { $objectClass = [string]$RawMember.ObjectClass } catch { <# best-effort: ObjectClass may not exist #> }
 
   [pscustomobject]@{
     PSTypeName      = 'LocalAdmins.Guardrail.Member'
@@ -346,7 +395,7 @@ function Get-AdministratorsGroupMembers {
       try {
         $nt = New-Object System.Security.Principal.NTAccount($name)
         $sid = ($nt.Translate([System.Security.Principal.SecurityIdentifier])).Value
-      } catch {}
+      } catch { <# best-effort: ADSI member SID translation may fail for orphaned/external accounts #> }
 
       $src =
         if ($name -match '^AzureAD\\') { 'Microsoft Entra group' }
@@ -426,24 +475,6 @@ function New-GuardrailResult {
   }
 }
 
-function Write-ColorLine {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] [string]$Text,
-    [ValidateSet('Default','Gray','Green','Yellow','Red','Cyan','White')] [string]$Color = 'Default'
-  )
-  if ($script:Quiet) { return }
-
-  switch ($Color) {
-    'Gray'   { Write-Host $Text -ForegroundColor DarkGray }
-    'Green'  { Write-Host $Text -ForegroundColor Green }
-    'Yellow' { Write-Host $Text -ForegroundColor Yellow }
-    'Red'    { Write-Host $Text -ForegroundColor Red }
-    'Cyan'   { Write-Host $Text -ForegroundColor Cyan }
-    'White'  { Write-Host $Text -ForegroundColor White }
-    default  { Write-Host $Text }
-  }
-}
 
 function Write-ConsoleSummary {
   [CmdletBinding()]
@@ -455,45 +486,45 @@ function Write-ConsoleSummary {
   if ($Result.EventLevel -eq 'Warning') { $levelColor = 'Yellow' }
   if ($Result.EventLevel -eq 'Error')   { $levelColor = 'Red' }
 
-  Write-Host ""
+  Write-UiLine ""
   Write-ColorLine "=== Local Admins Guardrail ===" 'Cyan'
   Write-ColorLine ("ComputerName           : {0}" -f $Result.ComputerName) 'Gray'
   Write-ColorLine ("GroupName              : {0}" -f $Result.GroupName) 'Gray'
-  Write-Host ""
+  Write-UiLine ""
 
   Write-ColorLine ("Status                 : {0} (EventId {1})" -f $Result.EventLevel, $Result.EventId) $levelColor
   Write-ColorLine ("Remediate              : {0}" -f $Result.Remediate) 'White'
   Write-ColorLine ("AllowDomainRemediation : {0}" -f $Result.AllowDomainRemediation) 'White'
-  Write-Host ""
+  Write-UiLine ""
 
   $failSafeColor = $(if ($Result.FailSafeNoRemove) { 'Yellow' } else { 'Green' })
   Write-ColorLine ("FailSafeNoRemove       : {0}" -f $Result.FailSafeNoRemove) $failSafeColor
   Write-ColorLine ("ConfigLoaded           : {0}" -f $Result.ConfigLoaded) 'Gray'
   Write-ColorLine ("AllowListPathUsed      : {0}" -f ($(if ($Result.AllowListPathUsed) { $Result.AllowListPathUsed } else { "(none)" }))) 'Gray'
-  Write-Host ""
+  Write-UiLine ""
 
   Write-ColorLine ("MembersBeforeCount     : {0}" -f @($Result.MembersBefore).Count) 'White'
   Write-ColorLine ("AllowResolvedSidCount  : {0}" -f @($Result.AllowSIDs).Count) 'White'
   Write-ColorLine ("UnresolvedAllowCount   : {0}" -f @($Result.UnresolvedAllowInput).Count) $(if (@($Result.UnresolvedAllowInput).Count -gt 0) { 'Yellow' } else { 'Green' })
-  Write-Host ""
+  Write-UiLine ""
 
   $driftColor = $(if ($Result.DriftDetected) { 'Yellow' } else { 'Green' })
   Write-ColorLine ("DriftDetected          : {0}" -f $Result.DriftDetected) $driftColor
   Write-ColorLine ("ToAddCount             : {0}" -f @($Result.ToAddSIDs).Count) $(if (@($Result.ToAddSIDs).Count -gt 0) { 'Yellow' } else { 'Green' })
   Write-ColorLine ("ToRemoveCount          : {0}" -f @($Result.ToRemove).Count) $(if (@($Result.ToRemove).Count -gt 0) { 'Yellow' } else { 'Green' })
-  Write-Host ""
+  Write-UiLine ""
 
   if ($Result.Remediate) {
     Write-ColorLine ("AddedCount             : {0}" -f @($Result.AddedSIDs).Count) $(if (@($Result.AddedSIDs).Count -gt 0) { 'Yellow' } else { 'Green' })
     Write-ColorLine ("RemovedCount           : {0}" -f @($Result.RemovedIds).Count) $(if (@($Result.RemovedIds).Count -gt 0) { 'Yellow' } else { 'Green' })
     Write-ColorLine ("PostCompliant          : {0}" -f $Result.PostCompliant) $(if ($Result.PostCompliant) { 'Green' } else { 'Yellow' })
-    Write-Host ""
+    Write-UiLine ""
   }
 
   if (@($Result.Errors).Count -gt 0) {
     Write-ColorLine "Errors:" 'Red'
     foreach ($e in $Result.Errors) { Write-ColorLine ("- {0}" -f $e) 'Red' }
-    Write-Host ""
+    Write-UiLine ""
   }
 }
 
@@ -675,7 +706,7 @@ try {
 
   if (-not $result) {
     $groupNameFallback = '(unknown)'
-    try { $groupNameFallback = Get-AdministratorsGroupName } catch {}
+    try { $groupNameFallback = Get-AdministratorsGroupName } catch { <# best-effort: group name resolution in error handler #> }
     $result = New-GuardrailResult -GroupName $groupNameFallback
   }
 
@@ -690,7 +721,9 @@ try {
   if ($result) { Write-ConsoleSummary -Result $result }
 }
 
-# Pipeline output: exactly one structured object (unless suppressed)
-if (-not $NoPipelineOutput) {
-  $result
-}
+# V2 output contract
+$resultToken = if ($result.DriftDetected) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $result -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

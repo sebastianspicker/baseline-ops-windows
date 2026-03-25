@@ -6,7 +6,7 @@
 .DESCRIPTION
   This script performs a local hardware security audit and produces:
   - A single structured result object on the success output stream (pipeline-friendly).
-  - A human-readable, colorized console summary (written via Write-Host/Write-Information only).
+  - A human-readable, colorized console summary (written via Write-UiLine/Write-Information only).
   - A JSON “proof” file containing the full structured result.
   - A Windows Event Log entry in the Application log for monitoring/alerting.
 
@@ -56,6 +56,25 @@
 .PARAMETER Strict
   When set, any detected drift forces the script to write a Warning event (EventId 4900).
   Without -Strict, a fully compliant result writes an Information event (EventId 4890) and a non-compliant result writes a Warning event (EventId 4900).
+
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
   System.Management.Automation.PSCustomObject
@@ -123,19 +142,59 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$CatalogPath,
   [switch]$Strict,
-  [string]$ConfigPath = "PATH/TO/CONFIG.json"
+  [string]$ConfigPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+$ErrorActionPreference = 'Stop'
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 # Anonymized defaults
 $EventLogName   = 'Application'
@@ -147,17 +206,7 @@ $DefaultOutFile = "PATH/TO/PROOF/HardwareCompliance.json"
 # -----------------------------
 
 
-function Save-Json {
-  param(
-    [Parameter(Mandatory=$true)][object]$Object,
-    [Parameter(Mandatory=$true)][string]$Path
-  )
-  $dir = Split-Path -Parent $Path
-  if ($dir) { Ensure-Directory -Path $dir }
-
-  # ConvertTo-Json default depth is 2; explicitly set for nested objects.
-  ($Object | ConvertTo-Json -Depth 10) | Out-File -Encoding UTF8 -FilePath $Path -Force
-}
+# Save-Json: using canonical Save-Json from lib/Serialization.psm1
 
 function Add-ListItem {
   param([Parameter(Mandatory=$true)][ref]$List,[Parameter(Mandatory=$true)][string]$Text)
@@ -213,7 +262,7 @@ function Load-Catalog {
 
   # 1) Explicit catalog
   if ($CatalogPath -and (Test-Path -LiteralPath $CatalogPath)) {
-    $raw = Get-Content -Raw -LiteralPath $CatalogPath -ErrorAction SilentlyContinue
+    $raw = Get-Content -Raw -LiteralPath $CatalogPath -Encoding UTF8 -ErrorAction SilentlyContinue
     if ($raw) {
       $obj = ConvertFrom-JsonSafe -JsonText $raw
       if ($obj) { return (Merge-CatalogWithDefaults -Catalog $obj -Defaults $defaults) }
@@ -222,13 +271,13 @@ function Load-Catalog {
 
   # 2) Config -> Hardware.CatalogPath
   if ($ConfigPath -and (Test-Path -LiteralPath $ConfigPath)) {
-    $rawCfg = Get-Content -Raw -LiteralPath $ConfigPath -ErrorAction SilentlyContinue
+    $rawCfg = Get-Content -Raw -LiteralPath $ConfigPath -Encoding UTF8 -ErrorAction SilentlyContinue
     if ($rawCfg) {
       $cfg = ConvertFrom-JsonSafe -JsonText $rawCfg
       if ($cfg -and $cfg.Hardware -and $cfg.Hardware.CatalogPath) {
         $p = [string]$cfg.Hardware.CatalogPath
         if ($p -and (Test-Path -LiteralPath $p)) {
-          $raw2 = Get-Content -Raw -LiteralPath $p -ErrorAction SilentlyContinue
+          $raw2 = Get-Content -Raw -LiteralPath $p -Encoding UTF8 -ErrorAction SilentlyContinue
           if ($raw2) {
             $obj2 = ConvertFrom-JsonSafe -JsonText $raw2
             if ($obj2) { return (Merge-CatalogWithDefaults -Catalog $obj2 -Defaults $defaults) }
@@ -269,36 +318,6 @@ function Get-CimPropValue {
   return $null
 }
 
-function Get-ConsoleColor {
-  param([Parameter(Mandatory=$true)][ValidateSet('OK','WARN','ERR','INFO','DIM')]$Kind)
-  switch ($Kind) {
-    'OK'   { return 'Green' }
-    'WARN' { return 'Yellow' }
-    'ERR'  { return 'Red' }
-    'INFO' { return 'Cyan' }
-    'DIM'  { return 'DarkGray' }
-  }
-}
-
-function Write-PrettyLine {
-  param(
-    [Parameter(Mandatory=$true)][string]$Text,
-    [ValidateSet('OK','WARN','ERR','INFO','DIM')]$Kind = 'INFO',
-    [switch]$NoNewLine
-  )
-  $c = Get-ConsoleColor -Kind $Kind
-  if ($NoNewLine) { Write-Host $Text -ForegroundColor $c -NoNewline }
-  else { Write-Host $Text -ForegroundColor $c }
-}
-
-function Write-PrettyHeader {
-  param([Parameter(Mandatory=$true)][string]$Title)
-  Write-Host ""
-  Write-Host ("=" * 60) -ForegroundColor DarkGray
-  Write-Host ("{0}" -f $Title) -ForegroundColor White
-  Write-Host ("=" * 60) -ForegroundColor DarkGray
-}
-
 function Write-ConsoleSummary {
   param(
     [Parameter(Mandatory=$true)][bool]$OverallOk,
@@ -308,44 +327,44 @@ function Write-ConsoleSummary {
     [Parameter(Mandatory=$true)]$Results
   )
 
-  Write-PrettyHeader -Title "Hardware/TPM Audit Summary"
+  Write-UiHeader -Title "Hardware/TPM Audit Summary"
 
   $statusText = if ($OverallOk) { "COMPLIANT" } else { "NON-COMPLIANT" }
   $statusKind = if ($OverallOk) { 'OK' } else { 'ERR' }
 
-  Write-PrettyLine -Text ("Status : {0}" -f $statusText) -Kind $statusKind
-  Write-PrettyLine -Text ("Proof  : {0}" -f $OutFile) -Kind 'DIM'
+  Write-ColorLine -Text ("Status : {0}" -f $statusText) -Color $statusKind
+  Write-ColorLine -Text ("Proof  : {0}" -f $OutFile) -Color 'DIM'
 
   # Key facts (compact, human-readable)
   $tpm = $Results.TPM
   if ($tpm) {
     $tpmPresent = [bool]$tpm.Present
     $tpmKind = if ($tpmPresent) { 'OK' } else { 'ERR' }
-    Write-PrettyLine -Text ("TPM    : {0}" -f $(if ($tpmPresent) { "Present" } else { "Missing/No Access" })) -Kind $tpmKind
+    Write-ColorLine -Text ("TPM    : {0}" -f $(if ($tpmPresent) { "Present" } else { "Missing/No Access" })) -Color $tpmKind
     if ($tpmPresent) {
-      Write-PrettyLine -Text ("         SpecVersion={0}, Owned={1}, Enabled={2}, Activated={3}, Ready={4}" -f $tpm.SpecVersion,$tpm.IsOwned,$tpm.Enabled,$tpm.Activated,$tpm.Ready) -Kind 'DIM'
+      Write-ColorLine -Text ("         SpecVersion={0}, Owned={1}, Enabled={2}, Activated={3}, Ready={4}" -f $tpm.SpecVersion,$tpm.IsOwned,$tpm.Enabled,$tpm.Activated,$tpm.Ready) -Color 'DIM'
     }
   }
 
-  Write-PrettyLine -Text ("Secure : {0}" -f $(if ($Results.SecureBoot) { "Secure Boot ON" } else { "Secure Boot OFF/Unknown" })) -Kind $(if ($Results.SecureBoot) { 'OK' } else { 'WARN' })
+  Write-ColorLine -Text ("Secure : {0}" -f $(if ($Results.SecureBoot) { "Secure Boot ON" } else { "Secure Boot OFF/Unknown" })) -Color $(if ($Results.SecureBoot) { 'OK' } else { 'WARN' })
 
   $blOk = $Results.BitLockerOsProtected
-  Write-PrettyLine -Text ("BL(OS) : {0}" -f $(if ($blOk) { "Protection ON" } else { "Protection OFF/Unknown" })) -Kind $(if ($blOk) { 'OK' } else { 'WARN' })
+  Write-ColorLine -Text ("BL(OS) : {0}" -f $(if ($blOk) { "Protection ON" } else { "Protection OFF/Unknown" })) -Color $(if ($blOk) { 'OK' } else { 'WARN' })
 
-  Write-Host ""
+  Write-UiLine ""
   if ($Drifts.Count -gt 0) {
-    Write-PrettyLine -Text "Drifts :" -Kind 'ERR'
-    foreach ($d in $Drifts) { Write-PrettyLine -Text ("- {0}" -f $d) -Kind 'ERR' }
+    Write-ColorLine -Text "Drifts :" -Color 'ERR'
+    foreach ($d in $Drifts) { Write-ColorLine -Text ("- {0}" -f $d) -Color 'ERR' }
   } else {
-    Write-PrettyLine -Text "Drifts : (none)" -Kind 'OK'
+    Write-ColorLine -Text "Drifts : (none)" -Color 'OK'
   }
 
   if ($Notes.Count -gt 0) {
-    Write-Host ""
-    Write-PrettyLine -Text "Notes  :" -Kind 'WARN'
-    foreach ($n in $Notes) { Write-PrettyLine -Text ("- {0}" -f $n) -Kind 'WARN' }
+    Write-UiLine ""
+    Write-ColorLine -Text "Notes  :" -Color 'WARN'
+    foreach ($n in $Notes) { Write-ColorLine -Text ("- {0}" -f $n) -Color 'WARN' }
   } else {
-    Write-PrettyLine -Text "Notes  : (none)" -Kind 'DIM'
+    Write-ColorLine -Text "Notes  : (none)" -Color 'DIM'
   }
 }
 
@@ -537,7 +556,7 @@ try {
   $proof.Results.Notes     = $notes.ToArray()
   $proof.Errors            = $errors.ToArray()
 
-  Save-Json -Object $proof -Path $outFile
+  Save-Json -InputObject $proof -Path $outFile -Depth 10
 
   # Event message (keep compact)
   $lines = @()
@@ -557,11 +576,31 @@ try {
   Write-ConsoleSummary -OverallOk $ok -Drifts $drifts -Notes $notes -OutFile $outFile -Results $proof.Results
 
   # Pipeline output: one structured object only
-  #[pscustomobject]$proof
+  [pscustomobject]$proof
 }
 catch {
   $errMsg = "Hardware/TPM-Audit failed: " + $_.Exception.Message
   Write-HealthEvent -Id 4900 -Message $errMsg -Level 'Error' -Source $EventSource -LogName $EventLogName
-  Write-PrettyHeader -Title "Hardware/TPM Audit Summary"
-  Write-PrettyLine -Text $errMsg -Kind 'ERR'
+  Write-UiHeader -Title "Hardware/TPM Audit Summary"
+  Write-ColorLine -Text $errMsg -Color 'ERR'
 }
+
+# C10: populate canonical findings from drifts and errors
+foreach ($d in @($drifts)) {
+  # Map drift strings to finding codes based on content keywords
+  $code = 'HW-Drift'
+  if ($d -match 'TPM')       { $code = 'HW-TPMDrift' }
+  if ($d -match 'Secure')    { $code = 'HW-SecureBootDrift' }
+  if ($d -match 'BitLocker') { $code = 'HW-BitLockerDrift' }
+  Add-Finding -FindingList $script:Findings -Code $code -Severity 'High' -Message $d
+}
+foreach ($e in @($errors)) {
+  Add-Finding -FindingList $script:Findings -Code 'HW-Error' -Severity 'High' -Message $e
+}
+
+# V2 output contract
+$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

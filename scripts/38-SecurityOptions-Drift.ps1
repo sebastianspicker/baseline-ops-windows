@@ -8,10 +8,10 @@ Audit/drift sensor for selected "Security Options"-adjacent settings via registr
 - Optionally loads desired state from JSON (path or inline JSON), compares, and can remediate drift.
 - If DesiredJson is missing/unreadable/invalid, continues with baseline checks only.
 - Pipeline output: exactly one structured object (safe for Export-Csv / ConvertTo-Json / Where-Object).
-- Console output: pretty, human-readable, colorized summary via Write-Host / Write-Information only.
+- Console output: pretty, human-readable, colorized summary via Write-UiLine / Write-Information only.
 
 .PARAMETER Mode
-AuditOnly | Remediate
+Audit | Remediate
 
 .PARAMETER DesiredJson
 Either:
@@ -27,6 +27,22 @@ Suppress console output (still returns structured object).
 .PARAMETER NoColor
 Disable colorized console output.
 
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
 .OUTPUTS
 PSCustomObject with Summary, Findings, CurrentValues, Drift, DesiredLoaded.
 .EXAMPLE
@@ -37,8 +53,8 @@ PSCustomObject with Summary, Findings, CurrentValues, Drift, DesiredLoaded.
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [ValidateSet('AuditOnly','Remediate')]
-  [string]$Mode = 'AuditOnly',
+  [ValidateSet('Audit','Remediate')]
+  [string]$Mode = 'Audit',
 
   [string]$DesiredJson,
 
@@ -47,15 +63,48 @@ param(
   [switch]$Quiet,
 
   [switch]$NoColor
+
+,
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -------------------------
@@ -69,39 +118,8 @@ $script:CurrentValues = New-Object System.Collections.Generic.List[object]
 $script:Drift         = New-Object System.Collections.Generic.List[object]
 
 # -------------------------
-# Console helpers (no pipeline pollution)
+# Console helpers (Get-SeverityColor from lib/Console.psm1; custom Write-ConsoleSummary for Drift/CurrentValues)
 # -------------------------
-
-function Write-Info {
-  param(
-    [Parameter(Mandatory)][string]$Message,
-    [string[]]$Tags = @('Info')
-  )
-
-  if ($script:Quiet) { return }
-  if ([string]::IsNullOrEmpty($Message)) { return }
-
-  # Information stream in Windows PowerShell 5.1 can be controlled with -InformationAction. [web:137]
-  Write-Information -MessageData $Message -Tags $Tags -InformationAction Continue
-}
-
-function Write-BlankLine {
-  if ($script:Quiet) { return }
-  Write-Host ''
-}
-
-
-function Get-SeverityColor {
-  param([Parameter(Mandatory)][string]$Severity)
-
-  switch ($Severity) {
-    'High'   { return [ConsoleColor]::Red }
-    'Medium' { return [ConsoleColor]::Yellow }
-    'Low'    { return [ConsoleColor]::Cyan }
-    'Info'   { return [ConsoleColor]::Gray }
-    default  { return [ConsoleColor]::Gray }
-  }
-}
 
 function Format-Value {
   param([object]$Value)
@@ -288,13 +306,17 @@ function Convert-ToDesiredObjectSafe {
 
   try {
     if (Test-Path -LiteralPath $InputValue) {
-      $raw = Get-Content -LiteralPath $InputValue -Raw
-      return ($raw | ConvertFrom-Json)
+      $sanitized = Sanitize-Path -Path $InputValue -MustExist
+      if ($sanitized) {
+        $raw = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8
+        return ($raw | ConvertFrom-Json)
+      }
     }
 
     return ($InputValue | ConvertFrom-Json)
   } catch {
-    Add-Finding -Code 'SECOPT-DesiredLoadFailed' -Severity 'Medium' -Message ("Desired JSON could not be loaded/parsed; continuing with baseline checks only. Error: {0}" -f $_.Exception.Message)
+    $hint = if (Test-Path -LiteralPath $InputValue) { ' (file read failed or invalid JSON)' } else { ' (path not found; then tried as inline JSON and parse failed)' }
+    Add-Finding -Code 'SECOPT-DesiredLoadFailed' -Severity 'Medium' -Message ("Desired JSON could not be loaded/parsed{0}; continuing with baseline checks only. Error: {1}" -f $hint, $_.Exception.Message)
     return $null
   }
 }
@@ -343,9 +365,7 @@ function Compare-Value {
 # Preconditions
 # -------------------------
 
-if (-not (Test-IsAdmin)) {
-  throw "Administrative privileges required."
-}
+Require-Admin
 
 # -------------------------
 # Built-in baseline checks (always)
@@ -378,7 +398,7 @@ if ($null -eq $lmVal) {
 } else {
   $lmValInt = [int]$lmVal
   if ($lmValInt -lt 3) {
-    Add-Finding -Code 'SECOPT-LmCompatibilityWeak' -Severity 'High' -Message ("LmCompatibilityLevel={0} is low (legacy/NTLM risk)." -f $lmValInt)
+    Add-Finding -Code 'SECOPT-LmCompatibilityWeak' -Severity 'High' -Message ("LmCompatibilityLevel={0} is low (legacy/NTLM risk)." -f $lmValInt) -Extra @{ Level = $lmValInt }
   }
 }
 
@@ -470,7 +490,7 @@ if (-not $desiredLoaded) {
       }
 
       if ($isDrift) {
-        Add-Finding -Code 'SECOPT-Drift' -Severity 'Medium' -Message ("Drift detected: {0}\{1} Current='{2}' Desired='{3}' (Type={4})." -f $path, $name, $have, $want, $type)
+        Add-Finding -Code 'SECOPT-Drift' -Severity 'Medium' -Message ("Drift detected: {0}\{1} Current='{2}' Desired='{3}' (Type={4})." -f $path, $name, $have, $want, $type) -Extra @{ Path = $path; Name = $name; Current = $have; Desired = $want; Type = $type }
 
         if ($Mode -eq 'Remediate') {
           if ($PSCmdlet.ShouldProcess("$path\$name", "Set to '$want' ($type)")) {
@@ -521,11 +541,9 @@ if ($ExportPath) {
 
 Write-ConsoleSummary -Summary $summary -Findings $script:Findings -CurrentValues $script:CurrentValues -Drift $script:Drift
 
-# Pipeline output: exactly one structured object.
-#[pscustomobject]@{
-#  Summary       = $summary
-#  Findings      = $script:Findings
-#  CurrentValues = $script:CurrentValues
-#  Drift         = $script:Drift
-#  DesiredLoaded = $desiredLoaded
-#}
+# V2 output contract
+$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '38-SecurityOptions-Drift.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $summary -Metadata @{ CurrentValues = [object[]]$script:CurrentValues; Drift = [object[]]$script:Drift; DesiredLoaded = $desiredLoaded }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

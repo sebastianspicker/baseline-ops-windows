@@ -6,7 +6,7 @@ Audits running processes and services (Top CPU/RAM, service->process mapping, st
 .DESCRIPTION
 Best-practice output model (Windows PowerShell 5.1):
 - Pipeline: one structured object only (easy for ConvertTo-Json, Export-Csv, Where-Object).
-- Console: all human-friendly formatting via Write-Host / Write-Information (no pipeline pollution).
+- Console: all human-friendly formatting via Write-UiLine / Write-Information (no pipeline pollution).
 - Optional JSON config with safe defaults when missing/invalid.
 
 .PARAMETER TopN
@@ -24,6 +24,28 @@ Suppress all console output (only pipeline object is emitted).
 .PARAMETER NoColor
 Disable colored console output (useful for non-interactive hosts).
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
 .OUTPUTS
 ProcessServiceAudit.Record (pscustomobject) with Summary, TopCpu, TopRam, Services, Config.
 .EXAMPLE
@@ -32,25 +54,59 @@ ProcessServiceAudit.Record (pscustomobject) with Summary, TopCpu, TopRam, Servic
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [ValidateRange(1, 1000)]
   [int]$TopN = 20,
 
   [string]$ExportPath,
 
-  [string]$ConfigJsonPath = "PATH/TO/JSON\process-service-audit.json",
+  [string]$ConfigJsonPath,
 
   [switch]$NoConsole,
 
   [switch]$NoColor
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -----------------------------
@@ -67,44 +123,8 @@ function Test-InteractiveHost {
 $script:IsInteractive = Test-InteractiveHost
 $script:UseColor = (-not $NoColor) -and $script:IsInteractive
 
-function Write-ConsoleInfo {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [string]$Message
-  )
-
-  if ($NoConsole) { return }
-
-  # Information stream is suppressed by default ($InformationPreference=SilentlyContinue),
-  # therefore we force display with -InformationAction Continue. [web:78][web:98]
-  Write-Information -MessageData $Message -InformationAction Continue
-}
 
 
-function Write-ConsoleRule {
-  [CmdletBinding()]
-  param(
-    [string]$Title
-  )
-
-  if ($NoConsole) { return }
-
-  $width = 80
-  try {
-    if ($Host.UI.RawUI.WindowSize.Width -gt 0) { $width = [Math]::Min(120, [Math]::Max(60, $Host.UI.RawUI.WindowSize.Width)) }
-  }
-  catch { }
-
-  if ([string]::IsNullOrWhiteSpace($Title)) {
-    Write-ConsoleLine -Message ('-' * $width) -Style Dim
-    return
-  }
-
-  $titleText = " $Title "
-  $dashCount = [Math]::Max(0, $width - $titleText.Length)
-  Write-ConsoleLine -Message ($titleText + ('-' * $dashCount)) -Style Dim
-}
 
 function Format-Bytes {
   [CmdletBinding()]
@@ -133,7 +153,7 @@ function Import-OptionalJsonConfig {
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
 
   try {
-    $jsonText = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $jsonText = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($jsonText)) { return $null }
     return ($jsonText | ConvertFrom-Json -ErrorAction Stop) # ConvertFrom-Json converts JSON to objects. [web:38]
   }
@@ -193,10 +213,10 @@ function Get-SafeProcessSnapshot {
   )
 
   $startTime = $null
-  try { $startTime = $Process.StartTime } catch { }
+  try { $startTime = $Process.StartTime } catch { <# best-effort: StartTime may throw for system/idle processes #> }
 
   $path = $null
-  try { $path = $Process.Path } catch { }
+  try { $path = $Process.Path } catch { <# best-effort: Path may throw for system/protected processes #> }
 
   [pscustomobject]@{
     Name         = $Process.Name
@@ -293,13 +313,13 @@ if ($summary.ExportEnabled) {
 # Pretty console output
 # -----------------------------
 if (-not $NoConsole) {
-  Write-Host ""
+  Write-UiLine ""
 
   Write-ConsoleRule -Title "Process/Service Audit"
   Write-ConsoleLine -Message ("Computer : {0}" -f $summary.ComputerName) -Style Header
   Write-ConsoleLine -Message ("Time     : {0}" -f $summary.Timestamp) -Style Dim
 
-  Write-Host ""
+  Write-UiLine ""
   Write-ConsoleRule -Title "Counts"
   Write-ConsoleLine -Message ("Processes        : {0}" -f $summary.ProcessCount) -Style Default
 
@@ -308,7 +328,7 @@ if (-not $NoConsole) {
 
   Write-ConsoleLine -Message ("TopN             : {0}" -f $summary.TopN) -Style Default
 
-  Write-Host ""
+  Write-UiLine ""
   Write-ConsoleRule -Title "Config"
   if ($summary.ConfigLoaded) {
     Write-ConsoleLine -Message "Config loaded    : True" -Style Ok
@@ -328,7 +348,7 @@ if (-not $NoConsole) {
 
   if ($Config.ShowListsInConsole) {
     if ($Config.ShowTopCpuInConsole) {
-      Write-Host ""
+      Write-UiLine ""
       Write-ConsoleRule -Title ("Top CPU (CPU seconds, cumulative) - Top {0}" -f $effectiveTopN)
       $topCpu |
         Select-Object Name, Id, CPU, WorkingSet64, StartTime, Path |
@@ -339,7 +359,7 @@ if (-not $NoConsole) {
     }
 
     if ($Config.ShowTopRamInConsole) {
-      Write-Host ""
+      Write-UiLine ""
       Write-ConsoleRule -Title ("Top RAM (WorkingSet) - Top {0}" -f $effectiveTopN)
       $topRam |
         Select-Object Name, Id, CPU, WorkingSet64, StartTime, Path |
@@ -350,7 +370,7 @@ if (-not $NoConsole) {
     }
 
     if ($Config.ShowServicesInConsole) {
-      Write-Host ""
+      Write-UiLine ""
       Write-ConsoleRule -Title ("Services (sample) - showing up to {0}" -f $Config.ConsoleMaxServices)
 
       $svcSample = $svcEnriched | Select-Object -First $Config.ConsoleMaxServices
@@ -365,18 +385,12 @@ if (-not $NoConsole) {
     }
   }
 
-  Write-Host ""
+  Write-UiLine ""
   Write-ConsoleRule -Title "End"
 }
 
-# -----------------------------
-# Pipeline output (single structured object)
-# -----------------------------
-#[pscustomobject]@{
-#  PSTypeName = 'ProcessServiceAudit.Record'
-#  Summary    = $summary
-#  TopCpu     = $topCpu
-#  TopRam     = $topRam
-#  Services   = $svcEnriched
-#  Config     = [pscustomobject]$Config
-#}
+# V2 output contract
+$v2Result = New-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ TopCpu = $topCpu; TopRam = $topRam; Services = $svcEnriched; Config = [pscustomobject]$Config }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

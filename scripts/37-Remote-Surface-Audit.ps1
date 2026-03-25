@@ -8,7 +8,7 @@ Audit-only (no remediation). Safe for support bundles/collections.
 
 Target design:
 - Pipeline output: structured objects only (Export-Csv / ConvertTo-Json / Where-Object).
-- Console output: pretty, human-friendly, colorized, using Write-Host only (host stream). [web:192]
+- Console output: pretty, human-friendly, colorized, using Write-UiLine only (host stream). [web:192]
 
 .PARAMETER ExportPath
 Optional base path for CSV export. Creates *_summary.csv, *_surfaces.csv, *_findings.csv.
@@ -20,6 +20,28 @@ Note: ConvertFrom-Json error handling should be done with try/catch. [web:52]
 .PARAMETER NoConsoleSummary
 Suppress console summary output.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 A single PSCustomObject:
 @{ Summary = <pscustomobject>; Surfaces = <pscustomobject>; Findings = <object[]> }
@@ -29,19 +51,54 @@ A single PSCustomObject:
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$ExportPath,
-  [string]$ConfigPath = 'PATH/TO/JSON',
+  [string]$ConfigPath,
   [switch]$NoConsoleSummary
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 3.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -------------------------
@@ -82,7 +139,7 @@ function Get-AuditConfig {
   if (-not (Test-Path -LiteralPath $Path)) { return $Defaults }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($raw)) { return $Defaults }
 
     $cfg = $raw | ConvertFrom-Json
@@ -119,45 +176,9 @@ function Get-ConfigValue {
 $Config = Get-AuditConfig -Path $ConfigPath -Defaults $DefaultConfig
 
 # -------------------------
-# Console helpers (host stream only)
-# -------------------------
-
-function Write-UiSection {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Title)
-  Write-Host ''
-  Write-Host $Title -ForegroundColor Cyan
-  Write-Host ('-' * $Title.Length) -ForegroundColor DarkCyan
-}
-
-function Get-SeverityColor {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Severity)
-  switch ($Severity) {
-    'High'   { [ConsoleColor]::Red }
-    'Medium' { [ConsoleColor]::Yellow }
-    'Low'    { [ConsoleColor]::Cyan }
-    default  { [ConsoleColor]::Gray }
-  }
-}
-
-# -------------------------
-# Findings helpers
+# Findings helpers (Get-SeverityColor, Get-SeverityRank from lib/Console.psm1)
 # -------------------------
 $Findings = New-FindingsList
-
-function Get-SeverityRank {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Severity)
-
-  switch ($Severity) {
-    'High'   { return 0 }
-    'Medium' { return 1 }
-    'Low'    { return 2 }
-    'Info'   { return 3 }
-    default  { return 999 }
-  }
-}
 
 # -------------------------
 # WinRM: service + listeners (best-effort)
@@ -349,7 +370,7 @@ if (-not $NoConsoleSummary) {
     Write-UiSection ("Top findings (max {0})" -f $maxTop)
 
     $top = $result.Findings |
-      Sort-Object @{ Expression = { [int](Get-SeverityRank -Severity ([string]$_.Severity)) } }, Code |
+      Sort-Object @{ Expression = { [int](Get-SeverityRank -Severity ([string]$_.Severity)) }; Descending = $true }, Code |
       Select-Object -First $maxTop
 
     foreach ($f in $top) {
@@ -359,7 +380,9 @@ if (-not $NoConsoleSummary) {
   }
 }
 
-# -------------------------
-# Pipeline output
-# -------------------------
-#$result
+# V2 output contract
+$resultToken = if ($Strict -and $findingsOut.Count -gt 0) { 'FAIL' } elseif ($findingsOut.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '37-Remote-Surface-Audit.ps1' -Mode $Mode -Result $resultToken -Findings $findingsOut -Summary $result.Summary -Metadata @{ Surfaces = $result.Surfaces }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

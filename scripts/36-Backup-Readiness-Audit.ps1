@@ -6,7 +6,7 @@ Backup/Restore readiness baseline audit (no third-party tools).
 .DESCRIPTION
 Best-practice split:
 - Pipeline output: only one structured object (Summary, Findings, Indicators, VssRaw).
-- Console output: pretty, colorized human output using Write-Host / Write-Information only.
+- Console output: pretty, colorized human output using Write-UiLine / Write-Information only.
 
 Checks:
 - OS disk free space (rough signal).
@@ -25,6 +25,31 @@ Creates: *_summary.csv, *_findings.csv, *_indicators.csv, *_vss_writers.txt
 Optional JSON configuration path (e.g. "PATH/TO/JSON\backup-audit.json").
 If missing or invalid JSON, defaults are used.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 PSCustomObject with Summary, Findings, Indicators, VssRaw.
 .EXAMPLE
@@ -32,19 +57,54 @@ PSCustomObject with Summary, Findings, Indicators, VssRaw.
 
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [Parameter(Mandatory = $false)]
   [string]$ExportPath,
 
-  [Parameter(Mandatory = $false)]
   [string]$ConfigJsonPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
-Set-StrictMode -Version 3.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 $script:Findings = New-FindingsList
@@ -61,7 +121,7 @@ function Get-DefaultConfig {
     VssFailedErrorSeverity    = 'High'
 
     ConsoleTopFindings        = 10
-    ConsoleUseInformation     = $false  # If $true, prefer Write-Information; Write-Host used for colors anyway.
+    ConsoleUseInformation     = $false  # If $true, prefer Write-Information; Write-UiLine used for colors anyway.
   }
 }
 
@@ -100,7 +160,7 @@ function Get-Config {
 
   try {
     # PowerShell 5.1 ConvertFrom-Json errors on JSON comments; keep JSON strictly compliant. [web:64]
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($raw)) { throw "Config JSON is empty." }
 
     $user = $raw | ConvertFrom-Json -ErrorAction Stop
@@ -139,8 +199,10 @@ function Get-OsDiskInfo {
     $driveId = $env:SystemDrive
     if ([string]::IsNullOrWhiteSpace($driveId)) { throw "SystemDrive is empty." }
     $driveId = $driveId.TrimEnd('\')
+    # S10 fix: escape single quotes to prevent WQL injection via manipulated env var
+    $escapedDriveId = $driveId -replace "'", "''"
 
-    $d = Get-CimInstance -ClassName Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $driveId) -ErrorAction Stop
+    $d = Get-CimInstance -ClassName Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $escapedDriveId) -ErrorAction Stop
     if (-not $d) { throw "Win32_LogicalDisk returned no result for $driveId" }
 
     [pscustomobject]@{
@@ -223,133 +285,7 @@ function Get-WsbStatus {
   return $status
 }
 
-function Get-SeverityRank {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] [ValidateSet('Info','Low','Medium','High')] [string]$Severity
-  )
-
-  switch ($Severity) {
-    'High'   { 4 }
-    'Medium' { 3 }
-    'Low'    { 2 }
-    'Info'   { 1 }
-  }
-}
-
-function Get-SeverityColor {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] [ValidateSet('Info','Low','Medium','High')] [string]$Severity
-  )
-
-  switch ($Severity) {
-    'High'   { 'Red' }
-    'Medium' { 'Yellow' }
-    'Low'    { 'Cyan' }
-    'Info'   { 'Gray' }
-  }
-}
-
-function Write-PrettyLine {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] [string]$Text,
-    [ConsoleColor]$Color = [ConsoleColor]::Gray,
-    [switch]$NoNewline
-  )
-
-  if ($NoNewline) {
-    Write-Host $Text -ForegroundColor $Color -NoNewline
-  }
-  else {
-    Write-Host $Text -ForegroundColor $Color
-  }
-}
-
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] $Summary,
-    [Parameter(Mandatory)] $Indicators,
-    [Parameter(Mandatory)] $Findings,
-    [Parameter(Mandatory)] $Config
-  )
-
-  # Keep formatting off the success output stream (pipeline). [page:0]
-  Write-Host ''
-  Write-PrettyLine -Text ('=' * 46) -Color DarkGray
-  Write-PrettyLine -Text ' Backup Readiness Audit (Baseline)' -Color White
-  Write-PrettyLine -Text ('=' * 46) -Color DarkGray
-
-  Write-PrettyLine -Text (" Computer : {0}" -f $Summary.ComputerName) -Color Gray
-  Write-PrettyLine -Text (" Time     : {0}" -f $Summary.Timestamp) -Color Gray
-
-  $badgeColor = if ($Summary.FindingsCount -gt 0) { 'Yellow' } else { 'Green' }
-  Write-PrettyLine -Text (" Findings : {0}" -f $Summary.FindingsCount) -Color $badgeColor
-
-  Write-Host ''
-  Write-PrettyLine -Text ' Indicators' -Color White
-  Write-PrettyLine -Text ('-' * 46) -Color DarkGray
-
-  $osLine = if ($null -eq $Indicators.OsFreeGB -or $null -eq $Indicators.OsSizeGB) {
-    ' OS Disk  : <unavailable>'
-  } else {
-    ' OS Disk  : {0}  Free {1} GB / {2} GB (Min {3} GB)' -f $Indicators.OsDrive, $Indicators.OsFreeGB, $Indicators.OsSizeGB, $Config.MinOsFreeGB
-  }
-
-  $osColor = 'Green'
-  if ($null -eq $Indicators.OsFreeGB) { $osColor = 'Yellow' }
-  elseif ($Indicators.OsFreeGB -lt $Config.MinOsFreeGB) { $osColor = 'Red' }
-  Write-PrettyLine -Text $osLine -Color $osColor
-
-  Write-PrettyLine -Text (" VSS      : Writers detected = {0}" -f $Indicators.VssWritersCount) -Color Gray
-
-  $wsbColor = switch ($Indicators.WSBStatus) {
-    'Installed'   { 'Green' }
-    'NotInstalled'{ 'Yellow' }
-    default       { 'Gray' }
-  }
-  Write-PrettyLine -Text (" WSB      : {0}" -f $Indicators.WSBStatus) -Color $wsbColor
-
-  $fhColor = if ($Indicators.FileHistoryKey) { 'Green' } else { 'Gray' }
-  Write-PrettyLine -Text (" FileHist : {0}" -f $Indicators.FileHistoryKey) -Color $fhColor
-
-  Write-Host ''
-  Write-PrettyLine -Text ' Findings' -Color White
-  Write-PrettyLine -Text ('-' * 46) -Color DarkGray
-
-  if ($Findings.Count -eq 0) {
-    Write-PrettyLine -Text ' No findings.' -Color Green
-    Write-Host ''
-    return
-  }
-
-  $top = $Findings |
-    Sort-Object `
-      @{ Expression = { Get-SeverityRank -Severity $_.Severity }; Descending = $true }, `
-      @{ Expression = 'Code'; Descending = $false } |
-    Select-Object -First $Config.ConsoleTopFindings
-
-  foreach ($f in $top) {
-    $c = Get-SeverityColor -Severity $f.Severity
-    Write-PrettyLine -Text (" [{0}] {1} - {2}" -f $f.Severity.ToUpper(), $f.Code, $f.Message) -Color $c
-
-    if (-not [string]::IsNullOrWhiteSpace($f.Evidence)) {
-      Write-PrettyLine -Text ("        Evidence   : {0}" -f $f.Evidence) -Color DarkGray
-    }
-    if (-not [string]::IsNullOrWhiteSpace($f.Remediation)) {
-      Write-PrettyLine -Text ("        Remediate  : {0}" -f $f.Remediation) -Color DarkGray
-    }
-  }
-
-  if ($Findings.Count -gt $Config.ConsoleTopFindings) {
-    Write-Host ''
-    Write-PrettyLine -Text (" Showing top {0} of {1} findings." -f $Config.ConsoleTopFindings, $Findings.Count) -Color DarkGray
-  }
-
-  Write-Host ''
-}
+# Write-ConsoleSummary imported from lib/Console.psm1
 
 function Invoke-Export {
   [CmdletBinding()]
@@ -494,7 +430,22 @@ if ($ExportPath) {
   $result.Findings = $script:Findings
 }
 
-Write-ConsoleSummary -Summary $summary -Indicators $indicators -Findings $script:Findings -Config $cfg
+$osDiskStr = if ($null -eq $indicators.OsFreeGB -or $null -eq $indicators.OsSizeGB) { '<unavailable>' }
+  else { "{0}  Free {1} GB / {2} GB (Min {3} GB)" -f $indicators.OsDrive, $indicators.OsFreeGB, $indicators.OsSizeGB, $cfg.MinOsFreeGB }
+$customFields = [ordered]@{
+  'OSDisk'   = $osDiskStr
+  'VSS'      = ("Writers detected = {0}" -f $indicators.VssWritersCount)
+  'WSB'      = [string]$indicators.WSBStatus
+  'FileHist' = [string]$indicators.FileHistoryKey
+}
+$findingsAL = [System.Collections.ArrayList]@($script:Findings)
+Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+  -Title 'Backup Readiness Audit (Baseline)' `
+  -CustomFields $customFields
 
-# Structured output only (success stream / pipeline). [web:63]
-# $result
+# V2 output contract
+$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '36-Backup-Readiness-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $summary -Metadata @{ Indicators = $indicators }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

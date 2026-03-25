@@ -1,3 +1,4 @@
+#Requires -RunAsAdministrator
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -60,6 +61,25 @@
 .INPUTS
   None. You can't pipe input objects to this script.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   PSCustomObject with the following properties:
     - Time:       ISO-like timestamp (local time) when the item was produced.
@@ -114,10 +134,9 @@
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
 param(
   [string]$CatalogPath,
-  [switch]$Remediate,
   [switch]$Strict,
 
-  [string]$ConfigPath = "PATH/TO/CONFIG.json",
+  [string]$ConfigPath,
 
   [ValidateSet('PersistentStore','LocalHost','StaticServiceStore','ConfigurableServiceStore')]
   [string]$LocalPolicyStore = 'PersistentStore',
@@ -130,15 +149,46 @@ param(
 
   # Show verbose "OK" items in the console summary.
   [switch]$ShowOkInConsole = $false
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -------------------------
@@ -151,13 +201,6 @@ $ErrorActionPreference = 'Stop'
 # -------------------------
 
 
-function Write-UiHeader {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Text)
-  Write-Host ""
-  Write-Host $Text -ForegroundColor Cyan
-  Write-Host ("-" * $Text.Length) -ForegroundColor DarkCyan
-}
 
 function Get-StatusColor {
   [CmdletBinding()]
@@ -184,7 +227,7 @@ function Write-UiItem {
   if (-not [string]::IsNullOrWhiteSpace($Item.DisplayName)) { $msg += " | " + $Item.DisplayName }
   if (-not [string]::IsNullOrWhiteSpace($Item.Detail))      { $msg += " | " + $Item.Detail }
 
-  Write-Host ("- " + $left + ": " + $msg) -ForegroundColor $color
+  Write-UiLine ("- " + $left + ": " + $msg) -ForegroundColor $color
 }
 
 # -------------------------
@@ -245,7 +288,7 @@ function Try-ReadJsonFile {
 
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
   try {
-    $raw = Get-Content -Raw -LiteralPath $Path
+    $raw = Get-Content -Raw -LiteralPath $Path -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
     $raw | ConvertFrom-Json
   } catch {
@@ -333,18 +376,27 @@ function Get-EffectiveCatalog {
   )
 
   if ($CatalogPath) {
-    $obj = Try-ReadJsonFile -Path $CatalogPath
-    if ($obj) { return $obj }
+    $sanitized = Sanitize-Path -Path $CatalogPath -MustExist
+    if ($sanitized) {
+      $obj = Try-ReadJsonFile -Path $sanitized
+      if ($obj) { return $obj }
+    }
   }
 
   if ($ConfigPath) {
-    $cfg = Try-ReadJsonFile -Path $ConfigPath
-    if ($cfg) {
-      $fw = Get-ObjProp -Object $cfg -Name 'Firewall' -Default $null
-      $cp = if ($fw) { [string](Get-ObjProp -Object $fw -Name 'CatalogPath' -Default '') } else { '' }
-      if (-not [string]::IsNullOrWhiteSpace($cp)) {
-        $obj = Try-ReadJsonFile -Path $cp
-        if ($obj) { return $obj }
+    $sanitizedCfg = Sanitize-Path -Path $ConfigPath -MustExist
+    if ($sanitizedCfg) {
+      $cfg = Try-ReadJsonFile -Path $sanitizedCfg
+      if ($cfg) {
+        $fw = Get-ObjProp -Object $cfg -Name 'Firewall' -Default $null
+        $cp = if ($fw) { [string](Get-ObjProp -Object $fw -Name 'CatalogPath' -Default '') } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($cp)) {
+          $sanitizedCp = Sanitize-Path -Path $cp -MustExist
+          if ($sanitizedCp) {
+            $obj = Try-ReadJsonFile -Path $sanitizedCp
+            if ($obj) { return $obj }
+          }
+        }
       }
     }
   }
@@ -500,7 +552,6 @@ function Disable-InboundByNameLike {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string[]]$Patterns,
-    [switch]$Remediate,
     [Parameter(Mandatory)][string]$LocalPolicyStore
   )
 
@@ -554,7 +605,6 @@ function Ensure-FwRule {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]$Spec,
-    [switch]$Remediate,
     [Parameter(Mandatory)][string]$LocalPolicyStore
   )
 
@@ -645,7 +695,7 @@ function Ensure-FwRule {
     if ($wantProf.Count -gt 0 -and ((@($haveProf) -join ',') -ne (@($wantProf) -join ','))) { $need += "Profile" }
 
     $pf = $null
-    try { $pf = Get-NetFirewallRule -PolicyStore $LocalPolicyStore -Name $r.Name | Get-NetFirewallPortFilter } catch { }
+    try { $pf = Get-NetFirewallRule -PolicyStore $LocalPolicyStore -Name $r.Name | Get-NetFirewallPortFilter } catch { <# best-effort: port filter may not be available for all rule types #> }
 
     if ($pf) {
       if ($proto -and $pf.Protocol -ne $proto) { $need += "Protocol" }
@@ -684,7 +734,7 @@ function Ensure-FwRule {
           }
 
           if ($desc) {
-            Set-NetFirewallRule -PolicyStore $LocalPolicyStore -Name $r.Name -Description $desc -ErrorAction SilentlyContinue | Out-Null
+            Set-NetFirewallRule -PolicyStore $LocalPolicyStore -Name $r.Name -Description $desc -ErrorAction Stop | Out-Null
           }
 
           $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status Changed -Message "Rule remediated" -Name $r.Name -DisplayName $r.DisplayName)
@@ -728,14 +778,14 @@ function Write-ConsoleSummary {
   Write-UiLine -Text ("Elevated:    " + $Elevated) -Color Gray
   Write-UiLine -Text ("PolicyStore: " + $PolicyStore) -Color Gray
   Write-UiLine -Text ("Duration:    " + [string]$Duration) -Color Gray
-  Write-Host ""
+  Write-UiLine ""
 
   Write-UiLine -Text ("Changed:     " + $changeCount) -Color Cyan
   Write-UiLine -Text ("Drift:       " + $driftCount) -Color Yellow
   Write-UiLine -Text ("Errors:      " + $errorCount) -Color Red
   Write-UiLine -Text ("Notes:       " + $noteCount) -Color DarkGray
   if ($ShowOk) { Write-UiLine -Text ("OK:          " + $okCount) -Color Green }
-  Write-Host ""
+  Write-UiLine ""
 
   # Show important items first
   $top = $items | Where-Object { $_.Status -in @('Error','Drift','Changed','Note') }
@@ -761,6 +811,7 @@ Ensure-EventSource -Source $EventSource -LogName $EventLogName
 $start = Get-Date
 $isAdmin = Test-IsAdmin
 
+$script:Findings = New-FindingsList
 $results = New-Object System.Collections.Generic.List[object]
 
 if (-not $isAdmin) {
@@ -777,17 +828,35 @@ $cat = Ensure-CatalogDefaults -Catalog $cat -DefaultCatalog $DefaultCatalog
 # Profiles
 foreach ($n in @('Domain','Private','Public')) {
   $def = Get-ObjProp -Object $cat.Profiles -Name $n -Default $DefaultCatalog.Profiles.$n
-  (Ensure-Profile -Name $n -Def $def -Remediate:$Remediate) | ForEach-Object { $results.Add($_) }
+  $resArr = Ensure-Profile -Name $n -Def $def -Remediate:$Remediate
+  foreach ($r in $resArr) {
+      $results.Add($r)
+      if ($r.Status -eq 'Drift') {
+          Add-Finding -Code 'FW-Profile-Drift' -Severity 'Medium' -Message "Firewall profile drift: $($r.Target)" -Extra @{ Profile = $r.Target; Detail = $r.Detail }
+      }
+  }
 }
 
 # Disable inbound patterns
 $patterns = @((Get-ObjProp -Object $cat -Name 'DisableInboundByNameLike' -Default @()) | Where-Object { $_ -is [string] -and $_ })
-(Disable-InboundByNameLike -Patterns $patterns -Remediate:$Remediate -LocalPolicyStore $LocalPolicyStore) | ForEach-Object { $results.Add($_) }
+$inboundResults = Disable-InboundByNameLike -Patterns $patterns -Remediate:$Remediate -LocalPolicyStore $LocalPolicyStore
+foreach ($r in $inboundResults) {
+    $results.Add($r)
+    if ($r.Status -eq 'Drift') {
+        Add-Finding -Code 'FW-InboundRule-Enabled' -Severity 'Medium' -Message "Risky inbound rule enabled: $($r.DisplayName)" -Extra @{ Name = $r.Name; DisplayName = $r.DisplayName; Pattern = $r.Target }
+    }
+}
 
 # Ensure rules
 $ensureRules = @((Get-ObjProp -Object $cat -Name 'EnsureRules' -Default @()) | Where-Object { $_ })
 foreach ($rule in $ensureRules) {
-  (Ensure-FwRule -Spec $rule -Remediate:$Remediate -LocalPolicyStore $LocalPolicyStore) | ForEach-Object { $results.Add($_) }
+  $ensureResults = Ensure-FwRule -Spec $rule -Remediate:$Remediate -LocalPolicyStore $LocalPolicyStore
+  foreach ($r in $ensureResults) {
+      $results.Add($r)
+      if ($r.Status -eq 'Drift') {
+          Add-Finding -Code 'FW-EnsureRule-Drift' -Severity 'Medium' -Message "Required firewall rule drift/missing: $($r.Target)" -Extra @{ RuleId = $r.Target; Detail = $r.Detail; Name = $r.Name; DisplayName = $r.DisplayName }
+      }
+  }
 }
 
 $duration = (New-TimeSpan -Start $start -End (Get-Date))
@@ -815,5 +884,9 @@ if ($ConsoleSummary) {
   Write-ConsoleSummary -Results $results -Duration $duration -Elevated $isAdmin -Remediate $Remediate -Strict $Strict -PolicyStore $LocalPolicyStore -ShowOk $ShowOkInConsole
 }
 
-# Pipeline output: structured objects only
-$results
+# V2 output contract
+$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '18-Firewall-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; Duration = $duration }) -Metadata @{ Results = $results }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

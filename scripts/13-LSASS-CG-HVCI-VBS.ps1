@@ -48,6 +48,25 @@
 .INPUTS
   None. This script does not accept pipeline input.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   System.Management.Automation.PSCustomObject
 
@@ -110,38 +129,53 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [switch]$Remediate,
   [bool]$Strict = $true,
   [bool]$RequireBlockList = $true,
-  [string]$ConfigPath = "PATH/TO/JSON"
+  [string]$ConfigPath,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 # -----------------------------
 # Helper functions (PS 5.1 compatible)
 # -----------------------------
-
-
-function Get-RegDword {
-  param(
-    [string]$Path,
-    [string]$Name
-  )
-  try {
-    if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    $v = (Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop).$Name
-    if ($null -eq $v) { return $null }
-    return [int]$v
-  } catch { return $null }
-}
-
 
 function Get-DeviceGuardInfo {
   try {
@@ -191,20 +225,28 @@ function Try-LoadJsonConfig {
     Baseline_Blocklist_Enable           = 1
   }
 
-  if ([string]::IsNullOrWhiteSpace($Path) -or $Path -eq 'PATH/TO/JSON') {
-    return [pscustomobject]@{ Config=$cfg; Loaded=$false; Reason='ConfigPath not set (using defaults)' }
-  }
-  if (-not (Test-Path -LiteralPath $Path)) {
-    return [pscustomobject]@{ Config=$cfg; Loaded=$false; Reason='Config file not found (using defaults)' }
+  $sanitized = Sanitize-Path -Path $Path -MustExist
+  if (-not $sanitized) {
+    return [pscustomobject]@{ Config=$cfg; Loaded=$false; Reason='ConfigPath not set or not found (using defaults)' }
   }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8 -ErrorAction Stop
     $obj = $raw | ConvertFrom-Json -ErrorAction Stop
 
     foreach ($k in $cfg.Keys) {
       if ($obj.PSObject.Properties.Name -contains $k) {
         $cfg[$k] = $obj.$k
+      }
+    }
+
+    # Warn if any Baseline_* value has been set to 0 or disabled by the config file
+    foreach ($k in $cfg.Keys) {
+      if ($k -like 'Baseline_*') {
+        $val = $cfg[$k]
+        if ($val -eq 0 -or $val -eq $false) {
+          Write-Warning "Configuration weakens security: $k set to $val"
+        }
       }
     }
 
@@ -327,68 +369,70 @@ function Write-PrettySummary {
   $statusText  = $(if ($Result.Compliant) { 'OK' } else { 'NONCOMPLIANT' })
   $statusColor = $(if ($Result.Compliant) { $cOk } else { $cBad })
 
-  Write-Host ""
-  Write-Host "============================================================" -ForegroundColor $cDim
-  Write-Host "LSASS / Credential Guard / VBS / HVCI / Driver Blocklist" -ForegroundColor $cInfo
-  Write-Host "============================================================" -ForegroundColor $cDim
+  Write-UiLine ""
+  Write-UiLine "============================================================" -ForegroundColor $cDim
+  Write-UiLine "LSASS / Credential Guard / VBS / HVCI / Driver Blocklist" -ForegroundColor $cInfo
+  Write-UiLine "============================================================" -ForegroundColor $cDim
 
-  Write-Host ("Computer   : {0}" -f $Result.ComputerName)
+  Write-UiLine ("Computer   : {0}" -f $Result.ComputerName)
   if ($Result.OsCaption) {
-    Write-Host ("OS         : {0} (Build {1}, Version {2})" -f $Result.OsCaption,$Result.OsBuildNumber,$Result.OsVersion)
+    Write-UiLine ("OS         : {0} (Build {1}, Version {2})" -f $Result.OsCaption,$Result.OsBuildNumber,$Result.OsVersion)
   }
 
-  Write-Host ("Result     : {0}" -f $statusText) -ForegroundColor $statusColor
-  Write-Host ("Mode       : Strict={0}  RequireBlockList={1}  Remediate={2}  IsAdmin={3}" -f $Result.Strict,$Result.RequireBlockList,$Result.RemediateRequested,$Result.IsAdmin) -ForegroundColor $cDim
+  Write-UiLine ("Result     : {0}" -f $statusText) -ForegroundColor $statusColor
+  Write-UiLine ("Mode       : Strict={0}  RequireBlockList={1}  Remediate={2}  IsAdmin={3}" -f $Result.Strict,$Result.RequireBlockList,$Result.RemediateRequested,$Result.IsAdmin) -ForegroundColor $cDim
 
-  Write-Host ""
-  Write-Host "Signals" -ForegroundColor $cInfo
-  Write-Host ("- LSASS PPL                : {0}" -f $(if ($Result.Lsa_PplConfigured) { 'Configured' } else { 'Not configured' })) -ForegroundColor $(if ($Result.Lsa_PplConfigured) { $cOk } else { $cBad })
-  Write-Host ("- Credential Guard         : Reg={0}  Running={1}" -f $Result.Cg_RegistryConfigured,$Result.Cg_Running) -ForegroundColor $(if ($Result.Cg_Running) { $cOk } else { $cBad })
-  Write-Host ("- VBS                      : RegEnabled={0}  Running={1}  Status={2}" -f ($Result.Dg_EnableVbs -eq 1),$Result.Vbs_Running,$Result.Dg_VbsStatus) -ForegroundColor $(if ($Result.Vbs_Running) { $cOk } else { $cBad })
-  Write-Host ("- HVCI (Memory Integrity)  : RegEnabled={0}  Running={1}" -f ($Result.Hvci_Enabled -eq 1),$Result.Hvci_Running) -ForegroundColor $(if ($Result.Hvci_Running) { $cOk } else { $cBad })
-  Write-Host ("- Vulnerable Driver Blocklist: Active={0} (Value={1})" -f $Result.Ci_Blocklist_Active,$Result.Ci_Blocklist_Value) -ForegroundColor $(if ($Result.Ci_Blocklist_Active) { $cOk } else { $cBad })
+  Write-UiLine ""
+  Write-UiLine "Signals" -ForegroundColor $cInfo
+  Write-UiLine ("- LSASS PPL                : {0}" -f $(if ($Result.Lsa_PplConfigured) { 'Configured' } else { 'Not configured' })) -ForegroundColor $(if ($Result.Lsa_PplConfigured) { $cOk } else { $cBad })
+  Write-UiLine ("- Credential Guard         : Reg={0}  Running={1}" -f $Result.Cg_RegistryConfigured,$Result.Cg_Running) -ForegroundColor $(if ($Result.Cg_Running) { $cOk } else { $cBad })
+  Write-UiLine ("- VBS                      : RegEnabled={0}  Running={1}  Status={2}" -f ($Result.Dg_EnableVbs -eq 1),$Result.Vbs_Running,$Result.Dg_VbsStatus) -ForegroundColor $(if ($Result.Vbs_Running) { $cOk } else { $cBad })
+  Write-UiLine ("- HVCI (Memory Integrity)  : RegEnabled={0}  Running={1}" -f ($Result.Hvci_Enabled -eq 1),$Result.Hvci_Running) -ForegroundColor $(if ($Result.Hvci_Running) { $cOk } else { $cBad })
+  Write-UiLine ("- Vulnerable Driver Blocklist: Active={0} (Value={1})" -f $Result.Ci_Blocklist_Active,$Result.Ci_Blocklist_Value) -ForegroundColor $(if ($Result.Ci_Blocklist_Active) { $cOk } else { $cBad })
 
   if ($Result.PolicyDeviceGuardPresent) {
-    Write-Host ""
-    Write-Host ("Policy     : DeviceGuard policy key present -> remediation skipped ({0})" -f $Result.PolicyDeviceGuardKey) -ForegroundColor $cWarn
+    Write-UiLine ""
+    Write-UiLine ("Policy     : DeviceGuard policy key present -> remediation skipped ({0})" -f $Result.PolicyDeviceGuardKey) -ForegroundColor $cWarn
   }
 
-  Write-Host ""
-  Write-Host ("Config     : Loaded={0}  Reason={1}  Path={2}" -f $Result.ConfigLoaded,$Result.ConfigLoadReason,$SanitizedConfigPath) -ForegroundColor $cDim
+  Write-UiLine ""
+  Write-UiLine ("Config     : Loaded={0}  Reason={1}  Path={2}" -f $Result.ConfigLoaded,$Result.ConfigLoadReason,$SanitizedConfigPath) -ForegroundColor $cDim
 
   if ($Result.RemediationActions.Count -gt 0) {
-    Write-Host ""
-    Write-Host "Remediation actions" -ForegroundColor $cInfo
+    Write-UiLine ""
+    Write-UiLine "Remediation actions" -ForegroundColor $cInfo
     foreach ($a in $Result.RemediationActions) {
-      Write-Host ("- {0}" -f $a) -ForegroundColor $cWarn
+      Write-UiLine ("- {0}" -f $a) -ForegroundColor $cWarn
     }
   }
 
   if ($Result.RebootRequired) {
-    Write-Host ""
-    Write-Host "RebootRequired: True (changes take effect after reboot)" -ForegroundColor $cWarn
+    Write-UiLine ""
+    Write-UiLine "RebootRequired: True (changes take effect after reboot)" -ForegroundColor $cWarn
   }
 
   if ($Result.Issues.Count -gt 0) {
-    Write-Host ""
-    Write-Host "Issues" -ForegroundColor $cInfo
-    foreach ($m in $Result.Issues) { Write-Host ("- {0}" -f $m) -ForegroundColor $cBad }
+    Write-UiLine ""
+    Write-UiLine "Issues" -ForegroundColor $cInfo
+    foreach ($m in $Result.Issues) { Write-UiLine ("- {0}" -f $m) -ForegroundColor $cBad }
   }
 
   if ($Result.Warnings.Count -gt 0) {
-    Write-Host ""
-    Write-Host "Warnings" -ForegroundColor $cInfo
-    foreach ($w in $Result.Warnings) { Write-Host ("- {0}" -f $w) -ForegroundColor $cWarn }
+    Write-UiLine ""
+    Write-UiLine "Warnings" -ForegroundColor $cInfo
+    foreach ($w in $Result.Warnings) { Write-UiLine ("- {0}" -f $w) -ForegroundColor $cWarn }
   }
 
-  Write-Host ""
-  Write-Host ("ExitCode   : {0}" -f $Result.ExitCode) -ForegroundColor $cDim
-  Write-Host "============================================================" -ForegroundColor $cDim
+  Write-UiLine ""
+  Write-UiLine ("ExitCode   : {0}" -f $Result.ExitCode) -ForegroundColor $cDim
+  Write-UiLine "============================================================" -ForegroundColor $cDim
 }
 
 # -----------------------------
 # Main
 # -----------------------------
+$script:Findings = New-FindingsList
+
 $eventOkId  = 3600
 $eventBadId = 3610
 $eventErrId = 3611
@@ -431,7 +475,7 @@ try {
   # Registry checks
   $result.Lsa_RunAsPPL      = Get-RegDword -Path $lsaKey -Name 'RunAsPPL'
   $result.Lsa_RunAsPPLBoot  = Get-RegDword -Path $lsaKey -Name 'RunAsPPLBoot'
-  $result.Lsa_PplConfigured = (($result.Lsa_RunAsPPL -eq 1) -or ($result.Lsa_RunAsPPLBoot -eq 1))
+  $result.Lsa_PplConfigured = (($result.Lsa_RunAsPPL -in @(1, 2)) -or ($result.Lsa_RunAsPPLBoot -eq 1))
 
   # Credential Guard uses LsaCfgFlags (1/2) per Microsoft documentation
   $result.Lsa_LsaCfgFlags       = Get-RegDword -Path $lsaKey -Name 'LsaCfgFlags'
@@ -471,7 +515,7 @@ try {
   try {
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
     $result.HypervisorPresent = [bool]$cs.HypervisorPresent
-  } catch { }
+  } catch { <# best-effort: HypervisorPresent property may not be available #> }
 
   # -----------------------------
   # Compliance evaluation
@@ -479,6 +523,7 @@ try {
   if (-not $result.Lsa_PplConfigured) {
     $result.Compliant = $false
     $result.Issues   += "LSASS PPL not configured"
+    Add-Finding -Code 'LSA-PPL-Missing' -Severity 'High' -Message 'LSASS PPL is not configured via registry.'
   }
 
   if ($Strict) {
@@ -494,7 +539,12 @@ try {
   if ($RequireBlockList -and -not $result.Ci_Blocklist_Active) {
     $result.Compliant = $false
     $result.Issues += "Vulnerable Driver Blocklist not active"
+    Add-Finding -Code 'Blocklist-Missing' -Severity 'Medium' -Message 'Vulnerable Driver Blocklist is not active.'
   }
+
+  if (-not $result.Vbs_Running) { Add-Finding -Code 'VBS-NotRunning' -Severity 'Medium' -Message 'Virtualization-Based Security is not running.' }
+  if (-not $result.Cg_Running)  { Add-Finding -Code 'CG-NotRunning' -Severity 'Medium' -Message 'Credential Guard is not running.' }
+  if (-not $result.Hvci_Running) { Add-Finding -Code 'HVCI-NotRunning' -Severity 'Medium' -Message 'Hypervisor-Enforced Code Integrity (HVCI) is not running.' }
 
   # -----------------------------
   # Remediation gate
@@ -516,65 +566,89 @@ try {
 
     # LSASS PPL
     if ($result.Lsa_RunAsPPL -ne [int]$cfg.Baseline_LsaPpl_RunAsPPL) {
-      if (Set-RegDword -Path $lsaKey -Name 'RunAsPPL' -Value ([int]$cfg.Baseline_LsaPpl_RunAsPPL)) {
-        $result.RemediationActions += ("Set RunAsPPL={0}" -f [int]$cfg.Baseline_LsaPpl_RunAsPPL)
-        $result.RebootRequired = $true
+      if ($PSCmdlet.ShouldProcess($lsaKey, "Set RunAsPPL=$([int]$cfg.Baseline_LsaPpl_RunAsPPL)")) {
+        if (Set-RegDword -Path $lsaKey -Name 'RunAsPPL' -Value ([int]$cfg.Baseline_LsaPpl_RunAsPPL)) {
+          $result.RemediationActions += ("Set RunAsPPL={0}" -f [int]$cfg.Baseline_LsaPpl_RunAsPPL)
+          $result.RebootRequired = $true
+        }
       }
     }
     if ($result.Lsa_RunAsPPLBoot -ne [int]$cfg.Baseline_LsaPpl_RunAsPPLBoot) {
-      if (Set-RegDword -Path $lsaKey -Name 'RunAsPPLBoot' -Value ([int]$cfg.Baseline_LsaPpl_RunAsPPLBoot)) {
-        $result.RemediationActions += ("Set RunAsPPLBoot={0}" -f [int]$cfg.Baseline_LsaPpl_RunAsPPLBoot)
-        $result.RebootRequired = $true
+      if ($PSCmdlet.ShouldProcess($lsaKey, "Set RunAsPPLBoot=$([int]$cfg.Baseline_LsaPpl_RunAsPPLBoot)")) {
+        if (Set-RegDword -Path $lsaKey -Name 'RunAsPPLBoot' -Value ([int]$cfg.Baseline_LsaPpl_RunAsPPLBoot)) {
+          $result.RemediationActions += ("Set RunAsPPLBoot={0}" -f [int]$cfg.Baseline_LsaPpl_RunAsPPLBoot)
+          $result.RebootRequired = $true
+        }
       }
     }
 
     # VBS
     if ($result.Dg_EnableVbs -ne [int]$cfg.Baseline_Vbs_EnableVbs) {
-      if (Set-RegDword -Path $dgRoot -Name 'EnableVirtualizationBasedSecurity' -Value ([int]$cfg.Baseline_Vbs_EnableVbs)) {
-        $result.RemediationActions += ("Set EnableVirtualizationBasedSecurity={0}" -f [int]$cfg.Baseline_Vbs_EnableVbs)
-        $result.RebootRequired = $true
+      if ($PSCmdlet.ShouldProcess($dgRoot, "Set EnableVirtualizationBasedSecurity=$([int]$cfg.Baseline_Vbs_EnableVbs)")) {
+        if (Set-RegDword -Path $dgRoot -Name 'EnableVirtualizationBasedSecurity' -Value ([int]$cfg.Baseline_Vbs_EnableVbs)) {
+          $result.RemediationActions += ("Set EnableVirtualizationBasedSecurity={0}" -f [int]$cfg.Baseline_Vbs_EnableVbs)
+          $result.RebootRequired = $true
+        }
       }
     }
     if (($null -eq $result.Dg_RequirePlatformSec) -or ($result.Dg_RequirePlatformSec -eq 0) -or ($result.Dg_RequirePlatformSec -ne [int]$cfg.Baseline_Vbs_RequirePlatformSecurityFeatures)) {
-      if (Set-RegDword -Path $dgRoot -Name 'RequirePlatformSecurityFeatures' -Value ([int]$cfg.Baseline_Vbs_RequirePlatformSecurityFeatures)) {
-        $result.RemediationActions += ("Set RequirePlatformSecurityFeatures={0}" -f [int]$cfg.Baseline_Vbs_RequirePlatformSecurityFeatures)
-        $result.RebootRequired = $true
+      if ($PSCmdlet.ShouldProcess($dgRoot, "Set RequirePlatformSecurityFeatures=$([int]$cfg.Baseline_Vbs_RequirePlatformSecurityFeatures)")) {
+        if (Set-RegDword -Path $dgRoot -Name 'RequirePlatformSecurityFeatures' -Value ([int]$cfg.Baseline_Vbs_RequirePlatformSecurityFeatures)) {
+          $result.RemediationActions += ("Set RequirePlatformSecurityFeatures={0}" -f [int]$cfg.Baseline_Vbs_RequirePlatformSecurityFeatures)
+          $result.RebootRequired = $true
+        }
       }
     }
     if (($null -eq $result.Dg_Locked) -or ($result.Dg_Locked -ne [int]$cfg.Baseline_Vbs_Locked)) {
-      if (Set-RegDword -Path $dgRoot -Name 'Locked' -Value ([int]$cfg.Baseline_Vbs_Locked)) {
-        $result.RemediationActions += ("Set DeviceGuard Locked={0}" -f [int]$cfg.Baseline_Vbs_Locked)
-        $result.RebootRequired = $true
+      # Do not downgrade from UEFI lock (Locked=1) to a less secure value
+      if ($result.Dg_Locked -ne 1 -or [int]$cfg.Baseline_Vbs_Locked -eq 1) {
+        if ($PSCmdlet.ShouldProcess($dgRoot, "Set DeviceGuard Locked=$([int]$cfg.Baseline_Vbs_Locked)")) {
+          if (Set-RegDword -Path $dgRoot -Name 'Locked' -Value ([int]$cfg.Baseline_Vbs_Locked)) {
+            $result.RemediationActions += ("Set DeviceGuard Locked={0}" -f [int]$cfg.Baseline_Vbs_Locked)
+            $result.RebootRequired = $true
+          }
+        }
       }
     }
 
     # Credential Guard (LsaCfgFlags 1/2)
     if ($result.Lsa_LsaCfgFlags -notin 1,2) {
-      if (Set-RegDword -Path $lsaKey -Name 'LsaCfgFlags' -Value ([int]$cfg.Baseline_CredentialGuard_LsaCfgFlags)) {
-        $result.RemediationActions += ("Set LsaCfgFlags={0}" -f [int]$cfg.Baseline_CredentialGuard_LsaCfgFlags)
-        $result.RebootRequired = $true
+      if ($PSCmdlet.ShouldProcess($lsaKey, "Set LsaCfgFlags=$([int]$cfg.Baseline_CredentialGuard_LsaCfgFlags)")) {
+        if (Set-RegDword -Path $lsaKey -Name 'LsaCfgFlags' -Value ([int]$cfg.Baseline_CredentialGuard_LsaCfgFlags)) {
+          $result.RemediationActions += ("Set LsaCfgFlags={0}" -f [int]$cfg.Baseline_CredentialGuard_LsaCfgFlags)
+          $result.RebootRequired = $true
+        }
       }
     }
 
     # HVCI
     if ($result.Hvci_Enabled -ne [int]$cfg.Baseline_Hvci_Enabled) {
-      if (Set-RegDword -Path $scHVCI -Name 'Enabled' -Value ([int]$cfg.Baseline_Hvci_Enabled)) {
-        $result.RemediationActions += ("Set HVCI Enabled={0}" -f [int]$cfg.Baseline_Hvci_Enabled)
-        $result.RebootRequired = $true
+      if ($PSCmdlet.ShouldProcess($scHVCI, "Set HVCI Enabled=$([int]$cfg.Baseline_Hvci_Enabled)")) {
+        if (Set-RegDword -Path $scHVCI -Name 'Enabled' -Value ([int]$cfg.Baseline_Hvci_Enabled)) {
+          $result.RemediationActions += ("Set HVCI Enabled={0}" -f [int]$cfg.Baseline_Hvci_Enabled)
+          $result.RebootRequired = $true
+        }
       }
     }
     if (($null -eq $result.Hvci_Locked) -or ($result.Hvci_Locked -ne [int]$cfg.Baseline_Hvci_Locked)) {
-      if (Set-RegDword -Path $scHVCI -Name 'Locked' -Value ([int]$cfg.Baseline_Hvci_Locked)) {
-        $result.RemediationActions += ("Set HVCI Locked={0}" -f [int]$cfg.Baseline_Hvci_Locked)
-        $result.RebootRequired = $true
+      # Do not downgrade from UEFI lock (Locked=1) to a less secure value
+      if ($result.Hvci_Locked -ne 1 -or [int]$cfg.Baseline_Hvci_Locked -eq 1) {
+        if ($PSCmdlet.ShouldProcess($scHVCI, "Set HVCI Locked=$([int]$cfg.Baseline_Hvci_Locked)")) {
+          if (Set-RegDword -Path $scHVCI -Name 'Locked' -Value ([int]$cfg.Baseline_Hvci_Locked)) {
+            $result.RemediationActions += ("Set HVCI Locked={0}" -f [int]$cfg.Baseline_Hvci_Locked)
+            $result.RebootRequired = $true
+          }
+        }
       }
     }
 
     # Vulnerable Driver Blocklist
     if (-not $result.Ci_Blocklist_Active) {
-      if (Set-RegDword -Path $ciCfg -Name 'VulnerableDriverBlocklistEnable' -Value ([int]$cfg.Baseline_Blocklist_Enable)) {
-        $result.RemediationActions += ("Set VulnerableDriverBlocklistEnable={0}" -f [int]$cfg.Baseline_Blocklist_Enable)
-        $result.RebootRequired = $true
+      if ($PSCmdlet.ShouldProcess($ciCfg, "Set VulnerableDriverBlocklistEnable=$([int]$cfg.Baseline_Blocklist_Enable)")) {
+        if (Set-RegDword -Path $ciCfg -Name 'VulnerableDriverBlocklistEnable' -Value ([int]$cfg.Baseline_Blocklist_Enable)) {
+          $result.RemediationActions += ("Set VulnerableDriverBlocklistEnable={0}" -f [int]$cfg.Baseline_Blocklist_Enable)
+          $result.RebootRequired = $true
+        }
       }
     }
   }
@@ -618,7 +692,7 @@ try {
     Write-HealthEvent -Id $result.EventId -Msg $logText -Level 'Warning' -Source $source
   }
 
-  # Pretty console output (Write-Host only; does not pollute pipeline)
+  # Pretty console output (Write-UiLine only; does not pollute pipeline)
   Write-PrettySummary -Result $result -Cfg $cfg -SanitizedConfigPath $sanitizedConfigPath
 
 } catch {
@@ -629,10 +703,16 @@ try {
 
   $errText = ("LSASS/CG/HVCI/VBS/Blocklist Check: error: {0}" -f $_.Exception.Message)
   Write-HealthEvent -Id $eventErrId -Msg $errText -Level 'Error' -Source $source
-  Write-Host $errText -ForegroundColor (Get-ConsoleColorSafe -Name ([string]$cfg.ColorBad) -Fallback 'Red')
+  Write-UiLine $errText -ForegroundColor (Get-ConsoleColorSafe -Name ([string]$cfg.ColorBad) -Fallback 'Red')
 }
 
-# Pipeline output: one structured object
-#$result
+# V2 output contract
+$resultToken = if ($result.ExitCode -ne 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
 
 exit $result.ExitCode
+
+
+

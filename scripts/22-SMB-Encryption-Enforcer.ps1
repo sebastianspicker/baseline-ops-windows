@@ -1,3 +1,4 @@
+#Requires -RunAsAdministrator
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -6,10 +7,9 @@ Enforces SMB encryption on a Windows host (server-wide or per share) and optiona
 .DESCRIPTION
 This script is a safe-by-default SMB encryption enforcer and auditor designed for interactive use and automation.
 
-It supports three operating modes:
-- AuditOnly: Reads current SMB server/client/share settings and produces a single structured result object. No changes are made.
-- ServerGlobal: Enables server-wide SMB encryption and (optionally) sets encryption on the specified shares for transparency/consistency.
-- ShareOnly: Enables SMB encryption only on the specified shares (useful for staged rollouts).
+It supports two v2 execution modes:
+- Audit: Reads current SMB server/client/share settings and produces a single structured result object. No changes are made.
+- Remediate: Applies SMB encryption changes. The remediation target is controlled by -RemediationScope.
 
 Optional enforcement/hardening:
 - ApplyClientRequireEncryption forces outbound SMB connections from this client to require encryption. This can break access to SMB targets
@@ -23,20 +23,26 @@ Output behavior (important):
 - Console output: A human-readable summary is printed separately (no pipeline pollution).
 
 .PARAMETER Mode
-Selects the operating mode:
-- AuditOnly    : No changes. Report-only.
+Selects v2 execution mode:
+- Audit     : No changes. Report-only.
+- Remediate : Applies changes based on -RemediationScope.
+
+Default: Audit
+
+.PARAMETER RemediationScope
+Selects what remediation should target when -Mode Remediate is used:
 - ServerGlobal : Enforce server-wide SMB encryption. Optionally also enables encryption on the specified shares.
 - ShareOnly    : Enforce SMB encryption only on the specified shares.
 
-Default: AuditOnly
+Default: ServerGlobal
 
 .PARAMETER ShareName
 One or more SMB share names to target.
 
-Behavior depends on Mode:
-- AuditOnly: If provided, those shares are included in the report.
-- ServerGlobal: If provided, those shares are additionally set to EncryptData=True (optional but recommended for clarity).
-- ShareOnly: Required. Those shares are set to EncryptData=True.
+Behavior depends on Mode/RemediationScope:
+- Mode Audit: If provided, those shares are included in the report.
+- Mode Remediate + RemediationScope ServerGlobal: If provided, those shares are additionally set to EncryptData=True (optional but recommended for clarity).
+- Mode Remediate + RemediationScope ShareOnly: Required. Those shares are set to EncryptData=True.
 
 If a specified share does not exist, the script stops with an error.
 
@@ -59,7 +65,8 @@ Use this for unattended execution, but prefer testing with -WhatIf first.
 Path to an optional JSON configuration file (example placeholder: PATH/TO/JSON/config.json).
 
 Supported JSON keys:
-- Mode (string): AuditOnly | ServerGlobal | ShareOnly
+- Mode (string): Audit | Remediate
+- RemediationScope (string): ServerGlobal | ShareOnly
 - ShareName (string or array of strings)
 - ApplyClientRequireEncryption (boolean or string: true/false/yes/no/1/0)
 - EnableRejectUnencryptedAccess (boolean or string)
@@ -69,6 +76,28 @@ If the JSON file is missing, empty, or invalid, the script continues with safe d
 
 .INPUTS
 None. This script does not accept pipeline input.
+
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
 System.Management.Automation.PSCustomObject
@@ -88,7 +117,7 @@ The script outputs one object with (at minimum) the following high-level fields:
 Requirements and assumptions:
 - Must be run elevated (Administrator), because SMB configuration changes require administrative privileges.
 - Uses -WhatIf / -Confirm (SupportsShouldProcess) to support safe execution and change simulation.
-- Console formatting is produced via Write-Host / Write-Information and is intentionally separated from pipeline output.
+- Console formatting is produced via Write-UiLine / Write-Information and is intentionally separated from pipeline output.
 
 .EXAMPLE
 # Report current SMB encryption settings (no changes)
@@ -96,34 +125,37 @@ Requirements and assumptions:
 
 .EXAMPLE
 # Audit only, but include specific shares in the report
-.\22-SMB-Encryption-Enforcer.ps1 -Mode AuditOnly -ShareName 'Public','Finance'
+.\22-SMB-Encryption-Enforcer.ps1 -Mode Audit -ShareName 'Public','Finance'
 
 .EXAMPLE
 # Enforce server-wide SMB encryption (preview changes)
-.\22-SMB-Encryption-Enforcer.ps1 -Mode ServerGlobal -WhatIf
+.\22-SMB-Encryption-Enforcer.ps1 -Mode Remediate -RemediationScope ServerGlobal -WhatIf
 
 .EXAMPLE
 # Enforce server-wide SMB encryption and harden server to reject unencrypted-capability clients
-.\22-SMB-Encryption-Enforcer.ps1 -Mode ServerGlobal -EnableRejectUnencryptedAccess -Force
+.\22-SMB-Encryption-Enforcer.ps1 -Mode Remediate -RemediationScope ServerGlobal -EnableRejectUnencryptedAccess -Force
 
 .EXAMPLE
 # Enforce encryption only for selected shares (staged rollout)
-.\22-SMB-Encryption-Enforcer.ps1 -Mode ShareOnly -ShareName 'Finance','HR' -Force
+.\22-SMB-Encryption-Enforcer.ps1 -Mode Remediate -RemediationScope ShareOnly -ShareName 'Finance','HR' -Force
 
 .EXAMPLE
 # Enforce share encryption and require encryption for outbound SMB from this machine (high impact; test first)
-.\22-SMB-Encryption-Enforcer.ps1 -Mode ShareOnly -ShareName 'Finance' -ApplyClientRequireEncryption -WhatIf
+.\22-SMB-Encryption-Enforcer.ps1 -Mode Remediate -RemediationScope ShareOnly -ShareName 'Finance' -ApplyClientRequireEncryption -WhatIf
 
 .EXAMPLE
 # Use a JSON config as defaults (script parameters override JSON when specified)
-.\22-SMB-Encryption-Enforcer.ps1 -JsonPath 'PATH/TO/JSON/config.json' -Mode AuditOnly
+.\22-SMB-Encryption-Enforcer.ps1 -JsonPath 'PATH/TO/JSON/config.json' -Mode Audit
 #>
 
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [ValidateSet('ServerGlobal','ShareOnly','AuditOnly')]
-  [string]$Mode = 'AuditOnly',
+  [ValidateSet('Audit','Remediate')]
+  [string]$Mode = 'Audit',
+
+  [ValidateSet('ServerGlobal','ShareOnly')]
+  [string]$RemediationScope = 'ServerGlobal',
 
   [string[]]$ShareName,
 
@@ -133,26 +165,58 @@ param(
 
   [switch]$Force,
 
-  [string]$JsonPath = 'PATH/TO/JSON/config.json'
+  [string]$JsonPath
+
+,
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -------------------------
 # Helpers
 # -------------------------
 
-function Ensure-Cmdlet {
-  param([Parameter(Mandatory)][string]$Name)
-  if (-not (Get-Command -Name $Name -ErrorAction SilentlyContinue)) {
-    throw ('Required cmdlet missing: {0}. Verify the SmbShare module / OS features.' -f $Name)
-  }
-}
+# Ensure-Cmdlet imported from lib/External.psm1
 
 function Get-Prop {
   param(
@@ -179,7 +243,8 @@ function Load-JsonConfigOrDefault {
 
   # Safe defaults if config is missing/invalid.
   $defaults = [pscustomobject]@{
-    Mode                         = 'AuditOnly'
+    Mode                         = 'Audit'
+    RemediationScope             = 'ServerGlobal'
     ShareName                     = @()
     ApplyClientRequireEncryption  = $false
     EnableRejectUnencryptedAccess = $false
@@ -194,7 +259,7 @@ function Load-JsonConfigOrDefault {
   }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($raw)) {
       Write-Verbose -Message ('Config JSON is empty at {0}. Using defaults.' -f $Path)
       return $defaults
@@ -203,9 +268,20 @@ function Load-JsonConfigOrDefault {
     $cfg = $raw | ConvertFrom-Json
     if ($null -eq $cfg) { return $defaults }
 
-    $mode = Get-Prop -Object $cfg -Name 'Mode'
-    if ($mode -and @('ServerGlobal','ShareOnly','AuditOnly') -contains $mode) {
+    $mode = [string](Get-Prop -Object $cfg -Name 'Mode')
+    if ($mode -and @('Audit','Remediate') -contains $mode) {
       $defaults.Mode = $mode
+    } elseif ($mode -and @('ServerGlobal','ShareOnly') -contains $mode) {
+      # Legacy mapping for v1 mode values.
+      $defaults.Mode = 'Remediate'
+      $defaults.RemediationScope = $mode
+    } elseif ($mode -eq 'AuditOnly') {
+      $defaults.Mode = 'Audit'
+    }
+
+    $scope = [string](Get-Prop -Object $cfg -Name 'RemediationScope')
+    if ($scope -and @('ServerGlobal','ShareOnly') -contains $scope) {
+      $defaults.RemediationScope = $scope
     }
 
     $sn = Get-Prop -Object $cfg -Name 'ShareName'
@@ -292,19 +368,6 @@ function Test-IsConsoleHost {
   return ($Host.Name -match 'ConsoleHost')
 }
 
-function Write-PrettyLine {
-  param(
-    [Parameter(Mandatory)][string]$Text,
-    [ConsoleColor]$Color = [ConsoleColor]::Gray,
-    [switch]$NoNewline
-  )
-  if (Test-IsConsoleHost) {
-    Write-Host $Text -ForegroundColor $Color -NoNewline:$NoNewline
-  } else {
-    # For non-console hosts, fallback without color.
-    Write-Host $Text -NoNewline:$NoNewline
-  }
-}
 
 function Format-Bool {
   param($Value)
@@ -313,17 +376,6 @@ function Format-Bool {
   return 'False'
 }
 
-function Write-PrettyKeyValue {
-  param(
-    [Parameter(Mandatory)][string]$Key,
-    [Parameter(Mandatory)][string]$Value,
-    [ConsoleColor]$KeyColor = [ConsoleColor]::DarkGray,
-    [ConsoleColor]$ValueColor = [ConsoleColor]::Gray
-  )
-
-  Write-PrettyLine -Text ('{0,-32}: ' -f $Key) -Color $KeyColor -NoNewline
-  Write-PrettyLine -Text $Value -Color $ValueColor
-}
 
 function Write-PrettySettingChange {
   param(
@@ -334,7 +386,7 @@ function Write-PrettySettingChange {
   )
 
   if (-not $Supported) {
-    Write-PrettyKeyValue -Key $Label -Value 'n/a (not supported on this OS/build)' -ValueColor ([ConsoleColor]::DarkYellow)
+    Write-KeyValue -Key $Label -Value 'n/a (not supported on this OS/build)' -ValueColor 'Warning'
     return
   }
 
@@ -344,8 +396,8 @@ function Write-PrettySettingChange {
   $changed = ($b -ne $a)
   $color = if ($changed) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Gray }
 
-  Write-PrettyLine -Text ('{0,-32}: ' -f $Label) -Color ([ConsoleColor]::DarkGray) -NoNewline
-  Write-PrettyLine -Text ('{0} -> {1}' -f $b, $a) -Color $color
+  Write-ColorLine -Text ('{0,-32}: ' -f $Label) -Color ([ConsoleColor]::DarkGray) -NoNewline
+  Write-ColorLine -Text ('{0} -> {1}' -f $b, $a) -Color $color
 }
 
 function Write-ConsoleSummary {
@@ -357,20 +409,20 @@ function Write-ConsoleSummary {
 
   $statusColor = if ($Result.Changes.Status -eq 'OK') { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
 
-  Write-Host ''
-  Write-PrettyLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
-  Write-PrettyLine -Text 'SMB Encryption Enforcer (Summary)' -Color ([ConsoleColor]::Cyan)
-  Write-PrettyLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
+  Write-UiLine ''
+  Write-ColorLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
+  Write-ColorLine -Text 'SMB Encryption Enforcer (Summary)' -Color ([ConsoleColor]::Cyan)
+  Write-ColorLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
 
-  Write-PrettyKeyValue -Key 'Computer' -Value $Result.ComputerName -ValueColor ([ConsoleColor]::White)
-  Write-PrettyKeyValue -Key 'Mode' -Value $Result.Mode -ValueColor ([ConsoleColor]::White)
-  Write-PrettyKeyValue -Key 'WhatIf' -Value (Format-Bool $Result.WhatIf) -ValueColor ([ConsoleColor]::White)
-  Write-PrettyKeyValue -Key 'Force' -Value (Format-Bool $Result.Force) -ValueColor ([ConsoleColor]::White)
-  Write-PrettyKeyValue -Key 'JsonPath' -Value $Result.JsonPath -ValueColor ([ConsoleColor]::DarkGray)
+  Write-KeyValue -Key 'Computer' -Value $Result.ComputerName -ValueColor ([ConsoleColor]::White)
+  Write-KeyValue -Key 'Mode' -Value $Result.Mode -ValueColor ([ConsoleColor]::White)
+  Write-KeyValue -Key 'WhatIf' -Value (Format-Bool $Result.WhatIf) -ValueColor ([ConsoleColor]::White)
+  Write-KeyValue -Key 'Force' -Value (Format-Bool $Result.Force) -ValueColor ([ConsoleColor]::White)
+  Write-KeyValue -Key 'JsonPath' -Value $Result.JsonPath -ValueColor ([ConsoleColor]::DarkGray)
 
-  Write-Host ''
-  Write-PrettyLine -Text 'Server / Client' -Color ([ConsoleColor]::Cyan)
-  Write-PrettyLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
+  Write-UiLine ''
+  Write-ColorLine -Text 'Server / Client' -Color ([ConsoleColor]::Cyan)
+  Write-ColorLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
 
   Write-PrettySettingChange -Label 'Server EncryptData' `
     -Before $Result.ServerEncryptData_Before -After $Result.ServerEncryptData_After -Supported:$true
@@ -381,38 +433,40 @@ function Write-ConsoleSummary {
   Write-PrettySettingChange -Label 'Client RequireEncryption' `
     -Before $Result.ClientRequireEncryption_Before -After $Result.ClientRequireEncryption_After -Supported:$HasClientRequireEncryption
 
-  Write-Host ''
-  Write-PrettyLine -Text 'Shares' -Color ([ConsoleColor]::Cyan)
-  Write-PrettyLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
+  Write-UiLine ''
+  Write-ColorLine -Text 'Shares' -Color ([ConsoleColor]::Cyan)
+  Write-ColorLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
 
-  Write-PrettyKeyValue -Key 'Shares targeted' -Value ([string]$Result.Changes.ShareCountTargeted) -ValueColor ([ConsoleColor]::White)
+  Write-KeyValue -Key 'Shares targeted' -Value ([string]$Result.Changes.ShareCountTargeted) -ValueColor ([ConsoleColor]::White)
 
   if (@($Result.Changes.SharesChanged).Count -gt 0) {
-    Write-PrettyKeyValue -Key 'Shares changed' -Value (@($Result.Changes.SharesChanged) -join ', ') -ValueColor ([ConsoleColor]::Yellow)
+    Write-KeyValue -Key 'Shares changed' -Value (@($Result.Changes.SharesChanged) -join ', ') -ValueColor ([ConsoleColor]::Yellow)
   } else {
-    Write-PrettyKeyValue -Key 'Shares changed' -Value 'none' -ValueColor ([ConsoleColor]::Gray)
+    Write-KeyValue -Key 'Shares changed' -Value 'none' -ValueColor ([ConsoleColor]::Gray)
   }
 
-  Write-Host ''
-  Write-PrettyLine -Text 'Result' -Color ([ConsoleColor]::Cyan)
-  Write-PrettyLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
+  Write-UiLine ''
+  Write-ColorLine -Text 'Result' -Color ([ConsoleColor]::Cyan)
+  Write-ColorLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
 
-  Write-PrettyLine -Text ('Status: {0}' -f $Result.Changes.Status) -Color $statusColor
-  Write-PrettyKeyValue -Key 'Started' -Value ($Result.Started.ToString('yyyy-MM-dd HH:mm:ss')) -ValueColor ([ConsoleColor]::DarkGray)
-  Write-PrettyKeyValue -Key 'Finished' -Value ($Result.Finished.ToString('yyyy-MM-dd HH:mm:ss')) -ValueColor ([ConsoleColor]::DarkGray)
+  Write-ColorLine -Text ('Status: {0}' -f $Result.Changes.Status) -Color $statusColor
+  Write-KeyValue -Key 'Started' -Value ($Result.Started.ToString('yyyy-MM-dd HH:mm:ss')) -ValueColor ([ConsoleColor]::DarkGray)
+  Write-KeyValue -Key 'Finished' -Value ($Result.Finished.ToString('yyyy-MM-dd HH:mm:ss')) -ValueColor ([ConsoleColor]::DarkGray)
 
   $duration = New-TimeSpan -Start $Result.Started -End $Result.Finished
-  Write-PrettyKeyValue -Key 'Duration' -Value $duration.ToString() -ValueColor ([ConsoleColor]::DarkGray)
+  Write-KeyValue -Key 'Duration' -Value $duration.ToString() -ValueColor ([ConsoleColor]::DarkGray)
 
-  Write-PrettyLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
+  Write-ColorLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
 }
 
 # -------------------------
 # Apply JSON defaults (only when parameters not explicitly provided)
 # -------------------------
-$cfg = Load-JsonConfigOrDefault -Path $JsonPath
+$sanitized = Sanitize-Path -Path $JsonPath -MustExist
+$cfg = Load-JsonConfigOrDefault -Path $sanitized
 
 if (-not $PSBoundParameters.ContainsKey('Mode')) { $Mode = $cfg.Mode }
+if (-not $PSBoundParameters.ContainsKey('RemediationScope')) { $RemediationScope = $cfg.RemediationScope }
 if (-not $PSBoundParameters.ContainsKey('ShareName')) { $ShareName = @($cfg.ShareName) }
 
 if (-not $PSBoundParameters.ContainsKey('ApplyClientRequireEncryption') -and $cfg.ApplyClientRequireEncryption) {
@@ -428,9 +482,7 @@ if (-not $PSBoundParameters.ContainsKey('Force') -and $cfg.Force) {
 # -------------------------
 # Preconditions
 # -------------------------
-if (-not (Test-IsAdmin)) {
-  throw 'Administrator privileges required (run PowerShell elevated).'
-}
+Require-Admin
 
 Ensure-Cmdlet 'Get-SmbServerConfiguration'
 Ensure-Cmdlet 'Set-SmbServerConfiguration'
@@ -446,16 +498,30 @@ $clientCfgProbe = Get-SmbClientConfiguration
 $hasRejectUnencryptedAccess = ($serverCfgProbe.PSObject.Properties.Name -contains 'RejectUnencryptedAccess')
 $hasClientRequireEncryption = ($clientCfgProbe.PSObject.Properties.Name -contains 'RequireEncryption')
 
-if ($EnableRejectUnencryptedAccess -and -not $hasRejectUnencryptedAccess) {
-  throw 'RejectUnencryptedAccess is not available on this OS/build. Cannot enable it.'
-}
-if ($ApplyClientRequireEncryption -and -not $hasClientRequireEncryption) {
-  throw 'Client RequireEncryption is not available on this OS/build. Cannot enable it.'
-}
-
 # -------------------------
 # Main
 # -------------------------
+$script:Findings = New-FindingsList
+
+if ($EnableRejectUnencryptedAccess -and -not $hasRejectUnencryptedAccess) {
+  $msg = 'RejectUnencryptedAccess is not available on this OS/build. Cannot enable it.'
+  Write-Warning $msg
+  Add-Finding -FindingList $script:Findings -Code 'SMB-UnsupportedFeature' -Severity 'Critical' -Message $msg
+  $v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings @($script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit 1
+}
+if ($ApplyClientRequireEncryption -and -not $hasClientRequireEncryption) {
+  $msg = 'Client RequireEncryption is not available on this OS/build. Cannot enable it.'
+  Write-Warning $msg
+  Add-Finding -FindingList $script:Findings -Code 'SMB-UnsupportedFeature' -Severity 'Critical' -Message $msg
+  $v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings @($script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit 1
+}
+
 $start = Get-Date
 
 $serverCfgBefore = Get-SmbServerConfiguration
@@ -475,59 +541,72 @@ try {
 
   switch ($Mode) {
 
-    'AuditOnly' {
-      # Intentionally no changes.
-    }
-
-    'ServerGlobal' {
-
-      $changes.ServerEncryptDataChanged =
-        Set-IfDifferent -Current ([bool](Get-Prop $serverCfgBefore 'EncryptData')) -Desired $true `
-          -Target $env:COMPUTERNAME `
-          -Action 'Set-SmbServerConfiguration EncryptData=True' `
-          -Setter { Invoke-SetSmbServerConfiguration @{ EncryptData = $true } }
-
-      if ($EnableRejectUnencryptedAccess) {
-        $changes.ServerRejectUnencryptedAccessChanged =
-          Set-IfDifferent -Current ([bool](Get-Prop $serverCfgBefore 'RejectUnencryptedAccess')) -Desired $true `
-            -Target $env:COMPUTERNAME `
-            -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
-            -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } }
-        # Microsoft documents RejectUnencryptedAccess behavior/parameter. [web:24]
+    'Audit' {
+      if (-not $serverCfgBefore.EncryptData) {
+        Add-Finding -Code 'SMB-Encryption-Disabled' -Severity 'Medium' -Message 'Server-wide SMB encryption is disabled.'
       }
-
+      if ($hasRejectUnencryptedAccess -and -not $serverCfgBefore.RejectUnencryptedAccess) {
+        Add-Finding -Code 'SMB-RejectUnencrypted-Disabled' -Severity 'Low' -Message 'SMB server RejectUnencryptedAccess is disabled.'
+      }
       foreach ($s in $sharesBefore) {
-        $did = Set-IfDifferent -Current ([bool](Get-Prop $s 'EncryptData')) -Desired $true `
-          -Target $s.Name `
-          -Action ('Set-SmbShare EncryptData=True ({0})' -f $s.Name) `
-          -Setter { Invoke-SetSmbShare @{ Name = $s.Name; EncryptData = $true } }
-
-        if ($did) { $null = $changes.SharesChanged.Add($s.Name) }
+        if (-not $s.EncryptData) {
+          Add-Finding -Code 'SMB-Share-NotEncrypted' -Severity 'Low' -Message "Share '$($s.Name)' encryption is disabled." -Extra @{ Share = $s.Name }
+        }
       }
     }
 
-    'ShareOnly' {
+    'Remediate' {
+      switch ($RemediationScope) {
+        'ServerGlobal' {
+          $changes.ServerEncryptDataChanged =
+            Set-IfDifferent -Current ([bool](Get-Prop $serverCfgBefore 'EncryptData')) -Desired $true `
+              -Target $env:COMPUTERNAME `
+              -Action 'Set-SmbServerConfiguration EncryptData=True' `
+              -Setter { Invoke-SetSmbServerConfiguration @{ EncryptData = $true } }
 
-      if (-not $ShareName -or $ShareName.Count -eq 0) {
-        throw 'Mode=ShareOnly requires at least one -ShareName.'
-      }
+          if ($EnableRejectUnencryptedAccess) {
+            $changes.ServerRejectUnencryptedAccessChanged =
+              Set-IfDifferent -Current ([bool](Get-Prop $serverCfgBefore 'RejectUnencryptedAccess')) -Desired $true `
+                -Target $env:COMPUTERNAME `
+                -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
+                -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } }
+            # Microsoft documents RejectUnencryptedAccess behavior/parameter. [web:24]
+          }
 
-      foreach ($s in $sharesBefore) {
-        $did = Set-IfDifferent -Current ([bool](Get-Prop $s 'EncryptData')) -Desired $true `
-          -Target $s.Name `
-          -Action ('Set-SmbShare EncryptData=True ({0})' -f $s.Name) `
-          -Setter { Invoke-SetSmbShare @{ Name = $s.Name; EncryptData = $true } }
+          foreach ($s in $sharesBefore) {
+            $did = Set-IfDifferent -Current ([bool](Get-Prop $s 'EncryptData')) -Desired $true `
+              -Target $s.Name `
+              -Action ('Set-SmbShare EncryptData=True ({0})' -f $s.Name) `
+              -Setter { Invoke-SetSmbShare @{ Name = $s.Name; EncryptData = $true } }
 
-        if ($did) { $null = $changes.SharesChanged.Add($s.Name) }
-      }
+            if ($did) { $null = $changes.SharesChanged.Add($s.Name) }
+          }
+        }
 
-      if ($EnableRejectUnencryptedAccess) {
-        $serverNow = Get-SmbServerConfiguration
-        $changes.ServerRejectUnencryptedAccessChanged =
-          Set-IfDifferent -Current ([bool](Get-Prop $serverNow 'RejectUnencryptedAccess')) -Desired $true `
-            -Target $env:COMPUTERNAME `
-            -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
-            -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } }
+        'ShareOnly' {
+
+          if (-not $ShareName -or $ShareName.Count -eq 0) {
+            throw 'Mode Remediate with RemediationScope=ShareOnly requires at least one -ShareName.'
+          }
+
+          foreach ($s in $sharesBefore) {
+            $did = Set-IfDifferent -Current ([bool](Get-Prop $s 'EncryptData')) -Desired $true `
+              -Target $s.Name `
+              -Action ('Set-SmbShare EncryptData=True ({0})' -f $s.Name) `
+              -Setter { Invoke-SetSmbShare @{ Name = $s.Name; EncryptData = $true } }
+
+            if ($did) { $null = $changes.SharesChanged.Add($s.Name) }
+          }
+
+          if ($EnableRejectUnencryptedAccess) {
+            $serverNow = Get-SmbServerConfiguration
+            $changes.ServerRejectUnencryptedAccessChanged =
+              Set-IfDifferent -Current ([bool](Get-Prop $serverNow 'RejectUnencryptedAccess')) -Desired $true `
+                -Target $env:COMPUTERNAME `
+                -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
+                -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } }
+          }
+        }
       }
     }
   }
@@ -543,7 +622,7 @@ try {
 
 } catch {
   $changes.Status = 'FAILED'
-  throw
+  Add-Finding -FindingList $script:Findings -Code 'SMB-RemediationFailed' -Severity 'Critical' -Message ("SMB remediation failed: {0}" -f $_.Exception.Message)
 } finally {
 
   $serverCfgAfter = Get-SmbServerConfiguration
@@ -553,6 +632,7 @@ try {
   $result = [pscustomobject]@{
     ComputerName                          = $env:COMPUTERNAME
     Mode                                  = $Mode
+    RemediationScope                      = $RemediationScope
     ShareName                             = if ($ShareName) { @($ShareName) } else { @() }
 
     ApplyClientRequireEncryption          = [bool]$ApplyClientRequireEncryption
@@ -589,6 +669,11 @@ try {
   # Console-only output (no pipeline pollution)
   Write-ConsoleSummary -Result $result -HasRejectUnencryptedAccess $hasRejectUnencryptedAccess -HasClientRequireEncryption $hasClientRequireEncryption
 
-  # Pipeline output: structured object only
-#  $result
 }
+
+# V2 output contract
+$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

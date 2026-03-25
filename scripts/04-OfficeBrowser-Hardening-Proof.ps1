@@ -1,3 +1,5 @@
+# TODO: This script exceeds 800 lines (1055 lines). Decompose into smaller modules
+# (e.g., separate Office, Edge, and Firefox checks into dedicated files).
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -47,6 +49,25 @@
 .PARAMETER Strict
   Switch. When specified, the script returns exit code 1 whenever drift is detected,
   even if remediation was enabled and some items were successfully changed.
+
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
   System.Management.Automation.PSCustomObject
@@ -116,23 +137,57 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$CatalogPath,
-  [switch]$Remediate,
   [switch]$Strict,
-  [string]$ConfigPath = "PATH/TO/CONFIG.json"
+  [string]$ConfigPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
-$InformationPreference = 'Continue'   # Information stream shown by default
+if (-not $Quiet) { $InformationPreference = 'Continue' }   # Information stream shown by default
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 $EventSource      = 'OfficeBrowser-Hardening'
 $EventLog         = 'Application'
@@ -183,27 +238,10 @@ $DefaultCatalogJson = @"
 # Utilities
 # -----------------------------
 
-
-function Is-Admin {
-  [CmdletBinding()]
-  param()
-  try {
-    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-    $p  = New-Object System.Security.Principal.WindowsPrincipal($id)
-    return $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-  } catch {
-    return $false
-  }
-}
+# Test-IsAdmin imported from lib/Common.psm1
 
 
-function Ensure-Key {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -Path $Path -Force | Out-Null
-  }
-}
+# Ensure-Key replaced by Ensure-RegistryKey from lib/Registry.psm1
 
 function Get-TextOrNull {
   [CmdletBinding()]
@@ -251,20 +289,7 @@ function Get-ArrayStrings {
   return @($s2)
 }
 
-function Save-Json {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][object]$Obj,
-    [Parameter(Mandatory)][string]$Path
-  )
-
-  $dir = Split-Path -Parent $Path
-  Ensure-Dir -Path $dir
-
-  $json = $Obj | ConvertTo-Json -Depth 20
-  $utf8NoBOM = New-Object System.Text.UTF8Encoding($false)  # UTF-8 without BOM
-  [System.IO.File]::WriteAllText($Path, $json, $utf8NoBOM)
-}
+# Save-Json: using canonical Save-Json from lib/Serialization.psm1
 
 
 function Convert-RegValue {
@@ -323,7 +348,8 @@ function Set-RegValueProof {
     [switch]$Remediate
   )
 
-  Ensure-Key -Path $Path
+  # Only ensure key exists when remediating (§2/§17)
+  if ($Remediate) { Ensure-RegistryKey -Path $Path }
 
   $expected = Convert-RegValue -Type $Type -Value $Value
   $cur      = Get-RegValue -Path $Path -Name $Name
@@ -443,7 +469,7 @@ function Load-Catalog {
   if ($p) {
     if (Test-Path -LiteralPath $p) {
       try {
-        $cat = Get-Content -Raw -Path $p | ConvertFrom-Json -ErrorAction Stop
+        $cat = Get-Content -Raw -Path $p -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
         $loadedFrom = 'CatalogPath'
       } catch {
         $notes.Add('CatalogPath JSON parse failed; using embedded defaults.') | Out-Null
@@ -458,7 +484,7 @@ function Load-Catalog {
     if ($cp) {
       if (Test-Path -LiteralPath $cp) {
         try {
-          $cfg = Get-Content -Raw -Path $cp | ConvertFrom-Json -ErrorAction Stop
+          $cfg = Get-Content -Raw -Path $cp -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
           $cfgCat = $null
 
           if ($cfg -and $cfg.PSObject.Properties['OfficeBrowser']) {
@@ -471,7 +497,7 @@ function Load-Catalog {
           if ($cfgCat) {
             if (Test-Path -LiteralPath $cfgCat) {
               try {
-                $cat = Get-Content -Raw -Path $cfgCat | ConvertFrom-Json -ErrorAction Stop
+                $cat = Get-Content -Raw -Path $cfgCat -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
                 $loadedFrom = 'ConfigPath->OfficeBrowser.CatalogPath'
               } catch {
                 $notes.Add('Config-referenced catalog JSON parse failed; using embedded defaults.') | Out-Null
@@ -639,18 +665,24 @@ function Ensure-Edge {
   $desiredUrls = Get-ArrayStrings $EdgeCfg.StartupURLs
 
   if ($Remediate) {
-    Ensure-Key -Path $urlsKey
+    Ensure-RegistryKey -Path $urlsKey
 
     try {
       $p = Get-ItemProperty -Path $urlsKey -ErrorAction SilentlyContinue
       if ($p) {
-        foreach($prop in $p.PSObject.Properties) {
+        foreach ($prop in $p.PSObject.Properties) {
           if ($prop.Name -match '^\d+$') {
-            Remove-ItemProperty -Path $urlsKey -Name $prop.Name -ErrorAction SilentlyContinue
+            try {
+              Remove-ItemProperty -Path $urlsKey -Name $prop.Name -ErrorAction Stop
+            } catch {
+              Write-Warning "Could not remove URL property $($prop.Name): $($_.Exception.Message)"
+            }
           }
         }
       }
-    } catch {}
+    } catch {
+      Write-Warning "Could not clear Edge startup URLs for remediation: $($_.Exception.Message)"
+    }
 
     $i = 1
     foreach($u in $desiredUrls) {
@@ -683,7 +715,7 @@ function Ensure-Edge {
           if ($prop.Name -match '^\d+$') { $current[$prop.Name] = [string]$prop.Value }
         }
       }
-    } catch {}
+    } catch { <# best-effort: registry key may not exist #> }
 
     $want = @{}
     $i = 1
@@ -794,7 +826,7 @@ function Ensure-Firefox {
 
   $existingRaw = $null
   if (Test-Path -LiteralPath $polPath) {
-    try { $existingRaw = Get-Content -Raw -Path $polPath -ErrorAction Stop } catch { $existingRaw = $null }
+    try { $existingRaw = Get-Content -Raw -Path $polPath -Encoding UTF8 -ErrorAction Stop } catch { $existingRaw = $null }
   }
 
   $same = $false
@@ -812,7 +844,7 @@ function Ensure-Firefox {
       $changed = $false
       $msg     = $null
       try {
-        Ensure-Dir -Path $dist
+        Ensure-Directory -Path $dist
         $utf8NoBOM = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($polPath, $newJson, $utf8NoBOM)
         $changed = $true
@@ -866,43 +898,43 @@ function Write-ConsoleSummary {
     New-ResultSummary -Section 'Firefox' -Items $firefoxItems
   )
 
-  Write-Host ""
-  Write-Host "==================================================" -ForegroundColor DarkCyan
-  Write-Host " Office / Browser Hardening Summary" -ForegroundColor Cyan
-  Write-Host "==================================================" -ForegroundColor DarkCyan
-  Write-Host ("Catalog source : {0}" -f $CatalogInfo.LoadedFrom) -ForegroundColor Gray
-  Write-Host ("Mode           : Remediate={0}  Strict={1}  IsAdmin={2}" -f $Remediate, $Strict, $IsAdmin) -ForegroundColor Gray
-  Write-Host ""
+  Write-UiLine ""
+  Write-UiLine "==================================================" -Style 'Header'
+  Write-UiLine " Office / Browser Hardening Summary" -Style 'Accent'
+  Write-UiLine "==================================================" -Style 'Header'
+  Write-UiLine ("Catalog source : {0}" -f $CatalogInfo.LoadedFrom) -ForegroundColor Gray
+  Write-UiLine ("Mode           : Remediate={0}  Strict={1}  IsAdmin={2}" -f $Remediate, $Strict, $IsAdmin) -ForegroundColor Gray
+  Write-UiLine ""
 
   foreach($row in $sum) {
     $statusText  = if ($row.Ok) { "OK" } else { "DRIFT" }
     $statusColor = if ($row.Ok) { 'Green' } else { 'Red' }
 
-    Write-Host ("[{0}]" -f $row.Section) -ForegroundColor White -NoNewline
-    Write-Host (" {0,-5} " -f $statusText) -ForegroundColor $statusColor -NoNewline
-    Write-Host ("Total={0}  NonCompliant={1}  Changed={2}" -f $row.Total, $row.NonCompliant, $row.Changed) -ForegroundColor Gray
+    Write-UiLine ("[{0}]" -f $row.Section) -ForegroundColor White -NoNewline
+    Write-UiLine (" {0,-5} " -f $statusText) -ForegroundColor $statusColor -NoNewline
+    Write-UiLine ("Total={0}  NonCompliant={1}  Changed={2}" -f $row.Total, $row.NonCompliant, $row.Changed) -ForegroundColor Gray
   }
 
   $driftSample = @($safe | Where-Object { (Bool-Prop $_ 'Compliant' $true) -eq $false } | Select-Object -First 10)
   if ($driftSample.Count -gt 0) {
-    Write-Host ""
-    Write-Host "Drift sample (first 10 items)" -ForegroundColor Yellow
-    Write-Host "---------------------------------------------" -ForegroundColor DarkYellow
+    Write-UiLine ""
+    Write-UiLine "Drift sample (first 10 items)" -ForegroundColor Yellow
+    Write-UiLine "---------------------------------------------" -Style 'Warning'
     foreach($d in $driftSample) {
-      Write-Host ("- [{0}/{1}] {2} :: {3}\{4} (Expected={5} Actual={6})" -f $d.Product, $d.Area, $d.Policy, $d.Target, $d.Name, $d.Expected, $d.Actual) -ForegroundColor Yellow
+      Write-UiLine ("- [{0}/{1}] {2} :: {3}\{4} (Expected={5} Actual={6})" -f $d.Product, $d.Area, $d.Policy, $d.Target, $d.Name, $d.Expected, $d.Actual) -ForegroundColor Yellow
     }
   }
 
   if ($Notes -and $Notes.Count -gt 0) {
-    Write-Host ""
-    Write-Host "Notes" -ForegroundColor White
-    Write-Host "-----" -ForegroundColor White
-    foreach($n in $Notes) { Write-Host ("- " + $n) -ForegroundColor DarkGray }
+    Write-UiLine ""
+    Write-UiLine "Notes" -ForegroundColor White
+    Write-UiLine "-----" -ForegroundColor White
+    foreach($n in $Notes) { Write-UiLine ("- " + $n) -ForegroundColor DarkGray }
   }
 
-  Write-Host ""
-  Write-Host ("Proof JSON written to: {0}" -f $ProofPath) -ForegroundColor Cyan
-  Write-Host ""
+  Write-UiLine ""
+  Write-UiLine ("Proof JSON written to: {0}" -f $ProofPath) -ForegroundColor Cyan
+  Write-UiLine ""
 
   $total        = $safe.Count
   $nonCompliant = @($safe | Where-Object { (Bool-Prop $_ 'Compliant' $true) -eq $false }).Count
@@ -912,10 +944,10 @@ function Write-ConsoleSummary {
   $finalColor = if ($overallOk -and -not $Strict) { 'Green' } else { 'Red' }
   $finalText  = if ($overallOk -and -not $Strict) { 'HARDENING OK' } else { 'DRIFT DETECTED' }
 
-  Write-Host "==================================================" -ForegroundColor DarkCyan
-  Write-Host (" Final result : {0}" -f $finalText) -ForegroundColor $finalColor
-  Write-Host (" Items        : Total={0}  NonCompliant={1}  Changed={2}" -f $total, $nonCompliant, $changed) -ForegroundColor Gray
-  Write-Host "==================================================" -ForegroundColor DarkCyan
+  Write-UiLine "==================================================" -Style 'Header'
+  Write-UiLine (" Final result : {0}" -f $finalText) -ForegroundColor $finalColor
+  Write-UiLine (" Items        : Total={0}  NonCompliant={1}  Changed={2}" -f $total, $nonCompliant, $changed) -ForegroundColor Gray
+  Write-UiLine "==================================================" -Style 'Header'
 
   Write-Information ("Summary: FinalResult={0}; Total={1}; NonCompliant={2}; Changed={3}" -f $finalText, $total, $nonCompliant, $changed)
 }
@@ -926,7 +958,7 @@ function Write-ConsoleSummary {
 
 Ensure-EventSource -Source $EventSource -Log $EventLog
 
-$isAdmin     = Is-Admin
+$isAdmin     = Test-IsAdmin
 $globalNotes = New-Object System.Collections.Generic.List[string]
 $proofPath   = $DefaultProofPath
 $overallOk   = $true
@@ -977,7 +1009,7 @@ $proof = [ordered]@{
 }
 
 try {
-  Save-Json -Obj $proof -Path $proofPath
+  Save-Json -InputObject $proof -Path $proofPath -NoBom
 } catch {
   $overallOk = $false
   $globalNotes.Add("Failed to write proof JSON: $($_.Exception.Message)") | Out-Null
@@ -1001,6 +1033,25 @@ try {
 
 Write-ConsoleSummary -AllItems @($allSafe) -CatalogInfo $catalogInfo -ProofPath $proofPath -IsAdmin $isAdmin -Remediate ([bool]$Remediate) -Strict ([bool]$Strict) -Notes @($globalNotes)
 
-# $allSafe
+# C10: populate canonical findings from non-compliant items
+foreach ($nc in @($nonCompliant)) {
+  $prod = if ($nc.PSObject.Properties['Product']) { $nc.Product } else { 'Unknown' }
+  $area = if ($nc.PSObject.Properties['Area']) { $nc.Area } else { '' }
+  $name = if ($nc.PSObject.Properties['Name']) { $nc.Name } else { '' }
+  $msg  = if ($nc.PSObject.Properties['Message']) { $nc.Message } else { ("{0}/{1}/{2} not compliant" -f $prod, $area, $name) }
+  $code = "OB-{0}" -f ($prod -replace '\s','')
+  Add-Finding -FindingList $script:Findings -Code $code -Severity 'Medium' -Message $msg `
+    -Extra @{ Product = $prod; Area = $area; Name = $name }
+}
+
+# V2 output contract
+$resultToken = if (-not $overallOk) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; OverallOk = $overallOk; Timestamp = Get-Date }) -Metadata @{ Notes = @($globalNotes) }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
 
 if (-not $overallOk -or $Strict) { exit 1 } else { exit 0 }
+
+
+
+

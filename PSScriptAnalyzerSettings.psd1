@@ -4,6 +4,9 @@
     # Many scripts intentionally use console summaries; exclude this rule repo-wide.
     'PSAvoidUsingWriteHost',
     # Repo intentionally favors descriptive helper names over approved verbs.
+    # Non-standard verb mappings: Ensure-* -> Assert-*/Initialize-*, Has-Property -> Test-HasProperty,
+    # Sanitize-Path -> ConvertTo-SafePath, Schedule-AutoRollback -> Register-AutoRollback.
+    # These are kept for API stability and readability in operational scripts.
     'PSUseApprovedVerbs',
     # Repo uses plural helper names for collections.
     'PSUseSingularNouns',

@@ -27,7 +27,7 @@
 
   Output conventions:
   - Pipeline output is always structured objects only (no formatted strings).
-  - Console output uses Write-Host / Write-Information only and is suppressed with -NoConsole.
+  - Console output uses Write-UiLine / Write-Information only and is suppressed with -NoConsole.
 
 .PARAMETER Remediate
   Enables remediation actions.
@@ -75,6 +75,28 @@
   Changes pipeline output mode:
   - Not set (default): outputs one result object containing a Records array.
   - Set:              outputs each record in the Records array as a separate pipeline object.
+
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
   Default output (single object):
@@ -128,11 +150,10 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
-  [switch]$Remediate,
   [bool]$RequirePrivateSource = $true,
-  [string]$ConfigPath = "PATH/TO/JSON",
+  [string]$ConfigPath,
 
   [string]$PrivateSourceName = $null,
   [string]$PrivateSourceUrl  = $null,
@@ -142,18 +163,51 @@ param(
 
   [switch]$NoConsole,
   [switch]$PassThruRecords
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 $script:NoConsole = [bool]$NoConsole
 $script:PassThruRecords = [bool]$PassThruRecords
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # ---------------- Defaults ----------------
@@ -171,18 +225,7 @@ $EventLogName = "Application"
 # ---------------- Console Helpers ----------------
 
 
-function Get-StatusColor {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Status)
-
-  switch ($Status) {
-    'OK'      { 'Green' }
-    'Warning' { 'Yellow' }
-    'Error'   { 'Red' }
-    'Skipped' { 'Gray' }
-    default   { 'Gray' }
-  }
-}
+# Get-StatusColor imported from lib/Console.psm1
 
 # ---------------- Event Log Helpers ----------------
 
@@ -249,18 +292,20 @@ function Get-Config {
   param([string]$Path)
 
   try {
-    if ($Path -and (Test-Path -LiteralPath $Path)) {
-      return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+    $sanitized = Sanitize-Path -Path $Path -MustExist
+    if ($sanitized) {
+      return Get-Content -Raw -LiteralPath $sanitized -Encoding UTF8 | ConvertFrom-Json
     }
 
     $here = Split-Path -Parent $MyInvocation.MyCommand.Path
     if ($here) {
       $alt = Join-Path (Split-Path -Parent $here) "config\config.json"
-      if (Test-Path -LiteralPath $alt) {
-        return Get-Content -Raw -LiteralPath $alt | ConvertFrom-Json
+      $sanitizedAlt = Sanitize-Path -Path $alt -MustExist
+      if ($sanitizedAlt) {
+        return Get-Content -Raw -LiteralPath $sanitizedAlt -Encoding UTF8 | ConvertFrom-Json
       }
     }
-  } catch { }
+  } catch { <# best-effort: fallback config file may not exist or be invalid JSON #> }
 
   return $null
 }
@@ -293,7 +338,7 @@ function Resolve-WingetPath {
   $cmd = Get-Command winget -ErrorAction SilentlyContinue
   if ($cmd -and $cmd.Source -and (Test-Path -LiteralPath $cmd.Source)) { return $cmd.Source }
 
-  $wa = 'C:\Program Files\WindowsApps'
+  $wa = Join-Path $env:ProgramFiles 'WindowsApps'
   if (Test-Path -LiteralPath $wa) {
     try {
       $cand = Get-ChildItem -LiteralPath $wa -Directory -Filter 'Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe' -ErrorAction Stop |
@@ -303,7 +348,7 @@ function Resolve-WingetPath {
         $p = Join-Path $cand.FullName 'winget.exe'
         if (Test-Path -LiteralPath $p) { return $p }
       }
-    } catch { }
+    } catch { <# best-effort: WindowsApps directory may not be accessible #> }
   }
 
   return $null
@@ -311,8 +356,10 @@ function Resolve-WingetPath {
 
 function ConvertTo-QuotedArg {
   param([Parameter(Mandatory)][string]$Value)
-  if ($Value -match '[\s"&]') { return '"' + ($Value -replace '"','\"') + '"' }
-  return $Value
+  # Basic robust quoting for cmd.exe/shell characters
+  # We escape existing quotes and wrap the whole thing.
+  $escaped = $Value -replace '"', '\"'
+  return '"' + $escaped + '"'
 }
 
 function Invoke-Winget {
@@ -336,7 +383,7 @@ function Invoke-Winget {
   $null = $p.Start()
 
   if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-    try { $p.Kill() } catch {}
+    try { $p.Kill() } catch { <# best-effort: process may have already exited #> }
     return @{
       ExitCode = 408
       StdOut   = ''
@@ -373,7 +420,7 @@ function Get-WingetErrorText {
     $res = Invoke-Winget -WingetPath $WingetPath -WingetArgs @('error','--input',"$ExitCode") -TimeoutSec 30
     $t = ($res.StdOut + "`n" + $res.StdErr).Trim()
     if ($t) { return $t }
-  } catch { }
+  } catch { <# best-effort: winget error diagnostics may not be available #> }
 
   return $null
 }
@@ -420,7 +467,7 @@ function Test-WingetSupportsAcceptSourceAgreements {
     $h = Invoke-Winget -WingetPath $WingetPath -WingetArgs @('source','update','--help') -TimeoutSec 30
     $t = ($h.StdOut + "`n" + $h.StdErr)
     if ($t -match '--accept-source-agreements') { return $true }
-  } catch { }
+  } catch { <# best-effort: source update help check #> }
 
   return $false
 }
@@ -457,7 +504,7 @@ function Test-VcRedistInstalled {
         $p = Get-ItemProperty -Path $key -ErrorAction Stop
         $installed = ($p.Installed -eq 1) -or ($p.PSObject.Properties['Version'] -and $p.Version)
         if ($installed) { return $true, ($p.Version) }
-      } catch { }
+      } catch { <# best-effort: VC++ registry key may not exist #> }
     }
   }
 
@@ -546,7 +593,7 @@ function Ensure-PrivateSource {
 }
 
 # ---------------- Main ----------------
-
+$script:Findings = New-FindingsList
 $records = New-Object System.Collections.Generic.List[object]
 
 # Settings with sane defaults when config missing:
@@ -567,7 +614,7 @@ $supportAcceptForSourceUpdate = $false
 
 try {
   # Do not fail the run if event source registration isn't possible (commonly needs admin). [web:2]
-  try { Ensure-EventSource -Source $EventSource -LogName $EventLogName } catch { }
+  try { Ensure-EventSource -Source $EventSource -LogName $EventLogName } catch { <# best-effort: event source registration commonly needs admin #> }
 
   $cfg = Get-Config -Path $ConfigPath
   if ($cfg) {
@@ -613,6 +660,7 @@ try {
       Add-Record -List $records -Record (New-CheckRecord -Name 'WinGet' -Status 'OK' -Message 'OK.' -Data @{
         Version = $v.Raw; Path = $wg
       })
+      Add-Finding -Code 'Winget-Found' -Severity 'Low' -Message "WinGet version $($v.Raw) located at $wg"
     }
 
     $supportAcceptForSourceUpdate = Test-WingetSupportsAcceptSourceAgreements -WingetPath $wg
@@ -732,24 +780,32 @@ try {
   $statusColor = 'Red'
   if ($overallOk) { $statusText = 'OK'; $statusColor = 'Green' }
 
-  Write-ConsoleKV -Key 'Status' -Value $statusText -ValueColor $statusColor
-  Write-ConsoleKV -Key 'Remediate' -Value ($(if ($Remediate) { 'Yes' } else { 'No' })) -ValueColor ($(if ($Remediate) { 'Yellow' } else { 'Gray' }))
-  Write-ConsoleKV -Key 'RequirePrivateSource' -Value ([string]$RequirePrivateSource) -ValueColor ($(if ($RequirePrivateSource) { 'Yellow' } else { 'Gray' }))
-  Write-ConsoleKV -Key 'ConfigPath' -Value 'PATH/TO/JSON' -ValueColor 'Gray'
-  if ($wingetVersionRaw) { Write-ConsoleKV -Key 'WinGetVersion' -Value $wingetVersionRaw -ValueColor 'White' }
+  Write-KeyValue -Key 'Status' -Value $statusText -ValueColor $statusColor
+  Write-KeyValue -Key 'Remediate' -Value ($(if ($Remediate) { 'Yes' } else { 'No' })) -ValueColor ($(if ($Remediate) { 'Yellow' } else { 'Gray' }))
+  Write-KeyValue -Key 'RequirePrivateSource' -Value ([string]$RequirePrivateSource) -ValueColor ($(if ($RequirePrivateSource) { 'Yellow' } else { 'Gray' }))
+  Write-KeyValue -Key 'ConfigPath' -Value 'PATH/TO/JSON' -ValueColor 'Gray'
+  if ($wingetVersionRaw) { Write-KeyValue -Key 'WinGetVersion' -Value $wingetVersionRaw -ValueColor 'White' }
 
   if (-not $script:NoConsole) {
-    Write-Host ""
-    Write-Host "Checks:" -ForegroundColor Cyan
+    Write-UiLine ""
+    Write-UiLine "Checks:" -ForegroundColor Cyan
     foreach ($r in $records) {
       $c = Get-StatusColor -Status $r.Status
       $msg = Get-TextOrEmpty $r.Message
-      Write-Host ("- {0,-32} {1,-8} {2}" -f $r.Name, $r.Status, $msg) -ForegroundColor $c
+      Write-UiLine ("- {0,-32} {1,-8} {2}" -f $r.Name, $r.Status, $msg) -ForegroundColor $c
     }
   }
 
-  # ---- Pipeline output (structured) ----
-  if ($script:PassThruRecords) { $records.ToArray() }
+  # V2 output contract
+  $resultToken = if (-not $overallOk) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  $v2Summary = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; OverallOk = $overallOk; Timestamp = Get-Date }
+  $v2Result = New-V2ResultObject -ScriptName '08-WinGet-SelfHeal.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $v2Summary -Metadata @{ Records = @($records) }
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
 
   if ($overallOk) { exit 0 } else { exit 1 }
 }
+
+
+
+

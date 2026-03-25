@@ -84,7 +84,7 @@ Remediation is only attempted if the remediation script passes policy checks (ex
 
 .PARAMETER RemediationScriptPath
 Path to the remediation script that is called when remediation is triggered.
-The script is started in a new PowerShell process with an additional parameter: -Remediate.
+The script is started in a new PowerShell process with additional parameters: -Mode Remediate.
 
 .PARAMETER RequireSignedRemediationScript
 If set, remediation will only be executed if RemediationScriptPath has a valid Authenticode signature.
@@ -106,6 +106,28 @@ This requires elevated permissions. If the channel cannot be enabled, the script
 Pipeline mode:
 - If set, the script outputs a single structured result object to the pipeline.
 - If not set, the script prints a formatted console summary and does not emit pipeline output.
+
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
 When -PassThru is specified:
@@ -169,13 +191,13 @@ Behavioral details and gotchas:
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [ValidateRange(1,168)]
   [int]$WindowHours = 24,
 
-  [string]$CatalogPath = "PATH/TO/JSON/drift-catalog.json",
-  [string]$StatePath   = "PATH/TO/JSON/drift_state.json",
+  [string]$CatalogPath,
+  [string]$StatePath,
 
   [ValidateRange(0.01,1.0)]
   [double]$Alpha = 0.3,
@@ -195,7 +217,7 @@ param(
 
   [switch]$TriggerReapply,
 
-  [string]$RemediationScriptPath = "PATH/TO/SCRIPTS/C2-Sysmon-Config-Updater.ps1",
+  [string]$RemediationScriptPath,
 
   [switch]$RequireSignedRemediationScript,
 
@@ -206,16 +228,54 @@ param(
   [switch]$AttemptEnableChannel,
 
   [switch]$PassThru
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
 
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+$ErrorActionPreference = 'Stop'
 # -----------------------------
 # Constants (ASCII only)
 # -----------------------------
@@ -230,11 +290,6 @@ $script:MaxEventMessageLength  = 30000
 # Console helpers (no pipeline output)
 # -----------------------------
 
-function Write-ConsoleSeparator {
-  param([string]$Char = '=', [int]$Width = 78, [string]$Color = 'Cyan')
-  if ($Width -lt 10) { $Width = 10 }
-  Write-Host ($Char * $Width) -ForegroundColor $Color
-}
 
 function Get-StatusColor {
   param([string]$Status)
@@ -287,31 +342,9 @@ function ConvertTo-Hashtable {
 # Utility: File IO (safe)
 # -----------------------------
 
-function Read-JsonFile {
-  param([Parameter(Mandatory)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+# Read-JsonFile replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
 
-  try {
-    return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop)
-  } catch {
-    return $null
-  }
-}
-
-function Write-JsonFile {
-  param(
-    [Parameter(Mandatory)][string]$Path,
-    [Parameter(Mandatory)][object]$Object
-  )
-
-  try {
-    Ensure-Directory -Path $Path
-    ($Object | ConvertTo-Json -Depth 10) | Out-File -LiteralPath $Path -Encoding UTF8 -Force
-    return $true
-  } catch {
-    return $false
-  }
-}
+# Write-JsonFile: replaced by canonical Save-Json from lib/Serialization.psm1
 
 # -----------------------------
 # Catalog defaults
@@ -353,7 +386,7 @@ function Load-CatalogOrDefault {
     [pscustomobject]$DefaultCatalog
   )
 
-  $cat = Read-JsonFile -Path $Path
+  $cat = Read-JsonFileSafe -Path $Path
   if ($null -eq $cat) { return $DefaultCatalog }
 
   if ($null -eq $cat.Rules) {
@@ -387,7 +420,7 @@ function Write-AuditEvent {
     Write-EventLog -LogName $script:EventLogName -Source $script:EventSourceName -EventId $EventId -EntryType $Level -Message $msg -ErrorAction Stop
   } catch {
     # Console fallback, do not emit pipeline output.
-    Write-Host ("[{0}][{1}] {2}" -f $Level,$EventId,$msg)
+    Write-UiLine ("[{0}][{1}] {2}" -f $Level,$EventId,$msg)
   }
 }
 
@@ -406,7 +439,9 @@ function Get-SysmonChannelStatus {
   }
 
   try {
-    $xml = & wevtutil gl $script:SysmonLogName /f:xml 2>$null
+    # S9 fix: use Invoke-Wevtutil wrapper with array-based args instead of direct wevtutil call
+    $wevtResult = Invoke-Wevtutil -Arguments @('gl', $script:SysmonLogName, '/f:xml') -CaptureOutput
+    $xml = if ($wevtResult -and $wevtResult.Output) { $wevtResult.Output } else { $null }
     if (-not $xml) { return $info }
 
     $x = [xml]$xml
@@ -425,7 +460,7 @@ function Get-SysmonChannelStatus {
     try {
       $oldest = Get-WinEvent -LogName $script:SysmonLogName -MaxEvents 1 -Oldest -ErrorAction SilentlyContinue
       if ($oldest) { $info.OldestRecord = $oldest.TimeCreated }
-    } catch { }
+    } catch { <# best-effort: oldest event record may not be readable #> }
 
   } catch {
     $info.Error = $_.Exception.Message
@@ -441,11 +476,12 @@ function Enable-SysmonChannelIfRequested {
   if (-not $ChannelStatus.Exists) { return $ChannelStatus }
   if ($ChannelStatus.Enabled) { return $ChannelStatus }
 
-  if (-not (Test-IsAdministrator)) { return $ChannelStatus }
+  if (-not (Test-IsAdmin)) { return $ChannelStatus }
 
   try {
-    & wevtutil sl $script:SysmonLogName /e:true 2>$null | Out-Null
-  } catch { }
+    # S9 fix: use Invoke-Wevtutil wrapper with array-based args instead of direct wevtutil call
+    Invoke-Wevtutil -Arguments @('sl', $script:SysmonLogName, '/e:true') | Out-Null
+  } catch { <# best-effort: channel enable may fail without admin rights #> }
 
   return (Get-SysmonChannelStatus)
 }
@@ -500,6 +536,17 @@ function Test-RemediationScriptAllowed {
 function Invoke-RemediationScript {
   param([Parameter(Mandatory)][string]$ScriptPath)
 
+  # S17 fix: validate ScriptPath is a .ps1 file under the expected scripts directory
+  $scriptFileName = Split-Path -Leaf $ScriptPath
+  if (-not (Test-SafeScriptName -Name $scriptFileName)) {
+    throw "Invoke-RemediationScript: ScriptPath file name '$scriptFileName' failed safety validation."
+  }
+  $scriptRoot = Split-Path -Parent $PSScriptRoot  # repo root
+  $scriptsDir = Join-Path $scriptRoot 'scripts'
+  if ((Test-Path -LiteralPath $ScriptPath) -and -not (Test-PathUnderRoot -Path $ScriptPath -Root $scriptsDir)) {
+    throw "Invoke-RemediationScript: ScriptPath '$ScriptPath' is not under the expected scripts directory."
+  }
+
   $result = [pscustomobject]@{
     Attempted = $true
     Success = $false
@@ -509,12 +556,13 @@ function Invoke-RemediationScript {
   }
 
   try {
-    $bypass = ''
-    if ($AllowExecutionPolicyBypass) { $bypass = ' -ExecutionPolicy Bypass' }
+    $argList = @('-NoProfile')
+    if ($AllowExecutionPolicyBypass) {
+      $argList += @('-ExecutionPolicy', 'Bypass')
+    }
+    $argList += @('-File', $ScriptPath, '-Mode', 'Remediate')
 
-    $arg = "-NoProfile{0} -File `"{1}`" -Remediate" -f $bypass, $ScriptPath
-
-    $p = Start-Process -FilePath "powershell.exe" -ArgumentList $arg -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+    $p = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
     $result.ExitCode = $p.ExitCode
     $result.Success = ($p.ExitCode -eq 0)
   } catch {
@@ -634,7 +682,7 @@ function Show-ConsoleSummary {
   if ($Result.Rules -and $Result.Rules.Count -gt 0) {
     $bad = $Result.Rules | Where-Object { $_.Status -ne 'OK' } | Sort-Object Status, Id
     if ($bad.Count -gt 0) {
-      Write-Host ""
+      Write-UiLine ""
       Write-ConsoleLine -Text "Top anomalies:" -Color 'Cyan'
 
       $bad | Select-Object -First 20 | ForEach-Object {
@@ -657,7 +705,7 @@ function Show-ConsoleSummary {
 
   # Next steps hints (only for humans)
   if ($Result.Status -eq 'CHANNEL_UNAVAILABLE') {
-    Write-Host ""
+    Write-UiLine ""
     Write-ConsoleLine -Text "Next steps:" -Color 'Cyan'
     Write-ConsoleLine -Text "  - Check if Sysmon is installed and running (Sysmon/Sysmon64 service)." -Color 'Gray'
     Write-ConsoleLine -Text "  - List logs: wevtutil el | findstr /i sysmon" -Color 'Gray'
@@ -665,7 +713,7 @@ function Show-ConsoleSummary {
   }
 
   Write-ConsoleSeparator -Char '=' -Width 78 -Color 'Cyan'
-  Write-Host ""
+  Write-UiLine ""
 }
 
 # -----------------------------
@@ -701,7 +749,7 @@ if (-not $channel.Exists -or -not $channel.Enabled) {
 
 # Load baseline state (tolerant)
 $baseline = @{}
-$state = Read-JsonFile -Path $StatePath
+$state = Read-JsonFileSafe -Path $StatePath
 if ($state -and $state.Baseline) {
   $baseline = ConvertTo-Hashtable -InputObject $state.Baseline
 }
@@ -711,7 +759,7 @@ $configChanged = $false
 try {
   $cfg = Get-WinEvent -FilterHashtable @{ LogName=$script:SysmonLogName; ID=16; StartTime=$startTime } -MaxEvents 1 -ErrorAction SilentlyContinue
   if ($cfg -and $cfg.Count -gt 0) { $configChanged = $true }
-} catch { }
+} catch { <# best-effort: Sysmon config change event may not exist in time window #> }
 
 $ruleResults = @()
 $remediationResult = $null
@@ -781,7 +829,11 @@ try {
     CatalogSource = $catalogSource
   }
 
-  $stateWriteOk = Write-JsonFile -Path $StatePath -Object $stateObj
+  $stateWriteOk = $false
+  try {
+    Save-Json -InputObject $stateObj -Path $StatePath -Depth 10
+    $stateWriteOk = $true
+  } catch { <# state write failed #> }
   if (-not $stateWriteOk) { $overallStatus = 'ANOMALIES_DETECTED' }
 
   # Optional remediation (trigger on any HARDZERO)
@@ -824,11 +876,16 @@ try {
 
   Write-AuditEvent -EventId $script:EventIdWarn -Message ("Sysmon Drift Sensor ERROR: {0}" -f $err) -Level 'Error'
 } finally {
-  if ($PassThru) {
-    $final
-  } else {
+  if (-not $PassThru) {
     Show-ConsoleSummary -Result $final
   }
 
   if ($final.Status -ne 'OK') { exit 1 }
 }
+
+# V2 output contract
+$resultToken = if ($final.Status -eq 'FAIL') { 'FAIL' } elseif ($final.Status -ne 'OK') { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $final -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

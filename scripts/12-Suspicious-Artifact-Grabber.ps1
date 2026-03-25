@@ -1,3 +1,5 @@
+# TODO: This script exceeds 800 lines (1102 lines). Decompose into smaller modules
+# (e.g., separate artifact collectors, packaging logic, and reporting into dedicated files).
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -56,6 +58,25 @@
 .INPUTS
   None. This script does not accept pipeline input.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   This script writes files to disk and prints a human-readable summary to the host.
 
@@ -110,27 +131,64 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$CatalogPath,
   [switch]$Force,
   [switch]$CollectSamples,
   [switch]$HashAllProcesses,
   [switch]$Strict,
-  [string]$ConfigPath = "PATH/TO/JSON/config.json"
+  [string]$ConfigPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Evidence.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
-# Make Write-Information visible for humans; it is controlled by InformationPreference. 
-$InformationPreference = 'Continue'
+# Make Write-Information visible for humans; it is controlled by InformationPreference.
+if (-not $Quiet) { $InformationPreference = 'Continue' }
 
 # -------------------------
 # Globals
@@ -141,48 +199,8 @@ $ScriptVersion = '2025.12.22-ps51'
 # Console helpers (no pipeline output)
 # -------------------------
 
-function Write-UiHeader {
-  param(
-    [string]$Title,
-    [string]$Subtitle
-  )
-  Write-UiLine
-  Write-Host $Title -ForegroundColor Cyan
-  if ($Subtitle) { Write-Host $Subtitle -ForegroundColor DarkCyan }
-  Write-UiLine
-}
 
-function Write-UiKeyValue {
-  param(
-    [string]$Key,
-    [string]$Value,
-    [ConsoleColor]$KeyColor = 'Gray',
-    [ConsoleColor]$ValueColor = 'White'
-  )
-  Write-Host ("{0,-12}: " -f $Key) -ForegroundColor $KeyColor -NoNewline
-  Write-Host ($Value) -ForegroundColor $ValueColor
-}
 
-function Write-UiStatus {
-  param(
-    [string]$Label,
-    [ValidateSet('OK','WARN','FAIL','INFO')]
-    [string]$State,
-    [string]$Text
-  )
-
-  $c = 'Gray'
-  switch ($State) {
-    'OK'   { $c = 'Green' }
-    'WARN' { $c = 'Yellow' }
-    'FAIL' { $c = 'Red' }
-    'INFO' { $c = 'Cyan' }
-  }
-
-  Write-Host ("[{0}] " -f $State) -ForegroundColor $c -NoNewline
-  if ($Label) { Write-Host ("{0}: " -f $Label) -ForegroundColor Gray -NoNewline }
-  if ($Text) { Write-Host $Text -ForegroundColor White } else { Write-Host "" }
-}
 
 # -------------------------
 # Logging helpers
@@ -193,23 +211,11 @@ function Write-UiStatus {
 # Generic helpers
 # -------------------------
 
-function Expand-Env([string]$p) {
-  try { [Environment]::ExpandEnvironmentVariables($p) } catch { $p }
-}
+# Expand-Env imported from lib/Evidence.psm1
 
-function Save-Json([object]$Obj,[string]$Path) {
-  Ensure-Dir (Split-Path -Parent $Path)
-  ($Obj | ConvertTo-Json -Depth 30) | Out-File -FilePath $Path -Encoding UTF8
-}
+# Save-Json: using canonical Save-Json from lib/Serialization.psm1
 
-function Read-Json([string]$Path) {
-  try {
-    if ($Path -and (Test-Path -LiteralPath $Path)) {
-      return (Get-Content -Raw -Path $Path -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
-    }
-  } catch { }
-  return $null
-}
+# Read-Json replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
 
 function New-ResultObject([string]$Name) {
   [pscustomobject]@{
@@ -239,10 +245,6 @@ function Safe-ToBool {
   } catch { return $Default }
 }
 
-function Get-FileSha256([string]$File) {
-  try { (Get-FileHash -Algorithm SHA256 -Path $File -ErrorAction Stop).Hash } catch { $null }
-}
-
 function Get-FileSignatureInfo([string]$File) {
   $o = [pscustomobject]@{
     Path            = $File
@@ -256,40 +258,8 @@ function Get-FileSignatureInfo([string]$File) {
     $o.SignatureStatus = [string]$sig.Status
     $o.Signed = ($sig.Status -eq 'Valid')
     if ($sig.SignerCertificate) { $o.Publisher = $sig.SignerCertificate.Subject }
-  } catch { }
+  } catch { <# best-effort: Authenticode check may fail for in-use or inaccessible files #> }
   return $o
-}
-
-function Copy-ToEvidence {
-  param(
-    [string]$Src,
-    [string]$BaseDir,
-    [int]$MaxFileSizeMB,
-    [int]$MaxTotalMB,
-    [ref]$runningTotalBytes
-  )
-  try {
-    if (-not (Test-Path -LiteralPath $Src)) { return $false, "missing" }
-    $fi = Get-Item -LiteralPath $Src -ErrorAction Stop
-    if ($fi.PSIsContainer) { return $false, "is-directory" }
-
-    $sizeBytes    = [int64]$fi.Length
-    $maxFileBytes = [int64]$MaxFileSizeMB * 1MB
-    $maxTotBytes  = [int64]$MaxTotalMB * 1MB
-
-    if ($sizeBytes -gt $maxFileBytes) { return $false, "too-large-file" }
-    if ($runningTotalBytes.Value + $sizeBytes -gt $maxTotBytes) { return $false, "total-limit" }
-
-    $rel = $Src.Replace(':','').TrimStart('\') -replace '[\\/:*?"<>|]','_'
-    $dst = Join-Path $BaseDir $rel
-    Ensure-Dir (Split-Path -Parent $dst)
-
-    Copy-Item -LiteralPath $Src -Destination $dst -Force -ErrorAction Stop
-    $runningTotalBytes.Value += $sizeBytes
-    return $true, $dst
-  } catch {
-    return $false, $_.Exception.Message
-  }
 }
 
 function Get-PSObjectPropertyValue {
@@ -297,7 +267,7 @@ function Get-PSObjectPropertyValue {
   try {
     if ($null -eq $Obj) { return $null }
     if ($Obj.PSObject.Properties.Name -contains $Name) { return $Obj.$Name }
-  } catch { }
+  } catch { <# best-effort: property access on dynamic object #> }
   return $null
 }
 
@@ -371,7 +341,7 @@ function Merge-Catalog {
 
     foreach ($p in $ov.PSObject.Properties.Name) {
       if (-not ($base.$section.PSObject.Properties.Name -contains $p)) {
-        try { $base.$section | Add-Member -NotePropertyName $p -NotePropertyValue $ov.$p -Force } catch { }
+        try { $base.$section | Add-Member -NotePropertyName $p -NotePropertyValue $ov.$p -Force } catch { <# best-effort: catalog merge for optional properties #> }
       }
     }
   }
@@ -385,18 +355,25 @@ function Load-Catalog {
   $CatalogLoadNote.Value = $null
   $cat = $null
 
-  if ($CatalogPath) {
-    $cat = Read-Json $CatalogPath
+  $sanitizedCatalog = Sanitize-Path -Path $CatalogPath -MustExist
+  if ($sanitizedCatalog) {
+    $cat = Read-JsonFileSafe -Path $sanitizedCatalog
     if ($cat) { $CatalogLoadNote.Value = "Catalog loaded from -CatalogPath" }
   }
 
   if ($null -eq $cat -and $ConfigPath) {
-    $cfg = Read-Json $ConfigPath
-    $p = $null
-    try { $p = $cfg.Grabber.CatalogPath } catch { $p = $null }
-    if ($p) {
-      $cat = Read-Json ([string]$p)
-      if ($cat) { $CatalogLoadNote.Value = "Catalog loaded from ConfigPath reference" }
+    $sanitizedConfig = Sanitize-Path -Path $ConfigPath -MustExist
+    if ($sanitizedConfig) {
+      $cfg = Read-JsonFileSafe -Path $sanitizedConfig
+      $p = $null
+      try { $p = $cfg.Grabber.CatalogPath } catch { $p = $null }
+      if ($p) {
+        $sanitizedP = Sanitize-Path -Path $p -MustExist
+        if ($sanitizedP) {
+          $cat = Read-JsonFileSafe -Path $sanitizedP
+          if ($cat) { $CatalogLoadNote.Value = "Catalog loaded from ConfigPath reference" }
+        }
+      }
     }
   }
 
@@ -428,12 +405,12 @@ function Read-Trigger {
       if ($p.PSObject.Properties.Name -contains 'MaxFileSizeMB') { $maxFileMB = Safe-ToInt $p.MaxFileSizeMB $maxFileMB }
       if ($p.PSObject.Properties.Name -contains 'MaxTotalMB') { $maxTotalMB = Safe-ToInt $p.MaxTotalMB $maxTotalMB }
     }
-  } catch { }
+  } catch { <# best-effort: trigger registry key may not exist #> }
 
   try {
     $ff = Expand-Env ([string]$cat.Trigger.FileFlag)
     if ($ff -and (Test-Path -LiteralPath $ff)) { $want = $true }
-  } catch { }
+  } catch { <# best-effort: trigger file flag path may be invalid #> }
 
   if ($CollectSamples) { $samples = $true }
 
@@ -456,14 +433,14 @@ function Collect-Processes {
   $csv = Join-Path $outDir 'processes.csv'
 
   try {
-    Ensure-Dir $outDir
+    Ensure-Directory $outDir
 
-    $rxList=@(); try { $rxList=@($cat.Process.UserPathsRegex) } catch { }
+    $rxList=@(); try { $rxList=@($cat.Process.UserPathsRegex) } catch { <# best-effort: catalog property may not exist #> }
     $hashUserlandOnly = Safe-ToBool $cat.Process.HashUserlandOnly $true
 
     $procs = Get-CimInstance Win32_Process
     $rows = foreach ($p in $procs) {
-      $path=$null; try { $path=[string]$p.ExecutablePath } catch { }
+      $path=$null; try { $path=[string]$p.ExecutablePath } catch { <# best-effort: process path may be inaccessible #> }
 
       $userlandMatch=$false
       if ($path) { foreach ($rx in $rxList) { if ($path -match $rx) { $userlandMatch=$true; break } } }
@@ -476,7 +453,7 @@ function Collect-Processes {
       $sha=$null
       $sig=[pscustomobject]@{ Signed=$false; Publisher=$null; SignatureStatus=$null }
       if ($path) {
-        if ($doHash) { $sha = Get-FileSha256 $path }
+        if ($doHash) { $sha = Get-FileSha256 -Path $path }
         $sig = Get-FileSignatureInfo $path
       }
 
@@ -526,12 +503,12 @@ function Try-CollectNetworkNetCmdlets {
       $note.Value = "UDP cmdlet unavailable: " + $_.Exception.Message
     }
 
-    try { Get-NetIPConfiguration | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $outDir 'net_ipconfig.csv') } catch { }
+    try { Get-NetIPConfiguration | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $outDir 'net_ipconfig.csv') } catch { <# best-effort: IP configuration cmdlet may not be available #> }
     try {
       Get-NetRoute | Select-Object ifIndex,DestinationPrefix,NextHop,RouteMetric,PolicyStore |
         Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $outDir 'net_routes.csv')
-    } catch { }
-    try { Get-DnsClientCache | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $outDir 'dns_cache.csv') } catch { }
+    } catch { <# best-effort: routing table cmdlet may not be available #> }
+    try { Get-DnsClientCache | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $outDir 'dns_cache.csv') } catch { <# best-effort: DNS cache cmdlet may not be available on all OS versions #> }
 
     return $true
   } catch {
@@ -612,7 +589,7 @@ function Collect-Network {
 
   $res = New-ResultObject 'Network'
   try {
-    Ensure-Dir $outDir
+    Ensure-Directory $outDir
 
     $counts = [ref](@{ Tcp=0; Listeners=0; Udp=0 })
     $note = [ref]$null
@@ -679,7 +656,7 @@ function Export-SuspiciousTaskXml {
     [int]$MaxXml
   )
 
-  Ensure-Dir $outDir
+  Ensure-Directory $outDir
   $exported = 0
 
   foreach ($t in ($taskRows | Where-Object { $_.Suspicious -eq $true })) {
@@ -687,9 +664,12 @@ function Export-SuspiciousTaskXml {
     try {
       $safe = (($t.TaskPath + $t.TaskName) -replace '[\\/:*?"<>|]','_')
       $xmlPath = Join-Path $outDir ($safe + '.xml')
+      # S14 fix: validate constructed path does not escape the output directory
+      Assert-NoPathTraversal -Path $safe -ParameterName 'TaskName'
+      if (-not (Test-PathUnderRoot -Path $xmlPath -Root $outDir)) { continue }
       Export-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath | Out-File -FilePath $xmlPath -Encoding UTF8
       $exported++
-    } catch { }
+    } catch { <# best-effort: individual task XML export may fail #> }
   }
 
   return $exported
@@ -699,23 +679,23 @@ function Collect-Tasks {
   param([string]$outDir,$cat)
 
   $res = New-ResultObject 'Tasks'
-  $rx=@(); try { $rx=@($cat.Tasks.SuspiciousRegex) } catch { }
+  $rx=@(); try { $rx=@($cat.Tasks.SuspiciousRegex) } catch { <# best-effort: catalog property may not exist #> }
   $exportXml = Safe-ToBool $cat.Tasks.ExportXmlForSuspicious $true
   $maxXml    = Safe-ToInt  $cat.Tasks.MaxXml 50
 
   try {
-    Ensure-Dir $outDir
+    Ensure-Directory $outDir
 
     $tasks = Get-ScheduledTask
     $flat = foreach ($t in $tasks) {
-      $actions=@(); try { $actions=@($t.Actions) } catch { }
+      $actions=@(); try { $actions=@($t.Actions) } catch { <# best-effort: task actions may not be accessible #> }
       $actionText = Convert-TaskActionsToText -Actions $actions
 
       $isSusp=$false
       foreach ($r in $rx) { if ($actionText -match $r) { $isSusp=$true; break } }
 
       $state=$null
-      try { $state = (Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction SilentlyContinue).State } catch { }
+      try { $state = (Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction SilentlyContinue).State } catch { <# best-effort: task state may not be readable #> }
 
       [pscustomobject]@{
         TaskName   = $t.TaskName
@@ -738,6 +718,10 @@ function Collect-Tasks {
     } else {
       $res.Counts.XmlExported = 0
     }
+
+    foreach ($t in ($flat | Where-Object { $_.Suspicious })) {
+        Add-Finding -Code 'Grabber-SuspiciousTask' -Severity 'Medium' -Message "Suspicious scheduled task detected: $($t.TaskPath)$($t.TaskName)" -Extra $t
+    }
   } catch {
     Add-Error $res ("tasks: " + $_.Exception.Message)
     $res.Counts.Total = 0
@@ -753,7 +737,7 @@ function Collect-WmiPersistence {
 
   $res = New-ResultObject 'WMI'
   try {
-    Ensure-Dir $outDir
+    Ensure-Directory $outDir
 
     $filters  = Get-CimInstance -Namespace root\subscription -ClassName __EventFilter -ErrorAction SilentlyContinue
     $bindings = Get-CimInstance -Namespace root\subscription -ClassName __FilterToConsumerBinding -ErrorAction SilentlyContinue
@@ -791,7 +775,7 @@ function Export-Autoruns {
 
   $res = New-ResultObject 'Autoruns'
   try {
-    Ensure-Dir $outDir
+    Ensure-Directory $outDir
 
     $targets=@(
       'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
@@ -830,7 +814,7 @@ function Reset-Trigger {
     if ($rk -and (Test-Path -LiteralPath $rk)) {
       New-ItemProperty -Path $rk -Name 'Request' -PropertyType DWord -Value 0 -Force | Out-Null
     }
-  } catch { }
+  } catch { <# best-effort: trigger registry reset may fail without admin rights #> }
 }
 
 function Print-ConsoleSummary {
@@ -847,20 +831,20 @@ function Print-ConsoleSummary {
     Write-UiStatus -Label 'Config' -State 'INFO' -Text $CatalogLoadNote
   }
 
-  Write-UiKeyValue -Key 'WorkDir' -Value ([string]$Summary.Output.WorkDir)
-  Write-UiKeyValue -Key 'Zip'     -Value ([string]$Summary.Output.Zip)
+  Write-KeyValue -Key 'WorkDir' -Value ([string]$Summary.Output.WorkDir)
+  Write-KeyValue -Key 'Zip'     -Value ([string]$Summary.Output.Zip)
 
   Write-UiLine
-  Write-Host "Counts:" -ForegroundColor Gray
+  Write-UiLine "Counts:" -ForegroundColor Gray
 
-  try { Write-Host ("  Processes : {0}" -f (Safe-ToInt $Summary.Counts.Processes 0)) -ForegroundColor White } catch { }
+  try { Write-UiLine ("  Processes : {0}" -f (Safe-ToInt $Summary.Counts.Processes 0)) -ForegroundColor White } catch { <# best-effort: console summary display #> }
 
   try {
     $tcp = Safe-ToInt $Summary.Counts.Network.Tcp 0
     $lst = Safe-ToInt $Summary.Counts.Network.Listeners 0
     $udp = Safe-ToInt $Summary.Counts.Network.Udp 0
-    Write-Host ("  Network   : TCP={0} Listeners={1} UDP={2}" -f $tcp,$lst,$udp) -ForegroundColor White
-  } catch { }
+    Write-UiLine ("  Network   : TCP={0} Listeners={1} UDP={2}" -f $tcp,$lst,$udp) -ForegroundColor White
+  } catch { <# best-effort: console summary display #> }
 
   try {
     $tot = Safe-ToInt $Summary.Counts.Tasks.Total 0
@@ -869,8 +853,8 @@ function Print-ConsoleSummary {
 
     $c = 'White'
     if ($sus -gt 0) { $c = 'Yellow' }
-    Write-Host ("  Tasks     : Total={0} Suspicious={1} XmlExported={2}" -f $tot,$sus,$xml) -ForegroundColor $c
-  } catch { }
+    Write-UiLine ("  Tasks     : Total={0} Suspicious={1} XmlExported={2}" -f $tot,$sus,$xml) -ForegroundColor $c
+  } catch { <# best-effort: console summary display #> }
 
   try {
     $f = Safe-ToInt $Summary.Counts.WMI.Filters 0
@@ -884,10 +868,10 @@ function Print-ConsoleSummary {
     $col = 'White'
     if ($wTotal -gt 0) { $col = 'Yellow' }
 
-    Write-Host ("  WMI       : Filters={0} Bindings={1} Cmd={2} ActiveScript={3} NTEventLog={4} LogFile={5}" -f $f,$b,$c1,$a,$e,$l) -ForegroundColor $col
-  } catch { }
+    Write-UiLine ("  WMI       : Filters={0} Bindings={1} Cmd={2} ActiveScript={3} NTEventLog={4} LogFile={5}" -f $f,$b,$c1,$a,$e,$l) -ForegroundColor $col
+  } catch { <# best-effort: console summary display #> }
 
-  try { Write-Host ("  Autoruns  : Items={0}" -f (Safe-ToInt $Summary.Counts.Autoruns.Items 0)) -ForegroundColor White } catch { }
+  try { Write-UiLine ("  Autoruns  : Items={0}" -f (Safe-ToInt $Summary.Counts.Autoruns.Items 0)) -ForegroundColor White } catch { <# best-effort: console summary display #> }
 
   try {
     if ($Summary.Counts.ContainsKey('Samples')) {
@@ -898,15 +882,15 @@ function Print-ConsoleSummary {
       $col = 'White'
       if ($cop -gt 0) { $col = 'Yellow' }
 
-      Write-Host ("  Samples   : Copied={0} (MaxFileMB={1}, MaxTotalMB={2})" -f $cop,$m1,$m2) -ForegroundColor $col
+      Write-UiLine ("  Samples   : Copied={0} (MaxFileMB={1}, MaxTotalMB={2})" -f $cop,$m1,$m2) -ForegroundColor $col
     }
-  } catch { }
+  } catch { <# best-effort: console summary display #> }
 
   Write-UiLine
 
   if ($Errors -and $Errors.Count -gt 0) {
     Write-UiStatus -Label 'Errors' -State 'WARN' -Text ("{0} error(s) occurred" -f $Errors.Count)
-    foreach ($e in @($Errors)) { Write-Host ("  - {0}" -f $e) -ForegroundColor Yellow }
+    foreach ($e in @($Errors)) { Write-UiLine ("  - {0}" -f $e) -ForegroundColor Yellow }
   } else {
     Write-UiStatus -Label 'Errors' -State 'OK' -Text "None"
   }
@@ -923,6 +907,7 @@ function Print-ConsoleSummary {
 # -------------------------
 # MAIN
 # -------------------------
+$script:Findings = New-FindingsList
 Ensure-EventSource
 
 $errors   = New-Object System.Collections.Generic.List[string]
@@ -966,11 +951,12 @@ try {
   $base = $null
   try { $base = [string]$cat.OutputBase } catch { $base = $null }
   if (-not $base) { $base = [string]$DefaultCatalog.OutputBase }
+  Assert-NoPathTraversal -Path $base -ParameterName 'Catalog.OutputBase'
 
   $work = Join-Path $base $ts
   $zip  = Join-Path $base ("Grabber-{0}-{1}.zip" -f $env:COMPUTERNAME,$ts)
 
-  Ensure-Dir $work
+  Ensure-Directory $work
 
   $summary = [ordered]@{
     Host    = $env:COMPUTERNAME
@@ -1026,7 +1012,7 @@ try {
   # Samples (optional)
   if ($tr.Samples -or (Safe-ToBool $cat.Samples.Enable $false)) {
     $sDir = Join-Path $work 'samples'
-    Ensure-Dir $sDir
+    Ensure-Directory $sDir
 
     $maxFileMB  = Safe-ToInt $tr.MaxFileMB (Safe-ToInt $cat.Samples.MaxFileSizeMB 20)
     $maxTotalMB = Safe-ToInt $tr.MaxTotalMB (Safe-ToInt $cat.Samples.MaxTotalMB 100)
@@ -1048,9 +1034,12 @@ try {
           if ($row.Signed -eq 'True') { continue }
         }
 
-        $okc, $dstOrWhy = Copy-ToEvidence -Src $path -BaseDir $sDir -MaxFileSizeMB $maxFileMB -MaxTotalMB $maxTotalMB -runningTotalBytes $totalBytes
+        $okc, $dstOrWhy = Copy-ToEvidence -SourcePath $path -EvidenceBaseDir $sDir -MaxFileSizeMB $maxFileMB -MaxTotalMB $maxTotalMB -RunningTotalBytes $totalBytes
         $sha = $null
-        if ($okc) { $sha = Get-FileSha256 $dstOrWhy }
+        if ($okc) { 
+            $sha = Get-FileSha256 -Path $dstOrWhy
+            Add-Finding -Code 'Grabber-SampleCollected' -Severity 'Low' -Message "Suspicious sample collected: $path" -Extra @{ Path = $path; Sha256 = $sha; Evidence = $dstOrWhy }
+        }
 
         $summary.Samples += [pscustomobject]@{
           Source = $path
@@ -1073,7 +1062,7 @@ try {
   }
 
   if ($errors.Count -gt 0) { $summary.Errors = @($errors) }
-  Save-Json -Obj $summary -Path (Join-Path $work 'Summary.json')
+  Save-Json -InputObject $summary -Path (Join-Path $work 'Summary.json') -Depth 30
 
   try {
     if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
@@ -1101,8 +1090,15 @@ try {
 } finally {
   if ($null -ne $summary) {
     if ($errors.Count -gt 0) { $summary.Errors = @($errors) }
-    try { Print-ConsoleSummary -Summary $summary -Errors $errors -Findings $findings -CatalogLoadNote $catalogNote } catch { }
+    try { Print-ConsoleSummary -Summary $summary -Errors $errors -Findings $findings -CatalogLoadNote $catalogNote } catch { <# best-effort: console summary display in finally block #> }
   } else {
     Write-UiStatus -Label 'IR Grabber' -State 'FAIL' -Text "No summary object created."
   }
-}
+} # end script try
+
+# V2 output contract
+$resultToken = if ($errors.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $summary -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

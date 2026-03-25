@@ -6,7 +6,7 @@ Audits physical disks and (if available) storage reliability counters.
 .DESCRIPTION
 Best-practice output model (PowerShell 5.1):
 - Pipeline output: structured objects only (safe for Export-Csv/ConvertTo-Json/Where-Object).
-- Console output: all human-friendly formatting via Write-Host / Write-Information only.
+- Console output: all human-friendly formatting via Write-UiLine / Write-Information only.
 
 Features:
 - Lists PhysicalDisks (status, media, size, bus, identifiers).
@@ -30,23 +30,87 @@ If set, suppresses console summary output.
 
 .NOTES
 Windows PowerShell 5.1 compatible (no ternary operator; avoid List+@() binder edge cases).
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
+
+.OUTPUTS
+  None by default.
+  When -PassThru is used, emits a PSCustomObject v2 result with Script, Mode, Result, Findings, Summary, and Metadata properties.
+
 .EXAMPLE
   .\35-Storage-Reliability-Audit.ps1
 
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$ExportPath,
-  [string]$ConfigJsonPath = "PATH/TO/JSON/storage-audit.json",
+  [string]$ConfigJsonPath,
   [switch]$PassThru,
   [switch]$NoConsole
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # region Helpers
@@ -100,7 +164,7 @@ function Load-Config {
 
   try {
     # ConvertFrom-Json can throw terminating errors; always use try/catch in PS 5.1.
-    $raw = Get-Content -Path $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -Path $Path -Raw -Encoding UTF8 -ErrorAction Stop
     $userCfg = $raw | ConvertFrom-Json
 
     if ($null -ne $userCfg.Thresholds) {
@@ -131,80 +195,25 @@ function Resolve-PhysicalDisk {
     if (-not [string]::IsNullOrWhiteSpace([string]$DiskRow.UniqueId)) {
       return Get-PhysicalDisk -UniqueId $DiskRow.UniqueId -ErrorAction Stop
     }
-  } catch { }
+  } catch { <# best-effort: UniqueId resolution may fail #> }
 
   try {
     if ($null -ne $DiskRow.DeviceId -and "$($DiskRow.DeviceId)" -ne "") {
       $pd = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq $DiskRow.DeviceId } | Select-Object -First 1
       if ($pd) { return $pd }
     }
-  } catch { }
+  } catch { <# best-effort: DeviceId resolution may fail #> }
 
   try {
     if (-not [string]::IsNullOrWhiteSpace([string]$DiskRow.FriendlyName)) {
       return (Get-PhysicalDisk -FriendlyName $DiskRow.FriendlyName -ErrorAction Stop | Select-Object -First 1)
     }
-  } catch { }
+  } catch { <# best-effort: FriendlyName resolution may fail #> }
 
   throw "Unable to resolve PhysicalDisk object for '$($DiskRow.FriendlyName)'."
 }
 
-function Ensure-Folder {
-  param([Parameter(Mandatory)][string]$Path)
-  if (-not (Test-Path -Path $Path)) {
-    New-Item -Path $Path -ItemType Directory -Force | Out-Null
-  }
-}
-
-function Get-SeverityColor {
-  param([Parameter(Mandatory)][ValidateSet('Info','Low','Medium','High')][string]$Severity)
-  switch ($Severity) {
-    'High'   { 'Red' }
-    'Medium' { 'Yellow' }
-    'Low'    { 'Cyan' }
-    'Info'   { 'DarkGray' }
-  }
-}
-
-function Write-Ui {
-  param(
-    [AllowEmptyString()][string]$Text,
-    [ConsoleColor]$Color,
-    [switch]$BlankLine
-  )
-
-  if ($BlankLine) {
-    if ($script:UseWriteInformation) {
-      Write-Information -MessageData "" -InformationAction Continue
-    } else {
-      Write-Host ""
-    }
-  }
-
-  if ($PSBoundParameters.ContainsKey('Text')) {
-    if ($script:UseWriteInformation) {
-      Write-Information -MessageData $Text -InformationAction Continue
-    } else {
-      if ($PSBoundParameters.ContainsKey('Color')) {
-        Write-Host $Text -ForegroundColor $Color
-      } else {
-        Write-Host $Text
-      }
-    }
-  }
-}
-
-function Write-Rule {
-  param(
-    [Parameter(Mandatory)][string]$Title,
-    [ConsoleColor]$Color = 'Gray'
-  )
-  $line = ('=' * 78)
-  Write-Ui -BlankLine
-  Write-Ui -Text $line -Color $Color
-  Write-Ui -Text ("{0}" -f $Title) -Color $Color
-  Write-Ui -Text $line -Color $Color
-}
+# Ensure-Directory imported from lib/Common.psm1
 
 function Write-ConsoleSummary {
   param(
@@ -217,58 +226,58 @@ function Write-ConsoleSummary {
 
   $sevOrder = @{ High = 1; Medium = 2; Low = 3; Info = 4 }
 
-  Write-Rule -Title "Storage Reliability Audit Summary" -Color 'Gray'
+  Write-DecorativeRule -Title "Storage Reliability Audit Summary" -Color 'Gray'
 
-  Write-Ui -Text ("ComputerName  : {0}" -f $Summary.ComputerName) -Color 'Gray'
-  Write-Ui -Text ("Timestamp     : {0}" -f $Summary.Timestamp) -Color 'Gray'
-  Write-Ui -Text ("PhysicalDisks : {0}" -f $Summary.PhysicalDisks) -Color 'Gray'
-  Write-Ui -Text ("Reliability   : {0}" -f $Summary.ReliabilityRead) -Color 'Gray'
+  Write-UiLine -Text ("ComputerName  : {0}" -f $Summary.ComputerName) -Color 'Gray'
+  Write-UiLine -Text ("Timestamp     : {0}" -f $Summary.Timestamp) -Color 'Gray'
+  Write-UiLine -Text ("PhysicalDisks : {0}" -f $Summary.PhysicalDisks) -Color 'Gray'
+  Write-UiLine -Text ("Reliability   : {0}" -f $Summary.ReliabilityRead) -Color 'Gray'
 
   $findingsColor = 'Green'
   if ($Summary.FindingsCount -gt 0) { $findingsColor = 'Yellow' }
   if (($Findings | Where-Object { $_.Severity -eq 'High' } | Measure-Object).Count -gt 0) { $findingsColor = 'Red' }
 
-  Write-Ui -Text ("Findings      : {0}" -f $Summary.FindingsCount) -Color $findingsColor
+  Write-UiLine -Text ("Findings      : {0}" -f $Summary.FindingsCount) -Color $findingsColor
 
   if ($Findings.Count -gt 0) {
     $group = $Findings | Group-Object Severity | Sort-Object @{Expression={ $sevOrder[$_.Name] }}
-    Write-Ui -BlankLine
-    Write-Ui -Text "Findings by severity" -Color 'Gray'
-    Write-Ui -Text (($group | Select-Object Name, Count | Format-Table -AutoSize | Out-String).TrimEnd()) -Color 'Gray'
+    Write-BlankLine
+    Write-UiLine -Text "Findings by severity" -Color 'Gray'
+    Write-UiLine -Text (($group | Select-Object Name, Count | Format-Table -AutoSize | Out-String).TrimEnd()) -Color 'Gray'
 
     $topN = 10
-    try { $topN = [int]$Config.Output.ConsoleSummaryTopFindings } catch { $topN = 10 }
+    try { $topN = [int]$Config.Output.ConsoleSummaryTopFindings } catch { <# best-effort: config property cast #> $topN = 10 }
     if ($topN -lt 1) { $topN = 10 }
 
     $top = $Findings | Sort-Object @{Expression={ $sevOrder[$_.Severity] }}, Code | Select-Object -First $topN
 
-    Write-Ui -BlankLine
-    Write-Ui -Text ("Top {0} findings" -f $topN) -Color 'Gray'
+    Write-BlankLine
+    Write-UiLine -Text ("Top {0} findings" -f $topN) -Color 'Gray'
 
     foreach ($f in $top) {
       $c = Get-SeverityColor -Severity $f.Severity
       $dk = $f.DiskKey
       if ([string]::IsNullOrWhiteSpace($dk)) { $dk = '-' }
-      Write-Ui -Text ("[{0}] {1} | {2} | {3}" -f $f.Severity.ToUpper(), $f.Code, $dk, $f.Message) -Color $c
+      Write-UiLine -Text ("[{0}] {1} | {2} | {3}" -f $f.Severity.ToUpper(), $f.Code, $dk, $f.Message) -Color $c
     }
   }
 
   $showDiskTable = $true
-  try { $showDiskTable = [bool]$Config.Output.ShowDiskTable } catch { $showDiskTable = $true }
+  try { $showDiskTable = [bool]$Config.Output.ShowDiskTable } catch { <# best-effort: config property cast #> $showDiskTable = $true }
 
   if ($showDiskTable -and $Disks -and $Disks.Count -gt 0) {
-    Write-Rule -Title "Physical disks" -Color 'Gray'
-    Write-Ui -Text ((($Disks | Select-Object FriendlyName, MediaType, BusType, HealthStatus, OperationalStatus, Size) |
+    Write-DecorativeRule -Title "Physical disks" -Color 'Gray'
+    Write-UiLine -Text ((($Disks | Select-Object FriendlyName, MediaType, BusType, HealthStatus, OperationalStatus, Size) |
         Format-Table -AutoSize | Out-String).TrimEnd()) -Color 'Gray'
   }
 
   if ($Reliability -and $Reliability.Count -gt 0) {
-    Write-Rule -Title "Reliability counters (sample fields)" -Color 'Gray'
-    Write-Ui -Text ((($Reliability | Select-Object FriendlyName, Temperature, Wear, UncorrectableErrors, ReadErrorsTotal, WriteErrorsTotal, PowerOnHours |
+    Write-DecorativeRule -Title "Reliability counters (sample fields)" -Color 'Gray'
+    Write-UiLine -Text ((($Reliability | Select-Object FriendlyName, Temperature, Wear, UncorrectableErrors, ReadErrorsTotal, WriteErrorsTotal, PowerOnHours |
         Format-Table -AutoSize | Out-String).TrimEnd())) -Color 'Gray'
   }
 
-  Write-Ui -BlankLine
+  Write-BlankLine
 }
 
 # endregion Helpers
@@ -278,7 +287,11 @@ function Write-ConsoleSummary {
 $Findings = New-FindingsList
 
 if (-not (Test-CmdletAvailable -Name 'Get-PhysicalDisk')) {
-  throw "Required cmdlet missing: Get-PhysicalDisk (Storage module/OS)."
+  Add-Finding -FindingList $Findings -Code 'STO-CmdletMissing' -Severity 'Critical' -Message 'Required cmdlet missing: Get-PhysicalDisk (Storage module/OS).' -TypeName 'StorageAudit.Finding'
+  $v2Result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings @($Findings.ToArray()) -Summary @{} -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit 1
 }
 
 $hasReliability = Test-CmdletAvailable -Name 'Get-StorageReliabilityCounter'
@@ -289,7 +302,7 @@ if (-not $hasReliability) {
 $Config = Load-Config -Path $ConfigJsonPath
 
 $script:UseWriteInformation = $false
-try { $script:UseWriteInformation = [bool]$Config.Output.UseWriteInformation } catch { $script:UseWriteInformation = $false }
+try { $script:UseWriteInformation = [bool]$Config.Output.UseWriteInformation } catch { <# best-effort: config property may not exist #> $script:UseWriteInformation = $false }
 
 $disks = Get-PhysicalDisk | Select-Object `
   FriendlyName, SerialNumber, UniqueId, DeviceId, MediaType, Size, HealthStatus, OperationalStatus, BusType
@@ -330,15 +343,15 @@ if ($hasReliability) {
 
       # Thresholds (robust parsing)
       $tWarn = 55; $tHigh = 65
-      try { $tWarn = [int]$Config.Thresholds.TemperatureWarnC } catch { }
-      try { $tHigh = [int]$Config.Thresholds.TemperatureHighC } catch { }
+      try { $tWarn = [int]$Config.Thresholds.TemperatureWarnC } catch { <# best-effort: config threshold cast #> }
+      try { $tHigh = [int]$Config.Thresholds.TemperatureHighC } catch { <# best-effort: config threshold cast #> }
       if ($tHigh -lt $tWarn) { $tHigh = $tWarn + 10 }
 
       $thrUnc = 1; $thrRead = 1; $thrWrite = 1; $wearWarn = 20
-      try { $thrUnc   = [int]$Config.Thresholds.UncorrectableErrorsHigh } catch { $thrUnc = 1 }
-      try { $thrRead  = [int]$Config.Thresholds.ReadErrorsWarn } catch { $thrRead = 1 }
-      try { $thrWrite = [int]$Config.Thresholds.WriteErrorsWarn } catch { $thrWrite = 1 }
-      try { $wearWarn = [int]$Config.Thresholds.WearWarnPercentRemaining } catch { $wearWarn = 20 }
+      try { $thrUnc   = [int]$Config.Thresholds.UncorrectableErrorsHigh } catch { <# best-effort: config threshold cast #> $thrUnc = 1 }
+      try { $thrRead  = [int]$Config.Thresholds.ReadErrorsWarn } catch { <# best-effort: config threshold cast #> $thrRead = 1 }
+      try { $thrWrite = [int]$Config.Thresholds.WriteErrorsWarn } catch { <# best-effort: config threshold cast #> $thrWrite = 1 }
+      try { $wearWarn = [int]$Config.Thresholds.WearWarnPercentRemaining } catch { <# best-effort: config threshold cast #> $wearWarn = 20 }
 
       if ($thrUnc -lt 1)   { $thrUnc = 1 }
       if ($thrRead -lt 1)  { $thrRead = 1 }
@@ -388,7 +401,7 @@ $summary = [pscustomobject]@{
 if ($ExportPath) {
   $folder = Split-Path -Path $ExportPath -Parent
   if (-not $folder) { $folder = (Get-Location).Path }
-  Ensure-Folder -Path $folder
+  Ensure-Directory -Path $folder
 
   $base = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
 
@@ -407,15 +420,11 @@ if (-not $NoConsole) {
     -Config $Config
 }
 
-if ($PassThru) {
-  [pscustomobject]@{
-    PSTypeName  = 'StorageAudit.Result'
-    Summary     = $summary
-    Findings    = $Findings.ToArray()
-    Disks       = @($disks)
-    Reliability = @($rel)
-    Config      = $Config
-  }
-}
+# V2 output contract
+$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary $summary -Metadata @{ Disks = @($disks); Reliability = @($rel); Config = $Config }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
 
 # endregion Main
+exit 0

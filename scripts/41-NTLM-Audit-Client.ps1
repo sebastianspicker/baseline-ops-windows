@@ -9,7 +9,7 @@ creates findings, optionally exports CSV, and prints a human-friendly console su
 
 Design goals:
 - Pipeline output: structured objects only (works cleanly with Export-Csv / ConvertTo-Json / Where-Object).
-- Console output: display-only formatting via Write-Host / Write-Information (never via pipeline strings). [web:102][web:106]
+- Console output: display-only formatting via Write-UiLine / Write-Information (never via pipeline strings). [web:102][web:106]
 
 .PARAMETER MinimumLevel
 Minimum accepted level (0..5). Default is 3.
@@ -32,6 +32,28 @@ Supported properties (all optional):
   "ConsoleMode": "Pretty"   // Pretty|Plain
 }
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 Pipeline emits:
 - Summary (1 object)
@@ -42,7 +64,7 @@ Pipeline emits:
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [ValidateRange(0,5)]
   [int]$MinimumLevel = 3,
@@ -50,33 +72,54 @@ param(
   [string]$ExportPath,
 
   [string]$ConfigPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 #region Helpers
-
-function Get-RegDword {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] [string]$Path,
-    [Parameter(Mandatory)] [string]$Name
-  )
-  try {
-    $p = Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop
-    $v = $p.$Name
-    if ($null -ne $v) { [int]$v } else { $null }
-  } catch {
-    $null
-  }
-}
-
 
 function Convert-LmCompatibilityLevelToText {
   [CmdletBinding()]
@@ -161,7 +204,7 @@ function Import-JsonConfigOrDefault {
   if (-not (Test-Path -LiteralPath $Path)) { return $DefaultConfig }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultConfig }
 
     # ConvertFrom-Json can behave unexpectedly with errors; try/catch is the robust approach. [web:65][web:62]
@@ -175,107 +218,7 @@ function Import-JsonConfigOrDefault {
 }
 
 
-function Get-SeverityRank {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)] [ValidateSet('Info','Low','Medium','High')] [string]$Severity)
-
-  switch ($Severity) {
-    'High'   { 3 }
-    'Medium' { 2 }
-    'Low'    { 1 }
-    'Info'   { 0 }
-  }
-}
-
-function Get-SeverityColor {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)] [ValidateSet('Info','Low','Medium','High')] [string]$Severity)
-
-  switch ($Severity) {
-    'High'   { 'Red' }
-    'Medium' { 'Yellow' }
-    'Low'    { 'Cyan' }
-    'Info'   { 'Gray' }
-  }
-}
-
-function Write-KvLine {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] [string]$Key,
-    [Parameter(Mandatory)] [string]$Value,
-    [ConsoleColor]$ValueColor = [ConsoleColor]::Gray
-  )
-
-  Write-Host ("{0,-22}: " -f $Key) -NoNewline
-  Write-Host $Value -ForegroundColor $ValueColor
-}
-
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] [pscustomobject]$Summary,
-    [Parameter(Mandatory)] [System.Collections.Generic.List[object]]$Findings,
-    [Parameter(Mandatory)] [pscustomobject]$Config
-  )
-
-  $sorted = @($Findings | Sort-Object @{ Expression = { Get-SeverityRank $_.Severity }; Descending = $true }, Code)
-  $top    = $sorted | Select-Object -First 1
-
-  $bannerColor = 'Green'
-  if ($Summary.FindingsCount -gt 0 -and $null -ne $top) {
-    if ($top.Severity -eq 'High') { $bannerColor = 'Red' }
-    elseif ($top.Severity -eq 'Medium') { $bannerColor = 'Yellow' }
-    elseif ($top.Severity -eq 'Low') { $bannerColor = 'Cyan' }
-  }
-
-  Write-Host ''
-  Write-Host ('=' * 34) -ForegroundColor DarkGray
-  Write-Host 'NTLM Audit (LmCompatibilityLevel)' -ForegroundColor $bannerColor
-  Write-Host ('=' * 34) -ForegroundColor DarkGray
-
-  Write-KvLine -Key 'ComputerName' -Value $Summary.ComputerName -ValueColor White
-  Write-KvLine -Key 'Timestamp' -Value ($Summary.Timestamp.ToString('s')) -ValueColor Gray
-
-  $lvlValue = if ($null -eq $Summary.LmCompatibilityLevel) { '<not set>' } else { [string]$Summary.LmCompatibilityLevel }
-  $lvlColor = if ($null -eq $Summary.LmCompatibilityLevel) { 'Yellow' } elseif ($Summary.LmCompatibilityLevel -lt $Summary.MinimumLevel) { 'Red' } else { 'Green' }
-
-  Write-KvLine -Key 'LmCompatibilityLevel' -Value $lvlValue -ValueColor $lvlColor
-  Write-KvLine -Key 'LmCompatibilityText' -Value $Summary.LmCompatibilityText -ValueColor Gray
-  Write-KvLine -Key 'MinimumLevel' -Value ([string]$Summary.MinimumLevel) -ValueColor Gray
-  Write-KvLine -Key 'FindingsCount' -Value ([string]$Summary.FindingsCount) -ValueColor $(if ($Summary.FindingsCount -gt 0) { 'Yellow' } else { 'Green' })
-  Write-KvLine -Key 'ConfigLoaded' -Value ([string]$Summary.ConfigLoaded) -ValueColor $(if ($Summary.ConfigLoaded) { 'Green' } else { 'DarkGray' })
-
-  if ($null -ne $top) {
-    $c = Get-SeverityColor -Severity $top.Severity
-    Write-KvLine -Key 'TopFinding' -Value ("{0} ({1})" -f $top.Severity, $top.Code) -ValueColor $c
-  } else {
-    Write-KvLine -Key 'TopFinding' -Value 'None' -ValueColor Green
-  }
-
-  $counts = @{ High = 0; Medium = 0; Low = 0; Info = 0 }
-  foreach ($g in ($Findings | Group-Object Severity)) {
-    if ($counts.ContainsKey($g.Name)) { $counts[$g.Name] = [int]$g.Count }
-  }
-
-  Write-Host ''
-  Write-Host 'Findings by severity:' -ForegroundColor DarkGray
-  Write-Host ("  High  : {0}" -f $counts.High)   -ForegroundColor (Get-SeverityColor -Severity 'High')
-  Write-Host ("  Medium: {0}" -f $counts.Medium) -ForegroundColor (Get-SeverityColor -Severity 'Medium')
-  Write-Host ("  Low   : {0}" -f $counts.Low)    -ForegroundColor (Get-SeverityColor -Severity 'Low')
-  Write-Host ("  Info  : {0}" -f $counts.Info)   -ForegroundColor (Get-SeverityColor -Severity 'Info')
-
-  if ($sorted.Count -gt 0 -and $Config.ConsoleMode -eq 'Pretty') {
-    Write-Host ''
-    Write-Host 'Top findings:' -ForegroundColor DarkGray
-    foreach ($f in ($sorted | Select-Object -First 5)) {
-      $color = Get-SeverityColor -Severity $f.Severity
-      Write-Host ("- [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -ForegroundColor $color
-    }
-  }
-
-  Write-Host ''
-}
+# Write-ConsoleSummary imported from lib/Console.psm1
 
 #endregion Helpers
 
@@ -288,7 +231,7 @@ $MinimumLevel  = $config.MinimumLevel
 $configLoaded = $false
 if (-not [string]::IsNullOrWhiteSpace($ConfigPath) -and (Test-Path -LiteralPath $ConfigPath)) {
   try {
-    $raw = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop
     if (-not [string]::IsNullOrWhiteSpace($raw)) {
       $null = $raw | ConvertFrom-Json
       $configLoaded = $true
@@ -303,7 +246,7 @@ if (-not [string]::IsNullOrWhiteSpace($ConfigPath) -and (Test-Path -LiteralPath 
 $findings = New-FindingsList
 
 $lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
-$val     = Get-RegDword -Path $lsaPath -Name 'LmCompatibilityLevel'
+$val     = Get-RegDwordOrNull -Path $lsaPath -Name 'LmCompatibilityLevel'
 $valText = Convert-LmCompatibilityLevelToText -Value $val
 
 if ($null -eq $val) {
@@ -364,10 +307,21 @@ if ($ExportPath) {
 #endregion Export
 
 #region Console-only output (no pipeline pollution)
-Write-ConsoleSummary -Summary $summary -Findings $findings -Config $config
+$lvlValue = if ($null -eq $summary.LmCompatibilityLevel) { '<not set>' } else { [string]$summary.LmCompatibilityLevel }
+$customFields = [ordered]@{
+  'LmLevel'    = ("{0} ({1})" -f $lvlValue, $summary.LmCompatibilityText)
+  'MinLevel'   = [string]$summary.MinimumLevel
+  'ConfigLoad' = [string]$summary.ConfigLoaded
+}
+$findingsAL = [System.Collections.ArrayList]@($findings)
+Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+  -Title 'NTLM Audit (LmCompatibilityLevel)' `
+  -CustomFields $customFields
 #endregion Console-only output
 
-#region Pipeline output (structured objects only)
-#$summary
-#$findings
-#endregion Pipeline output
+# V2 output contract
+$resultToken = if ($Strict -and $findings.Count -gt 0) { 'FAIL' } elseif ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '41-NTLM-Audit-Client.ps1' -Mode $Mode -Result $resultToken -Findings @($findings) -Summary $summary -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

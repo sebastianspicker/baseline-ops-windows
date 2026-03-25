@@ -10,7 +10,7 @@ Optionally loads a JSON config (e.g. "PATH/TO/JSON/config.json"); if missing/inv
 
 .DESIGN GOALS
 - Pipeline: structured objects only (safe for Export-Csv / ConvertTo-Json / Where-Object).
-- Console: all "pretty" output via Write-Host or Write-Information only (no strings/format objects to pipeline). [web:58]
+- Console: all "pretty" output via Write-UiLine or Write-Information only (no strings/format objects to pipeline). [web:58]
 
 .PARAMETER ExportPath
 Optional base file path for CSV exports. Creates:
@@ -29,6 +29,25 @@ Suppress console output.
 Emit structured pipeline output (object with Summary and Interfaces).
 If not set, no pipeline output is emitted (interactive-friendly).
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 With -PassThru: PSCustomObject with Summary and Interfaces.
 Without -PassThru: no pipeline output.
@@ -38,45 +57,67 @@ Without -PassThru: no pipeline output.
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [Parameter(Mandatory = $false)]
   [ValidateNotNullOrEmpty()]
   [string]$ExportPath,
 
-  [Parameter(Mandatory = $false)]
   [switch]$IncludeHidden,
 
-  [Parameter(Mandatory = $false)]
   [ValidateNotNullOrEmpty()]
   [string]$JsonPath = $null,
 
-  [Parameter(Mandatory = $false)]
   [switch]$Quiet,
 
-  [Parameter(Mandatory = $false)]
   [switch]$PassThru
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Strict,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 3.0
-$ErrorActionPreference = 'Stop'
-
-function Ensure-Cmdlet {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$Name
-  )
-
-  if (-not (Get-Command -Name $Name -ErrorAction SilentlyContinue)) {
-    throw "Required cmdlet is missing: $Name. Verify OS / NetTCPIP module availability."
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
   }
 }
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+$ErrorActionPreference = 'Stop'
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
+
+# Ensure-Cmdlet imported from lib/External.psm1
 
 function Get-OptionalPropertyValue {
   [CmdletBinding()]
@@ -125,7 +166,7 @@ function Get-DefaultConfig {
     ConsoleSummary            = $true
     ConsoleShowInterfaces     = $true
     ConsoleShowIssuesTable    = $true
-    ConsoleUseInformation     = $false # If $true: Write-Information; else: Write-Host.
+    ConsoleUseInformation     = $false # If $true: Write-Information; else: Write-UiLine.
     ConsoleWidthHint          = 240     # Used only for Out-String -Width to reduce wrapping.
   }
 }
@@ -133,7 +174,6 @@ function Get-DefaultConfig {
 function Import-JsonConfigOrDefault {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory = $false)]
     [string]$JsonPath
   )
 
@@ -143,7 +183,7 @@ function Import-JsonConfigOrDefault {
   if (-not (Test-Path -Path $JsonPath)) { return $cfg }
 
   try {
-    $raw = Get-Content -Path $JsonPath -Raw
+    $raw = Get-Content -Path $JsonPath -Raw -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($raw)) { return $cfg }
 
     $json = $raw | ConvertFrom-Json
@@ -190,7 +230,7 @@ function To-ConsoleTableText {
     [int]$Width
   )
 
-  # Console-only formatting; caller must write via Write-Host/Write-Information. [web:146]
+  # Console-only formatting; caller must write via Write-UiLine/Write-Information. [web:146]
   return ($InputObjects | Format-Table -AutoSize | Out-String -Width $Width)
 }
 
@@ -219,7 +259,7 @@ function Write-ConsoleInterfaces {
 
   $text = To-ConsoleTableText -InputObjects $rows -Width $Config.ConsoleWidthHint
   if ($Config.ConsoleUseInformation) { Write-Information -InformationAction Continue -MessageData $text }
-  else { Write-Host $text }
+  else { Write-UiLine $text }
 }
 
 function Write-ConsoleSummary {
@@ -273,7 +313,7 @@ function Write-ConsoleSummary {
 
   $issuesText = To-ConsoleTableText -InputObjects $issueRows -Width $Config.ConsoleWidthHint
   if ($Config.ConsoleUseInformation) { Write-Information -InformationAction Continue -MessageData $issuesText }
-  else { Write-Host $issuesText }
+  else { Write-UiLine $issuesText }
 }
 
 # --- Main ---
@@ -349,9 +389,27 @@ if (-not $Quiet -and $config.ConsoleSummary) {
   Write-ConsoleSummary -Summary $summary -Interfaces $interfaces -Config $config
 }
 
-#$result = [pscustomobject]@{
-#  Summary    = $summary
-#  Interfaces = $interfaces
-#}
+$result = [pscustomobject]@{
+  Summary    = $summary
+  Interfaces = $interfaces
+}
 
-if ($PassThru) { $result }
+# C10: populate findings from interface issues
+$issueInterfaces = @($interfaces | Where-Object {
+  (-not $_.DnsServers) -or ((-not $_.IPv4Gateway) -and (-not $_.IPv6Gateway))
+})
+foreach ($iface in $issueInterfaces) {
+  $issueType = @()
+  if (-not $iface.DnsServers) { $issueType += 'missing DNS' }
+  if (-not $iface.IPv4Gateway -and -not $iface.IPv6Gateway) { $issueType += 'missing gateway' }
+  Add-Finding -FindingList $script:Findings -Code 'NET-InterfaceIssue' -Severity 'Medium' `
+    -Message ("Interface '{0}' has {1}" -f $iface.InterfaceAlias, ($issueType -join ' and ')) `
+    -Extra @{ InterfaceAlias = $iface.InterfaceAlias; InterfaceIndex = $iface.InterfaceIndex; IPv4Address = $iface.IPv4Address; DnsServers = $iface.DnsServers }
+}
+
+# V2 output contract
+$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result.Summary -Metadata @{ Interfaces = $result.Interfaces }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

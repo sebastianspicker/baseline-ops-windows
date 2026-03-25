@@ -43,6 +43,25 @@ If present and readable, the script looks for a catalog path at:
 
 If ConfigPath is missing/invalid, or if it does not contain UpdateHealth.CatalogPath, the script continues with the built-in default catalog.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
 System.Management.Automation.PSCustomObject
 
@@ -103,68 +122,74 @@ Runs and displays only key output fields while preserving the full JSON proof fi
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$CatalogPath,
-  [switch]$Remediate,
   [switch]$Strict,
-  [string]$ConfigPath = "PATH/TO/JSON/config.json"
+  [string]$ConfigPath,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 # ------------------------------------ Globals --------------------------------------
 $script:EventSource = 'UpdateHealth-SSU-Proof'
 $script:EventLog    = 'Application'
-$script:FallbackLog = "PATH/TO/JSON/logs/UpdateHealth-SSU-Proof.log"
+$script:FallbackLog = $null
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 # -------------------------------- Console helpers ----------------------------------
 
-function Write-UiKeyValue {
-  param(
-    [string]$Key,
-    [string]$Value,
-    [ValidateSet('Default','Info','Ok','Warn','Err','Dim')]
-    [string]$Style = 'Default'
-  )
-  Write-UiLine -Text ("{0,-12}: {1}" -f $Key,$Value) -Style $Style
-}
 
 # ------------------------------------ Helpers --------------------------------------
 
 function Write-FallbackLogLine {
   param([string]$Line)
   try {
-    Ensure-Dir (Split-Path -Parent $script:FallbackLog)
+    Ensure-Directory (Split-Path -Parent $script:FallbackLog)
     ("{0} {1}" -f (Get-Date).ToString('s'), $Line) | Out-File -FilePath $script:FallbackLog -Encoding UTF8 -Append
-  } catch { }
+  } catch { <# best-effort: fallback log write may fail if path is inaccessible #> }
 }
 
 
-function Is-Admin {
-  try {
-    $p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  } catch {
-    return $false
-  }
-}
+# Test-IsAdmin imported from lib/Common.psm1
 
-function Save-Json {
-  param([object]$Obj,[string]$Path)
-  try {
-    Ensure-Dir (Split-Path -Parent $Path)
-    ($Obj | ConvertTo-Json -Depth 12) | Out-File -Encoding UTF8 -FilePath $Path
-    return $true
-  } catch {
-    Write-FallbackLogLine ("JSON write failed ({0}): {1}" -f $Path,$_.Exception.Message)
-    return $false
-  }
-}
+# Save-Json: using canonical Save-Json from lib/Serialization.psm1
 
 function Get-SafeString {
   param($Value,[string]$Default)
@@ -207,6 +232,13 @@ function New-Finding {
     Severity = $Severity
     Message  = $Message
   }
+}
+
+function Add-FindingToCanonical {
+  # C10: adds a legacy finding object to the canonical $script:Findings list
+  param([pscustomobject]$LegacyFinding)
+  $c10Sev = switch ($LegacyFinding.Severity) { 'Error' { 'High' }; 'Warning' { 'Medium' }; default { 'Info' } }
+  Add-Finding -FindingList $script:Findings -Code $LegacyFinding.Area -Severity $c10Sev -Message $LegacyFinding.Message -Extra @{ Time = $LegacyFinding.Time }
 }
 
 function New-Action {
@@ -312,14 +344,14 @@ function Get-TaskInfoUnder {
     $tasks = Get-ScheduledTask -TaskPath $Folder -ErrorAction Stop
     foreach($t in $tasks){
       $state = "Unknown"
-      try { $state = (Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop).State.ToString() } catch { }
+      try { $state = (Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop).State.ToString() } catch { <# best-effort: task state may not be readable #> }
       Add-ArrayList $list ([pscustomobject]@{
         Path    = ($t.TaskPath + $t.TaskName)
         Enabled = [bool]$t.Enabled
         State   = $state
       })
     }
-  } catch { }
+  } catch { <# best-effort: scheduled task enumeration may fail if task folder does not exist #> }
   return $list
 }
 
@@ -386,7 +418,7 @@ function Load-Catalog {
   if ($CatalogPath) {
     if (Test-Path -LiteralPath $CatalogPath) {
       try {
-        $cat = Get-Content -Raw -LiteralPath $CatalogPath | ConvertFrom-Json -ErrorAction Stop
+        $cat = Get-Content -Raw -LiteralPath $CatalogPath -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
         $meta.CatalogLoaded = $true
         $meta.CatalogSource = 'CatalogPath'
         return [pscustomobject]@{ Catalog=$cat; Meta=$meta }
@@ -401,12 +433,12 @@ function Load-Catalog {
   if ($ConfigPath) {
     if (Test-Path -LiteralPath $ConfigPath) {
       try {
-        $cfg = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json -ErrorAction Stop
+        $cfg = Get-Content -Raw -LiteralPath $ConfigPath -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
         $p = $null
         if ($cfg -and $cfg.UpdateHealth -and $cfg.UpdateHealth.CatalogPath) { $p = [string]$cfg.UpdateHealth.CatalogPath }
         if ($p) {
           if (Test-Path -LiteralPath $p) {
-            $cat = Get-Content -Raw -LiteralPath $p | ConvertFrom-Json -ErrorAction Stop
+            $cat = Get-Content -Raw -LiteralPath $p -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
             $meta.CatalogLoaded = $true
             $meta.CatalogSource = 'ConfigPath->CatalogPath'
             return [pscustomobject]@{ Catalog=$cat; Meta=$meta }
@@ -453,7 +485,7 @@ function Get-UHT-Info {
         if ($p.DisplayName -match 'Microsoft Update Health Tools') { $hit=$p; break }
       }
       if ($hit){ break }
-    } catch { }
+    } catch { <# best-effort: registry key may not exist on all OS editions #> }
   }
 
   if ($hit){
@@ -479,7 +511,7 @@ function Get-UHT-Info {
         if ($exe) { $ret.FileVersion = $exe.VersionInfo.FileVersion }
         if (-not $ret.InstallLocation) { $ret.InstallLocation = $d }
       }
-    } catch { }
+    } catch { <# best-effort: UHT install directory probing #> }
   }
 
   try {
@@ -513,7 +545,7 @@ function Get-SSU-Info {
       $ret.Source  = 'Registry:ServicingStackVersion'
       return $ret
     }
-  } catch { }
+  } catch { <# best-effort: SSU version registry key may not exist #> }
 
   try {
     $out = (& dism.exe /online /get-packages /format:table 2>&1) | Out-String
@@ -529,7 +561,7 @@ function Get-SSU-Info {
       if ($ver) { $ret.Version = $ver.ToString() }
       $ret.Source = 'DISM:Get-Packages'
     }
-  } catch { }
+  } catch { <# best-effort: DISM SSU detection may fail without elevation #> }
 
   return $ret
 }
@@ -552,7 +584,7 @@ function Get-WU-CoreServices {
 $sw = New-Object System.Diagnostics.Stopwatch
 $sw.Start()
 
-$admin = Is-Admin
+$admin = Test-IsAdmin
 $eventSourceOk = Ensure-EventSource
 
 $findings = New-Object System.Collections.ArrayList
@@ -610,7 +642,7 @@ try {
   if ($u.Installed) {
     $allowed = @('Automatic','AutomaticDelayedStart')
     if ($cat -and $cat.UpdateHealthTools -and $cat.UpdateHealthTools.ServiceStartAllowed) {
-      try { $allowed = @($cat.UpdateHealthTools.ServiceStartAllowed) } catch { }
+      try { $allowed = @($cat.UpdateHealthTools.ServiceStartAllowed) } catch { <# best-effort: catalog property may not exist #> }
       if (-not $allowed -or $allowed.Count -eq 0) { $allowed = @('Automatic','AutomaticDelayedStart') }
     }
 
@@ -690,6 +722,11 @@ $effectiveFindings = New-Object System.Collections.ArrayList
 Add-ArrayListMany $effectiveFindings $findings
 if ($Strict) { Add-ArrayListMany $effectiveFindings $notes }
 
+# C10: populate canonical findings from effectiveFindings
+foreach ($ef in @($effectiveFindings)) {
+  Add-FindingToCanonical -LegacyFinding $ef
+}
+
 # Compose proof object
 $proof = [pscustomobject]@{
   Time        = (Get-Date).ToString('s')
@@ -712,7 +749,13 @@ $proof = [pscustomobject]@{
 }
 
 # Persist JSON
-$jsonOk = Save-Json -Obj $proof -Path $outFile
+$jsonOk = $false
+try {
+  Save-Json -InputObject $proof -Path $outFile -Depth 12
+  $jsonOk = $true
+} catch {
+  Write-FallbackLogLine ("JSON write failed ({0}): {1}" -f $outFile, $_.Exception.Message)
+}
 if ($jsonOk) { Add-ArrayList $actions (New-Action -Target $outFile -Operation 'WriteJson' -Result 'Success' -Message 'Proof written') }
 else { Add-ArrayList $notes (New-Finding -Area 'Proof' -Severity 'Info' -Message 'Failed to write JSON proof file.') }
 
@@ -751,19 +794,19 @@ if ($summaryStatus -ne 'OK') { $summaryStyle = 'Warn' }
 $adminStyle = 'Warn'
 if ($admin) { $adminStyle = 'Ok' }
 
-Write-Host ""
+Write-UiLine ""
 Write-UiLine -Text "=== UpdateHealth/SSU Proof Summary ===" -Style 'Header'
-Write-UiKeyValue -Key 'Status'    -Value $summaryStatus -Style $summaryStyle
-Write-UiKeyValue -Key 'Remediate' -Value ([string][bool]$Remediate) -Style 'Dim'
-Write-UiKeyValue -Key 'Strict'    -Value ([string][bool]$Strict) -Style 'Dim'
-Write-UiKeyValue -Key 'Admin'     -Value ([string]$admin) -Style $adminStyle
-Write-UiKeyValue -Key 'Catalog'   -Value $catalogSource2 -Style 'Dim'
-Write-UiKeyValue -Key 'JSON'      -Value $outFile -Style 'Dim'
-Write-UiKeyValue -Key 'EventLog'  -Value ("{0}/{1}" -f $script:EventLog,$script:EventSource) -Style 'Dim'
-Write-UiKeyValue -Key 'Duration'  -Value ("{0} ms" -f $sw.ElapsedMilliseconds) -Style 'Dim'
+Write-KeyValue -Key 'Status'    -Value $summaryStatus -Style $summaryStyle
+Write-KeyValue -Key 'Remediate' -Value ([string][bool]$Remediate) -Style 'Dim'
+Write-KeyValue -Key 'Strict'    -Value ([string][bool]$Strict) -Style 'Dim'
+Write-KeyValue -Key 'Admin'     -Value ([string]$admin) -Style $adminStyle
+Write-KeyValue -Key 'Catalog'   -Value $catalogSource2 -Style 'Dim'
+Write-KeyValue -Key 'JSON'      -Value $outFile -Style 'Dim'
+Write-KeyValue -Key 'EventLog'  -Value ("{0}/{1}" -f $script:EventLog,$script:EventSource) -Style 'Dim'
+Write-KeyValue -Key 'Duration'  -Value ("{0} ms" -f $sw.ElapsedMilliseconds) -Style 'Dim'
 
 if ($notes.Count -gt 0) {
-  Write-Host ""
+  Write-UiLine ""
   Write-UiLine -Text "Notes" -Style 'Header'
   foreach($n in @($notes)) {
     $st = 'Info'
@@ -774,7 +817,7 @@ if ($notes.Count -gt 0) {
 }
 
 if ($actions.Count -gt 0) {
-  Write-Host ""
+  Write-UiLine ""
   Write-UiLine -Text "Actions" -Style 'Header'
   foreach($a in @($actions)) {
     $st2 = 'Ok'
@@ -784,7 +827,7 @@ if ($actions.Count -gt 0) {
 }
 
 if ($effectiveFindings.Count -gt 0) {
-  Write-Host ""
+  Write-UiLine ""
   Write-UiLine -Text "Findings" -Style 'Header'
   foreach($f in @($effectiveFindings)) {
     $st3 = 'Info'
@@ -793,20 +836,14 @@ if ($effectiveFindings.Count -gt 0) {
     Write-UiLine -Text ("- {0} [{1}] {2} ({3})" -f $f.Time,$f.Area,$f.Message,$f.Severity) -Style $st3
   }
 } else {
-  Write-Host ""
+  Write-UiLine ""
   Write-UiLine -Text "No findings." -Style 'Ok'
 }
 
-# ----------------------------- Pipeline output (single object) ---------------------
-# [pscustomobject]@{
-#   Status        = $summaryStatus
-#   CatalogSource = $catalogSource2
-#   Remediate     = [bool]$Remediate
-#   Strict        = [bool]$Strict
-#   IsAdmin       = $admin
-#   JsonPath      = $outFile
-#   Findings      = @($effectiveFindings)
-#   Actions       = @($actions)
-#   Notes         = @($notes)
-#   DurationMs    = $sw.ElapsedMilliseconds
-# }
+# V2 output contract
+$v2Summary = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Status = $summaryStatus; Remediate = [bool]$Remediate; Strict = [bool]$Strict; DurationMs = $sw.ElapsedMilliseconds; Timestamp = Get-Date }
+$resultToken = if ($summaryStatus -eq 'FAIL') { 'FAIL' } elseif ($summaryStatus -eq 'WARN' -or @($effectiveFindings).Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '06-UpdateHealth-SSU-Proof.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $v2Summary -Metadata @{ Actions = @($actions); Notes = @($notes); CatalogSource = $catalogSource2 }
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

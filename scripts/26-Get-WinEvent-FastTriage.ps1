@@ -6,7 +6,7 @@ Fast event log triage (Windows PowerShell 5.1) using Get-WinEvent -FilterHashtab
 .DESCRIPTION
 Best-practice layout:
 - Success output stream: structured objects only (safe for Export-Csv / ConvertTo-Json / Where-Object). [web:90]
-- Console UX: pretty blocks, separators, and colors via Write-Host / Write-Information only. [web:89][web:104]
+- Console UX: pretty blocks, separators, and colors via Write-UiLine / Write-Information only. [web:89][web:104]
 
 Features:
 - Optional JSON config overrides (PATH/TO/JSON\triage.json). Falls back to defaults if missing/invalid.
@@ -37,13 +37,34 @@ If enabled, produces NormalizedMessage (single-line) and uses it for collapse gr
 
 .PARAMETER ExportPath
 Optional CSV export path.
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+
+.OUTPUTS
+  None by default.
+  When -PassThru is used, emits a PSCustomObject v2 result with Script, Mode, Result, Findings, Summary, and Metadata properties.
+
 .EXAMPLE
   .\26-Get-WinEvent-FastTriage.ps1
 
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [Parameter()]
   [string]$ConfigPath,
@@ -91,61 +112,55 @@ param(
 
   [Parameter()]
   [string]$ExportPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 $script:Quiet = [bool]$Quiet
 $script:NoColor = [bool]$NoColor
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -------------------------
 # Console helpers (no pipeline pollution)
 # -------------------------
-function Write-InfoLine {
-  [CmdletBinding()]
-  param([AllowNull()][string]$Message)
 
-  if ($script:Quiet) { return }
-
-  # Write-Information rejects empty strings in PS 5.1; treat them as a blank line via Write-Host. [web:89][web:104]
-  if ([string]::IsNullOrEmpty($Message)) {
-    Write-Host ''
-    return
-  }
-
-  Write-Information $Message -InformationAction Continue
-}
-
-function Write-HostLine {
-  [CmdletBinding()]
-  param(
-    [AllowNull()][string]$Message,
-    [ConsoleColor]$ForegroundColor,
-    [ConsoleColor]$BackgroundColor,
-    [switch]$NoNewLine
-  )
-
-  if ($script:Quiet) { return }
-
-  if ($null -eq $Message) { $Message = '' }
-
-  if ($script:NoColor) {
-    if ($NoNewLine) { Write-Host $Message -NoNewline } else { Write-Host $Message }
-    return
-  }
-
-  $params = @{ Object = $Message }
-  if ($PSBoundParameters.ContainsKey('ForegroundColor')) { $params.ForegroundColor = $ForegroundColor }
-  if ($PSBoundParameters.ContainsKey('BackgroundColor')) { $params.BackgroundColor = $BackgroundColor }
-  if ($NoNewLine) { $params.NoNewline = $true }
-  Write-Host @params
-}
 
 
 function Get-LevelColor {
@@ -177,7 +192,7 @@ function Resolve-TriageConfig {
   }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
     return ($raw | ConvertFrom-Json -ErrorAction Stop)
   }
@@ -340,7 +355,11 @@ catch {
   if ($_.Exception.Message -match 'No events were found') {
     $eventsRaw = @()
   } else {
-    throw
+    Write-Warning "Get-WinEvent query failed: $($_.Exception.Message)"
+    $v2Result = New-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $_.Exception.Message } -Metadata @{}
+    Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+    if ($PassThru) { $v2Result }
+    exit 1
   }
 }
 
@@ -441,63 +460,66 @@ if ($events.Count -gt 0) {
 if (-not $Quiet) {
   Write-Section "Eventlog Triage Summary"
 
-  Write-HostLine ("LogName      : {0}" -f $LogName) -ForegroundColor White
-  Write-HostLine ("HoursBack    : {0}" -f $HoursBack) -ForegroundColor White
-  Write-HostLine ("StartTime    : {0}" -f $startTime) -ForegroundColor White
-  Write-HostLine ("Level(s)     : {0}" -f ($Level -join ', ')) -ForegroundColor White
-  Write-HostLine ("ProviderName : {0}" -f ($(if ($ProviderName -and $ProviderName.Count -gt 0) { $ProviderName -join ', ' } else { '<none>' }))) -ForegroundColor White
-  Write-HostLine ("Id(s)        : {0}" -f ($(if ($Id -and $Id.Count -gt 0) { $Id -join ', ' } else { '<none>' }))) -ForegroundColor White
-  Write-HostLine ("MaxEvents    : {0}" -f $MaxEvents) -ForegroundColor White
-  Write-HostLine ("Returned     : {0}" -f $events.Count) -ForegroundColor White
+  Write-UiLine ("LogName      : {0}" -f $LogName) -ForegroundColor White
+  Write-UiLine ("HoursBack    : {0}" -f $HoursBack) -ForegroundColor White
+  Write-UiLine ("StartTime    : {0}" -f $startTime) -ForegroundColor White
+  Write-UiLine ("Level(s)     : {0}" -f ($Level -join ', ')) -ForegroundColor White
+  Write-UiLine ("ProviderName : {0}" -f ($(if ($ProviderName -and $ProviderName.Count -gt 0) { $ProviderName -join ', ' } else { '<none>' }))) -ForegroundColor White
+  Write-UiLine ("Id(s)        : {0}" -f ($(if ($Id -and $Id.Count -gt 0) { $Id -join ', ' } else { '<none>' }))) -ForegroundColor White
+  Write-UiLine ("MaxEvents    : {0}" -f $MaxEvents) -ForegroundColor White
+  Write-UiLine ("Returned     : {0}" -f $events.Count) -ForegroundColor White
 
   if ($events.Count -gt 0) {
-    Write-HostLine ("TimeRange    : {0} .. {1}" -f $minTime, $maxTime) -ForegroundColor White
+    Write-UiLine ("TimeRange    : {0} .. {1}" -f $minTime, $maxTime) -ForegroundColor White
   } else {
-    Write-HostLine ("TimeRange    : <n/a>") -ForegroundColor DarkGray
+    Write-UiLine ("TimeRange    : <n/a>") -ForegroundColor DarkGray
   }
 
-  Write-HostLine ("Deduplicate  : {0} (removed: {1})" -f $Deduplicate, $dedupRemoved) -ForegroundColor DarkGray
-  Write-HostLine ("Collapse     : {0} (top: {1})" -f $Collapse, $CollapseTop) -ForegroundColor DarkGray
-  Write-HostLine ("ExportPath   : {0}" -f ($(if ($ExportPath) { $ExportPath } else { '<none>' }))) -ForegroundColor DarkGray
-  Write-HostLine ("Exported     : {0}" -f $exported) -ForegroundColor DarkGray
+  Write-UiLine ("Deduplicate  : {0} (removed: {1})" -f $Deduplicate, $dedupRemoved) -ForegroundColor DarkGray
+  Write-UiLine ("Collapse     : {0} (top: {1})" -f $Collapse, $CollapseTop) -ForegroundColor DarkGray
+  Write-UiLine ("ExportPath   : {0}" -f ($(if ($ExportPath) { $ExportPath } else { '<none>' }))) -ForegroundColor DarkGray
+  Write-UiLine ("Exported     : {0}" -f $exported) -ForegroundColor DarkGray
 
   Write-InfoLine ""  # blank line (safe now)
 
   if ($levelStats.Count -gt 0) {
-    Write-HostLine "Levels:" -ForegroundColor Cyan
+    Write-UiLine "Levels:" -ForegroundColor Cyan
     foreach ($g in $levelStats) {
       $c = Get-LevelColor -LevelDisplayName $g.Name
-      Write-HostLine ("  {0,-12} {1,6}" -f $g.Name, $g.Count) -ForegroundColor $c
+      Write-UiLine ("  {0,-12} {1,6}" -f $g.Name, $g.Count) -ForegroundColor $c
     }
   }
 
   if ($providerStats.Count -gt 0) {
     Write-InfoLine ""
-    Write-HostLine "Top Providers:" -ForegroundColor Cyan
+    Write-UiLine "Top Providers:" -ForegroundColor Cyan
     foreach ($g in $providerStats) {
-      Write-HostLine ("  {0,-40} {1,6}" -f $g.Name, $g.Count) -ForegroundColor Gray
+      Write-UiLine ("  {0,-40} {1,6}" -f $g.Name, $g.Count) -ForegroundColor Gray
     }
   }
 
   if ($idStats.Count -gt 0) {
     Write-InfoLine ""
-    Write-HostLine "Top Event IDs:" -ForegroundColor Cyan
+    Write-UiLine "Top Event IDs:" -ForegroundColor Cyan
     foreach ($g in $idStats) {
-      Write-HostLine ("  {0,-10} {1,6}" -f $g.Name, $g.Count) -ForegroundColor Gray
+      Write-UiLine ("  {0,-10} {1,6}" -f $g.Name, $g.Count) -ForegroundColor Gray
     }
   }
 
   if ($collapseSummary.Count -gt 0) {
     Write-InfoLine ""
-    Write-HostLine "Top Similar (collapsed):" -ForegroundColor Cyan
+    Write-UiLine "Top Similar (collapsed):" -ForegroundColor Cyan
     foreach ($row in $collapseSummary) {
       $c = Get-LevelColor -LevelDisplayName $row.Level
-      Write-HostLine ("  {0,6}x  {1}/{2}/{3}   {4} .. {5}" -f $row.Count, $row.Provider, $row.Id, $row.Level, $row.FirstSeen, $row.LastSeen) -ForegroundColor $c
+      Write-UiLine ("  {0,6}x  {1}/{2}/{3}   {4} .. {5}" -f $row.Count, $row.Provider, $row.Id, $row.Level, $row.FirstSeen, $row.LastSeen) -ForegroundColor $c
     }
   }
 
-  Write-HostLine ('-' * 70) -ForegroundColor DarkGray
+  Write-UiLine ('-' * 70) -ForegroundColor DarkGray
 }
 
-# Success output: objects only.
-#$events
+# V2 output contract
+$v2Result = New-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

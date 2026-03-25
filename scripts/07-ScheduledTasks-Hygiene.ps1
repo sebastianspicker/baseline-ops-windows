@@ -56,6 +56,25 @@
 .INPUTS
   None. This script does not accept pipeline input.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   System.Management.Automation.PSCustomObject
 
@@ -125,99 +144,77 @@
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='High')]
 param(
   [string]$CatalogPath,
-  [switch]$Remediate,
   [switch]$Strict,
-  [string]$ConfigPath = "PATH/TO/JSON/config.json"
+  [string]$ConfigPath
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+$Remediate = ($Mode -eq 'Remediate')
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 # =========================
 # Defaults (anonymized)
 # =========================
 $DefaultEventSource    = 'TasksHygiene'
-$DefaultQuarantineDir  = 'PATH/TO/QUARANTINE/tasks'
-$DefaultProofOutFile   = 'PATH/TO/PROOF/E5-Tasks.json'
+$DefaultQuarantineDir  = $null
+$DefaultProofOutFile   = $null
 
 # =========================
 # Console (pretty)
 # =========================
 
-function Write-UiHeader {
-  param([string]$Title)
-  Write-Host ""
-  Write-Host ("=" * 44) -ForegroundColor DarkGray
-  Write-Host ("  {0}" -f $Title) -ForegroundColor Cyan
-  Write-Host ("=" * 44) -ForegroundColor DarkGray
-}
 
-function Write-UiKV {
-  param(
-    [string]$Key,
-    [object]$Value,
-    [ConsoleColor]$KeyColor = [ConsoleColor]::DarkGray,
-    [ConsoleColor]$ValueColor = [ConsoleColor]::Gray
-  )
-  $v = ""
-  try { $v = [string]$Value } catch { $v = "" }
-  Write-Host ("{0,-12} {1}" -f ($Key + ":"), $v) -ForegroundColor $KeyColor -NoNewline
-  Write-Host "" -ForegroundColor $ValueColor
-}
 
-function Write-UiStatus {
-  param(
-    [string]$Label,
-    [ValidateSet('OK','WARN','FAIL','INFO')]$State,
-    [string]$Text
-  )
-  $c = [ConsoleColor]::Gray
-  if ($State -eq 'OK')   { $c = [ConsoleColor]::Green }
-  if ($State -eq 'WARN') { $c = [ConsoleColor]::Yellow }
-  if ($State -eq 'FAIL') { $c = [ConsoleColor]::Red }
-  if ($State -eq 'INFO') { $c = [ConsoleColor]::Cyan }
-
-  Write-Host ("[{0}] " -f $Label) -ForegroundColor $c -NoNewline
-  Write-Host $Text -ForegroundColor Gray
-}
 
 # =========================
 # Helpers
 # =========================
 
 
-function Is-Admin {
-  try {
-    $p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  } catch { return $false }
-}
+# Test-IsAdmin imported from lib/Common.psm1
 
+# Save-Json: using canonical Save-Json from lib/Serialization.psm1
 
-function Save-Json {
-  param([object]$Obj,[string]$Path)
-  Ensure-Dir (Split-Path -Parent $Path)
-  ($Obj | ConvertTo-Json -Depth 25) | Out-File -Encoding UTF8 -FilePath $Path
-}
-
-function Try-LoadJsonFile {
-  param([string]$Path)
-  if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
-  if (-not (Test-Path $Path)) { return $null }
-  try {
-    $raw = Get-Content -Raw -Path $Path -ErrorAction Stop
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-    return ($raw | ConvertFrom-Json -ErrorAction Stop)
-  } catch {
-    return $null
-  }
-}
+# Try-LoadJsonFile replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
 
 function Get-PropValue {
   param(
@@ -227,10 +224,12 @@ function Get-PropValue {
   )
   if ($null -eq $Object) { return $Default }
   try {
-    if ($Object.PSObject -and $Object.PSObject.Properties -and $Object.PSObject.Properties.Match($Name).Count -gt 0) {
+    if ($Object.PSObject -and $Object.PSObject.Properties -and $null -ne $Object.PSObject.Properties[$Name]) {
       return $Object.PSObject.Properties[$Name].Value
     }
-  } catch { }
+  } catch {
+    # Intentionally swallow: property access can throw in strict mode or with special types
+  }
   return $Default
 }
 
@@ -303,9 +302,9 @@ function New-DefaultCatalog {
       "\\Company\\Managed\\.*"
     )
     AllowActionPathPrefixes = @(
-      "C:\Windows\",
-      "C:\Program Files\",
-      "C:\Program Files (x86)\",
+      "$env:SystemRoot\",
+      "$env:ProgramFiles\",
+      "${env:ProgramFiles(x86)}\",
       "PATH/TO/SCRIPTS/"
     )
     DenyActionPathRegex = @(
@@ -363,16 +362,16 @@ function Normalize-Catalog {
 function Load-Catalog {
   param([string]$CatalogPath,[string]$ConfigPath,[object]$DefaultCatalog)
 
-  $cat = Try-LoadJsonFile -Path $CatalogPath
+  $cat = Read-JsonFileSafe -Path $CatalogPath
   if ($cat) { return (Normalize-Catalog -cat $cat -fallback $DefaultCatalog) }
 
-  $cfg = Try-LoadJsonFile -Path $ConfigPath
+  $cfg = Read-JsonFileSafe -Path $ConfigPath
   $th  = $null
   if ($cfg) { $th = Get-PropValue $cfg 'TasksHygiene' $null }
   if ($th) {
     $p = Get-PropValue $th 'CatalogPath' $null
     if (-not [string]::IsNullOrWhiteSpace([string]$p)) {
-      $cat = Try-LoadJsonFile -Path ([string]$p)
+      $cat = Read-JsonFileSafe -Path ([string]$p)
       if ($cat) { return (Normalize-Catalog -cat $cat -fallback $DefaultCatalog) }
     }
   }
@@ -609,7 +608,7 @@ function Quarantine-Task {
   $act = New-Object System.Collections.Generic.List[string]
 
   try {
-    Ensure-Dir $QuarantineDir
+    Ensure-Directory $QuarantineDir
     $xmlObj = Export-TaskXmlObject -TaskName $TaskName -TaskPath $TaskPath
 
     if ($xmlObj) {
@@ -746,7 +745,7 @@ $changes = New-Object System.Collections.Generic.List[string]
 $catalogFallback = New-DefaultCatalog -QuarantineDir $DefaultQuarantineDir -ProofOutFile $DefaultProofOutFile
 
 try {
-  $isAdmin = Is-Admin
+  $isAdmin = Test-IsAdmin
   if (-not $isAdmin) {
     $Proof.Notes += "Not elevated - remediation may fail."
     if ($Strict) { $ok = $false }
@@ -841,7 +840,7 @@ try {
     QuarantineDir = $cat.QuarantineDir
   })
 
-  Save-Json -Obj $Proof -Path $proofObj.OutFile
+  Save-Json -InputObject $Proof -Path $proofObj.OutFile -Depth 25
   $changes.Add("Proof JSON: $($proofObj.OutFile)")
 
   if (@($Proof.Notes).Count -gt 0) { foreach($n in @($Proof.Notes)) { $drifts.Add($n) } }
@@ -861,23 +860,23 @@ try {
   # Pretty console output (no pipeline pollution)
   Write-UiHeader "Scheduled Tasks Hygiene Summary"
 
-  Write-UiKV "Host"       $Proof.Hostname
-  Write-UiKV "Time"       $Proof.Time
-  Write-UiKV "Admin"      $Proof.Summary.IsAdmin
-  Write-UiKV "Remediate"  $Proof.Summary.Remediate
-  Write-UiKV "Purge"      $Proof.Summary.PurgeEnabled
-  Write-UiKV "Strict"     $Proof.Summary.Strict
+  Write-KeyValue "Host"       $Proof.Hostname
+  Write-KeyValue "Time"       $Proof.Time
+  Write-KeyValue "Admin"      $Proof.Summary.IsAdmin
+  Write-KeyValue "Remediate"  $Proof.Summary.Remediate
+  Write-KeyValue "Purge"      $Proof.Summary.PurgeEnabled
+  Write-KeyValue "Strict"     $Proof.Summary.Strict
 
-  Write-Host ""
-  Write-UiKV "Tasks"      $Proof.Summary.TotalTasks
-  Write-UiKV "Critical"   $Proof.Summary.CriticalKnown
-  Write-UiKV "Risky"      $Proof.Summary.RiskyDetected
+  Write-UiLine ""
+  Write-KeyValue "Tasks"      $Proof.Summary.TotalTasks
+  Write-KeyValue "Critical"   $Proof.Summary.CriticalKnown
+  Write-KeyValue "Risky"      $Proof.Summary.RiskyDetected
 
-  Write-Host ""
-  Write-UiKV "Proof JSON" $Proof.Summary.ProofOutFile
-  Write-UiKV "Quarantine" $Proof.Summary.QuarantineDir
+  Write-UiLine ""
+  Write-KeyValue "Proof JSON" $Proof.Summary.ProofOutFile
+  Write-KeyValue "Quarantine" $Proof.Summary.QuarantineDir
 
-  Write-Host ""
+  Write-UiLine ""
   if ($ok -and -not $Strict) {
     Write-UiStatus -Label "OK"   -State OK   -Text "No drift detected (or Strict is off)."
   } elseif ($ok -and $Strict) {
@@ -887,19 +886,19 @@ try {
   }
 
   if ($changes.Count -gt 0) {
-    Write-Host ""
+    Write-UiLine ""
     Write-UiLine "Changes:" DarkGray
     foreach($c in ($changes | Select-Object -Unique)) { Write-UiStatus -Label "CHG" -State INFO -Text $c }
   }
 
   if ($drifts.Count -gt 0) {
-    Write-Host ""
+    Write-UiLine ""
     Write-UiLine "Drifts:" DarkGray
     foreach($d in ($drifts | Select-Object -Unique)) { Write-UiStatus -Label "DRF" -State WARN -Text $d }
   }
 
-  Write-Host ""
-  Write-Host ("-" * 44) -ForegroundColor DarkGray
+  Write-UiLine ""
+  Write-UiLine ("-" * 44) -ForegroundColor DarkGray
 
   # Pipeline-safe structured output (single object)
   #$Proof
@@ -911,5 +910,26 @@ catch {
   Write-UiHeader "Scheduled Tasks Hygiene Summary"
   Write-UiStatus -Label "FAIL" -State FAIL -Text $errMsg
 
-  throw
+  Add-Finding -FindingList $script:Findings -Code 'TASK-Error' -Severity 'High' -Message $errMsg
+  $v2Result = New-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result 'FAIL' -Findings @($script:Findings) -Summary @{ Error = $errMsg } -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit 1
 }
+
+# C10: populate canonical findings from drifts
+foreach ($d in @($drifts)) {
+  $code = 'TASK-Drift'
+  $sev = 'Medium'
+  if ($d -match 'Critical missing') { $code = 'TASK-CriticalMissing'; $sev = 'High' }
+  if ($d -match 'Suspicious')       { $code = 'TASK-Suspicious'; $sev = 'High' }
+  if ($d -match 'quarantine')        { $code = 'TASK-QuarantineIssue'; $sev = 'Medium' }
+  Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $d
+}
+
+# V2 output contract
+$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

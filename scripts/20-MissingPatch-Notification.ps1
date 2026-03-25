@@ -55,8 +55,27 @@
 
 .PARAMETER UseInformationStream
   Changes how the console report is written.
-  - Default: uses Write-Host (always visible; does not produce pipeline objects).
+  - Default: uses Write-UiLine (always visible; does not produce pipeline objects).
   - When set: uses Write-Information for console output (visibility depends on InformationPreference).
+
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
 
 .OUTPUTS
   None by default.
@@ -112,25 +131,63 @@
 #>
 
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [string]$KBFeedPath = "PATH/TO/JSON/critical-kb-feed.json",
-  [string]$StatePath  = "PATH/TO/STATE/update-reminder.json",
+  [string]$KBFeedPath,
+  [string]$StatePath,
   [switch]$Strict,
   [switch]$PassThru,
   [switch]$UseInformationStream
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 $script:UseInformationStream = [bool]$UseInformationStream
 
 
 Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
+
+# C10: canonical findings list
+$script:Findings = New-FindingsList
 
 # ----------------------------
 # Helpers
@@ -161,18 +218,7 @@ function Get-DefaultStatePath {
   Join-Path -Path $base -ChildPath "PatchReminder\update-reminder.json"
 }
 
-function Ensure-FolderForFile {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$FilePath)
-
-  $dir = Split-Path -Parent $FilePath
-  if ([string]::IsNullOrWhiteSpace($dir)) { return }
-
-  if (-not (Test-Path -Path $dir -PathType Container)) {
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
-  }
-}
-
+# Ensure-DirectoryForFile imported from lib/Common.psm1
 
 function New-ConsoleLine {
   [CmdletBinding()]
@@ -181,19 +227,7 @@ function New-ConsoleLine {
 }
 
 
-function Save-JsonUtf8NoBom {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]$Obj,
-    [Parameter(Mandatory)][string]$Path
-  )
-
-  Ensure-FolderForFile -FilePath $Path
-
-  $json = $Obj | ConvertTo-Json -Depth 12
-  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-  [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
-}
+# Save-JsonUtf8NoBom: replaced by canonical Save-Json from lib/Serialization.psm1
 
 function New-DefaultFeed {
   [CmdletBinding()]
@@ -311,7 +345,7 @@ function Get-UiStyleForLevel {
 # ----------------------------
 
 $eventSource = 'PatchReminder'
-$canEventLog = Ensure-EventSource -Source $eventSource -Log 'Application'
+$null = Ensure-EventSource -Source $eventSource -Log 'Application'
 
 $run = [ordered]@{
   Host        = $env:COMPUTERNAME
@@ -366,6 +400,22 @@ foreach ($kb in @($feedKBs)) {
   }
 }
 
+# C10: populate structured findings from missing KBs
+foreach ($z in @($zeroDays)) {
+  Add-Finding -FindingList $script:Findings -Code 'PATCH-MissingZeroDay' -Severity 'High' `
+    -Message ("Missing zero-day KB: {0} [{1}]" -f $z.KB, $z.Title) `
+    -Extra @{ KB = $z.KB; Title = $z.Title; IsZeroDay = $true }
+}
+foreach ($mc in @($missingCritical)) {
+  Add-Finding -FindingList $script:Findings -Code 'PATCH-MissingCritical' -Severity 'Medium' `
+    -Message ("Missing critical KB: {0} [{1}]" -f $mc.KB, $mc.Title) `
+    -Extra @{ KB = $mc.KB; Title = $mc.Title; IsZeroDay = $false }
+}
+if ($run.FeedStatus -ne 'OK') {
+  Add-Finding -FindingList $script:Findings -Code 'PATCH-FeedIssue' -Severity 'Low' `
+    -Message ("KB feed status: {0}" -f $run.FeedStatus)
+}
+
 $status = 4904
 $level  = 'Information'
 
@@ -405,7 +455,7 @@ $report = [pscustomobject]([ordered]@{
 })
 
 try {
-  Save-JsonUtf8NoBom -Obj $report -Path $StatePath
+  Save-Json -InputObject $report -Path $StatePath -Depth 12 -NoBom
 } catch {
   $run.StateStatus = 'WriteFailed'
   $run.Errors += ("State write failed: " + $_.Exception.Message)
@@ -437,7 +487,7 @@ $msg = "Patch Status: MissingCritical=$(Get-Count $missingCritical), ZeroDayGaps
 if ((Get-Count $zeroDays) -gt 0) { $msg += " | ZERO-DAY: $zList" }
 elseif ((Get-Count $missingCritical) -gt 0) { $msg += " | Missing: $mList" }
 
-Write-HealthEvent -Id $status -Msg $msg -Level $level -CanEventLog:$canEventLog -Source $eventSource
+Write-HealthEvent -Id $status -Msg $msg -Level $level -Source $eventSource
 
 # Pretty console output.
 $headerLine = New-ConsoleLine -Char '='
@@ -493,6 +543,9 @@ if (((Get-Count $zeroDays) -gt 0) -or ((Get-Count $missingCritical) -gt 0)) {
 
 Write-UiLine -Message $headerLine -Style Dim
 
-if ($PassThru) {
-  $report
-}
+# V2 output contract
+$resultToken = if ($report.Errors.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '20-MissingPatch-Notification.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $report -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+exit 0

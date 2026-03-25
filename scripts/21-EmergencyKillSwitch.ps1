@@ -50,6 +50,31 @@
   Optional raw JSON string. If provided, it takes precedence over ConfigJsonPath.
   If invalid, the script continues with safe defaults and/or explicit parameters.
 
+
+.PARAMETER Mode
+  Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+
+.PARAMETER ConfigPath
+  Path to JSON configuration file.
+
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+
+.PARAMETER OutputPath
+  File path for Json/Csv output.
+
+.PARAMETER PassThru
+  Emit structured v2 result object to pipeline.
+
+.PARAMETER Strict
+  Treat warnings as failures.
+
+.PARAMETER Quiet
+  Suppress console output.
+
+.PARAMETER NoColor
+  Disable colored output.
+
 .OUTPUTS
   System.Management.Automation.PSCustomObject
 
@@ -105,17 +130,52 @@ param(
   [ValidateRange(0, 1440)]
   [int]$AutoRollbackMinutes = 0,
 
-  [string]$ConfigJsonPath = "PATH/TO/JSON/kill-switch.json",
+  [string]$ConfigJsonPath,
   [string]$ConfigJsonRaw
+
+,
+  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
+  [string]$ConfigPath,
+  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  [string]$OutputPath,
+  [switch]$PassThru,
+  [switch]$Strict,
+  [switch]$Quiet,
+  [switch]$NoColor
 )
 
-$script:LibPath = Join-Path $PSScriptRoot 'lib'
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Version Latest
+# v2-init
+$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+$script:__V2Context = @{
+  Mode = $Mode
+  ConfigPath = $ConfigPath
+  OutputFormat = $OutputFormat
+  OutputPath = $OutputPath
+  PassThru = [bool]$PassThru
+  Strict = [bool]$Strict
+  Quiet = [bool]$Quiet
+  NoColor = [bool]$NoColor
+}
+if ($PSBoundParameters.ContainsKey('Mode')) {
+  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
+    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
+  }
+}
+if ($Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
+if ($NoColor) {
+  $script:NoColor = $true
+}
 $ErrorActionPreference = 'Stop'
 
 # -------------------- Safe defaults
@@ -194,31 +254,8 @@ function Add-RunError {
 
 # ---------- Console helpers (never write to pipeline)
 
-function Write-UiHeader {
-  param([string]$Title)
-  Write-Host ""
-  Write-Host ("=" * 78) -ForegroundColor DarkGray
-  Write-Host ("  {0}" -f $Title) -ForegroundColor Cyan
-  Write-Host ("=" * 78) -ForegroundColor DarkGray
-}
 
-function Write-UiKV {
-  param(
-    [string]$Key,
-    [object]$Value,
-    [ConsoleColor]$KeyColor = 'DarkGray',
-    [ConsoleColor]$ValueColor = 'Gray'
-  )
-  $v = if ($null -eq $Value) { '' } else { [string]$Value }
-  Write-Host ("{0,-24}: " -f $Key) -ForegroundColor $KeyColor -NoNewline
-  Write-Host $v -ForegroundColor $ValueColor
-}
 
-function Write-UiBool {
-  param([string]$Key,[bool]$Value)
-  $c = if ($Value) { [ConsoleColor]::Green } else { [ConsoleColor]::DarkGray }
-  Write-UiKV -Key $Key -Value $Value -ValueColor $c
-}
 
 
 function Try-LoadConfigJson {
@@ -230,7 +267,7 @@ function Try-LoadConfigJson {
     }
 
     if ($Path -and (Test-Path -LiteralPath $Path)) {
-      $text = Get-Content -LiteralPath $Path -Raw
+      $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
       if ($text -and $text.Trim()) {
         return ($text | ConvertFrom-Json)
       }
@@ -294,7 +331,15 @@ function New-OrReplaceRule {
     [string]$Description = ''
   )
 
-  Get-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+  # Remove existing rule if present (ignore if not found)
+  try {
+    $existingRule = Get-NetFirewallRule -Name $Name -ErrorAction Stop
+    if ($existingRule) {
+      Remove-NetFirewallRule -Name $Name -ErrorAction Stop
+    }
+  } catch {
+    # Rule doesn't exist, which is fine
+  }
 
   $params = @{
     Name        = $Name
@@ -322,26 +367,77 @@ function Schedule-AutoRollback {
 
   if ($Minutes -le 0) { return $false }
 
-  $runAt = (Get-Date).AddMinutes($Minutes)
+  # Validate inputs before embedding in heredoc (prevents PS code injection into
+  # the base64-encoded rollback script that runs elevated via scheduled task).
+  if ($TaskName -notmatch '^[a-zA-Z0-9\-_\\]+$') {
+    Add-RunError "Schedule-AutoRollback: TaskName '$TaskName' contains invalid characters (allowed: a-z A-Z 0-9 - _ \)"
+    return $false
+  }
+  foreach ($rn in $RuleNames) {
+    if ($rn -match "'") {
+      Add-RunError "Schedule-AutoRollback: RuleNames entry '$rn' contains a single quote, which is not allowed"
+      return $false
+    }
+    if ($rn -match '[`$;{}]') {
+      Add-RunError "Schedule-AutoRollback: RuleNames entry '$rn' contains invalid characters (backtick, dollar, semicolon, or braces)"
+      return $false
+    }
+  }
 
+  $runAt = (Get-Date).AddMinutes($Minutes)
+  $logPath = Join-Path $env:TEMP "KillSwitch-Rollback-$($TaskName -replace '[^a-zA-Z0-9]', '').log"
+
+  # Improved rollback script with proper error handling and logging (fixes #21)
   $rollbackPs = @"
-`$ErrorActionPreference='SilentlyContinue';
-Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Allow -DefaultOutboundAction Allow;
-Get-NetFirewallRule -Name '$($RuleNames -join "','")' | Remove-NetFirewallRule;
-schtasks.exe /Delete /TN '$TaskName' /F | Out-Null;
+`$ErrorActionPreference = 'Stop'
+`$logPath = '$logPath'
+function Write-RollbackLog { param([string]`$Message) try { Add-Content -Path `$logPath -Value "`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') `$Message" } catch { <# best-effort: log file may not be writable #> } }
+try {
+  Write-RollbackLog 'Starting rollback...'
+  `$fwStatePath = Join-Path `$env:TEMP 'KillSwitch-PreFirewallState.json'
+  if (Test-Path -LiteralPath `$fwStatePath) {
+    `$saved = Get-Content -LiteralPath `$fwStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach (`$profileName in `$saved.PSObject.Properties.Name) {
+      `$s = `$saved.`$profileName
+      Set-NetFirewallProfile -Name `$profileName -Enabled `$s.Enabled -DefaultInboundAction `$s.DefaultInboundAction -DefaultOutboundAction `$s.DefaultOutboundAction
+    }
+    Write-RollbackLog 'Firewall profiles restored from saved pre-kill-switch state'
+    Remove-Item -LiteralPath `$fwStatePath -Force -ErrorAction SilentlyContinue
+  } else {
+    Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Allow -DefaultOutboundAction Allow
+    Write-RollbackLog 'No saved firewall state found; firewall profiles reset to Allow (fallback)'
+  }
+  try {
+    Get-NetFirewallRule -Name '$($RuleNames -join "','")' | Remove-NetFirewallRule -ErrorAction Stop
+    Write-RollbackLog 'Kill switch rules removed'
+  } catch {
+    Write-RollbackLog "Rule removal warning: `$(`$_.Exception.Message)"
+  }
+  `$delOutput = schtasks.exe /Delete /TN '$TaskName' /F 2>&1
+  if (`$LASTEXITCODE -eq 0) { Write-RollbackLog 'Rollback task removed' }
+  else { Write-RollbackLog "Task removal exit code: `$LASTEXITCODE - `$delOutput" }
+  Write-RollbackLog 'Rollback completed successfully'
+} catch {
+  Write-RollbackLog "ERROR: `$(`$_.Exception.Message)"
+  exit 1
+}
 "@
 
   $bytes = [System.Text.Encoding]::Unicode.GetBytes($rollbackPs)
   $enc   = [Convert]::ToBase64String($bytes)
   $tr    = "PowerShell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc"
 
-  try {
-    schtasks.exe /Create /TN $TaskName /SC ONCE /ST $runAt.ToString('HH:mm') /TR $tr /RL HIGHEST /F | Out-Null
-    return $true
-  } catch {
-    Add-RunError "Auto-rollback schedule failed: $($_.Exception.Message)"
+  # Use array-based invocation to avoid argument-splitting edge cases (S4)
+  $schtasksArgs = @('/Create', '/TN', $TaskName, '/SC', 'ONCE',
+                    '/ST', $runAt.ToString('HH:mm'), '/TR', $tr, '/RL', 'HIGHEST', '/F')
+  $output = schtasks.exe @schtasksArgs 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Add-RunError "Auto-rollback schedule failed (exit code $LASTEXITCODE): $output"
     return $false
   }
+
+  Write-UiLine "Auto-rollback scheduled for $runAt (log: $logPath)" -Style Info
+  return $true
 }
 
 function Update-Outcome {
@@ -368,26 +464,26 @@ function Write-ConsoleSummary {
 
   Write-UiHeader -Title $title
 
-  Write-UiKV   -Key 'ComputerName' -Value $Run.ComputerName -ValueColor White
-  Write-UiKV   -Key 'User'         -Value $Run.User
+  Write-KeyValue   -Key 'ComputerName' -Value $Run.ComputerName -ValueColor White
+  Write-KeyValue   -Key 'User'         -Value $Run.User
   Write-UiBool -Key 'Admin'        -Value $Run.IsAdmin
-  Write-UiKV   -Key 'StartTime'    -Value $Run.StartTime.ToString('s')
-  Write-UiKV   -Key 'EndTime'      -Value $Run.EndTime.ToString('s')
-  Write-UiKV   -Key 'Duration'     -Value $Run.Duration -ValueColor $durationColor
+  Write-KeyValue   -Key 'StartTime'    -Value $Run.StartTime.ToString('s')
+  Write-KeyValue   -Key 'EndTime'      -Value $Run.EndTime.ToString('s')
+  Write-KeyValue   -Key 'Duration'     -Value $Run.Duration -ValueColor $durationColor
 
-  Write-Host ""
-  Write-UiKV -Key 'JSON used' -Value $Run.JsonUsed -ValueColor $jsonUsedColor
-  Write-UiKV -Key 'JSON path' -Value $Run.JsonPath
-  if ($Run.JsonError) { Write-UiKV -Key 'JSON error' -Value $Run.JsonError -ValueColor Yellow }
+  Write-UiLine ""
+  Write-KeyValue -Key 'JSON used' -Value $Run.JsonUsed -ValueColor $jsonUsedColor
+  Write-KeyValue -Key 'JSON path' -Value $Run.JsonPath
+  if ($Run.JsonError) { Write-KeyValue -Key 'JSON error' -Value $Run.JsonError -ValueColor Yellow }
 
-  Write-Host ""
-  Write-UiKV   -Key 'Reason' -Value $Run.Effective.Reason -ValueColor Cyan
+  Write-UiLine ""
+  Write-KeyValue   -Key 'Reason' -Value $Run.Effective.Reason -ValueColor Cyan
   Write-UiBool -Key 'IsolationActive' -Value $Run.Outcome.IsolationActive
   Write-UiBool -Key 'DisableAdapters' -Value ([bool]$Run.Effective.DisableAdapters)
-  Write-UiKV   -Key 'BreakGlass' -Value ($Run.Effective.BreakGlassRemoteAddress -join ', ')
-  Write-UiKV   -Key 'AutoRollbackMinutes' -Value $Run.Effective.AutoRollbackMinutes
+  Write-KeyValue   -Key 'BreakGlass' -Value ($Run.Effective.BreakGlassRemoteAddress -join ', ')
+  Write-KeyValue   -Key 'AutoRollbackMinutes' -Value $Run.Effective.AutoRollbackMinutes
 
-  Write-Host ""
+  Write-UiLine ""
   Write-UiBool -Key 'RegistryWritten'    -Value $Run.Actions.RegistryWritten
   Write-UiBool -Key 'EventLogWritten'    -Value $Run.Actions.EventLogWritten
   Write-UiBool -Key 'FirewallProfileSet' -Value $Run.Actions.FirewallProfileSet
@@ -397,17 +493,17 @@ function Write-ConsoleSummary {
   Write-UiBool -Key 'RollbackScheduled'  -Value $Run.Actions.RollbackScheduled
 
   if ($Run.Actions.ConfirmDeclined) {
-    Write-Host ""
+    Write-UiLine ""
     Write-UiLine -Text "NOTE: One or more operations were declined in a Confirm prompt (No / No to All)." -Color Yellow
   }
 
   if ($Run.Errors.Count -gt 0) {
-    Write-Host ""
+    Write-UiLine ""
     Write-UiLine -Text "Warnings/Errors:" -Color Yellow
     foreach ($e in $Run.Errors) { Write-UiLine -Text ("- {0}" -f $e) -Color Yellow }
   }
 
-  Write-Host ("-" * 78) -ForegroundColor DarkGray
+  Write-UiLine ("-" * 78) -ForegroundColor DarkGray
 }
 
 
@@ -420,7 +516,26 @@ $Run.Effective.EventLog    = Get-ConfigValue -Config $config -Name 'EventLog'   
 $Run.Effective.EventId     = [int](Get-ConfigValue -Config $config -Name 'EventId' -Default $Defaults.EventId)
 
 $Run.Effective.RegKey      = Get-ConfigValue -Config $config -Name 'RegKey'     -Default $Defaults.RegKey
+
+# S7 fix: validate RegKey against allowlist of safe registry prefixes
+$regKeyAllowedPrefixes = @('HKLM:\SOFTWARE\', 'HKLM:\SYSTEM\')
+$regKeyValid = $false
+foreach ($prefix in $regKeyAllowedPrefixes) {
+  if ($Run.Effective.RegKey -like "$prefix*") { $regKeyValid = $true; break }
+}
+if (-not $regKeyValid) {
+  throw "RegKey '$($Run.Effective.RegKey)' is not under an allowed registry prefix ($($regKeyAllowedPrefixes -join ', ')). Aborting."
+}
+
 $Run.Effective.RulePrefix  = Get-ConfigValue -Config $config -Name 'RulePrefix' -Default $Defaults.RulePrefix
+
+# S8 fix: validate RulePrefix contains only safe characters (alphanumeric, hyphens, underscores) and reasonable length
+if ($Run.Effective.RulePrefix -notmatch '^[a-zA-Z0-9_-]+$') {
+  throw "RulePrefix '$($Run.Effective.RulePrefix)' contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed."
+}
+if ($Run.Effective.RulePrefix.Length -gt 64) {
+  throw "RulePrefix '$($Run.Effective.RulePrefix)' exceeds 64 characters."
+}
 $Run.Effective.TaskName    = Get-ConfigValue -Config $config -Name 'TaskName'   -Default $Defaults.TaskName
 $Run.Effective.IncludeUserInRegistry = [bool](Get-ConfigValue -Config $config -Name 'IncludeUserInRegistry' -Default $Defaults.IncludeUserInRegistry)
 
@@ -473,6 +588,23 @@ try {
     $Run.Actions.RollbackScheduled = Schedule-AutoRollback -Minutes $Run.Effective.AutoRollbackMinutes -TaskName $Run.Effective.TaskName -RuleNames $RuleNames
   }
 
+  # Capture current firewall profile settings before applying kill switch so rollback can restore them
+  $preKillSwitchFirewallState = @{}
+  try {
+    foreach ($fwProfile in Get-NetFirewallProfile) {
+      $preKillSwitchFirewallState[$fwProfile.Name] = @{
+        Enabled              = [string]$fwProfile.Enabled
+        DefaultInboundAction = [string]$fwProfile.DefaultInboundAction
+        DefaultOutboundAction = [string]$fwProfile.DefaultOutboundAction
+      }
+    }
+    $fwStateJson = $preKillSwitchFirewallState | ConvertTo-Json -Depth 4 -Compress
+    $fwStatePath = Join-Path $env:TEMP 'KillSwitch-PreFirewallState.json'
+    Set-Content -LiteralPath $fwStatePath -Value $fwStateJson -Encoding UTF8 -Force
+  } catch {
+    Add-RunError "Failed to capture pre-kill-switch firewall state: $($_.Exception.Message)"
+  }
+
   if ($PSCmdlet.ShouldProcess("Windows Firewall Profiles", "Enable firewall + set DefaultInboundAction=Block, DefaultOutboundAction=Block")) {
     Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Block -DefaultOutboundAction Block
     $Run.Actions.FirewallProfileSet = $true
@@ -497,7 +629,12 @@ try {
       $Run.Actions.ConfirmDeclined = $true
     }
   } else {
-    Get-NetFirewallRule -Name $RuleBgName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    try {
+      $rule = Get-NetFirewallRule -Name $RuleBgName -ErrorAction Stop
+      if ($rule) { $rule | Remove-NetFirewallRule -ErrorAction Stop }
+    } catch {
+      Write-Warning "Could not remove break-glass firewall rule: $($_.Exception.Message)"
+    }
   }
 
   if ($DisableAdapters) {
@@ -535,9 +672,9 @@ AutoRollbackMinutes: $($Run.Effective.AutoRollbackMinutes)
   } else {
     Write-UiLine -Text "Isolation is NOT active (actions were skipped/declined)." -Color Yellow
   }
-  Write-UiKV -Key 'Reason' -Value $Run.Effective.Reason -ValueColor Cyan
-  Write-UiKV -Key 'BreakGlass' -Value ($Run.Effective.BreakGlassRemoteAddress -join ', ')
-  Write-UiKV -Key 'AutoRollbackMinutes' -Value $Run.Effective.AutoRollbackMinutes
+  Write-KeyValue -Key 'Reason' -Value $Run.Effective.Reason -ValueColor Cyan
+  Write-KeyValue -Key 'BreakGlass' -Value ($Run.Effective.BreakGlassRemoteAddress -join ', ')
+  Write-KeyValue -Key 'AutoRollbackMinutes' -Value $Run.Effective.AutoRollbackMinutes
 }
 catch {
   $err = $_.Exception.Message
@@ -548,12 +685,16 @@ catch {
 
   Write-UiHeader -Title "Kill Switch"
   Write-UiLine -Text ("ERROR: {0}" -f $err) -Color Red
-  throw
 }
 finally {
   # Always write console summary, even if an exception is thrown.
-  try { Write-ConsoleSummary } catch { Write-Host "Summary failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+  try { Write-ConsoleSummary } catch { Write-UiLine "Summary failed: $($_.Exception.Message)" -ForegroundColor Yellow }
 }
 
-# Pipeline output: one structured object, no formatting
-#[pscustomobject]$Run
+# V2 output contract
+$resultToken = if ($Run.Errors.Count -gt 0) { 'FAIL' } elseif (($Run.Actions.Values | Where-Object { $_ -eq $true }).Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = New-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary ([pscustomobject]$Run) -Metadata @{}
+Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+if ($PassThru) { $v2Result }
+if ($Run.Errors.Count -gt 0) { exit 1 }
+exit 0
