@@ -82,24 +82,44 @@ Finding codes follow the pattern `PREFIX-Description`:
 
 | Prefix | Domain | Script(s) |
 |--------|--------|-----------|
-| `AUD-` | Audit policy | 33-AdvancedAuditPolicy |
+| `AC-` | App Control for Business | 43-AppControlForBusiness |
+| `AMSI-` | AMSI provider / bypass detection | 50-AMSI-Audit |
+| `APPLOCK-` | AppLocker policy enforcement | 51-AppLocker-Audit |
+| `ASR-` | ASR rules / Defender exclusions | 01-ASR-Defender-Allowlist |
+| `AUD-` | Advanced audit policy | 33-AdvancedAuditPolicy |
 | `BKP-` | Backup readiness | 36-Backup-Readiness |
+| `BLKR-` | BitLocker operations | 23-BitLocker-Operations |
+| `CERT-` | Certificate autoenrollment | 24-Cert-AutoEnrollment |
 | `CFG-` | Configuration loading | (shared) |
+| `CG-` | Credential Guard | 13-LSASS-CG-HVCI-VBS, 39-CredentialGuard |
 | `DATA-` | Data collection | (shared) |
 | `DEF-` | Defender health | 27-Defender-Health |
-| `DS-` | Driver signing | 49-DriverSigning |
+| `DOH-` | DNS-over-HTTPS client config | 52-DoH-Audit |
+| `DS-` | Driver signing / kernel integrity | 49-DriverSigning |
+| `EP-` | Exploit Protection mitigations | 48-ExploitProtection |
 | `FW-` | Firewall baseline | 18-Firewall-Baseline |
 | `Grabber-` | Artifact collection | 12-Suspicious-Artifact |
-| `HW-` | Hardware/TPM | 15-HardwareTPM |
+| `HVCI-` | HVCI / memory integrity | 13-LSASS-CG-HVCI-VBS |
+| `HW-` | Hardware / TPM | 15-HardwareTPM |
 | `IOC-` | IOC sweep | 11-IOC-Sweep |
-| `JOIN-` | Identity/domain join | 28-Join-Identity |
+| `JOIN-` | Identity / domain join | 28-Join-Identity |
 | `LAPS-` | LAPS hygiene | 02-LAPS-Hygiene |
-| `NET-` | Network config | 29-Network-Config |
+| `LSA-` | LSA Protection (RunAsPPL) | 13-LSASS-CG-HVCI-VBS, 40-AddedLSAProtection |
+| `NET-` | Network configuration | 29-Network-Config |
+| `NTLM-` | NTLM authentication audit | 41-NTLM-Audit-Client |
+| `PATCH-` | Patch / update status | 20-MissingPatch-Notification |
 | `PROFILE-` | Profile validation | 00-Validate-Profile |
-| `SB-` | Secure Boot/UEFI | 46-SecureBoot-UEFI |
-| `SECOPT-` | Security options | 38-SecurityOptions |
+| `PSLOG-` | PowerShell logging baseline | 31-PowerShell-Logging |
+| `REMOTE-` | Remote access surface | 37-Remote-Surface |
+| `SB-` | Secure Boot / UEFI | 46-SecureBoot-UEFI |
+| `SECOPT-` | Security options drift | 38-SecurityOptions |
+| `SMB-` | SMB encryption | 22-SMB-Encryption |
 | `STO-` | Storage reliability | 35-Storage-Reliability |
-| `WEF-` | WEF forwarding | 45-WEF-Client |
+| `TASK-` | Scheduled task hygiene | 07-ScheduledTasks |
+| `TIME-` | Time synchronization health | 34-TimeSync |
+| `VBS-` | Virtualization-Based Security | 13-LSASS-CG-HVCI-VBS |
+| `WDAG-` | Windows Defender App Guard | 47-WDAG-Readiness |
+| `WEF-` | WEF client forwarding | 45-WEF-Client |
 
 ### Severity levels
 

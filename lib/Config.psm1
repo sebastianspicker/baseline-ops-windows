@@ -70,7 +70,7 @@ function Read-ConfigWithDefaults {
   $config = @{}
   foreach ($k in $Defaults.Keys) { $config[$k] = $Defaults[$k] }
 
-  $sanitized = Sanitize-Path -Path $Path -MustExist
+  $sanitized = if ([string]::IsNullOrWhiteSpace($Path)) { $null } else { Sanitize-Path -Path $Path -MustExist }
   if (-not $sanitized) {
     if ([string]::IsNullOrWhiteSpace($Path)) {
         $meta.UsedDefaultsBecause = 'No ConfigPath provided.'

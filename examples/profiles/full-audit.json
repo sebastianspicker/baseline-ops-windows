@@ -242,6 +242,24 @@
       "Args": [],
       "ContinueOnError": true,
       "DependsOn": []
+    },
+    {
+      "Script": "50-AMSI-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "51-AppLocker-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
+    },
+    {
+      "Script": "52-DoH-Audit.ps1",
+      "Args": [],
+      "ContinueOnError": true,
+      "DependsOn": []
     }
   ],
   "Integrity": {

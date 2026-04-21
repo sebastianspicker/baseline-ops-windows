@@ -141,6 +141,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # C10: canonical findings list
 $script:Findings = New-FindingsList
 
@@ -288,60 +303,35 @@ function New-SummaryObject {
   }
 }
 
-function Write-ConsoleSummary {
+function Invoke-WinGetConsoleSummary {
   param([Parameter(Mandatory = $true)][pscustomobject]$Summary)
 
   if ($Summary.QuietConsole) { return }
 
-  $colorTestOnly   = Get-BoolColor -Value $Summary.TestOnly -TrueColor Yellow -FalseColor White
-  $colorAccept     = Get-BoolColor -Value $Summary.AcceptAgreements -TrueColor Green -FalseColor Yellow
-  $colorNoInteract = Get-BoolColor -Value $Summary.DisableInteractivity -TrueColor Green -FalseColor Yellow
-  $colorFailFast   = Get-BoolColor -Value $Summary.FailFast -TrueColor Yellow -FalseColor White
-
-  Write-UiLine ''
-  Write-Title '=== WinGet Configuration Summary ==='
-
-  Write-KeyValue -Key 'ComputerName'    -Value $Summary.ComputerName
-  Write-KeyValue -Key 'ConfigPath'      -Value $Summary.ConfigPath
-  Write-KeyValue -Key 'SummaryJsonPath' -Value $Summary.SummaryJsonPath
-  Write-KeyValue -Key 'LogPath'         -Value $Summary.LogPath
-  Write-KeyValue -Key 'Timestamp'       -Value ($Summary.Timestamp.ToString('s'))
-
-  Write-UiLine ''
-  Write-KeyValue -Key 'TestOnly'             -Value ([string]$Summary.TestOnly)             -ValueColor $colorTestOnly
-  Write-KeyValue -Key 'AcceptAgreements'     -Value ([string]$Summary.AcceptAgreements)     -ValueColor $colorAccept
-  Write-KeyValue -Key 'DisableInteractivity' -Value ([string]$Summary.DisableInteractivity) -ValueColor $colorNoInteract
-  Write-KeyValue -Key 'FailFast'             -Value ([string]$Summary.FailFast)             -ValueColor $colorFailFast
-
-  Write-UiLine ''
-  if ($Summary.ExtraArgs -and $Summary.ExtraArgs.Count -gt 0) {
-    Write-KeyValue -Key 'ExtraArgs' -Value ($Summary.ExtraArgs -join ' ')
-  } else {
-    Write-KeyValue -Key 'ExtraArgs' -Value $null
+  $fields = [ordered]@{
+    TestOnly             = [string]$Summary.TestOnly
+    AcceptAgreements     = [string]$Summary.AcceptAgreements
+    DisableInteractivity = [string]$Summary.DisableInteractivity
+    FailFast             = [string]$Summary.FailFast
+    FinalExitCode        = [string]$Summary.FinalExitCode
   }
+  if ($Summary.ErrorMessage) { $fields['ErrorMessage'] = $Summary.ErrorMessage }
 
-  if ($Summary.ErrorMessage) {
-    Write-UiLine ''
-    Write-Bad ("ERROR: {0}" -f $Summary.ErrorMessage)
-  }
+  Write-ConsoleSummary -Summary $Summary -Findings ([System.Collections.ArrayList]::new()) -CustomFields $fields
 
-  Write-UiLine ''
-  Write-Title 'Phases'
+  # Phases list
   if ($Summary.Results -and $Summary.Results.Count -gt 0) {
+    Write-UiLine ''
+    Write-Title 'Phases'
     foreach ($r in $Summary.Results) {
       $line = ("- {0,-8} ExitCode={1,-5} DurationS={2,-8}" -f $r.Phase, $r.ExitCode, $r.DurationS)
       if ($r.ExitCode -eq 0) { Write-Good $line } else { Write-Bad $line }
     }
   } else {
+    Write-UiLine ''
+    Write-Title 'Phases'
     Write-Warn "- (no phases executed)"
   }
-
-  Write-UiLine ''
-  if ($Summary.FinalExitCode -eq 0) { Write-Good ("FinalExitCode: {0}" -f $Summary.FinalExitCode) }
-  else { Write-Bad ("FinalExitCode: {0}" -f $Summary.FinalExitCode) }
-
-  Write-Title '==================================='
-  Write-UiLine ''
 }
 
 function Stop-UserFriendly {
@@ -374,7 +364,7 @@ function Stop-UserFriendly {
     -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
     -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPathEffective -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage $Message
 
-  Write-ConsoleSummary -Summary $summary
+  Invoke-WinGetConsoleSummary -Summary $summary
 
   # Pipeline output only when explicitly requested via -PassThru (no "double output" by default).
   if ($PassThruEffective) { $summary }
@@ -499,7 +489,7 @@ if ($FailFastEffective -and $rValidate.ExitCode -ne 0) {
     -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
     -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
     -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage "Validate failed."
-  Write-ConsoleSummary -Summary $summary
+  Invoke-WinGetConsoleSummary -Summary $summary
   if ($PassThruEffective) { $summary }
   exit $summary.FinalExitCode
 }
@@ -512,7 +502,7 @@ if ($FailFastEffective -and $rTest.ExitCode -ne 0) {
     -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
     -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
     -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage "Test failed."
-  Write-ConsoleSummary -Summary $summary
+  Invoke-WinGetConsoleSummary -Summary $summary
   if ($PassThruEffective) { $summary }
   exit $summary.FinalExitCode
 }
@@ -531,7 +521,7 @@ $summary = New-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $r
   -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective `
   -ErrorMessage (if ($finalExitCode -ne 0) { "WinGet finished with a non-zero exit code." } else { $null })
 
-Write-ConsoleSummary -Summary $summary
+Invoke-WinGetConsoleSummary -Summary $summary
 
 # C10: populate findings from phase results
 foreach ($phaseResult in @($results.ToArray())) {

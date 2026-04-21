@@ -221,6 +221,7 @@ function Invoke-ScriptWithTiming {
 
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   $err = $null
+  $global:LASTEXITCODE = 0
   try {
     & $ScriptPath @Arguments
     $exitCode = if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { $LASTEXITCODE } else { 0 }

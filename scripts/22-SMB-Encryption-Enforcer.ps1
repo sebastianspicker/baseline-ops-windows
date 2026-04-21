@@ -212,6 +212,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # -------------------------
 # Helpers
 # -------------------------
@@ -398,65 +413,6 @@ function Write-PrettySettingChange {
 
   Write-ColorLine -Text ('{0,-32}: ' -f $Label) -Color ([ConsoleColor]::DarkGray) -NoNewline
   Write-ColorLine -Text ('{0} -> {1}' -f $b, $a) -Color $color
-}
-
-function Write-ConsoleSummary {
-  param(
-    [Parameter(Mandatory)][pscustomobject]$Result,
-    [Parameter(Mandatory)][bool]$HasRejectUnencryptedAccess,
-    [Parameter(Mandatory)][bool]$HasClientRequireEncryption
-  )
-
-  $statusColor = if ($Result.Changes.Status -eq 'OK') { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
-
-  Write-UiLine ''
-  Write-ColorLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
-  Write-ColorLine -Text 'SMB Encryption Enforcer (Summary)' -Color ([ConsoleColor]::Cyan)
-  Write-ColorLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
-
-  Write-KeyValue -Key 'Computer' -Value $Result.ComputerName -ValueColor ([ConsoleColor]::White)
-  Write-KeyValue -Key 'Mode' -Value $Result.Mode -ValueColor ([ConsoleColor]::White)
-  Write-KeyValue -Key 'WhatIf' -Value (Format-Bool $Result.WhatIf) -ValueColor ([ConsoleColor]::White)
-  Write-KeyValue -Key 'Force' -Value (Format-Bool $Result.Force) -ValueColor ([ConsoleColor]::White)
-  Write-KeyValue -Key 'JsonPath' -Value $Result.JsonPath -ValueColor ([ConsoleColor]::DarkGray)
-
-  Write-UiLine ''
-  Write-ColorLine -Text 'Server / Client' -Color ([ConsoleColor]::Cyan)
-  Write-ColorLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
-
-  Write-PrettySettingChange -Label 'Server EncryptData' `
-    -Before $Result.ServerEncryptData_Before -After $Result.ServerEncryptData_After -Supported:$true
-
-  Write-PrettySettingChange -Label 'Server RejectUnencryptedAccess' `
-    -Before $Result.ServerRejectUnencryptedAccess_Before -After $Result.ServerRejectUnencryptedAccess_After -Supported:$HasRejectUnencryptedAccess
-
-  Write-PrettySettingChange -Label 'Client RequireEncryption' `
-    -Before $Result.ClientRequireEncryption_Before -After $Result.ClientRequireEncryption_After -Supported:$HasClientRequireEncryption
-
-  Write-UiLine ''
-  Write-ColorLine -Text 'Shares' -Color ([ConsoleColor]::Cyan)
-  Write-ColorLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
-
-  Write-KeyValue -Key 'Shares targeted' -Value ([string]$Result.Changes.ShareCountTargeted) -ValueColor ([ConsoleColor]::White)
-
-  if (@($Result.Changes.SharesChanged).Count -gt 0) {
-    Write-KeyValue -Key 'Shares changed' -Value (@($Result.Changes.SharesChanged) -join ', ') -ValueColor ([ConsoleColor]::Yellow)
-  } else {
-    Write-KeyValue -Key 'Shares changed' -Value 'none' -ValueColor ([ConsoleColor]::Gray)
-  }
-
-  Write-UiLine ''
-  Write-ColorLine -Text 'Result' -Color ([ConsoleColor]::Cyan)
-  Write-ColorLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
-
-  Write-ColorLine -Text ('Status: {0}' -f $Result.Changes.Status) -Color $statusColor
-  Write-KeyValue -Key 'Started' -Value ($Result.Started.ToString('yyyy-MM-dd HH:mm:ss')) -ValueColor ([ConsoleColor]::DarkGray)
-  Write-KeyValue -Key 'Finished' -Value ($Result.Finished.ToString('yyyy-MM-dd HH:mm:ss')) -ValueColor ([ConsoleColor]::DarkGray)
-
-  $duration = New-TimeSpan -Start $Result.Started -End $Result.Finished
-  Write-KeyValue -Key 'Duration' -Value $duration.ToString() -ValueColor ([ConsoleColor]::DarkGray)
-
-  Write-ColorLine -Text ('=' * 46) -Color ([ConsoleColor]::DarkGray)
 }
 
 # -------------------------
@@ -667,7 +623,32 @@ try {
   }
 
   # Console-only output (no pipeline pollution)
-  Write-ConsoleSummary -Result $result -HasRejectUnencryptedAccess $hasRejectUnencryptedAccess -HasClientRequireEncryption $hasClientRequireEncryption
+  $summaryObj = [pscustomobject]@{ ComputerName = $result.ComputerName; StartTime = $result.Started; EndTime = $result.Finished }
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      Mode             = $result.Mode
+      WhatIf           = (Format-Bool $result.WhatIf)
+      Force            = (Format-Bool $result.Force)
+      Status           = $result.Changes.Status
+      'Shares targeted' = $result.Changes.ShareCountTargeted
+    })
+  # Server / Client section
+  Write-UiLine ''
+  Write-ColorLine -Text 'Server / Client' -Color ([ConsoleColor]::Cyan)
+  Write-ColorLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
+  Write-PrettySettingChange -Label 'Server EncryptData' `
+    -Before $result.ServerEncryptData_Before -After $result.ServerEncryptData_After -Supported:$true
+  Write-PrettySettingChange -Label 'Server RejectUnencryptedAccess' `
+    -Before $result.ServerRejectUnencryptedAccess_Before -After $result.ServerRejectUnencryptedAccess_After -Supported:$hasRejectUnencryptedAccess
+  Write-PrettySettingChange -Label 'Client RequireEncryption' `
+    -Before $result.ClientRequireEncryption_Before -After $result.ClientRequireEncryption_After -Supported:$hasClientRequireEncryption
+  # Shares changed
+  if (@($result.Changes.SharesChanged).Count -gt 0) {
+    Write-KeyValue -Key 'Shares changed' -Value (@($result.Changes.SharesChanged) -join ', ') -ValueColor ([ConsoleColor]::Yellow)
+  } else {
+    Write-KeyValue -Key 'Shares changed' -Value 'none' -ValueColor ([ConsoleColor]::Gray)
+  }
 
 }
 

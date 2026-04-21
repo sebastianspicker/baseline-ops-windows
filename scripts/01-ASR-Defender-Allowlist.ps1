@@ -18,10 +18,6 @@
   - Desired state: JSON allowlist file (primary) or a baseline mode (fallback).
   - Current state: local Defender preferences retrieved at runtime.
 
-.PARAMETER Remediate
-  If specified, applies the calculated diff to the local system.
-  If omitted, the script runs in audit-only mode and performs no changes.
-
 .PARAMETER ConfigPath
   Path to an optional configuration JSON file that can contain the path to the allowlist JSON.
   This is a convenience input for centralized deployments.
@@ -91,7 +87,7 @@
 
 .EXAMPLE
   # Remediate: apply the diff to match the JSON allowlist
-  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -Remediate
+  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -Mode Remediate
 
 .EXAMPLE
   # Use a config file that contains the allowlist path (ExceptionsPath not specified)
@@ -179,6 +175,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # ----------------------------- Helpers --------------------------------------------
 
 function New-DefaultDesiredConfig {
@@ -259,10 +270,10 @@ function New-MinimumBaselineDesiredConfig {
 
 function Get-Config {
   [CmdletBinding()]
-  param([Parameter(Mandatory=$true)][string]$Path)
+  param([AllowEmptyString()][string]$Path)
 
   try {
-    $sanitized = Sanitize-Path -Path $Path -MustExist
+    $sanitized = if ([string]::IsNullOrWhiteSpace($Path)) { $null } else { Sanitize-Path -Path $Path -MustExist }
     if ($sanitized) {
       return Get-Content -Raw -LiteralPath $sanitized -Encoding UTF8 | ConvertFrom-Json
     }
@@ -284,7 +295,7 @@ function Get-Config {
 function Write-AuditJson {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory=$true)][string]$Path,
+    [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Path,
     [Parameter(Mandatory=$true)][object]$Object
   )
 
@@ -403,7 +414,7 @@ function Diff-Lists {
 }
 
 function Apply-Diff {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
   param(
     [Parameter(Mandatory=$true)][pscustomobject]$Diff,
     [switch]$Remediate
@@ -415,14 +426,16 @@ function Apply-Diff {
   if ($Remediate) {
     try {
       if ($Diff.ToAdd.Count -gt 0) {
-        switch ($name) {
-          'ExclusionPath'        { Add-MpPreference -ExclusionPath $Diff.ToAdd }
-          'ExclusionProcess'     { Add-MpPreference -ExclusionProcess $Diff.ToAdd }
-          'ExclusionExtension'   { Add-MpPreference -ExclusionExtension $Diff.ToAdd }
-          'AttackSurfaceReductionOnlyExclusions' { Add-MpPreference -AttackSurfaceReductionOnlyExclusions $Diff.ToAdd }
-          'ControlledFolderAccessAllowedApplications' { Add-MpPreference -ControlledFolderAccessAllowedApplications $Diff.ToAdd }
-          'ControlledFolderAccessProtectedFolders'   { Add-MpPreference -ControlledFolderAccessProtectedFolders $Diff.ToAdd }
-          default { }
+        if ($PSCmdlet.ShouldProcess($name, "Add Defender allowlist entries")) {
+          switch ($name) {
+            'ExclusionPath'        { Add-MpPreference -ExclusionPath $Diff.ToAdd }
+            'ExclusionProcess'     { Add-MpPreference -ExclusionProcess $Diff.ToAdd }
+            'ExclusionExtension'   { Add-MpPreference -ExclusionExtension $Diff.ToAdd }
+            'AttackSurfaceReductionOnlyExclusions' { Add-MpPreference -AttackSurfaceReductionOnlyExclusions $Diff.ToAdd }
+            'ControlledFolderAccessAllowedApplications' { Add-MpPreference -ControlledFolderAccessAllowedApplications $Diff.ToAdd }
+            'ControlledFolderAccessProtectedFolders'   { Add-MpPreference -ControlledFolderAccessProtectedFolders $Diff.ToAdd }
+            default { }
+          }
         }
       }
     } catch {
@@ -431,14 +444,16 @@ function Apply-Diff {
 
     try {
       if ($Diff.ToRemove.Count -gt 0) {
-        switch ($name) {
-          'ExclusionPath'        { Remove-MpPreference -ExclusionPath $Diff.ToRemove }
-          'ExclusionProcess'     { Remove-MpPreference -ExclusionProcess $Diff.ToRemove }
-          'ExclusionExtension'   { Remove-MpPreference -ExclusionExtension $Diff.ToRemove }
-          'AttackSurfaceReductionOnlyExclusions' { Remove-MpPreference -AttackSurfaceReductionOnlyExclusions $Diff.ToRemove }
-          'ControlledFolderAccessAllowedApplications' { Remove-MpPreference -ControlledFolderAccessAllowedApplications $Diff.ToRemove }
-          'ControlledFolderAccessProtectedFolders'   { Remove-MpPreference -ControlledFolderAccessProtectedFolders $Diff.ToRemove }
-          default { }
+        if ($PSCmdlet.ShouldProcess($name, "Remove Defender allowlist entries")) {
+          switch ($name) {
+            'ExclusionPath'        { Remove-MpPreference -ExclusionPath $Diff.ToRemove }
+            'ExclusionProcess'     { Remove-MpPreference -ExclusionProcess $Diff.ToRemove }
+            'ExclusionExtension'   { Remove-MpPreference -ExclusionExtension $Diff.ToRemove }
+            'AttackSurfaceReductionOnlyExclusions' { Remove-MpPreference -AttackSurfaceReductionOnlyExclusions $Diff.ToRemove }
+            'ControlledFolderAccessAllowedApplications' { Remove-MpPreference -ControlledFolderAccessAllowedApplications $Diff.ToRemove }
+            'ControlledFolderAccessProtectedFolders'   { Remove-MpPreference -ControlledFolderAccessProtectedFolders $Diff.ToRemove }
+            default { }
+          }
         }
       }
     } catch {
@@ -455,75 +470,64 @@ function Apply-Diff {
   }
 }
 
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)][pscustomobject]$Result
-  )
-
-
-  $modeColor = if ($Result.Remediate) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Cyan }
-  $resColor = switch ($Result.Result) {
-    'OK_NO_DRIFT'          { [ConsoleColor]::Green; break }
-    'REMEDIATION_OK'       { [ConsoleColor]::Green; break }
-    'DRIFT_NO_REMEDIATION' { [ConsoleColor]::Yellow; break }
-    'REMEDIATION_ERRORS'   { [ConsoleColor]::Red; break }
-    'FAILED'               { [ConsoleColor]::Red; break }
-    default                { [ConsoleColor]::Gray }
-  }
-
-  Write-UiLine ""
-  Write-UiLine "============================================================" -ForegroundColor DarkGray
-  Write-UiLine "Defender / ASR / CFA Allowlist Sync" -ForegroundColor White
-  Write-UiLine "============================================================" -ForegroundColor DarkGray
-
-  Write-KeyValue "Mode"       ($(if ($Result.Remediate) { "Remediate" } else { "Audit" })) DarkGray $modeColor
-  Write-KeyValue "Baseline"   $Result.BaselineUsed DarkGray ($(if ($Result.BaselineUsed -eq 'None') { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }))
-  Write-KeyValue "Computer"   $Result.ComputerName
-  Write-KeyValue "Timestamp"  $Result.Timestamp
-  Write-KeyValue "JSON"       $Result.SourceJson
-  Write-KeyValue "Audit"      $Result.AuditPath
-
-  Write-UiLine "------------------------------------------------------------" -ForegroundColor DarkGray
-  Write-KeyValue "JsonLoaded" ([string]$Result.JsonLoaded) DarkGray ($(if ($Result.JsonLoaded) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }))
-  if ($Result.JsonError) { Write-KeyValue "JsonError" $Result.JsonError DarkGray Yellow }
-
-  Write-UiLine "------------------------------------------------------------" -ForegroundColor DarkGray
-  Write-KeyValue "Add"        ([string]$Result.TotalAdd)      DarkGray ($(if ($Result.TotalAdd -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Green }))
-  Write-KeyValue "Remove"     ([string]$Result.TotalRemove)   DarkGray ($(if ($Result.TotalRemove -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Green }))
-  Write-KeyValue "Rejected"   ([string]$Result.TotalRejected) DarkGray ($(if ($Result.TotalRejected -gt 0) { [ConsoleColor]::Yellow } else { [ConsoleColor]::DarkGray }))
-  Write-KeyValue "Errors"     ([string]$Result.TotalErrors)   DarkGray ($(if ($Result.TotalErrors -gt 0) { [ConsoleColor]::Red } else { [ConsoleColor]::DarkGray }))
-  Write-KeyValue "Result"     $Result.Result                 DarkGray $resColor
-
-  if ($Result.Notes -and $Result.Notes.Count -gt 0) {
-    Write-UiLine "------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-UiLine "Notes:" -ForegroundColor DarkGray
-    foreach ($n in $Result.Notes) { Write-UiLine ("- " + $n) -ForegroundColor DarkGray }
-  }
-
-  if ($Result.PerCategory -and $Result.PerCategory.Count -gt 0) {
-    Write-UiLine "------------------------------------------------------------" -ForegroundColor DarkGray
-    Write-UiLine "Per-category diff:" -ForegroundColor DarkGray
-    foreach ($row in ($Result.PerCategory | Sort-Object Name)) {
-      Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f $row.Name,$row.Add,$row.Remove,$row.Rejected) -ForegroundColor Gray
-      if ($row.Add -gt 0 -or $row.Remove -gt 0 -or $row.Rejected -gt 0) {
-        # Optional: highlight lines with changes (second line in color to avoid pipeline)
-        Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f "",$row.Add,$row.Remove,$row.Rejected) -ForegroundColor DarkGray
-        Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f "",$row.Add,$row.Remove,$row.Rejected) -ForegroundColor DarkGray
-      }
-
-      # Keep it simple: single line; colors per field are not possible without multiple Write-UiLine calls.
-      # We already color the totals and overall result.
-    }
-  }
-
-  Write-UiLine "============================================================" -ForegroundColor DarkGray
-  Write-UiLine ""
-}
-
 # ----------------------------- Main ------------------------------------------------
 $script:Findings = New-FindingsList
 $null = Ensure-EventSource
+
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $final = [pscustomobject]@{
+    Timestamp     = (Get-Date).ToString("o")
+    ComputerName  = $env:COMPUTERNAME
+    Remediate     = [bool]$Remediate
+    SourceJson    = $(if ($ExceptionsPath) { $ExceptionsPath } else { "(not provided)" })
+    AuditPath     = $AuditPath
+    JsonLoaded    = $false
+    JsonError     = $null
+    BaselineUsed  = 'UnsupportedHost'
+    Notes         = @('Skipped: Microsoft Defender allowlist auditing is only supported on Windows hosts.')
+    TotalAdd      = 0
+    TotalRemove   = 0
+    TotalRejected = 0
+    TotalErrors   = 0
+    Result        = 'OK_NO_DRIFT'
+    Diffs         = @()
+    Results       = @()
+    ErrorsFlat    = @()
+    PerCategory   = @()
+  }
+
+  Write-AuditJson -Path $AuditPath -Object $final
+  $summaryObj = [pscustomobject]@{ ComputerName = $final.ComputerName; Timestamp = $final.Timestamp }
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      Mode       = $(if ($final.Remediate) { 'Remediate' } else { 'Audit' })
+      Baseline   = $final.BaselineUsed
+      JSON       = $final.SourceJson
+      Audit      = $final.AuditPath
+      JsonLoaded = [string]$final.JsonLoaded
+      Add        = [string]$final.TotalAdd
+      Remove     = [string]$final.TotalRemove
+      Rejected   = [string]$final.TotalRejected
+      Errors     = [string]$final.TotalErrors
+      Result     = $final.Result
+    })
+  if ($final.Notes -and $final.Notes.Count -gt 0) {
+    Write-UiLine "Notes:" -ForegroundColor DarkGray
+    foreach ($n in $final.Notes) { Write-UiLine ("- " + $n) -ForegroundColor DarkGray }
+  }
+  if ($final.PerCategory -and $final.PerCategory.Count -gt 0) {
+    Write-UiLine "Per-category diff:" -ForegroundColor DarkGray
+    foreach ($row in ($final.PerCategory | Sort-Object Name)) {
+      Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f $row.Name,$row.Add,$row.Remove,$row.Rejected) -ForegroundColor Gray
+    }
+  }
+  $v2Result = New-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $final -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit 0
+}
 
 try {
   if (-not (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)) {
@@ -666,7 +670,31 @@ try {
   }
 
   Write-AuditJson -Path $AuditPath -Object $final
-  Write-ConsoleSummary -Result $final
+  $summaryObj = [pscustomobject]@{ ComputerName = $final.ComputerName; Timestamp = $final.Timestamp }
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      Mode       = $(if ($final.Remediate) { 'Remediate' } else { 'Audit' })
+      Baseline   = $final.BaselineUsed
+      JSON       = $final.SourceJson
+      Audit      = $final.AuditPath
+      JsonLoaded = [string]$final.JsonLoaded
+      Add        = [string]$final.TotalAdd
+      Remove     = [string]$final.TotalRemove
+      Rejected   = [string]$final.TotalRejected
+      Errors     = [string]$final.TotalErrors
+      Result     = $final.Result
+    })
+  if ($final.Notes -and $final.Notes.Count -gt 0) {
+    Write-UiLine "Notes:" -ForegroundColor DarkGray
+    foreach ($n in $final.Notes) { Write-UiLine ("- " + $n) -ForegroundColor DarkGray }
+  }
+  if ($final.PerCategory -and $final.PerCategory.Count -gt 0) {
+    Write-UiLine "Per-category diff:" -ForegroundColor DarkGray
+    foreach ($row in ($final.PerCategory | Sort-Object Name)) {
+      Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f $row.Name,$row.Add,$row.Remove,$row.Rejected) -ForegroundColor Gray
+    }
+  }
 
 }
 catch {
@@ -697,7 +725,31 @@ catch {
   }
 
   Write-AuditJson -Path $AuditPath -Object $final
-  Write-ConsoleSummary -Result $final
+  $summaryObj = [pscustomobject]@{ ComputerName = $final.ComputerName; Timestamp = $final.Timestamp }
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      Mode       = $(if ($final.Remediate) { 'Remediate' } else { 'Audit' })
+      Baseline   = $final.BaselineUsed
+      JSON       = $final.SourceJson
+      Audit      = $final.AuditPath
+      JsonLoaded = [string]$final.JsonLoaded
+      Add        = [string]$final.TotalAdd
+      Remove     = [string]$final.TotalRemove
+      Rejected   = [string]$final.TotalRejected
+      Errors     = [string]$final.TotalErrors
+      Result     = $final.Result
+    })
+  if ($final.Notes -and $final.Notes.Count -gt 0) {
+    Write-UiLine "Notes:" -ForegroundColor DarkGray
+    foreach ($n in $final.Notes) { Write-UiLine ("- " + $n) -ForegroundColor DarkGray }
+  }
+  if ($final.PerCategory -and $final.PerCategory.Count -gt 0) {
+    Write-UiLine "Per-category diff:" -ForegroundColor DarkGray
+    foreach ($row in ($final.PerCategory | Sort-Object Name)) {
+      Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f $row.Name,$row.Add,$row.Remove,$row.Rejected) -ForegroundColor Gray
+    }
+  }
 }
 
 # V2 output contract

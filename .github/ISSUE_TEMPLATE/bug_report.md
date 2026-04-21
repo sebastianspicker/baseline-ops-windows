@@ -18,6 +18,9 @@ What actually happened?
 ## Steps to reproduce
 Provide commands and relevant configuration.
 
+## Invocation mode
+Which command did you run, and did you use `-WhatIf` / `-Confirm` or elevation?
+
 ## Environment
 OS version, PowerShell version, and any relevant tools.
 

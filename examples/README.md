@@ -28,7 +28,7 @@ Use with script-level `-ConfigPath` parameters.
 Run example:
 
 ```powershell
-pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 -ProfilePath .\examples\profiles\baseline-audit.json
+pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 -ProfilePath .\examples\profiles\baseline-audit.json -Mode Audit -OutputFormat None -Confirm:$false
 ```
 
 Validate profile before execution:
@@ -36,3 +36,5 @@ Validate profile before execution:
 ```powershell
 pwsh -NoProfile -File .\scripts\00-Validate-Profile.ps1 -ProfilePath .\examples\profiles\baseline-audit.json
 ```
+
+Note: when a profile is smoke-tested from a non-Windows development host, Windows-only steps should surface a structured unsupported-host result instead of aborting orchestration startup.

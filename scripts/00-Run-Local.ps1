@@ -248,10 +248,10 @@ function Invoke-TargetScript {
   }
 }
 
-if ($PSCmdlet.ShouldProcess((Split-Path -Leaf $scriptPath), 'Execute local script')) {
-  Invoke-TargetScript -Path $scriptPath -Arguments $ScriptArgs
-  exit $(if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE })
-} else {
+if ($WhatIfPreference) {
   Write-UiLine ("[SKIP] {0} (WhatIf/Confirm)" -f (Split-Path -Leaf $scriptPath)) -Style 'Muted'
   exit 0
 }
+
+Invoke-TargetScript -Path $scriptPath -Arguments $ScriptArgs
+exit $(if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE })

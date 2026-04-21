@@ -199,6 +199,7 @@ function Test-IsSafeTranscriptPath {
   param([string]$Path)
 
   if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+  if ([string]::IsNullOrWhiteSpace($env:ProgramData)) { return $false }
   try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return $false }
 
   $pd = [System.IO.Path]::GetFullPath($env:ProgramData)
@@ -340,6 +341,22 @@ function Format-PolicyValue {
 # ---------------------------
 # Main
 # ---------------------------
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: PowerShell logging baseline auditing is only supported on Windows hosts.')
+  }
+
+  $result = New-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 Require-Admin
 
 $Findings = New-FindingsList
@@ -355,7 +372,7 @@ $defaults = @{
   ModuleNames                        = @('*')
 }
 
-$sanitized = Sanitize-Path -Path $ConfigJsonPath -MustExist
+$sanitized = if ([string]::IsNullOrWhiteSpace($ConfigJsonPath)) { $null } else { Sanitize-Path -Path $ConfigJsonPath -MustExist }
 if (-not $sanitized -and -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)) {
   Add-Finding -FindingList $Findings -Code 'PSLOG-ConfigJsonMissing' -Severity 'Info' -Message 'Config JSON not found; using defaults.'
 }

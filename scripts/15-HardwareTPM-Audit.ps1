@@ -193,6 +193,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # C10: canonical findings list
 $script:Findings = New-FindingsList
 
@@ -316,56 +331,6 @@ function Get-CimPropValue {
   if ($null -eq $Object) { return $null }
   if ($Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
   return $null
-}
-
-function Write-ConsoleSummary {
-  param(
-    [Parameter(Mandatory=$true)][bool]$OverallOk,
-    [Parameter(Mandatory=$true)][System.Collections.Generic.List[string]]$Drifts,
-    [Parameter(Mandatory=$true)][System.Collections.Generic.List[string]]$Notes,
-    [Parameter(Mandatory=$true)][string]$OutFile,
-    [Parameter(Mandatory=$true)]$Results
-  )
-
-  Write-UiHeader -Title "Hardware/TPM Audit Summary"
-
-  $statusText = if ($OverallOk) { "COMPLIANT" } else { "NON-COMPLIANT" }
-  $statusKind = if ($OverallOk) { 'OK' } else { 'ERR' }
-
-  Write-ColorLine -Text ("Status : {0}" -f $statusText) -Color $statusKind
-  Write-ColorLine -Text ("Proof  : {0}" -f $OutFile) -Color 'DIM'
-
-  # Key facts (compact, human-readable)
-  $tpm = $Results.TPM
-  if ($tpm) {
-    $tpmPresent = [bool]$tpm.Present
-    $tpmKind = if ($tpmPresent) { 'OK' } else { 'ERR' }
-    Write-ColorLine -Text ("TPM    : {0}" -f $(if ($tpmPresent) { "Present" } else { "Missing/No Access" })) -Color $tpmKind
-    if ($tpmPresent) {
-      Write-ColorLine -Text ("         SpecVersion={0}, Owned={1}, Enabled={2}, Activated={3}, Ready={4}" -f $tpm.SpecVersion,$tpm.IsOwned,$tpm.Enabled,$tpm.Activated,$tpm.Ready) -Color 'DIM'
-    }
-  }
-
-  Write-ColorLine -Text ("Secure : {0}" -f $(if ($Results.SecureBoot) { "Secure Boot ON" } else { "Secure Boot OFF/Unknown" })) -Color $(if ($Results.SecureBoot) { 'OK' } else { 'WARN' })
-
-  $blOk = $Results.BitLockerOsProtected
-  Write-ColorLine -Text ("BL(OS) : {0}" -f $(if ($blOk) { "Protection ON" } else { "Protection OFF/Unknown" })) -Color $(if ($blOk) { 'OK' } else { 'WARN' })
-
-  Write-UiLine ""
-  if ($Drifts.Count -gt 0) {
-    Write-ColorLine -Text "Drifts :" -Color 'ERR'
-    foreach ($d in $Drifts) { Write-ColorLine -Text ("- {0}" -f $d) -Color 'ERR' }
-  } else {
-    Write-ColorLine -Text "Drifts : (none)" -Color 'OK'
-  }
-
-  if ($Notes.Count -gt 0) {
-    Write-UiLine ""
-    Write-ColorLine -Text "Notes  :" -Color 'WARN'
-    foreach ($n in $Notes) { Write-ColorLine -Text ("- {0}" -f $n) -Color 'WARN' }
-  } else {
-    Write-ColorLine -Text "Notes  : (none)" -Color 'DIM'
-  }
 }
 
 # -----------------------------
@@ -573,7 +538,44 @@ try {
   Write-HealthEvent -Id $eventId -Message $msg -Level $level -Source $EventSource -LogName $EventLogName
 
   # Pretty console output (out-of-band)
-  Write-ConsoleSummary -OverallOk $ok -Drifts $drifts -Notes $notes -OutFile $outFile -Results $proof.Results
+  $summaryObj = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      Status = $(if ($ok) { 'COMPLIANT' } else { 'NON-COMPLIANT' })
+      Proof  = $outFile
+    })
+  # TPM status
+  $tpm = $proof.Results.TPM
+  if ($tpm) {
+    $tpmPresent = [bool]$tpm.Present
+    $tpmKind = if ($tpmPresent) { 'OK' } else { 'ERR' }
+    Write-ColorLine -Text ("TPM    : {0}" -f $(if ($tpmPresent) { "Present" } else { "Missing/No Access" })) -Color $tpmKind
+    if ($tpmPresent) {
+      Write-ColorLine -Text ("         SpecVersion={0}, Owned={1}, Enabled={2}, Activated={3}, Ready={4}" -f $tpm.SpecVersion,$tpm.IsOwned,$tpm.Enabled,$tpm.Activated,$tpm.Ready) -Color 'DIM'
+    }
+  }
+  # SecureBoot status
+  Write-ColorLine -Text ("Secure : {0}" -f $(if ($proof.Results.SecureBoot) { "Secure Boot ON" } else { "Secure Boot OFF/Unknown" })) -Color $(if ($proof.Results.SecureBoot) { 'OK' } else { 'WARN' })
+  # BitLocker status
+  $blOk = $proof.Results.BitLockerOsProtected
+  Write-ColorLine -Text ("BL(OS) : {0}" -f $(if ($blOk) { "Protection ON" } else { "Protection OFF/Unknown" })) -Color $(if ($blOk) { 'OK' } else { 'WARN' })
+  # Drifts
+  Write-UiLine ""
+  if ($drifts.Count -gt 0) {
+    Write-ColorLine -Text "Drifts :" -Color 'ERR'
+    foreach ($d in $drifts) { Write-ColorLine -Text ("- {0}" -f $d) -Color 'ERR' }
+  } else {
+    Write-ColorLine -Text "Drifts : (none)" -Color 'OK'
+  }
+  # Notes
+  if ($notes.Count -gt 0) {
+    Write-UiLine ""
+    Write-ColorLine -Text "Notes  :" -Color 'WARN'
+    foreach ($n in $notes) { Write-ColorLine -Text ("- {0}" -f $n) -Color 'WARN' }
+  } else {
+    Write-ColorLine -Text "Notes  : (none)" -Color 'DIM'
+  }
 
   # Pipeline output: one structured object only
   [pscustomobject]$proof

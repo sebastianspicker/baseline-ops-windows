@@ -82,7 +82,6 @@ param(
 
   [string]$ExportPath,
 
-  [Alias('ConfigPath')]
   [string]$ConfigJsonPath = $null,
 
   [ValidateRange(1, 50000)]
@@ -150,15 +149,45 @@ if ([string]::IsNullOrWhiteSpace($OutputPath) -and -not [string]::IsNullOrWhiteS
   $OutputPath = $ExportPath
 }
 
+if ([string]::IsNullOrWhiteSpace($ConfigPath) -and -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)) {
+  $ConfigPath = $ConfigJsonPath
+  $script:__V2Context.ConfigPath = $ConfigPath
+}
+
 # --------------------------
 # Findings
 # --------------------------
 $script:Findings = New-FindingsList
+$Findings = $script:Findings
 $strictModeEnabled = [bool]$Strict
 $noColorEnabled = [bool]$NoColor
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName  = $env:COMPUTERNAME
+    LikelyActive  = $false
+    FindingsCount = 0
+    Timestamp     = Get-Date
+    Supported     = $false
+    Notes         = @('Skipped: App Control for Business auditing is only supported on Windows hosts.')
+  }
+
+  $resultObject = New-V2ResultObject `
+    -ScriptName '43-AppControlForBusiness-Audit.ps1' `
+    -Mode 'Audit' `
+    -Result 'WARN' `
+    -Findings @() `
+    -Summary $summary `
+    -Metadata @{ UnsupportedHost = $true; Indicators = $null; PolicyFiles = @(); RecentEvents = @() }
+
+  Write-ResultObject -ResultObject $resultObject -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $resultObject }
+  exit 0
+}
+
 if ($Mode -eq 'Remediate') {
-  Add-Finding -Code 'AC-ModeDowngradeToAudit' -Severity 'Warning' -Message 'Remediate mode is not supported by this script; running in audit behavior.'
+  Add-Finding -FindingList $script:Findings -Code 'AC-ModeDowngradeToAudit' -Severity 'Warning' -Message 'Remediate mode is not supported by this script; running in audit behavior.'
 }
 
 # --------------------------
@@ -198,7 +227,7 @@ function Get-EfiBootPaths {
       }
     }
   } catch {
-    Add-Finding -Code 'AC-EFIVolumeEnumFailed' -Severity 'Info' -Message ("EFI volumes could not be enumerated (best-effort): {0}" -f $_.Exception.Message)
+    Add-Finding -FindingList $script:Findings -Code 'AC-EFIVolumeEnumFailed' -Severity 'Info' -Message ("EFI volumes could not be enumerated (best-effort): {0}" -f $_.Exception.Message)
   }
 
   return @($paths.ToArray())
@@ -270,7 +299,7 @@ function Get-PolicyFilesFromRoots {
 
     foreach ($i in $items) {
       if ($out.Count -ge $MaxFiles) {
-        Add-Finding -Code 'AC-PolicyScanTruncated' -Severity 'Warning' -Message ("Policy scan truncated at MaxPolicyFiles={0}." -f $MaxFiles)
+        Add-Finding -FindingList $script:Findings -Code 'AC-PolicyScanTruncated' -Severity 'Warning' -Message ("Policy scan truncated at MaxPolicyFiles={0}." -f $MaxFiles)
         return @($out.ToArray())
       }
 
@@ -302,71 +331,6 @@ function Get-PolicyFilesFromRoots {
   return @($out.ToArray())
 }
 
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]$Summary,
-    [Parameter(Mandatory)]$Indicators,
-    [Parameter(Mandatory)][object[]]$PolicyFiles,
-    [Parameter(Mandatory)][object[]]$Events,
-    [Parameter(Mandatory)][object[]]$Findings,
-    [bool]$AlsoWriteInformation = $false
-  )
-
-  $policyByKind = @($PolicyFiles | Group-Object KindHint | Sort-Object Name)
-  $sevCounts    = @($Findings   | Group-Object Severity | Sort-Object Name)
-
-  $lines = New-Object 'System.Collections.Generic.List[string]'
-  $lines.Add("====== App Control for Business (WDAC) Audit Summary ======") | Out-Null
-  $lines.Add(("ComputerName      : {0}" -f $Summary.ComputerName)) | Out-Null
-  $lines.Add(("Timestamp         : {0}" -f $Summary.Timestamp)) | Out-Null
-  $lines.Add(("RunningAsAdmin    : {0}" -f $Indicators.RunningAsAdmin)) | Out-Null
-  $lines.Add(("CI Log Enabled    : {0}" -f $Indicators.CILogEnabled)) | Out-Null
-  $lines.Add(("Lookback (Hours)  : {0}" -f $Indicators.LookbackHours)) | Out-Null
-  $lines.Add(("CI Events (Found) : {0}" -f $Indicators.RecentCIEventsCount)) | Out-Null
-  $lines.Add(("Policies (Found)  : {0}" -f $Indicators.PolicyFilesCount)) | Out-Null
-  $lines.Add(("LikelyActive      : {0}" -f $Summary.LikelyActive)) | Out-Null
-
-  if ($policyByKind.Count -gt 0) {
-    $lines.Add("") | Out-Null
-    $lines.Add("Policy files by kind:") | Out-Null
-    foreach ($g in $policyByKind) {
-      $lines.Add(("- {0}: {1}" -f $g.Name, $g.Count)) | Out-Null
-    }
-  }
-
-  if ($sevCounts.Count -gt 0) {
-    $lines.Add("") | Out-Null
-    $lines.Add("Findings by severity:") | Out-Null
-    foreach ($g in $sevCounts) {
-      $lines.Add(("- {0}: {1}" -f $g.Name, $g.Count)) | Out-Null
-    }
-  }
-
-  if ($Events.Count -gt 0) {
-    $latest = $Events | Select-Object -First 1
-    $lines.Add("") | Out-Null
-    $lines.Add(("Latest CI event    : {0} (Id {1}, {2})" -f $latest.TimeCreated, $latest.Id, $latest.LevelDisplayName)) | Out-Null
-  }
-
-  $lines.Add("==========================================================") | Out-Null
-
-  Write-UiLine ""
-  foreach ($l in $lines) {
-    if ($l -like "======*") { Write-UiLine $l -ForegroundColor Cyan }
-    elseif ($l -like "==========================================================") { Write-UiLine $l -ForegroundColor Cyan }
-    else { Write-UiLine $l }
-  }
-  Write-UiLine ""
-
-  # Write-Information is controlled by $InformationPreference (default is SilentlyContinue). [web:90][web:74]
-  if ($AlsoWriteInformation) {
-    foreach ($l in $lines) {
-      Write-Information $l -InformationAction Continue
-    }
-  }
-}
-
 # --------------------------
 # Main
 # --------------------------
@@ -381,19 +345,19 @@ $configDefaults = @{
   PreferWriteInformation= $false  # if true: summary uses Write-Information additionally
 }
 
-$sanitized = Sanitize-Path -Path $ConfigJsonPath -MustExist
+$sanitized = if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $null } else { Sanitize-Path -Path $ConfigPath -MustExist }
 $cfgResult = Read-ConfigWithDefaults -Path $sanitized -Defaults $configDefaults
 $config = $cfgResult.Config
 
 if (-not $cfgResult.Meta.Provided) {
-  Add-Finding -Code 'AC-ConfigMissing' -Severity 'Info' -Message 'No config JSON provided; using defaults.'
+  Add-Finding -FindingList $script:Findings -Code 'AC-ConfigMissing' -Severity 'Info' -Message 'No config JSON provided; using defaults.'
 } elseif (-not $cfgResult.Meta.Loaded) {
   if ($cfgResult.Meta.Error -eq 'ConfigPath not found.') {
-    Add-Finding -Code 'AC-ConfigNotFound' -Severity 'Warning' -Message 'Config JSON not found at PATH/TO/JSON; using defaults.'
+    Add-Finding -FindingList $script:Findings -Code 'AC-ConfigNotFound' -Severity 'Warning' -Message 'Config JSON not found at PATH/TO/JSON; using defaults.'
   } elseif ($cfgResult.Meta.Error -eq 'Config file is empty.') {
-    Add-Finding -Code 'AC-ConfigEmpty' -Severity 'Warning' -Message 'Config JSON is empty; using defaults.'
+    Add-Finding -FindingList $script:Findings -Code 'AC-ConfigEmpty' -Severity 'Warning' -Message 'Config JSON is empty; using defaults.'
   } else {
-    Add-Finding -Code 'AC-ConfigInvalidJson' -Severity 'Warning' -Message ("Config JSON could not be parsed; using defaults. Error: {0}" -f $cfgResult.Meta.Error)
+    Add-Finding -FindingList $script:Findings -Code 'AC-ConfigInvalidJson' -Severity 'Warning' -Message ("Config JSON could not be parsed; using defaults. Error: {0}" -f $cfgResult.Meta.Error)
   }
 }
 
@@ -419,7 +383,7 @@ if ($null -ne $config.ExportDelimiter -and [string]$config.ExportDelimiter) {
   $d = [string]$config.ExportDelimiter
   if ($d.Length -eq 1) { $config.ExportDelimiter = $d }
   else {
-    Add-Finding -Code 'AC-ConfigBadDelimiter' -Severity 'Warning' -Message 'ExportDelimiter must be a single character; using default.'
+    Add-Finding -FindingList $script:Findings -Code 'AC-ConfigBadDelimiter' -Severity 'Warning' -Message 'ExportDelimiter must be a single character; using default.'
     $config.ExportDelimiter = $configDefaults.ExportDelimiter
   }
 }
@@ -436,7 +400,7 @@ if ($null -ne $config.AdditionalPolicyRoots) {
 }
 
 if (-not $config.Enabled) {
-  Add-Finding -Code 'AC-DisabledByConfig' -Severity 'Info' -Message 'Audit disabled by config; exiting.'
+  Add-Finding -FindingList $script:Findings -Code 'AC-DisabledByConfig' -Severity 'Info' -Message 'Audit disabled by config; exiting.'
 
   $summary = [pscustomobject]@{
     ComputerName  = $env:COMPUTERNAME
@@ -456,10 +420,20 @@ if (-not $config.Enabled) {
     ScannedRootsCount    = 0
   }
 
-  $findingsArr = @($script:Findings.ToArray())
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings.ToArray())
 
   if (-not $Quiet) {
-    Write-ConsoleSummary -Summary $summary -Indicators $emptyIndicators -PolicyFiles @() -Events @() -Findings $findingsArr -AlsoWriteInformation:$config.PreferWriteInformation
+    Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+      -CustomFields ([ordered]@{
+        RunningAsAdmin   = $emptyIndicators.RunningAsAdmin
+        'CI Log Enabled' = $emptyIndicators.CILogEnabled
+        'CI Events'      = $emptyIndicators.RecentCIEventsCount
+        'Policies Found' = $emptyIndicators.PolicyFilesCount
+        LikelyActive     = $summary.LikelyActive
+      })
+    if ($config.PreferWriteInformation) {
+      Write-Information ("AppControl audit complete. LikelyActive={0}" -f $summary.LikelyActive) -InformationAction Continue
+    }
   }
 
   $disabledResult = New-V2ResultObject `
@@ -477,7 +451,7 @@ if (-not $config.Enabled) {
 
 $runningAsAdmin = Test-IsAdmin
 if (-not $runningAsAdmin) {
-  Add-Finding -Code 'AC-NotElevated' -Severity 'Info' -Message 'Not running elevated; log/file access may be incomplete.'
+  Add-Finding -FindingList $script:Findings -Code 'AC-NotElevated' -Severity 'Info' -Message 'Not running elevated; log/file access may be incomplete.'
 }
 
 # 1) Code Integrity events
@@ -486,7 +460,7 @@ $ciLogInfo = $null
 try {
   $ciLogInfo = Get-WinEvent -ListLog $ciLog -ErrorAction Stop
 } catch {
-  Add-Finding -Code 'AC-CILogNotFoundOrNoAccess' -Severity 'Warning' -Message ("CI Operational log not available or no access: {0}" -f $_.Exception.Message)
+  Add-Finding -FindingList $script:Findings -Code 'AC-CILogNotFoundOrNoAccess' -Severity 'Warning' -Message ("CI Operational log not available or no access: {0}" -f $_.Exception.Message)
 }
 
 $events = @()
@@ -497,10 +471,10 @@ if ($ciLogInfo -and $ciLogInfo.IsEnabled) {
       Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message |
       Sort-Object TimeCreated -Descending
   } catch {
-    Add-Finding -Code 'AC-CILogReadFailed' -Severity 'Warning' -Message ("CI events could not be read: {0}" -f $_.Exception.Message)
+    Add-Finding -FindingList $script:Findings -Code 'AC-CILogReadFailed' -Severity 'Warning' -Message ("CI events could not be read: {0}" -f $_.Exception.Message)
   }
 } elseif ($ciLogInfo -and -not $ciLogInfo.IsEnabled) {
-  Add-Finding -Code 'AC-CILogDisabled' -Severity 'Info' -Message 'CI Operational log is disabled.'
+  Add-Finding -FindingList $script:Findings -Code 'AC-CILogDisabled' -Severity 'Info' -Message 'CI Operational log is disabled.'
 }
 
 # 2) Policy files
@@ -524,9 +498,9 @@ $policyFiles = Get-PolicyFilesFromRoots -Roots $roots -MaxDepth $RecurseMaxDepth
 $policyFiles = @($policyFiles)
 
 if ($policyFiles.Count -eq 0) {
-  Add-Finding -Code 'AC-NoPolicyFilesFound' -Severity 'Info' -Message 'No policy files found in scanned roots (deployment can still exist via other mechanisms).'
+  Add-Finding -FindingList $script:Findings -Code 'AC-NoPolicyFilesFound' -Severity 'Info' -Message 'No policy files found in scanned roots (deployment can still exist via other mechanisms).'
 } else {
-    Add-Finding -Code 'AC-PoliciesDetected' -Severity 'Low' -Message "Detected $($policyFiles.Count) App Control policy files." -Extra @{ Files = $policyFiles.Path }
+    Add-Finding -FindingList $script:Findings -Code 'AC-PoliciesDetected' -Severity 'Low' -Message "Detected $($policyFiles.Count) App Control policy files." -Extra @{ Files = $policyFiles.Path }
 }
 
 # 3) Indicators + Summary
@@ -570,10 +544,36 @@ if ($ExportPath) {
 }
 
 # 5) Console summary
-$findingsArr = @($script:Findings.ToArray())
+$findingsAL = [System.Collections.ArrayList]@($script:Findings.ToArray())
 if (-not $Quiet) {
-  Write-ConsoleSummary -Summary $summary -Indicators $indicators -PolicyFiles $policyFiles -Events @($events) -Findings $findingsArr -AlsoWriteInformation:$config.PreferWriteInformation
+  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      RunningAsAdmin   = $indicators.RunningAsAdmin
+      'CI Log Enabled' = $indicators.CILogEnabled
+      'CI Events'      = $indicators.RecentCIEventsCount
+      'Policies Found' = $indicators.PolicyFilesCount
+      LikelyActive     = $summary.LikelyActive
+    })
+  # Policy files by kind
+  if ($policyFiles.Count -gt 0) {
+    Write-UiLine ''
+    Write-UiLine 'Policy files by kind:' -ForegroundColor Cyan
+    $policyFiles | Group-Object KindHint | Sort-Object Name | ForEach-Object {
+      Write-UiLine ("- {0}: {1}" -f $_.Name, $_.Count)
+    }
+  }
+  # Latest CI event
+  $latestEvent = @($events) | Select-Object -First 1
+  if ($latestEvent) {
+    Write-UiLine ''
+    Write-UiLine ("Latest CI event    : {0} (Id {1}, {2})" -f $latestEvent.TimeCreated, $latestEvent.Id, $latestEvent.LevelDisplayName)
+  }
+  if ($config.PreferWriteInformation) {
+    Write-Information ("AppControl audit complete. LikelyActive={0}" -f $summary.LikelyActive) -InformationAction Continue
+  }
 }
+
+$findingsArr = @($findingsAL)
 
 $resultToken = if ($strictModeEnabled -and $findingsArr.Count -gt 0) { 'FAIL' } elseif ($findingsArr.Count -gt 0) { 'WARN' } else { 'OK' }
 $resultObject = New-V2ResultObject `
@@ -591,7 +591,3 @@ if ($PassThru) {
 
 if ($resultToken -eq 'WARN') { exit 2 }
 exit 0
-
-
-
-

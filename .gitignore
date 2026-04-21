@@ -35,6 +35,10 @@ reports/
 reports/*
 !reports/screenshots/
 reports/screenshots/*
+!reports/screenshots/*.html
+!reports/screenshots/*.txt
+reports/screenshots/*.html
+reports/screenshots/*.txt
 !reports/screenshots/launcher-gui-preview.png
 eventlogs/
 defender/
@@ -67,6 +71,18 @@ progress.md
 ralph-loop/
 plans/
 .claude/
+
+# Local harness and audit workspace state
+.agents/
+.github/codex/
+.github/workflows/codex.yml
+AGENTS.md
+AUDIT.md
+HARNESS_PRINCIPLES.md
+code_review.md
+docs/agent/
+docs/source-audit/
+scripts/topology_inventory.sh
 
 # CI/test artifacts
 coverage/

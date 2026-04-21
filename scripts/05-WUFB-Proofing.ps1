@@ -11,7 +11,7 @@
 
   It can run in two modes:
   - Audit mode (default): Detects drift only and produces a DRIFT result when differences are found.
-  - Remediation mode (-Remediate): Applies idempotent registry changes to match the catalog and reports changes.
+  - Remediation mode (-Mode Remediate): Applies idempotent registry changes to match the catalog and reports changes.
 
   The script always:
   - Collects evidence (selected registry values and basic OS information).
@@ -36,11 +36,6 @@
   The config may reference a catalog file path (for example: config.WUfB.CatalogPath).
   If the config doesn't exist or cannot be parsed, the script falls back to built-in defaults unless -CatalogPath
   was provided.
-
-.PARAMETER Remediate
-  Enables remediation mode.
-  When set, the script applies registry changes to match the desired state from the catalog.
-  Without this switch, the script runs in audit-only mode and never modifies policy values.
 
 .PARAMETER Strict
   Changes result handling when drift is detected.
@@ -93,7 +88,7 @@
 
 .EXAMPLE
   # Remediate and show structured output for further processing
-  .\05-WUFB-Proofing.ps1 -CatalogPath "PATH/TO/CATALOG.json" -Remediate -PassThru
+  .\05-WUFB-Proofing.ps1 -CatalogPath "PATH/TO/CATALOG.json" -Mode Remediate -PassThru
 
 .EXAMPLE
   # Integrate in reporting pipelines (one object only)
@@ -166,6 +161,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # C10: canonical findings list
 $script:Findings = New-FindingsList
 
@@ -176,56 +186,6 @@ $script:Findings = New-FindingsList
 
 
 
-
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][hashtable]$Summary,
-    [AllowEmptyCollection()][string[]]$Changes,
-    [AllowEmptyCollection()][string[]]$Drift,
-    [AllowEmptyCollection()][string[]]$Notes
-  )
-
-  $result = [string]$Summary.Result
-  $resColor = [ConsoleColor]::Gray
-  if ($result -eq 'OK') { $resColor = [ConsoleColor]::Green }
-  elseif ($result -eq 'DRIFT') { $resColor = [ConsoleColor]::Yellow }
-  elseif ($result -eq 'WARNING') { $resColor = [ConsoleColor]::Yellow }
-  elseif ($result -eq 'ERROR') { $resColor = [ConsoleColor]::Red }
-
-  Write-UiLine ""
-  Write-DecorativeRule -Title "WUfB Proofing Summary" -Color 'Header'
-
-  Write-KeyValue -Key 'Result'    -Value $Summary.Result -ValueColor $resColor
-  Write-KeyValue -Key 'Elevated'  -Value $Summary.Elevated
-  Write-KeyValue -Key 'Remediate' -Value $Summary.Remediate
-  Write-KeyValue -Key 'Strict'    -Value $Summary.Strict
-  Write-KeyValue -Key 'Changes'   -Value $Summary.ChangesCount
-  Write-KeyValue -Key 'Drift'     -Value $Summary.DriftCount
-  Write-KeyValue -Key 'Notes'     -Value $Summary.NotesCount
-  Write-KeyValue -Key 'EventLog'  -Value $Summary.EventLogStatus
-  Write-KeyValue -Key 'Proof JSON'-Value $Summary.ProofPath
-
-  if ($Changes -and $Changes.Count -gt 0) {
-    Write-UiLine ""
-    Write-UiLine "Changes:" -ForegroundColor ([ConsoleColor]::Green)
-    foreach ($c in $Changes) { Write-UiLine ("- {0}" -f $c) -ForegroundColor ([ConsoleColor]::Gray) }
-  }
-
-  if ($Drift -and $Drift.Count -gt 0) {
-    Write-UiLine ""
-    Write-UiLine "Drift:" -ForegroundColor ([ConsoleColor]::Yellow)
-    foreach ($d in $Drift) { Write-UiLine ("- {0}" -f $d) -ForegroundColor ([ConsoleColor]::Gray) }
-  }
-
-  if ($Notes -and $Notes.Count -gt 0) {
-    Write-UiLine ""
-    Write-UiLine "Notes:" -ForegroundColor ([ConsoleColor]::Cyan)
-    foreach ($n in $Notes) { Write-UiLine ("- {0}" -f $n) -ForegroundColor ([ConsoleColor]::Gray) }
-  }
-
-  Write-UiLine ""
-}
 
 # -----------------------------
 # Event log (best-effort)
@@ -258,8 +218,6 @@ function Set-WufbDword {
     [switch]$Remediate
   )
 
-  # Only ensure key exists when remediating (§2/§17)
-  if ($Remediate) { Ensure-RegistryKey -Path $Path }
   $cur = Get-REG -Path $Path -Name $Name
 
   if ($cur -eq $Value) {
@@ -270,7 +228,12 @@ function Set-WufbDword {
     return [pscustomobject]@{ Ok=$true; Changed=$false; Drift=$true; Message="$Path\$Name drift ($cur != $Value)"; Path=$Path; Name=$Name; Current=$cur; Desired=$Value; Action='Detect' }
   }
 
+  if (-not $PSCmdlet.ShouldProcess("$Path\$Name", "Set DWORD value")) {
+    return [pscustomobject]@{ Ok=$true; Changed=$false; Drift=$true; Message="Skipped setting $Path\$Name due to confirmation/WhatIf."; Path=$Path; Name=$Name; Current=$cur; Desired=$Value; Action='Skipped' }
+  }
+
   try {
+    Ensure-RegistryKey -Path $Path
     New-ItemProperty -Path $Path -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
     return [pscustomobject]@{ Ok=$true; Changed=$true; Drift=$false; Message="Set $Path\$Name=$Value"; Path=$Path; Name=$Name; Current=$cur; Desired=$Value; Action='SetDword' }
   } catch {
@@ -287,8 +250,6 @@ function Set-REGSZ {
     [switch]$Remediate
   )
 
-  # Only ensure key exists when remediating (§2/§17)
-  if ($Remediate) { Ensure-RegistryKey -Path $Path }
   $cur = Get-REG -Path $Path -Name $Name
 
   if ($cur -eq $Value) {
@@ -299,7 +260,12 @@ function Set-REGSZ {
     return [pscustomobject]@{ Ok=$true; Changed=$false; Drift=$true; Message="$Path\$Name drift ($cur != '$Value')"; Path=$Path; Name=$Name; Current=$cur; Desired=$Value; Action='Detect' }
   }
 
+  if (-not $PSCmdlet.ShouldProcess("$Path\$Name", "Set string value")) {
+    return [pscustomobject]@{ Ok=$true; Changed=$false; Drift=$true; Message="Skipped setting $Path\$Name due to confirmation/WhatIf."; Path=$Path; Name=$Name; Current=$cur; Desired=$Value; Action='Skipped' }
+  }
+
   try {
+    Ensure-RegistryKey -Path $Path
     New-ItemProperty -Path $Path -Name $Name -PropertyType String -Value $Value -Force | Out-Null
     return [pscustomobject]@{ Ok=$true; Changed=$true; Drift=$false; Message="Set $Path\$Name='$Value'"; Path=$Path; Name=$Name; Current=$cur; Desired=$Value; Action='SetString' }
   } catch {
@@ -315,8 +281,6 @@ function Remove-REGValue {
     [switch]$Remediate
   )
 
-  # Only ensure key exists when remediating (§2/§17)
-  if ($Remediate) { Ensure-RegistryKey -Path $Path }
   $cur = Get-REG -Path $Path -Name $Name
 
   if ($null -eq $cur) {
@@ -325,6 +289,10 @@ function Remove-REGValue {
 
   if (-not $Remediate) {
     return [pscustomobject]@{ Ok=$true; Changed=$false; Drift=$true; Message="$Path\$Name should be absent, but is present ($cur)"; Path=$Path; Name=$Name; Current=$cur; Desired=$null; Action='Detect' }
+  }
+
+  if (-not $PSCmdlet.ShouldProcess("$Path\$Name", "Remove registry value")) {
+    return [pscustomobject]@{ Ok=$true; Changed=$false; Drift=$true; Message="Skipped removing $Path\$Name due to confirmation/WhatIf."; Path=$Path; Name=$Name; Current=$cur; Desired=$null; Action='Skipped' }
   }
 
   try {
@@ -697,7 +665,40 @@ try {
     ProofPath      = $proofPathToShow
   }
 
-  Write-ConsoleSummary -Summary $summary -Changes $changes.ToArray() -Drift $drifts.ToArray() -Notes $notes.ToArray()
+  $summaryObj = [pscustomobject]$summary
+  if (-not $summaryObj.PSObject.Properties['ComputerName']) {
+    $summaryObj | Add-Member -NotePropertyName ComputerName -NotePropertyValue $env:COMPUTERNAME
+  }
+  Write-ConsoleSummary -Summary $summaryObj -Findings ([System.Collections.ArrayList]::new()) `
+    -CustomFields ([ordered]@{
+      Result     = $summary.Result
+      Elevated   = $summary.Elevated
+      Remediate  = $summary.Remediate
+      Strict     = $summary.Strict
+      Changes    = $summary.ChangesCount
+      Drift      = $summary.DriftCount
+      Notes      = $summary.NotesCount
+      EventLog   = $summary.EventLogStatus
+      'Proof JSON' = $summary.ProofPath
+    })
+  $changesArr = $changes.ToArray()
+  $driftsArr  = $drifts.ToArray()
+  $notesArr   = $notes.ToArray()
+  if ($changesArr -and $changesArr.Count -gt 0) {
+    Write-UiLine ""
+    Write-UiLine "Changes:" -ForegroundColor ([ConsoleColor]::Green)
+    foreach ($c in $changesArr) { Write-UiLine ("- {0}" -f $c) -ForegroundColor ([ConsoleColor]::Gray) }
+  }
+  if ($driftsArr -and $driftsArr.Count -gt 0) {
+    Write-UiLine ""
+    Write-UiLine "Drift:" -ForegroundColor ([ConsoleColor]::Yellow)
+    foreach ($d in $driftsArr) { Write-UiLine ("- {0}" -f $d) -ForegroundColor ([ConsoleColor]::Gray) }
+  }
+  if ($notesArr -and $notesArr.Count -gt 0) {
+    Write-UiLine ""
+    Write-UiLine "Notes:" -ForegroundColor ([ConsoleColor]::Cyan)
+    foreach ($n in $notesArr) { Write-UiLine ("- {0}" -f $n) -ForegroundColor ([ConsoleColor]::Gray) }
+  }
 
   if ($PassThru) {
     [pscustomobject]@{

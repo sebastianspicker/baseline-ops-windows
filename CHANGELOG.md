@@ -2,7 +2,74 @@
 
 All notable changes to this project are documented in this file.
 
-## [2.1.0] - 2026-03-21
+## [2.2.0] - 2026-04-18
+
+### Added
+
+- **v2 UnsupportedHost platform guard** added to all 49 numbered scripts
+  (`01`–`49`). Every script now returns `Result=OK` with
+  `Metadata.UnsupportedHost=true` when executed on a non-Windows host,
+  preventing orchestration crashes during cross-platform CI smoke tests.
+  Scripts 31 and 43 already had the guard; the remaining 47 are addressed
+  in this release.
+- **`scripts/private/` helper layer**: extracted helper functions from
+  three large scripts into dedicated dot-sourced files:
+  `04-OfficeBrowser-Hardening-Proof.helpers.ps1` (~530 lines),
+  `09-SupportBundle.helpers.ps1` (~577 lines),
+  `12-Suspicious-Artifact-Grabber.helpers.ps1` (~677 lines).
+  All three parent scripts are now well under the 800-line budget.
+- **`tests/scripts/PrivateHelpers.Tests.ps1`**: 35 Pester unit tests
+  covering the three new helper files (pure functions, constructor
+  helpers, symbol-export checks). All 35 pass.
+- **`tests/scripts/ScriptLineBudget.Tests.ps1`**: enforces an 800-line
+  ceiling on all `scripts/NN-*.ps1` numbered scripts.
+- **3 new security audit scripts** (scripts 50–52):
+  - `50-AMSI-Audit.ps1`: audits AMSI provider registration, detects known
+    bypass artifacts, checks PowerShell Script Block Logging, and reports
+    Windows Script Host AMSI integration status.
+  - `51-AppLocker-Audit.ps1`: enumerates AppLocker effective policy per
+    rule collection (Exe/Script/MSI/DLL/Appx), checks enforcement vs.
+    AuditOnly mode, verifies Application Identity service state.
+  - `52-DoH-Audit.ps1`: audits Windows DNS client DoH configuration
+    (`EnableAutoDoh`), validates configured resolvers against known
+    DoH-capable servers, and reports plaintext DNS fallback posture.
+  All three follow the full v2 contract and pass V2Contract.Tests.ps1.
+- **`tests/lib/Sanitization.Tests.ps1`**: proper Pester test file
+  converted from the standalone `tests/Verify-Sanitization.ps1` script.
+  8 tests covering `Sanitize-Path`, `Read-ConfigWithDefaults`, and
+  `ConvertTo-Hashtable` are now automatically discovered by `Invoke-Pester`.
+- Scripts 50–52 added to `examples/profiles/full-audit.json`.
+
+### Changed
+
+- **`#Requires -RunAsAdministrator`** added to scripts 24, 32, 38, 39,
+  40, and 44. These scripts already called `Require-Admin` at runtime;
+  the directive makes the elevation requirement explicit at invocation and
+  consistent with the rest of the elevated-script set (18, 22, 23, 31, 33).
+- **CI branch trigger** (`ci.yml`) extended to also cover `feat/**`
+  branches (previously only `fix/**` feature branches triggered CI).
+- **`scripts/README.md`** audit table expanded: scripts 03, 04, 06, 13,
+  14, 16, 18, and 22 added to the Audit table (they were listed only
+  under Remediation despite supporting both modes). New `Private Helpers`
+  section added. Scripts 50–52 added to catalog.
+- **Root `README.md`** script catalog updated (52 scripts, rows 50–52 added).
+- **`scripts/TODO-future-scripts.md`**: AMSI, AppLocker, and DoH items
+  marked as completed (implemented in scripts 50–52).
+- **Doc-comment whitespace** cleaned up in scripts 02, 06–08, 10–11,
+  14, 16–18: redundant blank lines between `.PARAMETER` entries removed.
+- **Switch parameter defaults** cleaned up: removed redundant `= $false`
+  defaults from `[switch]$EmitObject` in `09-SupportBundle.ps1` and
+  `[switch]$ShowOkInConsole` in `18-Firewall-Baseline.ps1`
+  (`PSAvoidDefaultValueSwitchParameter` compliance).
+
+### Fixed
+
+- Stale `# TODO: This script exceeds 800 lines` markers removed from
+  scripts 04, 09, and 12 (helpers already extracted; budget met).
+- Missing `## [2.1.0] - 2026-04-11` version header added to CHANGELOG
+  (the 2.1.0 content was present but had no version marker).
+
+## [2.1.0] - 2026-04-11
 
 ### Added
 

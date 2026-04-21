@@ -11,13 +11,20 @@ Scripts that check configuration and report drift without making changes.
 |--------|---------|----------------|
 | `01-ASR-Defender-Allowlist.ps1` | ASR rules and Defender exclusions audit | `-ExceptionsPath`, `-ConfigPath` |
 | `02-LAPS-Hygiene.ps1` | LAPS password rotation hygiene | `-MinDaysBeforeRotate`, `-Mode Remediate` |
+| `03-LocalAdmins-Guardrail.ps1` | Local administrator group membership audit | `-AllowlistPath`, `-Mode Remediate` |
+| `04-OfficeBrowser-Hardening-Proof.ps1` | Office/Browser registry hardening proof | `-CatalogPath`, `-ConfigPath`, `-Mode Remediate` |
 | `05-WUFB-Proofing.ps1` | Windows Update for Business proofing | `-CatalogPath`, `-Mode Remediate` |
 | `06-UpdateHealth-SSU-Proof.ps1` | Update health and SSU verification | `-CatalogPath`, `-ConfigPath` |
 | `07-ScheduledTasks-Hygiene.ps1` | Scheduled task health and security hygiene | `-CatalogPath`, `-ConfigPath`, `-Mode Remediate` |
 | `09-SupportBundle.ps1` | Collect diagnostic support bundle | `-BundleName`, `-IncludeKbFeed` |
 | `10-SupportBundle-Parser.ps1` | Parse support bundle archives | `-SupportDir`, `-ConfigPath` |
+| `13-LSASS-CG-HVCI-VBS.ps1` | LSASS, Credential Guard, HVCI, VBS audit | `-ConfigPath`, `-Mode Remediate` |
+| `14-SecureRemoteAccessGuardrails.ps1` | Secure remote access guardrails audit | `-ConfigPath`, `-Mode Remediate` |
 | `15-HardwareTPM-Audit.ps1` | Hardware and TPM compliance | `-CatalogPath`, `-ConfigPath` |
+| `16-Sysmon-Config-Updater.ps1` | Sysmon configuration audit and update | `-ConfigPath`, `-Mode Remediate` |
+| `18-Firewall-Baseline.ps1` | Firewall baseline audit | `-ConfigPath`, `-Mode Remediate` |
 | `19-Software-Audit.ps1` | Installed software inventory | `-CatalogPath`, `-StatePath` |
+| `22-SMB-Encryption-Enforcer.ps1` | SMB encryption settings audit | `-ConfigPath`, `-Mode Remediate` |
 | `23-BitLocker-Operations-Audit.ps1` | BitLocker configuration audit | `-ConfigPath` |
 | `24-Cert-AutoEnrollment-Health.ps1` | Certificate autoenrollment health, expiring cert report | `-WarnDays`, `-ConfigPath`, `-ExportPath` |
 | `26-Get-WinEvent-FastTriage.ps1` | Fast event log triage | `-ConfigPath`, `-MaxEvents` |
@@ -37,11 +44,14 @@ Scripts that check configuration and report drift without making changes.
 | `47-WDAG-Readiness-Audit.ps1` | Application Guard prerequisites audit | `-ConfigPath` |
 | `48-ExploitProtection-Audit.ps1` | Exploit Protection and ASR mitigations | `-ConfigPath` |
 | `49-DriverSigning-Integrity-Audit.ps1` | Driver signing and kernel code integrity | `-ConfigPath` |
+| `50-AMSI-Audit.ps1` | AMSI provider registration and bypass detection | `-ConfigPath` |
+| `51-AppLocker-Audit.ps1` | AppLocker policy enforcement and rule coverage | `-ConfigPath` |
+| `52-DoH-Audit.ps1` | DNS-over-HTTPS client configuration audit | `-ConfigPath` |
 
 ### Remediation Scripts
 Scripts that can apply fixes when run with `-Mode Remediate`.
 
-| Script | Purpose | What It Remediate |
+| Script | Purpose | What It Remediates |
 |--------|---------|-------------------|
 | `01-ASR-Defender-Allowlist.ps1` | ASR/Defender allowlist sync | Adds/removes exclusions to match JSON |
 | `02-LAPS-Hygiene.ps1` | LAPS password rotation | Rotates expired LAPS passwords |
@@ -97,6 +107,16 @@ Scripts for ongoing monitoring and drift detection.
 | `41-NTLM-Audit-Client.ps1` | NTLM / LAN Manager authentication level audit | Periodic |
 | `32-Firewall-Logging-Audit.ps1` | Firewall logging status | Periodic |
 
+### Private Helpers
+
+Internal helper files dot-sourced by their parent scripts. Not for direct invocation.
+
+| File | Used By | Content |
+|------|---------|---------|
+| `private/04-OfficeBrowser-Hardening-Proof.helpers.ps1` | `04-OfficeBrowser-Hardening-Proof.ps1` | Office/Edge/Firefox proof helpers, catalog loading, result summary |
+| `private/09-SupportBundle.helpers.ps1` | `09-SupportBundle.ps1` | Bundle record creation, file/log export, config loading |
+| `private/12-Suspicious-Artifact-Grabber.helpers.ps1` | `12-Suspicious-Artifact-Grabber.ps1` | Artifact collection, process/network/task collectors, result objects |
+
 ## Common Parameters and Conventions
 
 Most scripts support these common parameters:
@@ -113,6 +133,8 @@ Most scripts support these common parameters:
 | `-Quiet` / `-NoColor` | Reduce console noise / disable color where supported |
 | `-WhatIf` | Preview changes without applying (where supported) |
 | `-Confirm` | Require confirmation before changes (where supported) |
+
+Mutation-capable scripts should implement `SupportsShouldProcess` and honor `-WhatIf` / `-Confirm` for any state-changing path.
 
 **Pipeline output:** Scripts that document pipeline output emit exactly one structured object (e.g. `Summary`, `Findings`, `Config`) for automation (Export-Csv, ConvertTo-Json, Where-Object). Use `-PassThru` where the script gates pipeline output on that switch.
 

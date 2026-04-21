@@ -3,83 +3,61 @@
 <#
 .SYNOPSIS
   Audits and optionally remediates a Windows Firewall baseline (profiles, logging, and selected local firewall rules) using a JSON catalog or built-in defaults.
-
 .DESCRIPTION
   This script evaluates a baseline in three areas:
   1) Firewall profiles (Domain/Private/Public): enabled state, default inbound/outbound actions, notifications, and logging settings.
   2) Risky inbound local rules: finds inbound rules in a chosen local policy store and flags/disables rules whose DisplayName matches configured wildcard patterns.
   3) Baseline ensure-rules: verifies required rules exist in the chosen local policy store and match key properties (direction/action/enabled/profile/port filters). Missing or drifting rules can be created/updated.
-
   The script supports two modes:
   - Audit (default): detects drift and reports findings.
   - Remediate (-Remediate): applies changes to match the baseline, using ShouldProcess (supports -WhatIf / -Confirm).
-
   Output design:
   - Pipeline output: emits structured result objects only (CSV/JSON-friendly).
   - Console output: prints a human-friendly summary and colorized findings (optional).
-
   Catalog loading order:
   - If -CatalogPath is provided and valid, it is used.
   - Otherwise, if -ConfigPath is provided and contains Firewall.CatalogPath, that catalog is used.
   - Otherwise, built-in defaults are used.
-
 .PARAMETER CatalogPath
   Path to a baseline catalog JSON file.
   If provided, this takes precedence over -ConfigPath.
-
 .PARAMETER Remediate
   If set, the script attempts to apply the baseline (update profiles, disable targeted inbound rules, and create/update ensure-rules).
   Use -WhatIf to preview changes without applying them.
-
 .PARAMETER Strict
   If set, drift is treated as non-compliant.
   If not set, drift is reported but the compliance result is less strict (see Notes on event IDs).
-
 .PARAMETER ConfigPath
   Path to a configuration JSON file that may contain:
     { "Firewall": { "CatalogPath": "PATH/TO/JSON" } }
   Used only when -CatalogPath is not provided or cannot be loaded.
-
 .PARAMETER LocalPolicyStore
   The local firewall policy store to read/modify.
   Typical use is the default local persistent store; other stores can be targeted as needed.
-
 .PARAMETER EventSource
   Event source name used when writing the health event to the Windows Event Log.
-
 .PARAMETER EventLogName
   Event log name (for example "Application") where the health event is written.
-
 .PARAMETER ConsoleSummary
   If set (default), prints a readable summary and colorized findings to the console host.
   If not set, no console summary is printed (pipeline output still occurs).
-
 .PARAMETER ShowOkInConsole
   If set, the console summary also includes a list of OK items.
   By default, the console focuses on Changed/Drift/Error/Note.
-
 .INPUTS
   None. You can't pipe input objects to this script.
-
-
 .PARAMETER Mode
   Execution mode. 'Audit' reports only; 'Remediate' applies changes.
-
 .PARAMETER OutputFormat
   Output format: Console, Json, Csv, or None.
-
 .PARAMETER OutputPath
   File path for Json/Csv output.
-
 .PARAMETER PassThru
   Emit structured v2 result object to pipeline.
-
 .PARAMETER Quiet
   Suppress console output.
-
 .PARAMETER NoColor
   Disable colored output.
-
 .OUTPUTS
   PSCustomObject with the following properties:
     - Time:       ISO-like timestamp (local time) when the item was produced.
@@ -90,66 +68,49 @@
     - Detail:     Optional additional detail (e.g., which properties drifted).
     - Name:       Optional firewall rule Name (internal identifier).
     - DisplayName:Optional firewall rule DisplayName (user-facing title).
-
 .NOTES
   Safety and change control:
   - Remediation is guarded by ShouldProcess; use -WhatIf for a dry run and -Confirm for interactive approval.
-
   Scope:
   - This script targets a selected local policy store only. It is not intended to modify centrally managed policies.
-
   Health event semantics:
   - Writes an event indicating overall status:
     - 4800 indicates no errors and (when not strict) drift does not force a warning state.
     - 4810 indicates drift and/or errors (and in strict mode, any drift is considered non-compliant).
-
   Exit codes:
   - The script does not set a custom process exit code; rely on pipeline output and the event log result.
-
 .EXAMPLE
   # Audit using built-in defaults (no changes)
   .\18-Firewall-Baseline.ps1
-
 .EXAMPLE
   # Audit using an explicit catalog JSON
   .\18-Firewall-Baseline.ps1 -CatalogPath "PATH/TO/BASELINE.json"
-
 .EXAMPLE
   # Remediate using a catalog, preview only (no changes applied)
   .\18-Firewall-Baseline.ps1 -CatalogPath "PATH/TO/BASELINE.json" -Remediate -WhatIf
-
 .EXAMPLE
   # Remediate using config-driven catalog path, suppress console summary, export results to CSV
   .\18-Firewall-Baseline.ps1 -ConfigPath "PATH/TO/CONFIG.json" -Remediate -ConsoleSummary:$false |
     Export-Csv -NoTypeInformation -Path "PATH/TO/report.csv"
-
 .EXAMPLE
   # Audit, then filter only drift/error items for automation
   .\18-Firewall-Baseline.ps1 |
     Where-Object { $_.Status -in @('Drift','Error') } |
     ConvertTo-Json -Depth 5
 #>
-
-
 [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='Medium')]
 param(
   [string]$CatalogPath,
   [switch]$Strict,
-
   [string]$ConfigPath,
-
   [ValidateSet('PersistentStore','LocalHost','StaticServiceStore','ConfigurableServiceStore')]
   [string]$LocalPolicyStore = 'PersistentStore',
-
   [string]$EventSource = 'Win-Firewall-Baseline',
   [string]$EventLogName = 'Application',
-
   # Pretty console output. (Pipeline output is always structured objects only.)
   [switch]$ConsoleSummary = $true,
-
   # Show verbose "OK" items in the console summary.
-  [switch]$ShowOkInConsole = $false
-
+  [switch]$ShowOkInConsole
 ,
   [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
   [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
@@ -158,7 +119,6 @@ param(
   [switch]$Quiet,
   [switch]$NoColor
 )
-
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
@@ -166,8 +126,6 @@ Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
-
-
 Set-StrictMode -Version Latest
 # v2-init
 $null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
@@ -191,21 +149,30 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '18-Firewall-Baseline.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # -------------------------
 # Event log helpers
 # -------------------------
-
-
 # -------------------------
 # Console UI helpers (no pipeline output)
 # -------------------------
-
-
-
 function Get-StatusColor {
   [CmdletBinding()]
   param([Parameter(Mandatory)][ValidateSet('OK','Drift','Changed','Error','Note')][string]$Status)
-
   switch ($Status) {
     'OK'      { [ConsoleColor]::Green; break }
     'Changed' { [ConsoleColor]::Cyan; break }
@@ -214,34 +181,27 @@ function Get-StatusColor {
     'Error'   { [ConsoleColor]::Red; break }
   }
 }
-
 function Write-UiItem {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]$Item
   )
-
   $color = Get-StatusColor -Status $Item.Status
   $left  = ("[{0}] {1}/{2}" -f $Item.Status, $Item.Category, $Item.Target)
   $msg   = $Item.Message
   if (-not [string]::IsNullOrWhiteSpace($Item.DisplayName)) { $msg += " | " + $Item.DisplayName }
   if (-not [string]::IsNullOrWhiteSpace($Item.Detail))      { $msg += " | " + $Item.Detail }
-
   Write-UiLine ("- " + $left + ": " + $msg) -ForegroundColor $color
 }
-
 # -------------------------
 # Generic helpers
 # -------------------------
-
-
 function Expand-EnvPath {
   [CmdletBinding()]
   param([AllowNull()][string]$Path)
   if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
   [Environment]::ExpandEnvironmentVariables($Path)
 }
-
 function Normalize-ProfileValue {
   [CmdletBinding()]
   param([AllowNull()]$ProfileValue)
@@ -249,7 +209,6 @@ function Normalize-ProfileValue {
   $parts = @($ProfileValue.ToString().Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   @($parts | Sort-Object -Unique)
 }
-
 function Normalize-EnabledValue {
   [CmdletBinding()]
   param($Value)
@@ -261,7 +220,6 @@ function Normalize-EnabledValue {
   if ($s -match '^(0|Disabled)$') { return 'False' }
   'True'
 }
-
 function Get-ObjProp {
   [CmdletBinding()]
   param(
@@ -269,23 +227,18 @@ function Get-ObjProp {
     [Parameter(Mandatory)][string]$Name,
     $Default = $null
   )
-
   if ($null -eq $Object) { return $Default }
-
   if ($Object -is [System.Collections.IDictionary]) {
     if ($Object.Contains($Name)) { return $Object[$Name] }
     return $Default
   }
-
   $p = $Object.PSObject.Properties[$Name]
   if ($p) { return $p.Value }
   $Default
 }
-
 function Try-ReadJsonFile {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Path)
-
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
   try {
     $raw = Get-Content -Raw -LiteralPath $Path -Encoding UTF8
@@ -295,7 +248,6 @@ function Try-ReadJsonFile {
     $null
   }
 }
-
 function New-ResultItem {
   [CmdletBinding()]
   param(
@@ -307,7 +259,6 @@ function New-ResultItem {
     [string]$Name,
     [string]$DisplayName
   )
-
   # Structured object for pipelines (CSV/JSON/etc.)
   [pscustomobject]@{
     Time        = (Get-Date).ToString('s')
@@ -320,11 +271,9 @@ function New-ResultItem {
     DisplayName = $DisplayName
   }
 }
-
 # -------------------------
 # Default catalog (built-in)
 # -------------------------
-
 $DefaultCatalog = ConvertFrom-Json @"
 {
   "Profiles": {
@@ -366,7 +315,6 @@ $DefaultCatalog = ConvertFrom-Json @"
   ]
 }
 "@
-
 function Get-EffectiveCatalog {
   [CmdletBinding()]
   param(
@@ -374,7 +322,6 @@ function Get-EffectiveCatalog {
     [AllowNull()][string]$ConfigPath,
     [Parameter(Mandatory)]$DefaultCatalog
   )
-
   if ($CatalogPath) {
     $sanitized = Sanitize-Path -Path $CatalogPath -MustExist
     if ($sanitized) {
@@ -382,7 +329,6 @@ function Get-EffectiveCatalog {
       if ($obj) { return $obj }
     }
   }
-
   if ($ConfigPath) {
     $sanitizedCfg = Sanitize-Path -Path $ConfigPath -MustExist
     if ($sanitizedCfg) {
@@ -400,44 +346,35 @@ function Get-EffectiveCatalog {
       }
     }
   }
-
   $DefaultCatalog
 }
-
 function Ensure-CatalogDefaults {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]$Catalog,
     [Parameter(Mandatory)]$DefaultCatalog
   )
-
   $profiles = Get-ObjProp -Object $Catalog -Name 'Profiles' -Default $null
   if (-not $profiles) {
     $Catalog | Add-Member -NotePropertyName Profiles -NotePropertyValue $DefaultCatalog.Profiles -Force
     $profiles = $Catalog.Profiles
   }
-
   foreach ($n in @('Domain','Private','Public')) {
     if (-not (Get-ObjProp -Object $profiles -Name $n -Default $null)) {
       $profiles | Add-Member -NotePropertyName $n -NotePropertyValue (Get-ObjProp -Object $DefaultCatalog.Profiles -Name $n) -Force
     }
   }
-
   if ($null -eq (Get-ObjProp -Object $Catalog -Name 'DisableInboundByNameLike' -Default $null)) {
     $Catalog | Add-Member -NotePropertyName DisableInboundByNameLike -NotePropertyValue @() -Force
   }
-
   if ($null -eq (Get-ObjProp -Object $Catalog -Name 'EnsureRules' -Default $null)) {
     $Catalog | Add-Member -NotePropertyName EnsureRules -NotePropertyValue @() -Force
   }
-
   $Catalog
 }
-
 # -------------------------
 # Profile enforcement
 # -------------------------
-
 function Get-ProfileProp {
   [CmdletBinding()]
   param(
@@ -449,7 +386,6 @@ function Get-ProfileProp {
   if ($p) { return $p.Value }
   $Default
 }
-
 function Ensure-Profile {
   [CmdletBinding()]
   param(
@@ -457,39 +393,31 @@ function Ensure-Profile {
     [Parameter(Mandatory)]$Def,
     [switch]$Remediate
   )
-
   $out = @()
-
   try {
     $p = Get-NetFirewallProfile -Name $Name
-
     $wantEnabled  = [bool](Get-ObjProp -Object $Def -Name 'Enabled' -Default $true)
     $wantIn       = [string](Get-ObjProp -Object $Def -Name 'DefaultInbound' -Default 'Block')
     $wantOut      = [string](Get-ObjProp -Object $Def -Name 'DefaultOutbound' -Default 'Allow')
     $wantNotify   = [bool](Get-ObjProp -Object $Def -Name 'NotifyOnListen' -Default $false)
-
     # Catalog uses LogDropped; Set-NetFirewallProfile uses LogBlocked.
     $wantLogBlocked = Get-ObjProp -Object $Def -Name 'LogDropped' -Default $null
     $wantLogAllowed = Get-ObjProp -Object $Def -Name 'LogAllowed' -Default $null
     $wantLogKB      = Get-ObjProp -Object $Def -Name 'LogMaxSizeKB' -Default $null
     $wantLogFile    = Expand-EnvPath ([string](Get-ObjProp -Object $Def -Name 'LogFile' -Default ''))
-
     $haveEnabled = Get-ProfileProp -ProfileObject $p -PropName 'Enabled' -Default $null
     $haveIn      = Get-ProfileProp -ProfileObject $p -PropName 'DefaultInboundAction' -Default $null
     $haveOut     = Get-ProfileProp -ProfileObject $p -PropName 'DefaultOutboundAction' -Default $null
     $haveNotify  = Get-ProfileProp -ProfileObject $p -PropName 'NotifyOnListen' -Default $null
-
     $haveLogBlocked = Get-ProfileProp -ProfileObject $p -PropName 'LogBlocked' -Default $null
     $haveLogAllowed = Get-ProfileProp -ProfileObject $p -PropName 'LogAllowed' -Default $null
     $haveLogKB      = Get-ProfileProp -ProfileObject $p -PropName 'LogMaxSizeKilobytes' -Default $null
     $haveLogFile    = Expand-EnvPath ([string](Get-ProfileProp -ProfileObject $p -PropName 'LogFileName' -Default ''))
-
     $drift = @()
     if ($null -ne $haveEnabled -and $haveEnabled -ne $wantEnabled) { $drift += "Enabled=$haveEnabled != $wantEnabled" }
     if ($null -ne $haveIn -and $haveIn -ne $wantIn)               { $drift += "DefaultInbound=$haveIn != $wantIn" }
     if ($null -ne $haveOut -and $haveOut -ne $wantOut)            { $drift += "DefaultOutbound=$haveOut != $wantOut" }
     if ($null -ne $haveNotify -and $haveNotify -ne $wantNotify)   { $drift += "NotifyOnListen=$haveNotify != $wantNotify" }
-
     if ($null -ne $wantLogBlocked -and $null -ne $haveLogBlocked -and $haveLogBlocked -ne [bool]$wantLogBlocked) {
       $drift += "LogBlocked=$haveLogBlocked != $wantLogBlocked"
     }
@@ -502,14 +430,11 @@ function Ensure-Profile {
     if (-not [string]::IsNullOrWhiteSpace($wantLogFile) -and -not [string]::IsNullOrWhiteSpace($haveLogFile) -and $haveLogFile -ne $wantLogFile) {
       $drift += "LogFileName=$haveLogFile != $wantLogFile"
     }
-
     if ($drift.Count -eq 0) {
       $out += (New-ResultItem -Category Profile -Target $Name -Status OK -Message "Profile matches baseline")
       return $out
     }
-
     $out += (New-ResultItem -Category Profile -Target $Name -Status Drift -Message "Profile drift detected" -Detail ($drift -join '; '))
-
     if ($Remediate) {
       $spTarget = "FirewallProfile/$Name"
       if ($PSCmdlet.ShouldProcess($spTarget, "Set-NetFirewallProfile")) {
@@ -521,12 +446,10 @@ function Ensure-Profile {
             DefaultOutboundAction = $wantOut
             NotifyOnListen        = $wantNotify
           }
-
           if ($null -ne $haveLogBlocked -and $null -ne $wantLogBlocked) { $setParams['LogBlocked'] = [bool]$wantLogBlocked }
           if ($null -ne $haveLogAllowed -and $null -ne $wantLogAllowed) { $setParams['LogAllowed'] = [bool]$wantLogAllowed }
           if ($null -ne $haveLogKB -and $null -ne $wantLogKB)           { $setParams['LogMaxSizeKilobytes'] = [int]$wantLogKB }
           if ($null -ne $haveLogFile -and -not [string]::IsNullOrWhiteSpace($wantLogFile)) { $setParams['LogFileName'] = $wantLogFile }
-
           Set-NetFirewallProfile @setParams | Out-Null
           $out += (New-ResultItem -Category Profile -Target $Name -Status Changed -Message "Profile remediated")
         } catch {
@@ -536,27 +459,21 @@ function Ensure-Profile {
         $out += (New-ResultItem -Category Profile -Target $Name -Status Note -Message "Remediation skipped by ShouldProcess")
       }
     }
-
   } catch {
     $out += (New-ResultItem -Category Profile -Target $Name -Status Error -Message "Profile query failed" -Detail $_.Exception.Message)
   }
-
   $out
 }
-
 # -------------------------
 # Inbound rule disabling by pattern
 # -------------------------
-
 function Disable-InboundByNameLike {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string[]]$Patterns,
     [Parameter(Mandatory)][string]$LocalPolicyStore
   )
-
   $out = @()
-
   $allInbound = @()
   try {
     $allInbound = @(Get-NetFirewallRule -PolicyStore $LocalPolicyStore -Direction Inbound -ErrorAction Stop) 
@@ -564,15 +481,12 @@ function Disable-InboundByNameLike {
     $out += (New-ResultItem -Category InboundRuleDisable -Target "InboundRules" -Status Error -Message "Inbound rule enumeration failed" -Detail $_.Exception.Message)
     return $out
   }
-
   foreach ($pat in $Patterns) {
     if ([string]::IsNullOrWhiteSpace($pat)) { continue }
-
     $matchingRules = @($allInbound | Where-Object { $_.DisplayName -like $pat })
     foreach ($r in $matchingRules) {
       if ($r.Enabled -eq 'True') {
         $out += (New-ResultItem -Category InboundRuleDisable -Target $pat -Status Drift -Message "Inbound rule enabled" -Name $r.Name -DisplayName $r.DisplayName)
-
         if ($Remediate) {
           $spTarget = "FirewallRule/$($r.Name)"
           if ($PSCmdlet.ShouldProcess($spTarget, "Disable inbound rule")) {
@@ -589,27 +503,21 @@ function Disable-InboundByNameLike {
       }
     }
   }
-
   if ($out.Count -eq 0) {
     $out += (New-ResultItem -Category InboundRuleDisable -Target "InboundRules" -Status OK -Message "No matching enabled inbound rules found")
   }
-
   $out
 }
-
 # -------------------------
 # Ensure baseline rules
 # -------------------------
-
 function Ensure-FwRule {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]$Spec,
     [Parameter(Mandatory)][string]$LocalPolicyStore
   )
-
   $out = @()
-
   $name  = [string](Get-ObjProp -Object $Spec -Name 'Name' -Default '')
   $disp  = [string](Get-ObjProp -Object $Spec -Name 'DisplayName' -Default '')
   $grp   = [string](Get-ObjProp -Object $Spec -Name 'Group' -Default '')
@@ -623,13 +531,11 @@ function Ensure-FwRule {
   $prof  = @((Get-ObjProp -Object $Spec -Name 'Profile' -Default @()) | Where-Object { $_ })
   $ena   = Normalize-EnabledValue (Get-ObjProp -Object $Spec -Name 'Enabled' -Default $true)
   $desc  = [string](Get-ObjProp -Object $Spec -Name 'Description' -Default '')
-
   $targetId = if ($name) { $name } else { $disp }
   if ([string]::IsNullOrWhiteSpace($targetId)) {
     $out += (New-ResultItem -Category EnsureRule -Target "EnsureRules" -Status Error -Message "Invalid rule spec: missing Name/DisplayName")
     return $out
   }
-
   $existing = @()
   try {
     if ($name) {
@@ -643,10 +549,8 @@ function Ensure-FwRule {
     $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status Error -Message "Rule query failed" -Detail $_.Exception.Message -Name $name -DisplayName $disp)
     return $out
   }
-
   if ($existing.Count -eq 0) {
     $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status Drift -Message "Missing rule" -Name $name -DisplayName $disp)
-
     if ($Remediate) {
       $spTarget = "FirewallRule/(create)/$targetId"
       if ($PSCmdlet.ShouldProcess($spTarget, "New-NetFirewallRule")) {
@@ -668,7 +572,6 @@ function Ensure-FwRule {
           if ($svc)  { $params['Service'] = $svc }
           if ($prof.Count -gt 0) { $params['Profile'] = $prof }
           if ($desc) { $params['Description'] = $desc }
-
           New-NetFirewallRule @params | Out-Null
           $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status Changed -Message "Rule created" -Name $name -DisplayName $disp)
         } catch {
@@ -678,38 +581,29 @@ function Ensure-FwRule {
         $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status Note -Message "Remediation skipped by ShouldProcess" -Name $name -DisplayName $disp)
       }
     }
-
     return $out
   }
-
   foreach ($r in $existing) {
     $need = @()
-
     if ($dir -and $r.Direction -ne $dir) { $need += "Direction" }
     if ($act -and $r.Action -ne $act)    { $need += "Action" }
     if ($r.Enabled -ne $ena)             { $need += "Enabled" }
     if ($grp -and $r.Group -ne $grp)     { $need += "Group" }
-
     $haveProf = Normalize-ProfileValue $r.Profile
     $wantProf = Normalize-ProfileValue $prof
     if ($wantProf.Count -gt 0 -and ((@($haveProf) -join ',') -ne (@($wantProf) -join ','))) { $need += "Profile" }
-
     $pf = $null
     try { $pf = Get-NetFirewallRule -PolicyStore $LocalPolicyStore -Name $r.Name | Get-NetFirewallPortFilter } catch { <# best-effort: port filter may not be available for all rule types #> }
-
     if ($pf) {
       if ($proto -and $pf.Protocol -ne $proto) { $need += "Protocol" }
       if ($lprt  -and $pf.LocalPort  -ne $lprt) { $need += "LocalPort" }
       if ($rprt  -and $pf.RemotePort -ne $rprt) { $need += "RemotePort" }
     }
-
     if ($need.Count -eq 0) {
       $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status OK -Message "Rule matches baseline" -Name $r.Name -DisplayName $r.DisplayName)
       continue
     }
-
     $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status Drift -Message "Rule drift detected" -Detail ($need -join ', ') -Name $r.Name -DisplayName $r.DisplayName)
-
     if ($Remediate) {
       $spTarget = "FirewallRule/$($r.Name)"
       if ($PSCmdlet.ShouldProcess($spTarget, "Set-NetFirewallRule / Set-NetFirewallPortFilter")) {
@@ -724,7 +618,6 @@ function Ensure-FwRule {
           if ($grp) { $setParams['Group']     = $grp }
           if ($prof.Count -gt 0) { $setParams['Profile'] = $prof }
           Set-NetFirewallRule @setParams | Out-Null
-
           if ($pf -and ($proto -or $lprt -or $rprt)) {
             $portParams = @{}
             if ($proto) { $portParams['Protocol']  = $proto }
@@ -732,11 +625,9 @@ function Ensure-FwRule {
             if ($rprt)  { $portParams['RemotePort']= $rprt }
             Set-NetFirewallPortFilter -InputObject $pf @portParams | Out-Null
           }
-
           if ($desc) {
             Set-NetFirewallRule -PolicyStore $LocalPolicyStore -Name $r.Name -Description $desc -ErrorAction Stop | Out-Null
           }
-
           $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status Changed -Message "Rule remediated" -Name $r.Name -DisplayName $r.DisplayName)
         } catch {
           $out += (New-ResultItem -Category EnsureRule -Target $targetId -Status Error -Message "Rule remediation failed" -Detail $_.Exception.Message -Name $r.Name -DisplayName $r.DisplayName)
@@ -746,85 +637,25 @@ function Ensure-FwRule {
       }
     }
   }
-
   $out
 }
-
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][System.Collections.IEnumerable]$Results,
-    [Parameter(Mandatory)][timespan]$Duration,
-    [Parameter(Mandatory)][bool]$Elevated,
-    [Parameter(Mandatory)][bool]$Remediate,
-    [Parameter(Mandatory)][bool]$Strict,
-    [Parameter(Mandatory)][string]$PolicyStore,
-    [Parameter(Mandatory)][bool]$ShowOk
-  )
-
-  $items = @($Results)
-
-  $driftCount  = @($items | Where-Object { $_.Status -eq 'Drift'   }).Count
-  $errorCount  = @($items | Where-Object { $_.Status -eq 'Error'   }).Count
-  $changeCount = @($items | Where-Object { $_.Status -eq 'Changed' }).Count
-  $noteCount   = @($items | Where-Object { $_.Status -eq 'Note'    }).Count
-  $okCount     = @($items | Where-Object { $_.Status -eq 'OK'      }).Count
-
-  $mode = if ($Remediate) { 'Remediate' } else { 'Audit' }
-
-  Write-UiHeader -Text "Firewall baseline summary"
-  Write-UiLine -Text ("Mode:        " + $mode) -Color Gray
-  Write-UiLine -Text ("Strict:      " + $Strict) -Color Gray
-  Write-UiLine -Text ("Elevated:    " + $Elevated) -Color Gray
-  Write-UiLine -Text ("PolicyStore: " + $PolicyStore) -Color Gray
-  Write-UiLine -Text ("Duration:    " + [string]$Duration) -Color Gray
-  Write-UiLine ""
-
-  Write-UiLine -Text ("Changed:     " + $changeCount) -Color Cyan
-  Write-UiLine -Text ("Drift:       " + $driftCount) -Color Yellow
-  Write-UiLine -Text ("Errors:      " + $errorCount) -Color Red
-  Write-UiLine -Text ("Notes:       " + $noteCount) -Color DarkGray
-  if ($ShowOk) { Write-UiLine -Text ("OK:          " + $okCount) -Color Green }
-  Write-UiLine ""
-
-  # Show important items first
-  $top = $items | Where-Object { $_.Status -in @('Error','Drift','Changed','Note') }
-  if (-not $ShowOk) { $top = $top | Where-Object { $_.Status -ne 'OK' } }
-
-  if (@($top).Count -gt 0) {
-    Write-UiHeader -Text "Findings (top 25)"
-    $top | Select-Object -First 25 | ForEach-Object { Write-UiItem -Item $_ }
-  }
-
-  if ($ShowOk -and $okCount -gt 0) {
-    Write-UiHeader -Text "OK items (top 25)"
-    ($items | Where-Object { $_.Status -eq 'OK' } | Select-Object -First 25) | ForEach-Object { Write-UiItem -Item $_ }
-  }
-}
-
 # -------------------------
 # Main
 # -------------------------
-
 Ensure-EventSource -Source $EventSource -LogName $EventLogName
-
 $start = Get-Date
 $isAdmin = Test-IsAdmin
-
 $script:Findings = New-FindingsList
 $results = New-Object System.Collections.Generic.List[object]
-
 if (-not $isAdmin) {
   $results.Add((New-ResultItem -Category Runtime -Target "Elevation" -Status Note -Message "Not elevated: remediation may fail"))
 }
-
 $cat = Get-EffectiveCatalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath -DefaultCatalog $DefaultCatalog
 if ($null -eq $cat) {
   $cat = $DefaultCatalog
   $results.Add((New-ResultItem -Category Catalog -Target "Catalog" -Status Note -Message "Catalog not loaded; using built-in defaults"))
 }
 $cat = Ensure-CatalogDefaults -Catalog $cat -DefaultCatalog $DefaultCatalog
-
 # Profiles
 foreach ($n in @('Domain','Private','Public')) {
   $def = Get-ObjProp -Object $cat.Profiles -Name $n -Default $DefaultCatalog.Profiles.$n
@@ -836,7 +667,6 @@ foreach ($n in @('Domain','Private','Public')) {
       }
   }
 }
-
 # Disable inbound patterns
 $patterns = @((Get-ObjProp -Object $cat -Name 'DisableInboundByNameLike' -Default @()) | Where-Object { $_ -is [string] -and $_ })
 $inboundResults = Disable-InboundByNameLike -Patterns $patterns -Remediate:$Remediate -LocalPolicyStore $LocalPolicyStore
@@ -846,7 +676,6 @@ foreach ($r in $inboundResults) {
         Add-Finding -Code 'FW-InboundRule-Enabled' -Severity 'Medium' -Message "Risky inbound rule enabled: $($r.DisplayName)" -Extra @{ Name = $r.Name; DisplayName = $r.DisplayName; Pattern = $r.Target }
     }
 }
-
 # Ensure rules
 $ensureRules = @((Get-ObjProp -Object $cat -Name 'EnsureRules' -Default @()) | Where-Object { $_ })
 foreach ($rule in $ensureRules) {
@@ -858,18 +687,13 @@ foreach ($rule in $ensureRules) {
       }
   }
 }
-
 $duration = (New-TimeSpan -Start $start -End (Get-Date))
-
 $hasError = @($results | Where-Object { $_.Status -eq 'Error' }).Count -gt 0
 $hasDrift = @($results | Where-Object { $_.Status -eq 'Drift' }).Count -gt 0
-
 # Strict means: any drift flips to WARN (4810)
 $ok = (-not $hasError) -and (-not ($Strict -and $hasDrift))
-
 $eventId = if ($ok) { 4800 } else { 4810 }
 $level   = if ($ok) { 'Information' } else { 'Warning' }
-
 # Compact event message; no formatting.
 $eventSummary = "Mode={0}; Elevated={1}; PolicyStore={2}; Changed={3}; Drift={4}; Errors={5}; Duration={6}" -f `
   ($(if ($Remediate) { 'Remediate' } else { 'Audit' })), $isAdmin, $LocalPolicyStore, `
@@ -877,13 +701,37 @@ $eventSummary = "Mode={0}; Elevated={1}; PolicyStore={2}; Changed={3}; Drift={4}
   (@($results | Where-Object { $_.Status -eq 'Drift' }).Count), `
   (@($results | Where-Object { $_.Status -eq 'Error' }).Count), `
   ([string]$duration)
-
 Write-HealthEvent -Id $eventId -Message $eventSummary -Level $level -Source $EventSource -LogName $EventLogName
-
 if ($ConsoleSummary) {
-  Write-ConsoleSummary -Results $results -Duration $duration -Elevated $isAdmin -Remediate $Remediate -Strict $Strict -PolicyStore $LocalPolicyStore -ShowOk $ShowOkInConsole
+  $summaryObj = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; Duration = $duration }
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      Mode        = $(if ($Remediate) { 'Remediate' } else { 'Audit' })
+      Strict      = $Strict
+      Elevated    = $isAdmin
+      PolicyStore = $LocalPolicyStore
+      Changed     = @($results | Where-Object { $_.Status -eq 'Changed' }).Count
+      Drift       = @($results | Where-Object { $_.Status -eq 'Drift' }).Count
+      Errors      = @($results | Where-Object { $_.Status -eq 'Error' }).Count
+      Duration    = [string]$duration
+    })
+  # Show important items (non-OK, top 25)
+  $items = @($results)
+  $top = $items | Where-Object { $_.Status -in @('Error','Drift','Changed','Note') }
+  if (@($top).Count -gt 0) {
+    Write-UiHeader -Text "Findings (top 25)"
+    $top | Select-Object -First 25 | ForEach-Object { Write-UiItem -Item $_ }
+  }
+  # Show OK items if requested
+  if ($ShowOkInConsole) {
+    $okItems = $items | Where-Object { $_.Status -eq 'OK' }
+    if (@($okItems).Count -gt 0) {
+      Write-UiHeader -Text "OK items (top 25)"
+      ($okItems | Select-Object -First 25) | ForEach-Object { Write-UiItem -Item $_ }
+    }
+  }
 }
-
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
 $v2Result = New-V2ResultObject -ScriptName '18-Firewall-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; Duration = $duration }) -Metadata @{ Results = $results }

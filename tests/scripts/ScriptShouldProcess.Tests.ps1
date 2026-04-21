@@ -90,3 +90,103 @@ Describe 'ShouldProcess guards for registry-write calls' {
     $unguarded | Should -BeNullOrEmpty -Because "All Set-Reg*/Remove-Reg* calls must be wrapped in `$PSCmdlet.ShouldProcess() guards"
   }
 }
+
+Describe 'Direct registry-write paths in audited scripts' {
+  It '05-WUFB-Proofing helper writes are protected by ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/05-WUFB-Proofing.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match 'function Set-WufbDword'
+    $content | Should -Match 'function Set-REGSZ'
+    $content | Should -Match 'function Remove-REGValue'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\("\$Path\\\$Name", "Set DWORD'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\("\$Path\\\$Name", "Set string'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\("\$Path\\\$Name", "Remove registry value"\)'
+  }
+
+  It '04-OfficeBrowser-Hardening-Proof remediation writes are protected by ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/04-OfficeBrowser-Hardening-Proof.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match 'function Set-RegValueProof'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\("\$Path\\\$Name", "Set \$Type value"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$urlsKey, ''Reset Edge startup URLs''\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\("\$urlsKey\\\$name", ''Set Edge startup URL''\)'
+  }
+
+  It '21-EmergencyKillSwitch confirms quarantine-flag writes before touching the registry' {
+    $path = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match 'ShouldProcess\(\$Run\.Effective\.RegKey, "Write quarantine registry flag"\)'
+  }
+
+  It '38-SecurityOptions-Drift keeps registry writes behind a call-site ShouldProcess guard' {
+    $path = Join-Path $PSScriptRoot '../../scripts/38-SecurityOptions-Drift.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match 'if \(\$PSCmdlet\.ShouldProcess\("\$path\\\$name", "Set to ''\$want'' \(\$type\)"\)\)'
+  }
+
+  It '01-ASR-Defender-Allowlist gates Defender preference changes behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/01-ASR-Defender-Allowlist.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$name, "Add Defender allowlist entries"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$name, "Remove Defender allowlist entries"\)'
+  }
+
+  It '06-UpdateHealth-SSU-Proof gates service start-type and runtime state changes behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/06-UpdateHealth-SSU-Proof.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$Name, ''Set startup type to AutomaticDelayedStart''\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$Name, "Set startup type to \$StartType"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$Name, "Set service state to \$State"\)'
+  }
+
+  It '08-WinGet-SelfHeal gates VC++ installer launch behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/08-WinGet-SelfHeal.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$Path, ''Install VC\+\+ redistributable''\)'
+  }
+
+  It '09-SupportBundle gates event-source registration and trigger reset behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/09-SupportBundle.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$EventSource, ''Register SupportBundle event source''\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$KeyPath, ''Reset support bundle trigger registry values''\)'
+  }
+
+  It '11-IOC-Sweep-Defender gates containment actions behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/11-IOC-Sweep-Defender.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$path, ''Neutralize registry value''\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$svc\.Name, "Contain service \(\$action\)"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$full, ''Disable scheduled task''\)'
+  }
+
+  It '12-Suspicious-Artifact-Grabber gates trigger reset behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/12-Suspicious-Artifact-Grabber.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$rk, ''Reset artifact grabber trigger registry flag''\)'
+  }
+
+  It '17-Sysmon-Rule-Drift-Sensor gates remediation process launch behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/17-Sysmon-Rule-Drift-Sensor.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$ScriptPath, ''Launch remediation PowerShell process''\)'
+  }
+
+  It '34-TimeSync-Health gates AutoStartService behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/34-TimeSync-Health.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(''w32time'', ''Start service''\)'
+  }
+}

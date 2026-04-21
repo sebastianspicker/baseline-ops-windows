@@ -66,6 +66,7 @@ if ($files.Count -eq 0) {
 }
 
 $items = New-Object System.Collections.ArrayList
+$rejectedFiles = 0
 foreach ($file in $files) {
   try {
     $obj = Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
@@ -73,6 +74,7 @@ foreach ($file in $files) {
     $props = if ($null -ne $obj) { @($obj.PSObject.Properties.Name) } else { @() }
     if ($props -notcontains 'ScriptName' -or $props -notcontains 'Result' -or $props -notcontains 'Mode') {
       Write-Warning "Skipping '$file': missing required properties (ScriptName, Result, Mode)."
+      $rejectedFiles++
       continue
     }
     [void]$items.Add([pscustomobject]@{
@@ -83,6 +85,7 @@ foreach ($file in $files) {
       })
   } catch {
     Write-Warning "Skipping '$file': failed to parse JSON - $($_.Exception.Message)"
+    $rejectedFiles++
   }
 }
 
@@ -91,12 +94,13 @@ $ok = @($arr | Where-Object { $_.Result -eq 'OK' }).Count
 $warn = @($arr | Where-Object { $_.Result -eq 'WARN' }).Count
 $fail = @($arr | Where-Object { $_.Result -eq 'FAIL' }).Count
 
-$token = if ($fail -gt 0) { 'FAIL' } elseif ($warn -gt 0) { 'WARN' } else { 'OK' }
+$token = if ($arr.Count -eq 0 -and $rejectedFiles -gt 0) { 'FAIL' } elseif ($fail -gt 0) { 'FAIL' } elseif ($warn -gt 0) { 'WARN' } else { 'OK' }
 $summary = [pscustomobject]@{
-  Files = $arr.Count
-  OK    = $ok
-  WARN  = $warn
-  FAIL  = $fail
+  Files         = $arr.Count
+  RejectedFiles = $rejectedFiles
+  OK            = $ok
+  WARN          = $warn
+  FAIL          = $fail
 }
 
 $report = New-V2ResultObject `
@@ -119,8 +123,8 @@ Write-ResultObject -ResultObject $report -OutputFormat $OutputFormat -OutputPath
 
 if ($PassThru) { $report }
 
+if ($arr.Count -eq 0 -and $rejectedFiles -gt 0) { exit 1 }
 if ($fail -gt 0) { exit 1 }
 if ($warn -gt 0) { exit 2 }
 exit 0
-
 

@@ -7,7 +7,7 @@ PowerShell toolkit for Windows endpoint hardening, drift detection, triage, and 
 
 ## Quick start
 
-Run a single audit from an elevated PowerShell prompt:
+Run a single script from an elevated PowerShell prompt:
 
 ```powershell
 # Defender health check (audit mode, no changes)
@@ -22,14 +22,14 @@ Run a single audit from an elevated PowerShell prompt:
 
 ## Repository policy
 
-This repository uses a lean root layout. The root intentionally keeps only core project docs:
+This repository keeps the root lean. The tracked top-level docs are:
 
 - `README.md`
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 - `CHANGELOG.md`
 
-Operational bug tracking and investigation history live in GitHub Issues/PRs, not in large root markdown artifacts.
+Generated evidence, local audit workspace files, and machine-specific harness artifacts are ignored through `.gitignore` and should not be committed.
 
 ## Requirements
 
@@ -40,11 +40,12 @@ Operational bug tracking and investigation history live in GitHub Issues/PRs, no
 
 ## Core structure
 
-- `scripts/` : operational scripts (49 scripts across audit, remediation, collection, monitoring)
+- `scripts/` : operational scripts (52 scripts across audit, remediation, collection, monitoring)
 - `lib/` : shared modules (Output, Console, Results, Config, Registry, etc.)
 - `examples/` : sample JSON configs and profiles
 - `tests/` : Pester tests
 - `tools/` : CI and operator utilities (GUI launcher, verify, secret scan)
+- `.github/` : workflows, templates, and repo policy metadata
 
 ## Script catalog (at a glance)
 
@@ -99,6 +100,9 @@ Operational bug tracking and investigation history live in GitHub Issues/PRs, no
 | 47 | WDAG-Readiness-Audit | Hardening | x | |
 | 48 | ExploitProtection-Audit | Hardening | x | |
 | 49 | DriverSigning-Integrity-Audit | Hardening | x | |
+| 50 | AMSI-Audit | Hardening | x | |
+| 51 | AppLocker-Audit | Hardening | x | |
+| 52 | DoH-Audit | Network | x | |
 
 See [scripts/README.md](scripts/README.md) for full parameter documentation per script.
 
@@ -115,6 +119,18 @@ Deployment helpers:
 
 - `scripts/00-Copy-Local.ps1`
 - `scripts/00-Run-Local.ps1`
+
+### v2 execution flow
+
+```mermaid
+flowchart TD
+    A["00-Validate-Profile.ps1\n(schema + integrity check)"] --> B["00-Run-Profile.ps1\n(step orchestration)"]
+    B -->|"per step"| C["00-Run-Local.ps1\n(elevated invocation)"]
+    C --> D["NN-Script.ps1\n(audit / remediate)"]
+    D -->|"v2 result object"| E["lib/Serialization.psm1\nConvertTo-V2Json"]
+    B -->|"all results"| F["00-Report-Aggregate.ps1\n(summary rollup)"]
+    B2["00-Run-Batch.ps1\n(category/tag filter)"] -->|"delegates to"| B
+```
 
 ### Breaking changes (v2 hard cutover)
 
@@ -147,6 +163,12 @@ Deployment helpers:
 From repository root:
 
 ```powershell
+# Validate an orchestration profile before execution
+pwsh -NoProfile -File .\scripts\00-Validate-Profile.ps1 -ProfilePath .\examples\profiles\baseline-audit.json
+
+# Smoke the documented baseline audit profile
+pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 -ProfilePath .\examples\profiles\baseline-audit.json -Mode Audit -OutputFormat None -Confirm:$false
+
 # Parse checks only
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1 -SkipAnalyzer
 
@@ -165,6 +187,8 @@ Cross-platform local CI wrapper:
 ```bash
 ./scripts/ci-local.sh
 ```
+
+On non-Windows developer hosts, orchestration-level verification is supported with PowerShell 7. Windows-only numbered scripts that cannot execute meaningfully on the host should return a structured unsupported-host result rather than failing profile startup.
 
 ## Launcher GUI
 

@@ -27,6 +27,8 @@ param(
   [ValidateSet('Console','Json','Csv','None')]
   [string]$OutputFormat = 'Console',
 
+  [string]$RootPath,
+
   [string]$OutputPath,
 
   [switch]$PassThru
@@ -119,6 +121,14 @@ try {
   }
 
   if (Has-Property -Object $profileDoc -Name 'Steps') {
+    $scriptsBasePath = if ([string]::IsNullOrWhiteSpace($RootPath)) {
+      $PSScriptRoot
+    } elseif (Test-Path -LiteralPath (Join-Path $RootPath 'scripts') -PathType Container) {
+      Join-Path $RootPath 'scripts'
+    } else {
+      $RootPath
+    }
+
     $index = 0
     $knownStepNames = @()
     $seenScriptNames = @{}
@@ -132,6 +142,11 @@ try {
       $scriptName = [string]$step.Script
       if (-not (Test-SafeScriptName -Name $scriptName)) {
         Add-Issue -Severity 'High' -Code 'PROFILE-STEP-SCRIPT-NAME' -Message "Step #$index uses unsafe script name '$scriptName'."
+      } else {
+        $scriptPath = Join-Path $scriptsBasePath $scriptName
+        if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+          Add-Issue -Severity 'High' -Code 'PROFILE-STEP-SCRIPT-NOT-FOUND' -Message "Step #$index references script '$scriptName' that does not exist under scripts/."
+        }
       }
 
       if ($seenScriptNames.ContainsKey($scriptName)) {
@@ -244,4 +259,3 @@ try {
   Write-UiLine -Text ("Validation failed: {0}" -f $_.Exception.Message) -Style Error
   exit 1
 }
-

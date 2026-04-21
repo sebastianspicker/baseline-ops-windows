@@ -110,6 +110,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # ----------------------------
 # Helpers
 # ----------------------------
@@ -277,13 +292,15 @@ if ($svc.Status -ne 'Running') {
 
   if ($AutoStartService) {
     try {
-      Start-Service -Name 'w32time' -ErrorAction Stop
-      $svc = Get-Service -Name 'w32time' -ErrorAction Stop
+      if ($PSCmdlet.ShouldProcess('w32time', 'Start service')) {
+        Start-Service -Name 'w32time' -ErrorAction Stop
+        $svc = Get-Service -Name 'w32time' -ErrorAction Stop
 
-      if ($svc.Status -eq 'Running') {
-        Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceAutoStarted' -Severity 'Low' -Message 'w32time service was started automatically (AutoStartService).'
-      } else {
-        Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceStartFailed' -Severity 'High' -Message ("Start-Service executed but service is still {0}." -f $svc.Status)
+        if ($svc.Status -eq 'Running') {
+          Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceAutoStarted' -Severity 'Low' -Message 'w32time service was started automatically (AutoStartService).'
+        } else {
+          Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceStartFailed' -Severity 'High' -Message ("Start-Service executed but service is still {0}." -f $svc.Status)
+        }
       }
     } catch {
       Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceStartException' -Severity 'High' -Message ("Start-Service w32time failed: {0}" -f $_.Exception.Message)

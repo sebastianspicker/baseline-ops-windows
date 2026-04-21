@@ -95,6 +95,23 @@ Describe '00-Validate-Profile orchestration' {
     $LASTEXITCODE | Should -Be 1
   }
 
+  It 'Fails when a step references a missing but syntactically safe script file' {
+    $temp = Join-Path $script:TempDir "missing-script-$(Get-Random).json"
+    $doc = @{
+      ProfileName = 'missing-script'
+      Version     = '2.0'
+      Defaults    = @{ Mode = 'Audit' }
+      Steps       = @(
+        @{ Script = '99-Does-Not-Exist.ps1'; Args = @(); ContinueOnError = $false; DependsOn = @() }
+      )
+      Integrity   = @{ RequireSigned = $false; ExpectedHashes = @{} }
+    }
+    $doc | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temp -Encoding UTF8
+
+    & $script:ValidateScript -ProfilePath $temp -OutputFormat None -PassThru | Out-Null
+    $LASTEXITCODE | Should -Be 1
+  }
+
   It 'Fails when DependsOn references an unknown script' {
     $temp = Join-Path $script:TempDir "bad-dep-$(Get-Random).json"
     $doc = @{
@@ -258,19 +275,18 @@ Describe '00-Report-Aggregate orchestration' {
     { & $script:AggregateScript -InputPath $noJsonDir -OutputFormat None -PassThru } | Should -Throw '*No JSON result files*'
   }
 
-  It 'Handles malformed JSON gracefully by skipping the file' {
+  It 'Fails when all discovered JSON result files are rejected' {
     $badDir = Join-Path $script:TempDir "badjson-$(Get-Random)"
     New-Item -Path $badDir -ItemType Directory -Force | Out-Null
 
     Set-Content -LiteralPath (Join-Path $badDir 'corrupt.json') -Value '{{{invalid json' -Encoding UTF8
+    @{ Hello = 1 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $badDir 'wrong-shape.json') -Encoding UTF8
 
-    # Schema validation now skips malformed files with a warning instead of
-    # including them as FAIL. With no valid results the aggregate is OK with
-    # zero files counted.
     $result = & $script:AggregateScript -InputPath $badDir -OutputFormat None -PassThru 3>&1
     $resultObj = $result | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] }
-    $resultObj.Result | Should -Be 'OK'
+    $resultObj.Result | Should -Be 'FAIL'
     $resultObj.Summary.Files | Should -Be 0
+    $resultObj.Summary.RejectedFiles | Should -Be 2
   }
 
   It 'Accepts a single JSON file path as InputPath' {

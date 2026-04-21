@@ -53,6 +53,28 @@ Describe 'v2 parameter contract' {
     ($null -eq $modeValidateSet -or (@($modeValidateSet.PositionalArguments.Value) -notcontains 'AuditOnly')) | Should -BeTrue
   }
 
+  It '<_.Name> does not define parameter names that collide with parameter aliases' -ForEach $cases {
+    $file = $_
+    $errors = $null
+    $tokens = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+    $errors | Should -BeNullOrEmpty
+
+    $params = @($ast.ParamBlock.Parameters)
+    $paramNames = @($params | ForEach-Object { $_.Name.VariablePath.UserPath })
+    $aliases = @(
+      foreach ($param in $params) {
+        foreach ($attr in @($param.Attributes | Where-Object { $_.TypeName.FullName -eq 'Alias' })) {
+          foreach ($arg in @($attr.PositionalArguments)) {
+            [string]$arg.SafeGetValue()
+          }
+        }
+      }
+    )
+
+    @($paramNames | Where-Object { $aliases -contains $_ }) | Should -BeNullOrEmpty
+  }
+
   It '<_.Name> enforces ShouldProcess when Mode supports Remediate' -ForEach $cases {
     $file = $_
     $errors = $null
@@ -82,5 +104,34 @@ Describe 'v2 parameter contract' {
 
     $content = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
     ($content -match 'SupportsShouldProcess\s*=\s*\$true') | Should -BeTrue
+  }
+
+  It 'Audited scripts do not expose stale legacy Remediate help text in the top comment block' {
+    $scriptsPath = Join-Path $PSScriptRoot '../../scripts'
+    $legacyHelpCases = Get-ChildItem -Path $scriptsPath -File |
+      Where-Object { $_.Name -match '^\d{2}-' } |
+      Where-Object {
+        $errors = $null
+        $tokens = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+        if ($errors) { return $false }
+
+        $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+        if (($paramNames -notcontains 'Mode') -or ($paramNames -contains 'Remediate')) { return $false }
+
+        $content = Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8
+        $helpBlock = [regex]::Match($content, '(?s)<#.*?#>').Value
+        ($helpBlock -match '\.PARAMETER\s+Mode') -and ($helpBlock -match '(?m)-Mode\s+Remediate\b')
+      } |
+      Select-Object -ExpandProperty Name
+
+    foreach ($name in $legacyHelpCases) {
+      $path = Join-Path $scriptsPath $name
+      $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+      $helpBlock = [regex]::Match($content, '(?s)<#.*?#>').Value
+
+      $helpBlock | Should -Not -Match '\.PARAMETER\s+Remediate'
+      $helpBlock | Should -Not -Match '(?m)^\s*\..*?-Remediate\b'
+    }
   }
 }

@@ -168,6 +168,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # -------------------- Settings --------------------
 $Script:EventLogName     = 'Application'
 $Script:EventSourceName  = 'Software-Audit'
@@ -448,41 +463,6 @@ function New-SummaryLines {
   return ,$lines
 }
 
-# -------------------- Console output (host only) --------------------
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param([Parameter(Mandatory=$true)][pscustomobject]$ResultObject)
-
-  $statusColor = Get-StatusColor -Status $ResultObject.Status.Level
-
-  Write-ConsoleBanner -Title "Software Audit" -Color 'Cyan'
-  Write-KeyValue -Key 'Timestamp' -Value ([string]$ResultObject.Time)
-  Write-KeyValue -Key 'Host' -Value ([string]$ResultObject.Host)
-  Write-KeyValue -Key 'Catalog' -Value ([string]$ResultObject.Catalog.Meta.Source)
-  Write-KeyValue -Key 'EventSource' -Value ("{0} (ready={1})" -f $ResultObject.EventSource.Name, $ResultObject.EventSource.Ready)
-
-  Write-UiLine ""
-  Write-UiLine ("Status          : {0} ({1})" -f $ResultObject.Status.EventId, $ResultObject.Status.Level) -ForegroundColor $statusColor
-  Write-UiLine ("Counts          : Total={0}  Whitelisted={1}  Unknown={2}  Blacklisted={3}" -f `
-    $ResultObject.Total, $ResultObject.CountWhitelisted, $ResultObject.CountUnknown, $ResultObject.CountBlacklisted) -ForegroundColor 'Gray'
-
-  Write-UiLine ""
-  Write-UiLine "Summary:" -ForegroundColor 'Gray'
-  foreach ($l in @($ResultObject.Summary)) {
-    Write-UiLine ("  " + [string]$l) -ForegroundColor 'Gray'
-  }
-
-  $blNames = @($ResultObject.Blacklisted | Select-Object -ExpandProperty Name | Sort-Object)
-  $ukNames = @($ResultObject.Unknown     | Select-Object -ExpandProperty Name | Sort-Object)
-
-  Write-UiLine ""
-  Write-ConsoleList -Header "Blacklisted items:" -Items $blNames -HeaderColor 'Red' -ItemColor 'Red' -MaxItems 20
-  Write-ConsoleList -Header "Unknown items:"     -Items $ukNames -HeaderColor 'Yellow' -ItemColor 'Yellow' -MaxItems 20
-
-  Write-UiLine ("=" * 62) -ForegroundColor 'Cyan'
-  Write-UiLine ""
-}
-
 # -------------------- MAIN --------------------
 $eventSourceReady = Ensure-EventSource
 
@@ -533,7 +513,28 @@ try {
   Write-HealthEvent -Id $status.EventId -Msg $msg -Level $status.Level | Out-Null
 
   # Console summary (host output only)
-  Write-ConsoleSummary -ResultObject $result
+  $summaryObj = [pscustomobject]@{ ComputerName = [string]$result.Host; Timestamp = Get-Date }
+  Write-ConsoleSummary -Summary $summaryObj -Findings ([System.Collections.ArrayList]::new()) `
+    -CustomFields ([ordered]@{
+      Catalog     = [string]$result.Catalog.Meta.Source
+      Status      = ("{0} ({1})" -f $result.Status.EventId, $result.Status.Level)
+      Total       = $result.Total
+      Whitelisted = $result.CountWhitelisted
+      Unknown     = $result.CountUnknown
+      Blacklisted = $result.CountBlacklisted
+    })
+  # Summary lines
+  Write-UiLine ""
+  Write-UiLine "Summary:" -ForegroundColor 'Gray'
+  foreach ($l in @($result.Summary)) {
+    Write-UiLine ("  " + [string]$l) -ForegroundColor 'Gray'
+  }
+  # Blacklisted and Unknown lists
+  $blNames = @($result.Blacklisted | Select-Object -ExpandProperty Name | Sort-Object)
+  $ukNames = @($result.Unknown     | Select-Object -ExpandProperty Name | Sort-Object)
+  Write-UiLine ""
+  Write-ConsoleList -Header "Blacklisted items:" -Items $blNames -HeaderColor 'Red' -ItemColor 'Red' -MaxItems 20
+  Write-ConsoleList -Header "Unknown items:"     -Items $ukNames -HeaderColor 'Yellow' -ItemColor 'Yellow' -MaxItems 20
 
   # Pipeline output (structured object only)
   $result

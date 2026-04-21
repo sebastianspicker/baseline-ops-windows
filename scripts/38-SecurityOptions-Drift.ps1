@@ -1,3 +1,4 @@
+#Requires -RunAsAdministrator
 #requires -version 5.1
 <#
 .SYNOPSIS
@@ -107,6 +108,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '38-SecurityOptions-Drift.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # -------------------------
 # Script-scope state (avoid null method calls under StrictMode)
 # -------------------------
@@ -118,7 +134,7 @@ $script:CurrentValues = New-Object System.Collections.Generic.List[object]
 $script:Drift         = New-Object System.Collections.Generic.List[object]
 
 # -------------------------
-# Console helpers (Get-SeverityColor from lib/Console.psm1; custom Write-ConsoleSummary for Drift/CurrentValues)
+# Console helpers (Get-SeverityColor from lib/Console.psm1; Write-ConsoleSummary)
 # -------------------------
 
 function Format-Value {
@@ -128,103 +144,6 @@ function Format-Value {
   if ($Value -is [byte[]]) { return ('0x' + (($Value | ForEach-Object { $_.ToString('X2') }) -join '')) }
   if ($Value -is [string[]]) { return ('[' + ($Value -join ',') + ']') }
   return ($Value.ToString())
-}
-
-function Write-ConsoleSummary {
-  param(
-    [Parameter(Mandatory)][pscustomobject]$Summary,
-
-    [Parameter(Mandatory)]
-    [AllowEmptyCollection()]
-    [System.Collections.Generic.List[object]]$Findings,
-
-    [Parameter(Mandatory)]
-    [AllowEmptyCollection()]
-    [System.Collections.Generic.List[object]]$CurrentValues,
-
-    [Parameter(Mandatory)]
-    [AllowEmptyCollection()]
-    [System.Collections.Generic.List[object]]$Drift
-  )
-
-  if ($script:Quiet) { return }
-
-  $sevOrder = @('High','Medium','Low','Info')
-  $counts = @{}
-  foreach ($s in $sevOrder) { $counts[$s] = 0 }
-  foreach ($f in $Findings) {
-    $sev = [string]$f.Severity
-    if ($counts.ContainsKey($sev)) { $counts[$sev]++ }
-  }
-
-  # StrictMode-safe counting: use Measure-Object, not (...).Count on pipeline results. [web:161]
-  $driftCount = ($Drift | Where-Object { $_.Drift } | Measure-Object).Count
-  $remediated = ($Drift | Where-Object { $_.Remediated -eq $true } | Measure-Object).Count
-  $failed     = ($Drift | Where-Object { $_.RemediateError } | Measure-Object).Count
-
-  $headlineColor =
-    if ($counts['High'] -gt 0 -or $failed -gt 0) { [ConsoleColor]::Red }
-    elseif ($counts['Medium'] -gt 0 -or $driftCount -gt 0) { [ConsoleColor]::Yellow }
-    else { [ConsoleColor]::Green }
-
-  Write-BlankLine
-  Write-UiLine -Text "========== SecurityOptions Drift ==========" -Color $headlineColor
-  Write-UiLine -Text ("Computer   : {0}" -f $Summary.ComputerName) -Color Gray
-  Write-UiLine -Text ("Mode       : {0}" -f $Summary.Mode) -Color Gray
-  Write-UiLine -Text ("Desired    : {0}" -f ($(if ($Summary.DesiredLoaded) { 'Loaded' } else { 'Not loaded (baseline only)' }))) -Color Gray
-  Write-UiLine -Text ("Timestamp  : {0}" -f $Summary.Timestamp) -Color Gray
-  Write-BlankLine
-
-  Write-UiLine -Text "Findings:" -Color White
-  foreach ($s in $sevOrder) {
-    $c = $counts[$s]
-    $col = Get-SeverityColor -Severity $s
-    Write-UiLine -Text ("  {0,-6}: {1}" -f $s, $c) -Color $col
-  }
-
-  Write-BlankLine
-  Write-UiLine -Text ("Drift items: Total={0}, Drift={1}, Remediated={2}, Failed={3}" -f $Summary.DriftItems, $driftCount, $remediated, $failed) -Color White
-
-  Write-BlankLine
-  Write-UiLine -Text "Current values:" -Color White
-  foreach ($cv in $CurrentValues) {
-    $valText = Format-Value -Value $cv.Value
-    Write-UiLine -Text ("  {0}\{1} = {2} ({3})" -f $cv.Path, $cv.Name, $valText, $cv.SourceHint) -Color Gray
-  }
-
-  $topFindings = $Findings |
-    Sort-Object @{ Expression = { @('High','Medium','Low','Info').IndexOf([string]$_.Severity) }; Ascending = $true }, Timestamp |
-    Select-Object -First 10
-
-  Write-BlankLine
-  Write-UiLine -Text "Top findings (max 10):" -Color White
-  if (($topFindings | Measure-Object).Count -eq 0) {
-    Write-UiLine -Text "  None" -Color Green
-  } else {
-    foreach ($f in $topFindings) {
-      $col = Get-SeverityColor -Severity ([string]$f.Severity)
-      Write-UiLine -Text ("  [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -Color $col
-    }
-  }
-
-  $topDrift = $Drift | Where-Object { $_.Drift } | Select-Object -First 10
-  Write-BlankLine
-  Write-UiLine -Text "Drift (max 10):" -Color White
-  if (($topDrift | Measure-Object).Count -eq 0) {
-    Write-UiLine -Text "  None" -Color Green
-  } else {
-    foreach ($d in $topDrift) {
-      $cur = Format-Value -Value $d.Current
-      $des = Format-Value -Value $d.Desired
-      $statusColor = if ($d.Remediated -eq $true) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }
-      $suffix = if ($d.RemediateError) { " ERROR: $($d.RemediateError)" } else { '' }
-      Write-UiLine -Text ("  {0}\{1} ({2}) Current={3} Desired={4} Remediated={5}{6}" -f $d.Path, $d.Name, $d.Type, $cur, $des, $d.Remediated, $suffix) -Color $statusColor
-    }
-  }
-
-  Write-BlankLine
-  Write-UiLine -Text "==========================================" -Color $headlineColor
-  Write-BlankLine
 }
 
 # -------------------------
@@ -539,7 +458,43 @@ if ($ExportPath) {
   $script:Drift         | Export-Csv -Path (Join-Path $folder ($base + "_drift.csv"))     -NoTypeInformation -Encoding UTF8
 }
 
-Write-ConsoleSummary -Summary $summary -Findings $script:Findings -CurrentValues $script:CurrentValues -Drift $script:Drift
+if (-not $script:Quiet) {
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      Mode          = $Mode
+      DesiredLoaded = $desiredLoaded
+      DriftItems    = $script:Drift.Count
+    })
+  # Current values
+  if ($script:CurrentValues.Count -gt 0) {
+    Write-UiLine -Text '' -Color 'Gray'
+    Write-UiLine -Text 'Current values:' -Color 'White'
+    foreach ($cv in $script:CurrentValues) {
+      $valText = Format-Value -Value $cv.Value
+      Write-UiLine -Text ("  {0}\{1} = {2} ({3})" -f $cv.Path, $cv.Name, $valText, $cv.SourceHint) -Color 'Gray'
+    }
+  }
+  # Drift (max 10)
+  $topDrift = $script:Drift | Where-Object { $_.Drift } | Select-Object -First 10
+  Write-UiLine -Text '' -Color 'Gray'
+  Write-UiLine -Text 'Drift (max 10):' -Color 'White'
+  if (($topDrift | Measure-Object).Count -eq 0) {
+    Write-UiLine -Text '  None' -Color 'Green'
+  } else {
+    foreach ($d in $topDrift) {
+      $cur = Format-Value -Value $d.Current
+      $des = Format-Value -Value $d.Desired
+      $statusColor = if ($d.Remediated -eq $true) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }
+      $suffix = if ($d.RemediateError) { " ERROR: $($d.RemediateError)" } else { '' }
+      Write-UiLine -Text ("  {0}\{1} ({2}) Current={3} Desired={4} Remediated={5}{6}" -f $d.Path, $d.Name, $d.Type, $cur, $des, $d.Remediated, $suffix) -Color $statusColor
+    }
+    if (($script:Drift | Where-Object { $_.Drift } | Measure-Object).Count -gt 10) {
+      $extra = ($script:Drift | Where-Object { $_.Drift } | Measure-Object).Count - 10
+      Write-UiLine -Text "  ... and $extra more drift item(s)" -Color 'DarkYellow'
+    }
+  }
+}
 
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }

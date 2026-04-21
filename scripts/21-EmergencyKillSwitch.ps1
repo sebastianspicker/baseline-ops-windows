@@ -178,6 +178,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # -------------------- Safe defaults
 $Defaults = [ordered]@{
   EventSource = 'KillSwitch'
@@ -445,44 +460,24 @@ function Update-Outcome {
   $Run.Outcome.IsolationActive = [bool]($Run.Actions.FirewallProfileSet -or $Run.Actions.RulesCreated -or $Run.Actions.AdaptersDisabled)
 }
 
-function Write-ConsoleSummary {
+function Invoke-KillSwitchConsoleSummary {
   $Run.EndTime = Get-Date
   $Run.Duration = New-TimeSpan -Start $Run.StartTime -End $Run.EndTime
-
   Update-Outcome
 
-  $hasProblems = ($Run.Errors.Count -gt 0) -or ($Run.Actions.ConfirmDeclined)
-
-  $title = 'Kill Switch Summary (OK)'
-  if ($hasProblems) { $title = 'Kill Switch Summary (Attention)' }
-
-  $durationColor = [ConsoleColor]::Green
-  if ($hasProblems) { $durationColor = [ConsoleColor]::Yellow }
-
-  $jsonUsedColor = [ConsoleColor]::DarkGray
-  if ($Run.JsonUsed) { $jsonUsedColor = [ConsoleColor]::Green }
-
-  Write-UiHeader -Title $title
-
-  Write-KeyValue   -Key 'ComputerName' -Value $Run.ComputerName -ValueColor White
-  Write-KeyValue   -Key 'User'         -Value $Run.User
-  Write-UiBool -Key 'Admin'        -Value $Run.IsAdmin
-  Write-KeyValue   -Key 'StartTime'    -Value $Run.StartTime.ToString('s')
-  Write-KeyValue   -Key 'EndTime'      -Value $Run.EndTime.ToString('s')
-  Write-KeyValue   -Key 'Duration'     -Value $Run.Duration -ValueColor $durationColor
-
-  Write-UiLine ""
-  Write-KeyValue -Key 'JSON used' -Value $Run.JsonUsed -ValueColor $jsonUsedColor
-  Write-KeyValue -Key 'JSON path' -Value $Run.JsonPath
-  if ($Run.JsonError) { Write-KeyValue -Key 'JSON error' -Value $Run.JsonError -ValueColor Yellow }
-
-  Write-UiLine ""
-  Write-KeyValue   -Key 'Reason' -Value $Run.Effective.Reason -ValueColor Cyan
-  Write-UiBool -Key 'IsolationActive' -Value $Run.Outcome.IsolationActive
-  Write-UiBool -Key 'DisableAdapters' -Value ([bool]$Run.Effective.DisableAdapters)
-  Write-KeyValue   -Key 'BreakGlass' -Value ($Run.Effective.BreakGlassRemoteAddress -join ', ')
-  Write-KeyValue   -Key 'AutoRollbackMinutes' -Value $Run.Effective.AutoRollbackMinutes
-
+  $summaryObj = [pscustomobject]@{ ComputerName = $Run.ComputerName; Timestamp = $Run.EndTime }
+  Write-ConsoleSummary -Summary $summaryObj -Findings ([System.Collections.ArrayList]::new()) `
+    -CustomFields ([ordered]@{
+      User                = $Run.User
+      IsAdmin             = $Run.IsAdmin
+      Duration            = $Run.Duration
+      'JSON used'         = $Run.JsonUsed
+      Reason              = $Run.Effective.Reason
+      IsolationActive     = [string]$Run.Outcome.IsolationActive
+      DisableAdapters     = [string][bool]$Run.Effective.DisableAdapters
+      AutoRollbackMinutes = $Run.Effective.AutoRollbackMinutes
+    })
+  # Action booleans
   Write-UiLine ""
   Write-UiBool -Key 'RegistryWritten'    -Value $Run.Actions.RegistryWritten
   Write-UiBool -Key 'EventLogWritten'    -Value $Run.Actions.EventLogWritten
@@ -491,21 +486,18 @@ function Write-ConsoleSummary {
   Write-UiBool -Key 'BreakGlassApplied'  -Value $Run.Actions.BreakGlassApplied
   Write-UiBool -Key 'AdaptersDisabled'   -Value $Run.Actions.AdaptersDisabled
   Write-UiBool -Key 'RollbackScheduled'  -Value $Run.Actions.RollbackScheduled
-
+  # ConfirmDeclined warning
   if ($Run.Actions.ConfirmDeclined) {
     Write-UiLine ""
     Write-UiLine -Text "NOTE: One or more operations were declined in a Confirm prompt (No / No to All)." -Color Yellow
   }
-
+  # Errors list
   if ($Run.Errors.Count -gt 0) {
     Write-UiLine ""
     Write-UiLine -Text "Warnings/Errors:" -Color Yellow
     foreach ($e in $Run.Errors) { Write-UiLine -Text ("- {0}" -f $e) -Color Yellow }
   }
-
-  Write-UiLine ("-" * 78) -ForegroundColor DarkGray
 }
-
 
 # -------------------- Load JSON (optional) and merge with defaults/parameters
 $config = Try-LoadConfigJson -Path $ConfigJsonPath -Raw $ConfigJsonRaw
@@ -576,13 +568,17 @@ if (-not $Run.IsAdmin) {
   Write-HealthEvent -Log $Run.Effective.EventLog -Source $Run.Effective.EventSource -Id $Run.Effective.EventId `
     -Msg "KillSwitch aborted: admin privileges required." -Level 'Error'
 
-  Write-ConsoleSummary
+  Invoke-KillSwitchConsoleSummary
   [pscustomobject]$Run
   return
 }
 
 try {
-  Set-QuarantineFlag -RegKey $Run.Effective.RegKey -ReasonText $Run.Effective.Reason -IncludeUser $Run.Effective.IncludeUserInRegistry
+  if ($PSCmdlet.ShouldProcess($Run.Effective.RegKey, "Write quarantine registry flag")) {
+    Set-QuarantineFlag -RegKey $Run.Effective.RegKey -ReasonText $Run.Effective.Reason -IncludeUser $Run.Effective.IncludeUserInRegistry
+  } else {
+    $Run.Actions.ConfirmDeclined = $true
+  }
 
   if ($Run.Effective.AutoRollbackMinutes -gt 0) {
     $Run.Actions.RollbackScheduled = Schedule-AutoRollback -Minutes $Run.Effective.AutoRollbackMinutes -TaskName $Run.Effective.TaskName -RuleNames $RuleNames
@@ -688,7 +684,7 @@ catch {
 }
 finally {
   # Always write console summary, even if an exception is thrown.
-  try { Write-ConsoleSummary } catch { Write-UiLine "Summary failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+  try { Invoke-KillSwitchConsoleSummary } catch { Write-UiLine "Summary failed: $($_.Exception.Message)" -ForegroundColor Yellow }
 }
 
 # V2 output contract

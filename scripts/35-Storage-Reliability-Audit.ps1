@@ -113,6 +113,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # region Helpers
 
 function Test-CmdletAvailable {
@@ -214,71 +229,6 @@ function Resolve-PhysicalDisk {
 }
 
 # Ensure-Directory imported from lib/Common.psm1
-
-function Write-ConsoleSummary {
-  param(
-    [Parameter(Mandatory)]$Summary,
-    [Parameter(Mandatory)][object[]]$Findings,
-    [Parameter(Mandatory)][object[]]$Disks,
-    [Parameter(Mandatory)][object[]]$Reliability,
-    [Parameter(Mandatory)]$Config
-  )
-
-  $sevOrder = @{ High = 1; Medium = 2; Low = 3; Info = 4 }
-
-  Write-DecorativeRule -Title "Storage Reliability Audit Summary" -Color 'Gray'
-
-  Write-UiLine -Text ("ComputerName  : {0}" -f $Summary.ComputerName) -Color 'Gray'
-  Write-UiLine -Text ("Timestamp     : {0}" -f $Summary.Timestamp) -Color 'Gray'
-  Write-UiLine -Text ("PhysicalDisks : {0}" -f $Summary.PhysicalDisks) -Color 'Gray'
-  Write-UiLine -Text ("Reliability   : {0}" -f $Summary.ReliabilityRead) -Color 'Gray'
-
-  $findingsColor = 'Green'
-  if ($Summary.FindingsCount -gt 0) { $findingsColor = 'Yellow' }
-  if (($Findings | Where-Object { $_.Severity -eq 'High' } | Measure-Object).Count -gt 0) { $findingsColor = 'Red' }
-
-  Write-UiLine -Text ("Findings      : {0}" -f $Summary.FindingsCount) -Color $findingsColor
-
-  if ($Findings.Count -gt 0) {
-    $group = $Findings | Group-Object Severity | Sort-Object @{Expression={ $sevOrder[$_.Name] }}
-    Write-BlankLine
-    Write-UiLine -Text "Findings by severity" -Color 'Gray'
-    Write-UiLine -Text (($group | Select-Object Name, Count | Format-Table -AutoSize | Out-String).TrimEnd()) -Color 'Gray'
-
-    $topN = 10
-    try { $topN = [int]$Config.Output.ConsoleSummaryTopFindings } catch { <# best-effort: config property cast #> $topN = 10 }
-    if ($topN -lt 1) { $topN = 10 }
-
-    $top = $Findings | Sort-Object @{Expression={ $sevOrder[$_.Severity] }}, Code | Select-Object -First $topN
-
-    Write-BlankLine
-    Write-UiLine -Text ("Top {0} findings" -f $topN) -Color 'Gray'
-
-    foreach ($f in $top) {
-      $c = Get-SeverityColor -Severity $f.Severity
-      $dk = $f.DiskKey
-      if ([string]::IsNullOrWhiteSpace($dk)) { $dk = '-' }
-      Write-UiLine -Text ("[{0}] {1} | {2} | {3}" -f $f.Severity.ToUpper(), $f.Code, $dk, $f.Message) -Color $c
-    }
-  }
-
-  $showDiskTable = $true
-  try { $showDiskTable = [bool]$Config.Output.ShowDiskTable } catch { <# best-effort: config property cast #> $showDiskTable = $true }
-
-  if ($showDiskTable -and $Disks -and $Disks.Count -gt 0) {
-    Write-DecorativeRule -Title "Physical disks" -Color 'Gray'
-    Write-UiLine -Text ((($Disks | Select-Object FriendlyName, MediaType, BusType, HealthStatus, OperationalStatus, Size) |
-        Format-Table -AutoSize | Out-String).TrimEnd()) -Color 'Gray'
-  }
-
-  if ($Reliability -and $Reliability.Count -gt 0) {
-    Write-DecorativeRule -Title "Reliability counters (sample fields)" -Color 'Gray'
-    Write-UiLine -Text ((($Reliability | Select-Object FriendlyName, Temperature, Wear, UncorrectableErrors, ReadErrorsTotal, WriteErrorsTotal, PowerOnHours |
-        Format-Table -AutoSize | Out-String).TrimEnd())) -Color 'Gray'
-  }
-
-  Write-BlankLine
-}
 
 # endregion Helpers
 
@@ -412,12 +362,26 @@ if ($ExportPath) {
 }
 
 if (-not $NoConsole) {
-  Write-ConsoleSummary `
-    -Summary $summary `
-    -Findings ($Findings.ToArray()) `
-    -Disks @($disks) `
-    -Reliability @($rel) `
-    -Config $Config
+  $findingsAL = [System.Collections.ArrayList]@($Findings.ToArray())
+  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      PhysicalDisks   = $summary.PhysicalDisks
+      ReliabilityRead = $summary.ReliabilityRead
+    })
+  # Disk table
+  $showDiskTable = $true
+  try { $showDiskTable = [bool]$Config.Output.ShowDiskTable } catch { <# best-effort: config property cast #> $showDiskTable = $true }
+  if ($showDiskTable -and $disks -and @($disks).Count -gt 0) {
+    Write-DecorativeRule -Title "Physical disks" -Color 'Gray'
+    Write-UiLine -Text (((@($disks) | Select-Object FriendlyName, MediaType, BusType, HealthStatus, OperationalStatus, Size) |
+        Format-Table -AutoSize | Out-String).TrimEnd()) -Color 'Gray'
+  }
+  # Reliability counters
+  if ($rel -and @($rel).Count -gt 0) {
+    Write-DecorativeRule -Title "Reliability counters (sample fields)" -Color 'Gray'
+    Write-UiLine -Text (((@($rel) | Select-Object FriendlyName, Temperature, Wear, UncorrectableErrors, ReadErrorsTotal, WriteErrorsTotal, PowerOnHours |
+        Format-Table -AutoSize | Out-String).TrimEnd())) -Color 'Gray'
+  }
 }
 
 # V2 output contract

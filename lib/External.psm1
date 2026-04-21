@@ -108,7 +108,7 @@ function Invoke-NativeCommand {
 
   # Restrict -Command to a single executable name or path to avoid command injection
   $trimmed = $Command.Trim()
-  if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed -match '[|;&<>]') {
+  if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed -match '\s' -or $trimmed -match '[|;&<>]') {
     throw "Invoke-NativeCommand: -Command must be a single executable name or path (no pipe, semicolon, or redirection operators)."
   }
 

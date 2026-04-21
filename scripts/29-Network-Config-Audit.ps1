@@ -114,6 +114,21 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $result = New-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit 0
+}
+
 # C10: canonical findings list
 $script:Findings = New-FindingsList
 
@@ -262,60 +277,6 @@ function Write-ConsoleInterfaces {
   else { Write-UiLine $text }
 }
 
-function Write-ConsoleSummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [pscustomobject]$Summary,
-
-    [Parameter(Mandatory)]
-    [object[]]$Interfaces,
-
-    [Parameter(Mandatory)]
-    [pscustomobject]$Config
-  )
-
-  Write-ConsoleHeader -Title "Network Config Audit" -Right ("{0}  |  {1}" -f $Summary.ComputerName, $Summary.Timestamp) -Config $Config
-  Write-ConsoleLine -Text "" -Config $Config
-
-  $statusColor = if ($Summary.InterfacesWithDNS -gt 0 -and $Summary.InterfacesWithGateway -gt 0) { 'Green' } else { 'Yellow' }
-  Write-ConsoleLine -Text "Summary:" -Color White -Config $Config
-  Write-ConsoleLine -Text ("  Interfaces total        : {0}" -f $Summary.InterfacesCount) -Config $Config
-  Write-ConsoleLine -Text ("  Interfaces with gateway : {0}" -f $Summary.InterfacesWithGateway) -Color $statusColor -Config $Config
-  Write-ConsoleLine -Text ("  Interfaces with DNS     : {0}" -f $Summary.InterfacesWithDNS) -Color $statusColor -Config $Config
-  Write-ConsoleLine -Text "" -Config $Config
-
-  if ($Config.ConsoleShowInterfaces) {
-    Write-ConsoleInterfaces -Interfaces $Interfaces -Config $Config
-    Write-ConsoleLine -Text "" -Config $Config
-  }
-
-  if (-not $Config.ConsoleShowIssuesTable) { return }
-
-  $issues = @(
-    $Interfaces | Where-Object {
-      (-not $_.DnsServers) -or
-      ((-not $_.IPv4Gateway) -and (-not $_.IPv6Gateway))
-    }
-  )
-
-  if ($issues.Count -eq 0) {
-    Write-ConsoleLine -Text "No obvious issues detected (missing DNS and/or gateway)." -Color Green -Config $Config
-    return
-  }
-
-  Write-ConsoleLine -Text ("Potential issues: {0} interface(s) missing DNS and/or gateway" -f $issues.Count) -Color Yellow -Config $Config
-
-  $issueRows = @(
-    $issues |
-      Select-Object InterfaceAlias, InterfaceIndex, IPv4Address, IPv6Address, IPv4Gateway, IPv6Gateway, DnsServers
-  )
-
-  $issuesText = To-ConsoleTableText -InputObjects $issueRows -Width $Config.ConsoleWidthHint
-  if ($Config.ConsoleUseInformation) { Write-Information -InformationAction Continue -MessageData $issuesText }
-  else { Write-UiLine $issuesText }
-}
-
 # --- Main ---
 Ensure-Cmdlet -Name 'Get-NetIPConfiguration'
 
@@ -386,7 +347,36 @@ if ($ExportPath) {
 }
 
 if (-not $Quiet -and $config.ConsoleSummary) {
-  Write-ConsoleSummary -Summary $summary -Interfaces $interfaces -Config $config
+  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+    -CustomFields ([ordered]@{
+      InterfacesTotal       = $summary.InterfacesCount
+      InterfacesWithGateway = $summary.InterfacesWithGateway
+      InterfacesWithDNS     = $summary.InterfacesWithDNS
+    })
+  # Interfaces table
+  if ($config.ConsoleShowInterfaces) {
+    Write-ConsoleInterfaces -Interfaces $interfaces -Config $config
+    Write-ConsoleLine -Text "" -Config $config
+  }
+  # Issues table
+  if ($config.ConsoleShowIssuesTable) {
+    $issues = @(
+      $interfaces | Where-Object {
+        (-not $_.DnsServers) -or
+        ((-not $_.IPv4Gateway) -and (-not $_.IPv6Gateway))
+      }
+    )
+    if ($issues.Count -eq 0) {
+      Write-ConsoleLine -Text "No obvious issues detected (missing DNS and/or gateway)." -Color Green -Config $config
+    } else {
+      Write-ConsoleLine -Text ("Potential issues: {0} interface(s) missing DNS and/or gateway" -f $issues.Count) -Color Yellow -Config $config
+      $issueRows = @($issues | Select-Object InterfaceAlias, InterfaceIndex, IPv4Address, IPv6Address, IPv4Gateway, IPv6Gateway, DnsServers)
+      $issuesText = To-ConsoleTableText -InputObjects $issueRows -Width $config.ConsoleWidthHint
+      if ($config.ConsoleUseInformation) { Write-Information -InformationAction Continue -MessageData $issuesText }
+      else { Write-UiLine $issuesText }
+    }
+  }
 }
 
 $result = [pscustomobject]@{

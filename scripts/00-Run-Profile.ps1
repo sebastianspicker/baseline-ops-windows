@@ -111,7 +111,7 @@ if ($RootPath -eq 'C:\install\mdm\ps1') {
   }
 }
 
-$validation = & $validatorPath -ProfilePath $ProfilePath -OutputFormat None -PassThru
+$validation = & $validatorPath -ProfilePath $ProfilePath -RootPath $RootPath -OutputFormat None -PassThru
 if ($LASTEXITCODE -ne 0) {
   if ($LASTEXITCODE -eq 2) {
     Write-Warning "Profile validation produced warnings: $ProfilePath"
@@ -239,17 +239,17 @@ while ($pending.Count -gt 0) {
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
-      if ($PSCmdlet.ShouldProcess($scriptName, 'Execute profile step')) {
+      if ($WhatIfPreference) {
+        $exitCode = 0
+        $status = 'Skipped'
+        $message = 'Skipped (-WhatIf).'
+        Write-UiLine -Text ("[SKIP] {0} (-WhatIf)" -f $scriptName) -Style Muted
+      } else {
         Write-UiLine -Text ("[RUN ] {0}" -f $scriptName) -Style Header
         & $runLocalPath @runParams
         $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
         $status = if ($exitCode -eq 0) { 'Success' } elseif ($exitCode -eq 2) { 'Partial' } else { 'Failed' }
         $message = "Exit code: $exitCode"
-      } else {
-        $exitCode = 0
-        $status = 'Skipped'
-        $message = 'Skipped by ShouldProcess (-WhatIf/-Confirm).'
-        Write-UiLine -Text ("[SKIP] {0} (WhatIf/Confirm)" -f $scriptName) -Style Muted
       }
     } catch {
       $exitCode = 1
