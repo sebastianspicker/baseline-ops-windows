@@ -322,14 +322,18 @@ function Invoke-WinGetConsoleSummary {
   # Phases list
   if ($Summary.Results -and $Summary.Results.Count -gt 0) {
     Write-UiLine ''
-    Write-Title 'Phases'
+    Write-UiLine -Message 'Phases' -Style 'Header'
     foreach ($r in $Summary.Results) {
       $line = ("- {0,-8} ExitCode={1,-5} DurationS={2,-8}" -f $r.Phase, $r.ExitCode, $r.DurationS)
-      if ($r.ExitCode -eq 0) { Write-Good $line } else { Write-Bad $line }
+      if ($r.ExitCode -eq 0) {
+        Write-UiLine -Message $line -Style 'Success'
+      } else {
+        Write-UiLine -Message $line -Style 'Error'
+      }
     }
   } else {
     Write-UiLine ''
-    Write-Title 'Phases'
+    Write-UiLine -Message 'Phases' -Style 'Header'
     Write-Warn "- (no phases executed)"
   }
 }
@@ -352,7 +356,7 @@ function Stop-UserFriendly {
   )
 
   if (-not $QuietConsoleEffective) {
-    Write-Bad ("ERROR: {0}" -f $Message)
+    Write-UiLine -Message ("ERROR: {0}" -f $Message) -Style 'Error'
     Write-UiLine "Hint: Provide -ConfigPath 'PATH/TO/config.dsc.yaml' or set 'ConfigPath' in PATH/TO/JSON." -Style 'Warning'
   }
 
@@ -419,6 +423,9 @@ if ($PSBoundParameters.ContainsKey('PassThru')) { $PassThruEffective = [bool]$Pa
 
 $TestOnlyEffective = To-BoolOrDefault (Get-EffectiveSetting -Name 'TestOnly' -Json $jsonSettings -DefaultValue $defaultSettings.TestOnly) -Default $defaultSettings.TestOnly
 if ($PSBoundParameters.ContainsKey('TestOnly')) { $TestOnlyEffective = [bool]$TestOnly }
+# Audit mode is intentionally validate/test only. Applying a WinGet
+# configuration is a host mutation and must require explicit Remediate mode.
+if ($Mode -eq 'Audit') { $TestOnlyEffective = $true }
 
 $QuietConsoleEffective = To-BoolOrDefault (Get-EffectiveSetting -Name 'QuietConsole' -Json $jsonSettings -DefaultValue $defaultSettings.QuietConsole) -Default $defaultSettings.QuietConsole
 if ($PSBoundParameters.ContainsKey('QuietConsole')) { $QuietConsoleEffective = [bool]$QuietConsole }
@@ -508,9 +515,13 @@ if ($FailFastEffective -and $rTest.ExitCode -ne 0) {
 }
 
 $rApply = $null
-if (-not $TestOnlyEffective) {
-  $rApply = Invoke-WinGet -ArgsWinget $argsApply -Phase 'apply' -LogPathEffective $LogPathEffective
-  $results.Add($rApply) | Out-Null
+if (($Mode -eq 'Remediate') -and (-not $TestOnlyEffective)) {
+  # The apply phase is the only mutating WinGet phase in this runner; validate
+  # and test can run in audit workflows, but apply stays behind ShouldProcess.
+  if ($PSCmdlet.ShouldProcess($resolvedConfigPath, 'Run winget configure apply')) {
+    $rApply = Invoke-WinGet -ArgsWinget $argsApply -Phase 'apply' -LogPathEffective $LogPathEffective
+    $results.Add($rApply) | Out-Null
+  }
 }
 
 $finalExitCode = if (-not $TestOnlyEffective -and $rApply) { [int]$rApply.ExitCode } else { [int]$rTest.ExitCode }
@@ -539,7 +550,3 @@ $v2Result = New-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit $finalExitCode
-
-
-
-

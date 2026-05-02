@@ -79,4 +79,145 @@ exit 1
       }
     }
   }
+
+  It 'Uses profile output defaults when CLI output parameters are omitted' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runprofile-output-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $profilePath = Join-Path $tempRoot 'profile.json'
+    $outputPath = Join-Path $tempRoot 'profile-output.json'
+
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value 'exit 0' -Encoding UTF8
+
+      $profile = @{
+        ProfileName = 'test-profile-output'
+        Version = '2.0'
+        Defaults = @{ Mode = 'Audit'; Strict = $false; OutputFormat = 'Json'; OutputPath = $outputPath }
+        Steps = @(
+          @{ Script = '01-Ok.ps1'; Args = @(); ContinueOnError = $false; DependsOn = @() }
+        )
+        Integrity = @{ RequireSigned = $false; ExpectedHashes = @{} }
+      }
+      $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1'
+      & $runner -ProfilePath $profilePath -RootPath $tempRoot -Confirm:$false
+
+      $LASTEXITCODE | Should -Be 0
+      Test-Path -LiteralPath $outputPath | Should -BeTrue
+      $result = Get-Content -LiteralPath $outputPath -Raw | ConvertFrom-Json
+      $result.ScriptName | Should -Be '00-Run-Profile.ps1'
+      $result.Result | Should -Be 'OK'
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  It 'Lets CLI output format override profile output defaults' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runprofile-output-override-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $profilePath = Join-Path $tempRoot 'profile.json'
+    $outputPath = Join-Path $tempRoot 'profile-output.json'
+
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value 'exit 0' -Encoding UTF8
+
+      $profile = @{
+        ProfileName = 'test-profile-output-override'
+        Version = '2.0'
+        Defaults = @{ Mode = 'Audit'; Strict = $false; OutputFormat = 'Json'; OutputPath = $outputPath }
+        Steps = @(
+          @{ Script = '01-Ok.ps1'; Args = @(); ContinueOnError = $false; DependsOn = @() }
+        )
+        Integrity = @{ RequireSigned = $false; ExpectedHashes = @{} }
+      }
+      $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1'
+      & $runner -ProfilePath $profilePath -RootPath $tempRoot -OutputFormat None -Confirm:$false
+
+      $LASTEXITCODE | Should -Be 0
+      Test-Path -LiteralPath $outputPath | Should -BeFalse
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  It 'Removes blocked profile step argument tokens and paired values' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runprofile-blocked-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $profilePath = Join-Path $tempRoot 'profile.json'
+
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+
+      $scriptContent = @'
+param(
+  [string]$Mode = 'Audit',
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [object[]]$Remaining
+)
+if (@($Remaining) -contains 'LEAKED') { exit 1 }
+exit 0
+'@
+      Set-Content -LiteralPath (Join-Path $scriptsDir '01-Blocked.ps1') -Value $scriptContent -Encoding UTF8
+
+      $profile = @{
+        ProfileName = 'test-profile-blocked'
+        Version = '2.0'
+        Defaults = @{ Mode = 'Audit'; Strict = $false; OutputFormat = 'Console'; OutputPath = $null }
+        Steps = @(
+          @{ Script = '01-Blocked.ps1'; Args = @('-RootPath','LEAKED','-ConfigPath','LEAKED','-ExpectedHash','LEAKED'); ContinueOnError = $false; DependsOn = @() }
+        )
+        Integrity = @{ RequireSigned = $false; ExpectedHashes = @{} }
+      }
+      $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1'
+      & $runner -ProfilePath $profilePath -RootPath $tempRoot -OutputFormat None -Confirm:$false
+
+      $LASTEXITCODE | Should -Be 0
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  It 'Removes profile step confirmation controls before invoking child scripts' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runprofile-confirm-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $profilePath = Join-Path $tempRoot 'profile.json'
+
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value 'exit 0' -Encoding UTF8
+
+      $profile = @{
+        ProfileName = 'test-profile-confirm'
+        Version = '2.0'
+        Defaults = @{ Mode = 'Audit'; Strict = $false; OutputFormat = 'Console'; OutputPath = $null }
+        Steps = @(
+          @{ Script = '01-Ok.ps1'; Args = @('-Confirm:$false','-WhatIf'); ContinueOnError = $false; DependsOn = @() }
+        )
+        Integrity = @{ RequireSigned = $false; ExpectedHashes = @{} }
+      }
+      $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1'
+      & $runner -ProfilePath $profilePath -RootPath $tempRoot -OutputFormat None -Confirm:$false
+
+      $LASTEXITCODE | Should -Be 0
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
 }

@@ -41,10 +41,18 @@ Audit or Remediate mode.
 } else {
 @'
 .PARAMETER Mode
-Audit mode.
+Audit mode only.
 '@
 }
 
+$modeValidateSet = if ($SupportsRemediate) {
+  "'Audit','Remediate'"
+} else {
+  "'Audit'"
+}
+
+# New scripts start audit-only so they cannot accidentally expose a remediation
+# surface before the author has added explicit ShouldProcess-protected changes.
 $modeBody = if ($SupportsRemediate) {
 @'
 if ($Mode -eq 'Remediate') {
@@ -54,11 +62,7 @@ if ($Mode -eq 'Remediate') {
 }
 '@
 } else {
-@'
-if ($Mode -eq 'Remediate') {
-  Write-UiLine -Text 'Remediate not supported in this script. Running audit only.' -ForegroundColor Yellow
-}
-'@
+  ''
 }
 
 $template = @"
@@ -83,53 +87,53 @@ Emit standardized v2 result object.
 
 $cmdletBinding
 param(
-  [ValidateSet('Audit','Remediate')]
+  [ValidateSet($modeValidateSet)]
   [string]
-  \$Mode = 'Audit',
+  `$Mode = 'Audit',
 
   [ValidateSet('Console','Json','Csv','None')]
   [string]
-  \$OutputFormat = 'Console',
+  `$OutputFormat = 'Console',
 
   [string]
-  \$OutputPath,
+  `$OutputPath,
 
   [switch]
-  \$PassThru,
+  `$PassThru,
 
   [switch]
-  \$Strict,
+  `$Strict,
 
   [switch]
-  \$Quiet,
+  `$Quiet,
 
   [switch]
-  \$NoColor
+  `$NoColor
 )
 
-. (Join-Path \$PSScriptRoot '_lib/Bootstrap.ps1')
-Import-Module (Join-Path \$script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path \$script:LibPath 'Serialization.psm1') -Force
+. (Join-Path `$PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path `$script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path `$script:LibPath 'Serialization.psm1') -Force
 
 Set-StrictMode -Version Latest
-\$ErrorActionPreference = 'Stop'
+`$ErrorActionPreference = 'Stop'
 
 $modeBody
 
-\$summary = [pscustomobject]@{
+`$summary = [pscustomobject]@{
   Script = '$Name.ps1'
-  Mode = \$Mode
+  Mode = `$Mode
 }
 
-\$result = New-V2ResultObject -ScriptName '$Name.ps1' -Mode \$Mode -Result 'OK' -Findings @() -Summary \$summary -Metadata @{}
+`$result = New-V2ResultObject -ScriptName '$Name.ps1' -Mode `$Mode -Result 'OK' -Findings @() -Summary `$summary -Metadata @{}
 
-if (-not \$Quiet -and \$OutputFormat -eq 'Console') {
+if (-not `$Quiet -and `$OutputFormat -eq 'Console') {
   Write-Section -Title '$Name'
-  Write-KeyValue -Key 'Mode' -Value \$Mode
+  Write-KeyValue -Key 'Mode' -Value `$Mode
 }
 
-Write-ResultObject -ResultObject \$result -OutputFormat \$OutputFormat -OutputPath \$OutputPath
-if (\$PassThru) { \$result }
+Write-ResultObject -ResultObject `$result -OutputFormat `$OutputFormat -OutputPath `$OutputPath
+if (`$PassThru) { `$result }
 exit 0
 "@
 

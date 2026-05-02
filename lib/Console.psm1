@@ -291,6 +291,7 @@ function Write-ConsoleSummary {
     [Parameter(Mandatory)]
     [psobject]$Summary,
     [Parameter(Mandatory)]
+    [AllowEmptyCollection()]
     [System.Collections.ArrayList]$Findings,
     [string]$Title = 'Audit Summary',
     [int]$Width = 70,
@@ -371,18 +372,6 @@ function Write-ConsoleSummary {
   Write-DecorativeRule -Width $Width
 }
 
-function Write-PrettySummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [psobject]$Result,
-    [string]$Title = 'Summary',
-    [int]$Width = 70
-  )
-
-  Write-ConsoleSummary -Summary $Result -Findings @() -Title $Title -Width $Width
-}
-
 <#
 .SYNOPSIS
   Computes finding counts by severity level.
@@ -439,5 +428,4 @@ Export-ModuleMember -Function `
   Write-SummaryHeader, `
   Write-FindingLine, `
   Write-ConsoleSummary, `
-  Write-PrettySummary, `
   Get-FindingStats

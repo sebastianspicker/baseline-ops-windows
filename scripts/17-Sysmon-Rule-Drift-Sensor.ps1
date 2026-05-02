@@ -434,29 +434,57 @@ function Get-EventCount {
 # -----------------------------
 # Remediation
 # -----------------------------
+# HARDZERO remediation launches another PowerShell script, so normalize the path
+# to a real file inside this repo's scripts directory before any signature check
+# or process launch. This prevents catalog/profile input from selecting an
+# arbitrary local script through traversal or reparse points.
+function Resolve-RemediationScriptPath {
+  param([Parameter(Mandatory)][string]$ScriptPath)
+  $scriptRoot = Split-Path -Parent $PSScriptRoot  # repo root
+  $scriptsDir = Join-Path $scriptRoot 'scripts'
+  try {
+    $resolvedScriptsDir = Resolve-Path -LiteralPath $scriptsDir -ErrorAction Stop
+    $resolvedScriptPath = Resolve-Path -LiteralPath $ScriptPath -ErrorAction Stop
+  } catch {
+    throw "Resolve-RemediationScriptPath: ScriptPath '$ScriptPath' is missing or cannot be resolved."
+  }
+  $canonicalScriptsDir = $resolvedScriptsDir.ProviderPath
+  $canonicalScriptPath = $resolvedScriptPath.ProviderPath
+  if (-not (Test-PathUnderRoot -Path $canonicalScriptPath -Root $canonicalScriptsDir)) {
+    throw "Resolve-RemediationScriptPath: ScriptPath '$ScriptPath' is not under the expected scripts directory."
+  }
+  $scriptFileName = Split-Path -Leaf $canonicalScriptPath
+  if (-not (Test-SafeScriptName -Name $scriptFileName)) {
+    throw "Resolve-RemediationScriptPath: ScriptPath file name '$scriptFileName' failed safety validation."
+  }
+  try {
+    $scriptItem = Get-Item -LiteralPath $canonicalScriptPath -Force -ErrorAction Stop
+  } catch {
+    throw "Resolve-RemediationScriptPath: ScriptPath '$ScriptPath' is missing or cannot be inspected."
+  }
+  if ($scriptItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+    throw "Resolve-RemediationScriptPath: ScriptPath '$ScriptPath' is a reparse point."
+  }
+  return $canonicalScriptPath
+}
 function Test-RemediationScriptAllowed {
   param(
     [Parameter(Mandatory)][string]$ScriptPath,
     [switch]$RequireSignature
   )
-  if (-not (Test-Path -LiteralPath $ScriptPath)) { return $false }
+  try {
+    $canonicalScriptPath = Resolve-RemediationScriptPath -ScriptPath $ScriptPath
+  } catch {
+    return $false
+  }
   if (-not $RequireSignature) { return $true }
-  $sig = Get-AuthenticodeSignature -FilePath $ScriptPath
+  $sig = Get-AuthenticodeSignature -FilePath $canonicalScriptPath
   return ($sig.Status -eq 'Valid')
 }
 function Invoke-RemediationScript {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
   param([Parameter(Mandatory)][string]$ScriptPath)
-  # S17 fix: validate ScriptPath is a .ps1 file under the expected scripts directory
-  $scriptFileName = Split-Path -Leaf $ScriptPath
-  if (-not (Test-SafeScriptName -Name $scriptFileName)) {
-    throw "Invoke-RemediationScript: ScriptPath file name '$scriptFileName' failed safety validation."
-  }
-  $scriptRoot = Split-Path -Parent $PSScriptRoot  # repo root
-  $scriptsDir = Join-Path $scriptRoot 'scripts'
-  if ((Test-Path -LiteralPath $ScriptPath) -and -not (Test-PathUnderRoot -Path $ScriptPath -Root $scriptsDir)) {
-    throw "Invoke-RemediationScript: ScriptPath '$ScriptPath' is not under the expected scripts directory."
-  }
+  $ScriptPath = Resolve-RemediationScriptPath -ScriptPath $ScriptPath
   $result = [pscustomobject]@{
     Attempted = $true
     Success = $false
@@ -551,9 +579,9 @@ function New-FinalResult {
 function Show-ConsoleSummary {
   param([Parameter(Mandatory)][pscustomobject]$Result)
   $statusColor = Get-StatusColor -Status $Result.Status
-  Write-ConsoleSeparator -Char '=' -Width 78 -Color 'Cyan'
+  Write-UiSeparator -Char '=' -Width 78 -Style 'Cyan'
   Write-ConsoleLine -Text ("Sysmon Drift Sensor  |  Host: {0}  |  Time: {1}" -f $Result.HostName, $Result.Timestamp) -Color 'Cyan'
-  Write-ConsoleSeparator -Char '=' -Width 78 -Color 'Cyan'
+  Write-UiSeparator -Char '=' -Width 78 -Style 'Cyan'
   Write-ConsoleLine -Text ("Status: {0}" -f $Result.Status) -Color $statusColor
   Write-ConsoleLine -Text ("WindowHours: {0} | Rules: {1} | Anomalies: {2} | HardZero: {3}" -f $Result.WindowHours, $Result.Summary.TotalRules, $Result.Summary.Anomalies, $Result.Summary.HardZero) -Color 'White'
   $oldestTxt = 'n/a'
@@ -601,7 +629,7 @@ function Show-ConsoleSummary {
     Write-ConsoleLine -Text "  - List logs: wevtutil el | findstr /i sysmon" -Color 'Gray'
     Write-ConsoleLine -Text "  - If log exists but disabled: run as admin and enable it: wevtutil sl Microsoft-Windows-Sysmon/Operational /e:true" -Color 'Gray'
   }
-  Write-ConsoleSeparator -Char '=' -Width 78 -Color 'Cyan'
+  Write-UiSeparator -Char '=' -Width 78 -Style 'Cyan'
   Write-UiLine ""
 }
 # -----------------------------

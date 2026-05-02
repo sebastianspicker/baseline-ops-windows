@@ -42,11 +42,6 @@ Root docs are intentionally minimal:
 
 Move implementation plans and experiments to PR descriptions.
 
-## Dev-only maintenance scripts
-
-One-off migration helpers are under `scripts/dev/`.
-They are not CI-required and should not be used as runtime dependencies.
-
 ## Security reporting
 
 See [SECURITY.md](SECURITY.md).

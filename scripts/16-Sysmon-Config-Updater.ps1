@@ -258,7 +258,7 @@ function Get-SysmonServiceName(){
   }
   return $null
 }
-function Get-SysmonEngineVersion([string]$Exe){
+function Get-SysmonEngineVersion([string]$Exe,[switch]$SkipProcessLaunch){
   if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $null }
   # Primary: file version metadata.
   try {
@@ -266,7 +266,9 @@ function Get-SysmonEngineVersion([string]$Exe){
     $v  = Parse-Version $pv
     if ($v) { return $v }
   } catch { <# best-effort: file version metadata may not be available #> }
-  # Fallback: parse help text (sysmon -?).
+  # Fallback: parse help text (sysmon -?). This launches the Sysmon binary, so
+  # WhatIf runs can suppress it and stay side-effect free.
+  if ($SkipProcessLaunch) { return $null }
   try {
     $tempOut = [IO.Path]::GetTempFileName()
     $tempErr = [IO.Path]::GetTempFileName()
@@ -343,7 +345,7 @@ function Validate-ConfigXml([string]$file){
     return $false, $_.Exception.Message
   }
 }
-function Ensure-SysmonChannel([switch]$DoIt,[int]$MiB){
+function Ensure-SysmonChannel([switch]$DoIt,[int]$MiB,[System.Management.Automation.PSCmdlet]$Cmdlet){
   $name = 'Microsoft-Windows-Sysmon/Operational'
   $ok=$true; $msgs=@()
   try {
@@ -352,13 +354,31 @@ function Ensure-SysmonChannel([switch]$DoIt,[int]$MiB){
     $q = if ($glResult -and $glResult.Output) { $glResult.Output } else { '' }
     $enabled = ($q -match 'enabled:\s*true')
     if (-not $enabled) {
-      if ($DoIt) { Invoke-Wevtutil -Arguments @('sl', $name, '/e:true') | Out-Null; $msgs += "enabled" } else { $ok=$false }
+      # Event-channel enable/resize operations mutate host logging state, so
+      # they use the parent script's ShouldProcess decision.
+      if ($DoIt) {
+        if ($Cmdlet.ShouldProcess($name, 'Enable Sysmon Operational event channel')) {
+          Invoke-Wevtutil -Arguments @('sl', $name, '/e:true') | Out-Null
+          $msgs += "enabled"
+        } else {
+          $ok=$false
+          $msgs += "enable skipped by ShouldProcess"
+        }
+      } else { $ok=$false }
     }
     if ($MiB -gt 0) {
       $m = [regex]::Match($q,'maximum size:\s*(\d+)')
       $cur = if ($m.Success){ [int64]$m.Groups[1].Value } else { 0 }
       $want = [int64]$MiB * 1024 * 1024
-      if ($cur -lt $want -and $DoIt) { Invoke-Wevtutil -Arguments @('sl', $name, "/ms:$want") | Out-Null; $msgs += ("size=" + $MiB + "MiB") }
+      if ($cur -lt $want -and $DoIt) {
+        if ($Cmdlet.ShouldProcess($name, "Resize Sysmon Operational event channel to $MiB MiB")) {
+          Invoke-Wevtutil -Arguments @('sl', $name, "/ms:$want") | Out-Null
+          $msgs += ("size=" + $MiB + "MiB")
+        } else {
+          $ok=$false
+          $msgs += "resize skipped by ShouldProcess"
+        }
+      }
       elseif ($cur -lt $want) { $ok=$false }
     }
   } catch { $ok=$false; $msgs += $_.Exception.Message }
@@ -481,6 +501,9 @@ $summary = [ordered]@{
 try {
   $isAdmin = Test-IsAdmin
   $summary.IsAdmin = $isAdmin
+  # Remediation preview must not launch Sysmon or query runtime config through
+  # Sysmon process execution; keep the run to validation and decision reporting.
+  $previewOnly = ($Remediate -and [bool]$WhatIfPreference)
   if ($Remediate -and -not $isAdmin) {
     $ok = $false
     $warns += "Remediate requested but not elevated."
@@ -529,7 +552,7 @@ try {
   # Detect Sysmon
   $exe = Resolve-SysmonExe -Hint $SysmonExePath
   $svcName = Get-SysmonServiceName
-  $eng = Get-SysmonEngineVersion -Exe $exe
+  $eng = Get-SysmonEngineVersion -Exe $exe -SkipProcessLaunch:$previewOnly
   $summary.SysmonExe = $exe
   $summary.SysmonService = $svcName
   if ($eng) { $summary.EngineVersion = $eng.Raw }
@@ -560,16 +583,22 @@ try {
   # Runtime dump hash (best effort)
   $currentCfgDumpSha = $null
   if ($svcName -and $exe) {
-    $currentCfgDumpSha = Get-SysmonCurrentConfigSha256 -Exe $exe
-    $summary.CurrentDumpSha256 = $currentCfgDumpSha
-    if (-not $currentCfgDumpSha) {
-      $warns += "Could not compute runtime config dump hash."
+    if ($previewOnly) {
+      # sysmon -c can touch external process behavior; skip it in preview mode
+      # so -WhatIf stays a pure planning path.
+      $warns += "Runtime config dump skipped in WhatIf mode."
     } else {
-      $prevDump = $null
-      if ($state -and $state.Runtime -and $state.Runtime.CurrentDumpSha256) { $prevDump = [string]$state.Runtime.CurrentDumpSha256 }
-      if ($prevDump -and ($prevDump -ne $currentCfgDumpSha)) {
-        $needUpdate = $true
-        $warns += "Runtime drift: current dump hash differs from last recorded."
+      $currentCfgDumpSha = Get-SysmonCurrentConfigSha256 -Exe $exe
+      $summary.CurrentDumpSha256 = $currentCfgDumpSha
+      if (-not $currentCfgDumpSha) {
+        $warns += "Could not compute runtime config dump hash."
+      } else {
+        $prevDump = $null
+        if ($state -and $state.Runtime -and $state.Runtime.CurrentDumpSha256) { $prevDump = [string]$state.Runtime.CurrentDumpSha256 }
+        if ($prevDump -and ($prevDump -ne $currentCfgDumpSha)) {
+          $needUpdate = $true
+          $warns += "Runtime drift: current dump hash differs from last recorded."
+        }
       }
     }
   }
@@ -577,7 +606,7 @@ try {
   if ($EnsureChannel) {
     $doIt = $false
     if ($Remediate -and $isAdmin) { $doIt = $true }
-    $res = Ensure-SysmonChannel -DoIt:$doIt -MiB $ChannelSizeMiB
+    $res = Ensure-SysmonChannel -DoIt:$doIt -MiB $ChannelSizeMiB -Cmdlet $PSCmdlet
     $cOk  = [bool]$res[0]
     $cMsg = [string]$res[1]
     if (-not $cOk) { $ok=$false; $warns += ("Channel not compliant: " + $cMsg) }
@@ -589,14 +618,20 @@ try {
       if (-not $exe) { $ok=$false; throw "Sysmon not installed and SysmonExePath not provided/found." }
       try {
         # Install with config (-i) and accept EULA.
-        $p = Start-Process -FilePath $exe -ArgumentList @('-accepteula', '-i', $cfgPath) -Wait -PassThru -WindowStyle Hidden
-        if ($p.ExitCode -eq 0) {
-          $installed = $true
-          $actions += "Installed Sysmon"
-          $needUpdate = $false
+        if ($PSCmdlet.ShouldProcess($exe, "Install Sysmon with config '$cfgPath'")) {
+          $p = Start-Process -FilePath $exe -ArgumentList @('-accepteula', '-i', $cfgPath) -Wait -PassThru -WindowStyle Hidden
+          if ($p.ExitCode -eq 0) {
+            $installed = $true
+            $actions += "Installed Sysmon"
+            $needUpdate = $false
+          } else {
+            $ok = $false
+            $warns += ("Install exitcode=" + $p.ExitCode)
+          }
         } else {
           $ok = $false
-          $warns += ("Install exitcode=" + $p.ExitCode)
+          $needUpdate = $true
+          $warns += "Install skipped by ShouldProcess."
         }
       } catch {
         $ok = $false
@@ -606,13 +641,18 @@ try {
     elseif ($needUpdate) {
       try {
         # Update config (-c) and accept EULA.
-        $p = Start-Process -FilePath $exe -ArgumentList @('-accepteula', '-c', $cfgPath) -Wait -PassThru -WindowStyle Hidden
-        if ($p.ExitCode -eq 0) {
-          $actions += "Applied config update"
-          $needUpdate = $false
+        if ($PSCmdlet.ShouldProcess($exe, "Update Sysmon config to '$cfgPath'")) {
+          $p = Start-Process -FilePath $exe -ArgumentList @('-accepteula', '-c', $cfgPath) -Wait -PassThru -WindowStyle Hidden
+          if ($p.ExitCode -eq 0) {
+            $actions += "Applied config update"
+            $needUpdate = $false
+          } else {
+            $ok = $false
+            $warns += ("Update exitcode=" + $p.ExitCode)
+          }
         } else {
           $ok = $false
-          $warns += ("Update exitcode=" + $p.ExitCode)
+          $warns += "Update skipped by ShouldProcess."
         }
       } catch {
         $ok = $false
@@ -622,8 +662,8 @@ try {
     # Re-detect after changes
     $exe = Resolve-SysmonExe -Hint $SysmonExePath
     $svcName = Get-SysmonServiceName
-    $eng = Get-SysmonEngineVersion -Exe $exe
-    if ($svcName -and $exe) { $currentCfgDumpSha = Get-SysmonCurrentConfigSha256 -Exe $exe }
+    $eng = Get-SysmonEngineVersion -Exe $exe -SkipProcessLaunch:$previewOnly
+    if ($svcName -and $exe -and (-not $previewOnly)) { $currentCfgDumpSha = Get-SysmonCurrentConfigSha256 -Exe $exe }
     $summary.SysmonExe = $exe
     $summary.SysmonService = $svcName
     $summary.CurrentDumpSha256 = $currentCfgDumpSha

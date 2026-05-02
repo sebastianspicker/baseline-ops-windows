@@ -581,7 +581,14 @@ try {
   }
 
   if ($Run.Effective.AutoRollbackMinutes -gt 0) {
-    $Run.Actions.RollbackScheduled = Schedule-AutoRollback -Minutes $Run.Effective.AutoRollbackMinutes -TaskName $Run.Effective.TaskName -RuleNames $RuleNames
+    # Rollback scheduling is a safety mechanism, but it still creates a
+    # scheduled task. Keep it under the same preview/confirmation policy as the
+    # firewall mutations.
+    if ($PSCmdlet.ShouldProcess($Run.Effective.TaskName, "Schedule automatic rollback task")) {
+      $Run.Actions.RollbackScheduled = Schedule-AutoRollback -Minutes $Run.Effective.AutoRollbackMinutes -TaskName $Run.Effective.TaskName -RuleNames $RuleNames
+    } else {
+      $Run.Actions.ConfirmDeclined = $true
+    }
   }
 
   # Capture current firewall profile settings before applying kill switch so rollback can restore them
@@ -596,7 +603,13 @@ try {
     }
     $fwStateJson = $preKillSwitchFirewallState | ConvertTo-Json -Depth 4 -Compress
     $fwStatePath = Join-Path $env:TEMP 'KillSwitch-PreFirewallState.json'
-    Set-Content -LiteralPath $fwStatePath -Value $fwStateJson -Encoding UTF8 -Force
+    # This temp file is consumed by the rollback task. If confirmation is
+    # declined, do not create partial rollback artifacts.
+    if ($PSCmdlet.ShouldProcess($fwStatePath, "Write pre-kill-switch firewall state")) {
+      Set-Content -LiteralPath $fwStatePath -Value $fwStateJson -Encoding UTF8 -Force
+    } else {
+      $Run.Actions.ConfirmDeclined = $true
+    }
   } catch {
     Add-RunError "Failed to capture pre-kill-switch firewall state: $($_.Exception.Message)"
   }
@@ -626,8 +639,14 @@ try {
     }
   } else {
     try {
-      $rule = Get-NetFirewallRule -Name $RuleBgName -ErrorAction Stop
-      if ($rule) { $rule | Remove-NetFirewallRule -ErrorAction Stop }
+      # Absence of break-glass addresses means "remove our managed break-glass
+      # rule", not "leave a stale inbound allow rule behind".
+      if ($PSCmdlet.ShouldProcess($RuleBgName, "Remove break-glass inbound allow rule")) {
+        $rule = Get-NetFirewallRule -Name $RuleBgName -ErrorAction Stop
+        if ($rule) { $rule | Remove-NetFirewallRule -ErrorAction Stop }
+      } else {
+        $Run.Actions.ConfirmDeclined = $true
+      }
     } catch {
       Write-Warning "Could not remove break-glass firewall rule: $($_.Exception.Message)"
     }

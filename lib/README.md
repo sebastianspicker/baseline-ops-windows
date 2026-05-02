@@ -31,6 +31,20 @@ Shared PowerShell modules used to remove script-level duplication and standardiz
 - `Serialization.psm1` (v2)
   - JSON/CSV writers (with path-traversal protection) and standardized v2 result objects
 
+## Module boundaries
+
+Use `Output.psm1` for generic human-readable UI primitives such as sections,
+key/value lines, warnings, and status lines. Use `Console.psm1` only when a
+script needs severity/finding-specific console summary helpers. Use
+`Serialization.psm1` for machine-readable v2 output and file export; scripts
+should not hand-roll their final JSON/CSV writers.
+
+Use `Execution.psm1` when invoking child PowerShell scripts or native processes,
+especially when argument token parsing or timeout behavior matters. Use
+`Validation.psm1` for path, script-name, URL, or reference validation before
+crossing a trust boundary such as profile input, remediation script selection,
+or output-file writing.
+
 ## Recommended import pattern
 
 ```powershell

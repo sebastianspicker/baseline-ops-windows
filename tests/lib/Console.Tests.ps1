@@ -410,6 +410,15 @@ Describe "Write-FindingLine" {
 }
 
 Describe "Write-ConsoleSummary" {
+  It "Does not throw with empty findings array syntax" {
+    $summary = [pscustomobject]@{ ComputerName = 'PC'; Timestamp = 'now' }
+    $output = Write-ConsoleSummary -Summary $summary -Findings @() 6>&1
+    $text = ($output | Out-String)
+    $text | Should -Match 'Findings'
+    $text | Should -Match '0'
+    $text | Should -Match 'PASS'
+  }
+
   It "Does not throw with findings" {
     $summary = [pscustomobject]@{ ComputerName = 'PC'; Timestamp = 'now' }
     $findings = [System.Collections.ArrayList]@(
@@ -427,12 +436,10 @@ Describe "Write-ConsoleSummary" {
   }
 }
 
-Describe "Write-PrettySummary" {
-  It "Throws with empty findings due to ArrayList binding (known limitation)" {
-    $result = [pscustomobject]@{ ComputerName = 'PC'; Timestamp = 'now' }
-    # Write-PrettySummary passes @() to Write-ConsoleSummary -Findings [ArrayList],
-    # which PowerShell cannot bind to an empty collection. This is a known source limitation.
-    { Write-PrettySummary -Result $result } | Should -Throw '*empty collection*'
+Describe "Console module export surface" {
+  It "Does not export removed pretty summary wrapper" {
+    $names = Get-Command -Module Console | Select-Object -ExpandProperty Name
+    $names | Should -Not -Contain 'Write-PrettySummary'
   }
 }
 

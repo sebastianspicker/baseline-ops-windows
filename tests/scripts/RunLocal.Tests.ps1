@@ -103,4 +103,63 @@ exit 0
       }
     }
   }
+
+  It 'Rejects weak inline hash algorithms in ExpectedHash' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runlocal-hash-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $markerPath = Join-Path $tempRoot 'marker.txt'
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+
+      $scriptPath = Join-Path $scriptsDir '00-Hash.ps1'
+      $scriptContent = @"
+[System.IO.File]::WriteAllText('$markerPath', 'executed')
+exit 0
+"@
+      Set-Content -LiteralPath $scriptPath -Value $scriptContent -Encoding UTF8
+      $md5Hash = (Get-FileHash -Path $scriptPath -Algorithm MD5).Hash
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Local.ps1'
+      { & $runner -ScriptName '00-Hash.ps1' -RootPath $tempRoot -ExpectedHash "MD5:$md5Hash" -Confirm:$false } |
+        Should -Throw '*Unsupported hash algorithm*'
+      Test-Path -LiteralPath $markerPath | Should -BeFalse
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  It 'Accepts strong inline hash algorithms in ExpectedHash' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runlocal-strong-hash-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $markerPath = Join-Path $tempRoot 'marker.txt'
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+
+      $scriptPath = Join-Path $scriptsDir '00-StrongHash.ps1'
+      $scriptContent = @"
+[System.IO.File]::WriteAllText('$markerPath', 'executed')
+exit 0
+"@
+      Set-Content -LiteralPath $scriptPath -Value $scriptContent -Encoding UTF8
+      $sha256Hash = (Get-FileHash -Path $scriptPath -Algorithm SHA256).Hash
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Local.ps1'
+      & $runner -ScriptName '00-StrongHash.ps1' -RootPath $tempRoot -ExpectedHash "sha256:$sha256Hash" -Confirm:$false
+
+      $LASTEXITCODE | Should -Be 0
+      Test-Path -LiteralPath $markerPath | Should -BeTrue
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  It 'Falls back to the repo root when the default Windows root is unavailable' {
+    $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Local.ps1'
+    & $runner -ScriptName '27-Defender-Health-Audit.ps1' -WhatIf
+    $LASTEXITCODE | Should -Be 0
+  }
 }

@@ -512,56 +512,10 @@ function Write-ConsoleList {
   }
 }
 
-function Write-Rule {
-  [CmdletBinding()]
-  param(
-    [string]$Title,
-    [object]$Color = 'Header'
-  )
-  Write-UiRule -Title $Title -Style $Color
-}
-
-function Write-ConsoleRule {
-  [CmdletBinding()]
-  param(
-    [string]$Title,
-    [object]$Color = 'Header'
-  )
-  Write-UiRule -Title $Title -Style $Color
-}
-
-function Write-ConsoleSeparator {
-  [CmdletBinding()]
-  param(
-    [string]$Char = '-',
-    [int]$Width = $script:UiDefaults.SectionWidth,
-    [object]$Color = 'Dim'
-  )
-  Write-UiSeparator -Char $Char -Width $Width -Style $Color
-}
-
 function Write-InfoLine {
   [CmdletBinding()]
   param([Parameter(Mandatory)][AllowEmptyString()][string]$Message)
   Write-Info -Message $Message
-}
-
-function Write-Title {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
-  Write-UiLine -Message $Text -Style 'Header'
-}
-
-function Write-Good {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
-  Write-UiLine -Message $Text -Style 'Success'
-}
-
-function Write-Bad {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
-  Write-UiLine -Message $Text -Style 'Error'
 }
 
 function Write-WarnLine {
@@ -680,11 +634,5 @@ Export-ModuleMember -Function `
   Write-ConsoleBanner, `
   Write-ConsoleInfo, `
   Write-ConsoleList, `
-  Write-Rule, `
-  Write-ConsoleRule, `
-  Write-ConsoleSeparator, `
-  Write-Title, `
-  Write-Good, `
-  Write-Bad, `
   Write-UiProgress, `
   Write-UiSummaryTable

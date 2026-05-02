@@ -330,12 +330,12 @@ if ($summary.ExportEnabled) {
 if (-not $NoConsole) {
   Write-UiLine ""
 
-  Write-ConsoleRule -Title "Process/Service Audit"
+  Write-UiRule -Title "Process/Service Audit"
   Write-ConsoleLine -Message ("Computer : {0}" -f $summary.ComputerName) -Style Header
   Write-ConsoleLine -Message ("Time     : {0}" -f $summary.Timestamp) -Style Dim
 
   Write-UiLine ""
-  Write-ConsoleRule -Title "Counts"
+  Write-UiRule -Title "Counts"
   Write-ConsoleLine -Message ("Processes        : {0}" -f $summary.ProcessCount) -Style Default
 
   $svcLine = "Services         : {0} (Running: {1})" -f $summary.ServiceCount, $summary.RunningServices
@@ -344,7 +344,7 @@ if (-not $NoConsole) {
   Write-ConsoleLine -Message ("TopN             : {0}" -f $summary.TopN) -Style Default
 
   Write-UiLine ""
-  Write-ConsoleRule -Title "Config"
+  Write-UiRule -Title "Config"
   if ($summary.ConfigLoaded) {
     Write-ConsoleLine -Message "Config loaded    : True" -Style Ok
   } else {
@@ -364,7 +364,7 @@ if (-not $NoConsole) {
   if ($Config.ShowListsInConsole) {
     if ($Config.ShowTopCpuInConsole) {
       Write-UiLine ""
-      Write-ConsoleRule -Title ("Top CPU (CPU seconds, cumulative) - Top {0}" -f $effectiveTopN)
+      Write-UiRule -Title ("Top CPU (CPU seconds, cumulative) - Top {0}" -f $effectiveTopN)
       $topCpu |
         Select-Object Name, Id, CPU, WorkingSet64, StartTime, Path |
         ForEach-Object {
@@ -375,7 +375,7 @@ if (-not $NoConsole) {
 
     if ($Config.ShowTopRamInConsole) {
       Write-UiLine ""
-      Write-ConsoleRule -Title ("Top RAM (WorkingSet) - Top {0}" -f $effectiveTopN)
+      Write-UiRule -Title ("Top RAM (WorkingSet) - Top {0}" -f $effectiveTopN)
       $topRam |
         Select-Object Name, Id, CPU, WorkingSet64, StartTime, Path |
         ForEach-Object {
@@ -386,7 +386,7 @@ if (-not $NoConsole) {
 
     if ($Config.ShowServicesInConsole) {
       Write-UiLine ""
-      Write-ConsoleRule -Title ("Services (sample) - showing up to {0}" -f $Config.ConsoleMaxServices)
+      Write-UiRule -Title ("Services (sample) - showing up to {0}" -f $Config.ConsoleMaxServices)
 
       $svcSample = $svcEnriched | Select-Object -First $Config.ConsoleMaxServices
       foreach ($s in $svcSample) {
@@ -401,7 +401,7 @@ if (-not $NoConsole) {
   }
 
   Write-UiLine ""
-  Write-ConsoleRule -Title "End"
+  Write-UiRule -Title "End"
 }
 
 # V2 output contract

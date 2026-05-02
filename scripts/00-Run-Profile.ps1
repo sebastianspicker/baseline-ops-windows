@@ -94,6 +94,46 @@ function Test-StepArgHasToken {
   return $false
 }
 
+# Profile JSON is untrusted run input. The runner owns deployment roots,
+# integrity controls, and confirmation policy; a profile step may add
+# script-specific arguments but must not weaken those run-level decisions.
+function Remove-ProfileStepBlockedArgs {
+  [CmdletBinding()]
+  param(
+    [string[]]$ArgsList,
+    [Parameter(Mandatory)][string[]]$BlockedNames,
+    [Parameter(Mandatory)][string]$ScriptName
+  )
+
+  if (-not $ArgsList) { return @() }
+
+  $cleanArgs = New-Object System.Collections.ArrayList
+  for ($i = 0; $i -lt $ArgsList.Count; $i++) {
+    $argVal = [string]$ArgsList[$i]
+    $blockedMatch = $null
+
+    foreach ($blocked in $BlockedNames) {
+      $pattern = '^-{0}($|:)' -f [regex]::Escape($blocked)
+      if ($argVal -imatch $pattern) {
+        $blockedMatch = $blocked
+        break
+      }
+    }
+
+    if ($null -ne $blockedMatch) {
+      Write-Warning "Profile step '$ScriptName' contains blocked argument override '$argVal'. Removing it."
+      if ($argVal -notmatch ':' -and ($i + 1) -lt $ArgsList.Count -and [string]$ArgsList[$i + 1] -notmatch '^-') {
+        $i++
+      }
+      continue
+    }
+
+    [void]$cleanArgs.Add($ArgsList[$i])
+  }
+
+  return @($cleanArgs)
+}
+
 $validatorPath = Join-Path $PSScriptRoot '00-Validate-Profile.ps1'
 $runLocalPath = Join-Path $PSScriptRoot '00-Run-Local.ps1'
 
@@ -105,6 +145,8 @@ if (-not (Test-Path -LiteralPath $runLocalPath -PathType Leaf)) {
 }
 
 if ($RootPath -eq 'C:\install\mdm\ps1') {
+  # Keep the production default for deployed Windows hosts while allowing repo
+  # checkout smoke tests to run on non-Windows developer machines.
   $repoRootCandidate = Split-Path -Parent $PSScriptRoot
   if (Test-Path -LiteralPath (Join-Path $repoRootCandidate 'scripts') -PathType Container) {
     $RootPath = $repoRootCandidate
@@ -128,9 +170,16 @@ $defaults = if (Has-Property -Object $profileDoc -Name 'Defaults') { $profileDoc
 $integrity = if (Has-Property -Object $profileDoc -Name 'Integrity') { $profileDoc.Integrity } else { [pscustomobject]@{} }
 $expectedHashes = if (Has-Property -Object $integrity -Name 'ExpectedHashes') { ConvertTo-HashtableSafe -InputObject $integrity.ExpectedHashes } else { @{} }
 
+# CLI parameters intentionally win over profile defaults: an operator invoking
+# the runner should be able to redirect output without editing the profile file.
 $globalMode = if ($PSBoundParameters.ContainsKey('Mode')) { $Mode } elseif (Has-Property -Object $defaults -Name 'Mode') { [string]$defaults.Mode } else { 'Audit' }
+$effectiveOutputFormat = if ($PSBoundParameters.ContainsKey('OutputFormat')) { $OutputFormat } elseif (Has-Property -Object $defaults -Name 'OutputFormat' -and -not [string]::IsNullOrWhiteSpace([string]$defaults.OutputFormat)) { [string]$defaults.OutputFormat } else { $OutputFormat }
+$effectiveOutputPath = if ($PSBoundParameters.ContainsKey('OutputPath')) { $OutputPath } elseif (Has-Property -Object $defaults -Name 'OutputPath' -and -not [string]::IsNullOrWhiteSpace([string]$defaults.OutputPath)) { [string]$defaults.OutputPath } else { $OutputPath }
 $profileStrict = [bool]($Strict -or ((Has-Property -Object $defaults -Name 'Strict') -and $defaults.Strict))
 $profileRequireSigned = [bool]($RequireSigned -or ((Has-Property -Object $integrity -Name 'RequireSigned') -and $integrity.RequireSigned))
+
+$script:__V2Context.OutputFormat = $effectiveOutputFormat
+$script:__V2Context.OutputPath = $effectiveOutputPath
 
 $results = New-Object System.Collections.ArrayList
 $stepStatus = @{}
@@ -143,6 +192,9 @@ Write-KeyValue -Key 'Mode' -Value $globalMode
 Write-KeyValue -Key 'Strict' -Value $profileStrict
 Write-KeyValue -Key 'RequireSigned' -Value $profileRequireSigned
 
+# The scheduler is intentionally simple: repeatedly run steps whose
+# dependencies have finished, mark dependents skipped when an upstream failed,
+# and treat a no-progress pass as an unresolved dependency cycle.
 while ($pending.Count -gt 0) {
   $progress = $false
 
@@ -186,16 +238,8 @@ while ($pending.Count -gt 0) {
       $stepArgs += @($step.Args)
     }
 
-    # Validate that profile step args don't attempt to override security-sensitive parameters
-    $blockedOverrides = @('-RootPath', '-ConfigPath', '-ExpectedHash')
-    foreach ($argVal in @($stepArgs)) {
-      foreach ($blocked in $blockedOverrides) {
-        if ([string]$argVal -ieq $blocked -or [string]$argVal -imatch "^$([regex]::Escape($blocked)):") {
-          Write-Warning "Profile step '$scriptName' contains blocked argument override '$argVal'. Removing it."
-          $stepArgs = @($stepArgs | Where-Object { [string]$_ -ine $argVal })
-        }
-      }
-    }
+    # Profile steps must not override runner-owned path, integrity, or confirmation controls.
+    $stepArgs = @(Remove-ProfileStepBlockedArgs -ArgsList $stepArgs -BlockedNames @('RootPath', 'ConfigPath', 'ExpectedHash', 'Confirm', 'WhatIf') -ScriptName $scriptName)
 
     # Legacy profile compatibility: normalize removed v1 token "-Remediate" to v2 mode.
     if (@($stepArgs | Where-Object { [string]$_ -ieq '-Remediate' }).Count -gt 0) {
@@ -323,7 +367,7 @@ $runResult = New-V2ResultObject `
   -Summary $summary `
   -Metadata @{ Steps = $resultsArr; Validation = $validation }
 
-if ($OutputFormat -eq 'Console') {
+if ($effectiveOutputFormat -eq 'Console') {
   Write-Section -Title 'Profile Summary'
   Write-KeyValue -Key 'Profile' -Value $summary.ProfileName
   Write-KeyValue -Key 'Mode' -Value $summary.Mode
@@ -333,7 +377,7 @@ if ($OutputFormat -eq 'Console') {
   Write-KeyValue -Key 'Skipped' -Value $summary.StepsSkipped
 }
 
-Write-ResultObject -ResultObject $runResult -OutputFormat $OutputFormat -OutputPath $OutputPath
+Write-ResultObject -ResultObject $runResult -OutputFormat $effectiveOutputFormat -OutputPath $effectiveOutputPath
 
 if ($PassThru) {
   $runResult

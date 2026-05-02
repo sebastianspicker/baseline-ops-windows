@@ -47,6 +47,24 @@ Generated evidence, local audit workspace files, and machine-specific harness ar
 - `tools/` : CI and operator utilities (GUI launcher, verify, secret scan)
 - `.github/` : workflows, templates, and repo policy metadata
 
+## How to navigate the code
+
+Start with the v2 orchestration scripts if you need the main control flow:
+`00-Validate-Profile.ps1` checks profile shape and integrity, `00-Run-Profile.ps1`
+orders profile steps and owns run-level safety defaults, and `00-Run-Local.ps1`
+executes exactly one numbered script after path and integrity checks.
+
+Numbered scripts are the operational surface. Each one should be readable in
+three layers: comment-based help for operator intent, the parameter block for
+the public contract, and the final v2 result object for automation output.
+Shared behavior belongs in `lib/`, while script-specific Windows/domain logic
+stays next to the script that owns it.
+
+Tests mirror those contracts. `tests/scripts/V2Contract.Tests.ps1` protects the
+shared v2 parameter surface, `ScriptShouldProcess.Tests.ps1` protects
+destructive-operation safety, and focused tests cover runner behavior and module
+helpers.
+
 ## Script catalog (at a glance)
 
 | # | Script | Category | Audit | Remediate |
@@ -112,7 +130,7 @@ New orchestration scripts provide a normalized execution layer:
 
 - `scripts/00-Validate-Profile.ps1` : validates profile JSON
 - `scripts/00-Run-Profile.ps1` : executes profile steps with dependency/order controls
-- `scripts/00-Run-Batch.ps1` : runs category/tag based script batches
+- `scripts/00-Run-Batch.ps1` : runs category-based script batches
 - `scripts/00-Report-Aggregate.ps1` : aggregates multiple JSON outputs
 
 Deployment helpers:
@@ -129,7 +147,7 @@ flowchart TD
     C --> D["NN-Script.ps1\n(audit / remediate)"]
     D -->|"v2 result object"| E["lib/Serialization.psm1\nConvertTo-V2Json"]
     B -->|"all results"| F["00-Report-Aggregate.ps1\n(summary rollup)"]
-    B2["00-Run-Batch.ps1\n(category/tag filter)"] -->|"delegates to"| B
+    B2["00-Run-Batch.ps1\n(category filter)"] -->|"delegates to"| B
 ```
 
 ### Breaking changes (v2 hard cutover)
@@ -209,7 +227,7 @@ Launcher supports:
 
 ### GUI Launcher
 
-![Launcher GUI Preview](./reports/screenshots/launcher-gui-preview.png)
+![Launcher GUI Preview](./docs/assets/launcher-gui-preview.png)
 
 The GUI launcher (`tools/Launcher-GUI.ps1`) provides a point-and-click interface for
 selecting scripts, choosing Audit or Remediate mode, and viewing live output.

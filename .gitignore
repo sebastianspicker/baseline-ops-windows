@@ -31,15 +31,6 @@ proof/
 proofs/
 evidence/
 reports/
-!reports/
-reports/*
-!reports/screenshots/
-reports/screenshots/*
-!reports/screenshots/*.html
-!reports/screenshots/*.txt
-reports/screenshots/*.html
-reports/screenshots/*.txt
-!reports/screenshots/launcher-gui-preview.png
 eventlogs/
 defender/
 defender-support/
@@ -89,6 +80,7 @@ coverage/
 test-results/
 testResults.xml
 junit.xml
+*.sarif
 *.trx
 *.coverage
 *.coveragexml

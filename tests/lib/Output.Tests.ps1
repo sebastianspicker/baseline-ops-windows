@@ -5,7 +5,7 @@ Pester tests for Output.psm1 module
 
 .DESCRIPTION
 Unit tests for the Output module. Tests core functions Write-UiLine,
-Write-KeyValue, Write-Section, Write-BlankLine, and smoke tests for wrappers.
+Write-KeyValue, Write-Section, and Write-BlankLine.
 Uses Mock Write-Host to capture output for assertions.
 #>
 
@@ -14,6 +14,17 @@ param()
 
 BeforeAll {
   Import-Module (Join-Path $PSScriptRoot '../../lib/Output.psm1') -Force
+}
+
+Describe 'Output module export surface' {
+  It 'Does not export removed decorative console wrappers' {
+    $removed = @('Write-Rule', 'Write-ConsoleRule', 'Write-ConsoleSeparator', 'Write-Title', 'Write-Good', 'Write-Bad')
+    $names = Get-Command -Module Output | Select-Object -ExpandProperty Name
+
+    foreach ($name in $removed) {
+      $names | Should -Not -Contain $name
+    }
+  }
 }
 
 Describe 'Write-UiLine' {
@@ -132,29 +143,5 @@ Describe 'Write-Success' {
     Mock Write-Host {} -ModuleName Output
     Write-Success -Message 'Pass text'
     Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $Object -match 'OK.*Pass text' }
-  }
-}
-
-Describe 'Write-Good' {
-  It 'Outputs text with success style' {
-    Mock Write-Host {} -ModuleName Output
-    Write-Good -Text 'Great'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $ForegroundColor -eq [ConsoleColor]::Green }
-  }
-}
-
-Describe 'Write-Bad' {
-  It 'Outputs text with error style' {
-    Mock Write-Host {} -ModuleName Output
-    Write-Bad -Text 'Problem'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $ForegroundColor -eq [ConsoleColor]::Red }
-  }
-}
-
-Describe 'Write-Title' {
-  It 'Outputs text with header style' {
-    Mock Write-Host {} -ModuleName Output
-    Write-Title -Text 'My Title'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $ForegroundColor -eq [ConsoleColor]::Cyan }
   }
 }

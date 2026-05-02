@@ -113,6 +113,15 @@ if ($NoColor) {
 }
 $ErrorActionPreference = 'Stop'
 
+if ($RootPath -eq 'C:\install\mdm\ps1') {
+  # Preserve the documented deployment default, but make local repo smoke tests
+  # work when the Windows deployment drive is not present.
+  $repoRootCandidate = Split-Path -Parent $PSScriptRoot
+  if (Test-Path -LiteralPath (Join-Path $repoRootCandidate 'scripts') -PathType Container) {
+    $RootPath = $repoRootCandidate
+  }
+}
+
 $scriptsRoot = Join-Path $RootPath 'scripts'
 
 if (-not (Test-Path -LiteralPath $scriptsRoot)) {
@@ -126,6 +135,8 @@ function Test-ResolvedPathUnderScriptsRoot {
     [Parameter(Mandatory)][string]$ScriptsRootPath
   )
 
+  # Resolve both sides before comparison so relative paths and symlinks cannot
+  # escape the deployment scripts directory by string-shape tricks.
   try {
     $resolvedPath = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
     $resolvedRoot = (Resolve-Path -LiteralPath $ScriptsRootPath -ErrorAction Stop).Path
@@ -208,12 +219,17 @@ if ($RequireSigned) {
 
 if (-not [string]::IsNullOrWhiteSpace($ExpectedHash)) {
   # Parse expected hash - format can be "ALGORITHM:HASH" or just "HASH"
+  $allowedHashAlgorithms = @('SHA256','SHA384','SHA512')
   $expectedAlg = $HashAlgorithm
   $expectedHashValue = $ExpectedHash.Trim()
   
   if ($expectedHashValue -match '^(\w+):([A-Fa-f0-9]+)$') {
-    $expectedAlg = $Matches[1]
+    $expectedAlg = $Matches[1].ToUpperInvariant()
     $expectedHashValue = $Matches[2]
+  }
+
+  if ($allowedHashAlgorithms -notcontains $expectedAlg) {
+    throw "Unsupported hash algorithm '$expectedAlg'. Allowed algorithms: $($allowedHashAlgorithms -join ', ')."
   }
   
   $actualHashObj = Get-FileHash -Path $scriptPath -Algorithm $expectedAlg
@@ -232,6 +248,8 @@ function Invoke-TargetScript {
     [string[]]$Arguments = @()
   )
 
+  # ScriptArgs arrives from profile JSON or CLI token arrays. Parse it once and
+  # splat typed named arguments so child scripts see normal PowerShell binding.
   if (-not $Arguments -or $Arguments.Count -eq 0) {
     & $Path
     return

@@ -2,6 +2,18 @@
 
 This directory contains PowerShell scripts for Windows MDM security hardening and v2 orchestration, organized by category.
 
+## Maintainer map
+
+Use the `00-*` scripts as the orchestration layer and the numbered scripts as
+the endpoint-operation layer. Profiles should describe intent and sequencing;
+they should not bypass runner-owned safety controls such as script roots,
+hash/signature checks, `-WhatIf`, or `-Confirm`.
+
+When reading a numbered script, start with the help block and parameter block,
+then jump to the final summary/result construction. Helper functions in the
+middle should either wrap a Windows API/command, normalize configuration, or
+build findings for the v2 result contract.
+
 ## Categories
 
 ### Audit Scripts
@@ -91,7 +103,7 @@ Helper scripts for setup and operations.
 | `00-Run-Local.ps1` | Run scripts from local copy |
 | `00-Validate-Profile.ps1` | Validate v2 orchestration profile JSON |
 | `00-Run-Profile.ps1` | Execute profile steps with dependency + fail strategy |
-| `00-Run-Batch.ps1` | Execute category/tag based batches via profile layer |
+| `00-Run-Batch.ps1` | Execute category-based batches via profile layer |
 | `00-Report-Aggregate.ps1` | Aggregate v2 JSON results into a summary report |
 | `25-WinGet-Config-Baseline-Runner.ps1` | WinGet configuration deployment |
 | `08-WinGet-SelfHeal.ps1` | WinGet self-healing for apps |

@@ -183,6 +183,56 @@ Describe 'Direct registry-write paths in audited scripts' {
     $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$ScriptPath, ''Launch remediation PowerShell process''\)'
   }
 
+  It '17-Sysmon-Rule-Drift-Sensor rejects unsafe remediation script paths before launch' {
+    $path = Join-Path $PSScriptRoot '../../scripts/17-Sysmon-Rule-Drift-Sensor.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match 'function Resolve-RemediationScriptPath'
+    $content | Should -Match 'Resolve-Path -LiteralPath \$ScriptPath -ErrorAction Stop'
+    $content | Should -Match 'Test-PathUnderRoot -Path \$canonicalScriptPath -Root \$canonicalScriptsDir'
+    $content | Should -Match '\[System\.IO\.FileAttributes\]::ReparsePoint'
+    $content | Should -Match 'Get-AuthenticodeSignature -FilePath \$canonicalScriptPath'
+    $content | Should -Match '\$ScriptPath = Resolve-RemediationScriptPath -ScriptPath \$ScriptPath'
+    $content | Should -Match 'Start-Process -FilePath "powershell\.exe"'
+  }
+
+  It '16-Sysmon-Config-Updater gates Sysmon install and config update behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/16-Sysmon-Config-Updater.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$exe, "Install Sysmon with config ''\$cfgPath''"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$exe, "Update Sysmon config to ''\$cfgPath''"\)'
+  }
+
+  It '16-Sysmon-Config-Updater gates Sysmon event channel mutations behind ShouldProcess' {
+    $path = Join-Path $PSScriptRoot '../../scripts/16-Sysmon-Config-Updater.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match 'function Ensure-SysmonChannel\(\[switch\]\$DoIt,\[int\]\$MiB,\[System\.Management\.Automation\.PSCmdlet\]\$Cmdlet\)'
+    $content | Should -Match '\$Cmdlet\.ShouldProcess\(\$name, ''Enable Sysmon Operational event channel''\)'
+    $content | Should -Match '\$Cmdlet\.ShouldProcess\(\$name, "Resize Sysmon Operational event channel to \$MiB MiB"\)'
+    $content | Should -Match 'Ensure-SysmonChannel -DoIt:\$doIt -MiB \$ChannelSizeMiB -Cmdlet \$PSCmdlet'
+  }
+
+  It '21-EmergencyKillSwitch gates scheduled task, firewall-state file, and break-glass removal' {
+    $path = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$Run\.Effective\.TaskName, "Schedule automatic rollback task"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$fwStatePath, "Write pre-kill-switch firewall state"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$RuleBgName, "Remove break-glass inbound allow rule"\)'
+  }
+
+  It '25-WinGet-Config-Baseline-Runner gates apply and keeps Audit mode test-only' {
+    $path = Join-Path $PSScriptRoot '../../scripts/25-WinGet-Config-Baseline-Runner.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match 'if \(\$Mode -eq ''Audit''\) \{ \$TestOnlyEffective = \$true \}'
+    $content | Should -Match 'if \(\(\$Mode -eq ''Remediate''\) -and \(-not \$TestOnlyEffective\)\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$resolvedConfigPath, ''Run winget configure apply''\)'
+    $content | Should -Match 'Invoke-WinGet -ArgsWinget \$argsApply -Phase ''apply'''
+  }
+
   It '34-TimeSync-Health gates AutoStartService behind ShouldProcess' {
     $path = Join-Path $PSScriptRoot '../../scripts/34-TimeSync-Health.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
