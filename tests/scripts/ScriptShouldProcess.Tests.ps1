@@ -223,6 +223,26 @@ Describe 'Direct registry-write paths in audited scripts' {
     $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$RuleBgName, "Remove break-glass inbound allow rule"\)'
   }
 
+  It '21-EmergencyKillSwitch keeps mutation execution behind Remediate mode' {
+    $path = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\$Remediate = \(\$Mode -eq ''Remediate''\)'
+    $content | Should -Match 'if \(-not \$Run\.IsAdmin -and \$Remediate\)'
+    $content | Should -Match 'if \(-not \$Remediate\)'
+    $content | Should -Match 'Audit mode: no kill switch actions applied\.'
+    $content | Should -Match 'if \(\$Remediate\) \{\s*Ensure-EventSource'
+  }
+
+  It '21-EmergencyKillSwitch rollback fails closed without saved firewall state' {
+    $path = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Not -Match 'DefaultInboundAction Allow -DefaultOutboundAction Allow'
+    $content | Should -Match 'refusing unsafe Allow/Allow fallback'
+    $content | Should -Match 'refusing to apply unsafe firewall profile fallback'
+  }
+
   It '25-WinGet-Config-Baseline-Runner gates apply and keeps Audit mode test-only' {
     $path = Join-Path $PSScriptRoot '../../scripts/25-WinGet-Config-Baseline-Runner.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8

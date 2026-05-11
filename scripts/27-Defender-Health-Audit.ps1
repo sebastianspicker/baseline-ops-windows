@@ -108,10 +108,10 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
@@ -210,6 +210,7 @@ function Try-LoadJsonConfig {
     [pscustomobject]$Config,
 
     [Parameter(Mandatory = $true)]
+    [AllowEmptyString()]
     [string]$Path
   )
 
@@ -303,7 +304,7 @@ if (-not $effective.SkipAdminCheck -and -not (Test-IsAdmin)) {
   exit 1
 }
 
-Ensure-Cmdlet -Name 'Get-MpComputerStatus'  # Defender status cmdlet. [page:1]
+$null = Ensure-Cmdlet -Name 'Get-MpComputerStatus'  # Defender status cmdlet. [page:1]
 
 # ----- Data collection
 $Findings = New-FindingsList
@@ -384,6 +385,11 @@ if ($effective.ExportPath) {
 }
 
 # ----- Console summary at the end (pretty, host-only)
+$findingsAL = [System.Collections.ArrayList]::new()
+foreach ($finding in $Findings) {
+  [void]$findingsAL.Add($finding)
+}
+
 if (-not $NoConsoleSummary) {
   $highest = Get-HighestSeverity -Findings $Findings
   $qa = Get-ScanAgeLabel (Normalize-UInt32Age $summary.QuickScanAge)
@@ -408,7 +414,6 @@ if (-not $NoConsoleSummary) {
     'Config'     = $configSource
   }
 
-  $findingsAL = [System.Collections.ArrayList]@($Findings)
   Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
     -Title 'Microsoft Defender Health Audit' `
     -CustomFields $customFields
@@ -416,7 +421,8 @@ if (-not $NoConsoleSummary) {
 
 # V2 output contract
 $resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '27-Defender-Health-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings) -Summary $result.Summary -Metadata @{ EffectiveConfig = $result.EffectiveConfig }
+$findingsArray = $findingsAL.ToArray()
+$v2Result = New-V2ResultObject -ScriptName '27-Defender-Health-Audit.ps1' -Mode $Mode -Result $resultToken -Findings $findingsArray -Summary $result.Summary -Metadata @{ EffectiveConfig = $result.EffectiveConfig }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

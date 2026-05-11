@@ -75,10 +75,10 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
@@ -285,7 +285,7 @@ $txt = Get-AuditPolText
 $policies = Parse-AuditPolText -Text $txt
 
 if ($policies.Count -eq 0) {
-  Add-Finding -Code 'AUD-ParserEmpty' -Severity 'High' -Message 'Parsed 0 audit policies. Check parser/locale/Windows version.'
+  Add-Finding -FindingList $script:Findings -Code 'AUD-ParserEmpty' -Severity 'High' -Message 'Parsed 0 audit policies. Check parser/locale/Windows version.'
 }
 
 # Basic checks (kept from your version).
@@ -299,10 +299,10 @@ foreach ($m in $mustHave) {
   $hit = $policies | Where-Object { ($_.Category -like $m.CategoryLike) -and ($_.Subcategory -like $m.SubLike) } | Select-Object -First 1
   if ($hit) {
     if ([string]$hit.Setting -match 'No Auditing') {
-      Add-Finding -Code $m.Code -Severity $m.Severity -Message ("{0} Category='{1}', Subcategory='{2}', Setting='{3}'." -f $m.Message, $hit.Category, $hit.Subcategory, $hit.Setting)
+      Add-Finding -FindingList $script:Findings -Code $m.Code -Severity $m.Severity -Message ("{0} Category='{1}', Subcategory='{2}', Setting='{3}'." -f $m.Message, $hit.Category, $hit.Subcategory, $hit.Setting)
     }
   } else {
-    Add-Finding -Code 'AUD-ParserMiss' -Severity 'Info' -Message ("Could not find subcategory (parser/locale): {0}/{1}" -f $m.CategoryLike, $m.SubLike)
+    Add-Finding -FindingList $script:Findings -Code 'AUD-ParserMiss' -Severity 'Info' -Message ("Could not find subcategory (parser/locale): {0}/{1}" -f $m.CategoryLike, $m.SubLike)
   }
 }
 
@@ -317,9 +317,9 @@ if (-not $desired) {
   $desiredSource = if ($desiredSource -eq 'None') { 'Default' } else { ("{0} -> Default" -f $desiredSource) }
 
   if ($desiredError) {
-    Add-Finding -Code 'AUD-DesiredPolicyFallback' -Severity 'Info' -Message ("DesiredPolicyJson could not be loaded; using defaults. Error: {0}" -f $desiredError)
+    Add-Finding -FindingList $script:Findings -Code 'AUD-DesiredPolicyFallback' -Severity 'Info' -Message ("DesiredPolicyJson could not be loaded; using defaults. Error: {0}" -f $desiredError)
   } else {
-    Add-Finding -Code 'AUD-DesiredPolicyDefault' -Severity 'Info' -Message 'No DesiredPolicyJson provided; using built-in defaults for drift checks.'
+    Add-Finding -FindingList $script:Findings -Code 'AUD-DesiredPolicyDefault' -Severity 'Info' -Message 'No DesiredPolicyJson provided; using built-in defaults for drift checks.'
   }
 }
 
@@ -334,12 +334,12 @@ foreach ($catProp in $desired.PSObject.Properties) {
 
     $current = $policies | Where-Object { ($_.Category -eq $catName) -and ($_.Subcategory -eq $subName) } | Select-Object -First 1
     if (-not $current) {
-      Add-Finding -Code 'AUD-DesiredNotFound' -Severity 'Info' -Message ("Desired policy has '{0} -> {1}', but it was not found in auditpol output." -f $catName, $subName)
+      Add-Finding -FindingList $script:Findings -Code 'AUD-DesiredNotFound' -Severity 'Info' -Message ("Desired policy has '{0} -> {1}', but it was not found in auditpol output." -f $catName, $subName)
       continue
     }
 
     if ([string]$current.Setting -ne $wanted) {
-      Add-Finding -Code 'AUD-Drift' -Severity 'Medium' -Message ("Drift: '{0} -> {1}' is '{2}', expected '{3}'." -f $catName, $subName, $current.Setting, $wanted) -Extra @{ Category = $catName; Subcategory = $subName; Current = $current.Setting; Desired = $wanted }
+      Add-Finding -FindingList $script:Findings -Code 'AUD-Drift' -Severity 'Medium' -Message ("Drift: '{0} -> {1}' is '{2}', expected '{3}'." -f $catName, $subName, $current.Setting, $wanted) -Extra @{ Category = $catName; Subcategory = $subName; Current = $current.Setting; Desired = $wanted }
     }
   }
 }
@@ -349,8 +349,8 @@ if ($Mode -eq 'Remediate') {
   if ($desiredInfo.Source -ne 'Json') {
     $msg = "Mode=Remediate requires a valid -DesiredPolicyJson (not defaults). Example: PATH/TO/JSON/auditpolicy.json"
     Write-Warning $msg
-    Add-Finding -Code 'AuditPol-NoDesiredPolicy' -Severity 'Critical' -Message $msg
-    $v2Result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings @($script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+    Add-Finding -FindingList $script:Findings -Code 'AuditPol-NoDesiredPolicy' -Severity 'Critical' -Message $msg
+    $v2Result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
     Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
     if ($PassThru) { $v2Result }
     exit 1
@@ -365,7 +365,7 @@ if ($Mode -eq 'Remediate') {
 
       # S6 fix: validate subcategory name to prevent argument injection via auditpol.exe
       if ($subName -notmatch '^[a-zA-Z0-9 \-\/]+$') {
-        Add-Finding -Code 'AuditPol-InvalidSubcategory' -Severity 'High' -Message ("Subcategory name contains invalid characters, skipped: {0}" -f $subName)
+        Add-Finding -FindingList $script:Findings -Code 'AuditPol-InvalidSubcategory' -Severity 'High' -Message ("Subcategory name contains invalid characters, skipped: {0}" -f $subName)
         continue
       }
 
@@ -379,7 +379,7 @@ if ($Mode -eq 'Remediate') {
         $auditArgs = @('/set', "/subcategory:`"$subName`"", $successArg, $failureArg)
         $res = Invoke-Auditpol -Arguments $auditArgs
         if ($res -ne $true) {
-          Add-Finding -Code 'AuditPol-SetFailed' -Severity 'High' -Message ("auditpol /set failed for subcategory: {0}" -f $subName)
+          Add-Finding -FindingList $script:Findings -Code 'AuditPol-SetFailed' -Severity 'High' -Message ("auditpol /set failed for subcategory: {0}" -f $subName)
         }
       }
     }
@@ -429,7 +429,7 @@ Write-FindingsConsole -Findings $script:Findings
 
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $summary -Metadata @{ ParsedPolicies = $policies }
+$v2Result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ ParsedPolicies = $policies }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

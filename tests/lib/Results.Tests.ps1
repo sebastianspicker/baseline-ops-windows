@@ -11,7 +11,7 @@ Unit tests for New-FindingsList, New-FindingObject, and Add-Finding.
 param()
 
 BeforeAll {
-  Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force
+  Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force -DisableNameChecking
   Import-Module (Join-Path $PSScriptRoot '../../lib/Results.psm1') -Force
 }
 

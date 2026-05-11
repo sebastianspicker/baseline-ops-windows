@@ -161,12 +161,12 @@ function Get-WinRmState {
     $svc = Get-Service -Name 'WinRM' -ErrorAction Stop
   }
   catch {
-    Add-Finding -Code 'WEF-WinRMServiceMissingOrNoAccess' -Severity 'High' -Message ("WinRM service could not be queried: {0}" -f $_.Exception.Message)
+    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-WinRMServiceMissingOrNoAccess' -Severity 'High' -Message ("WinRM service could not be queried: {0}" -f $_.Exception.Message)
     return [pscustomobject]@{ Status = $null; StartMode = $null }
   }
 
   if ($svc.Status -ne 'Running') {
-    Add-Finding -Code 'WEF-WinRMNotRunning' -Severity 'High' -Message ("WinRM service is {0}; WEF sources require WinRM/WSMan." -f $svc.Status)
+    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-WinRMNotRunning' -Severity 'High' -Message ("WinRM service is {0}; WEF sources require WinRM/WSMan." -f $svc.Status)
   }
 
   try {
@@ -174,11 +174,11 @@ function Get-WinRmState {
     # If refactored to a variable, apply: $escaped = $name -replace "'", "''"
     $startMode = (Get-CimInstance -ClassName Win32_Service -Filter "Name='WinRM'" -ErrorAction Stop).StartMode
     if ($startMode -eq 'Disabled') {
-      Add-Finding -Code 'WEF-WinRMDisabled' -Severity 'High' -Message 'WinRM start mode is Disabled; client is not WEF-ready.'
+      $null = Add-Finding -FindingList $script:Findings -Code 'WEF-WinRMDisabled' -Severity 'High' -Message 'WinRM start mode is Disabled; client is not WEF-ready.'
     }
   }
   catch {
-    Add-Finding -Code 'WEF-WinRMStartModeUnknown' -Severity 'Low' -Message ("WinRM start mode could not be determined: {0}" -f $_.Exception.Message)
+    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-WinRMStartModeUnknown' -Severity 'Low' -Message ("WinRM start mode could not be determined: {0}" -f $_.Exception.Message)
   }
 
   return [pscustomobject]@{ Status = [string]$svc.Status; StartMode = $startMode }
@@ -202,12 +202,12 @@ function Get-SubscriptionManagerPolicy {
     }
   }
   catch {
-    Add-Finding -Code 'WEF-SubscriptionManagerReadFailed' -Severity 'Medium' -Message ("SubscriptionManager key could not be read: {0}" -f $_.Exception.Message)
+    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-SubscriptionManagerReadFailed' -Severity 'Medium' -Message ("SubscriptionManager key could not be read: {0}" -f $_.Exception.Message)
   }
 
   $joined = if ($values.Count -gt 0) { ($values.ToArray() -join ' | ') } else { $null }
   if (-not $joined) {
-    Add-Finding -Code 'WEF-SubscriptionManagerMissing' -Severity 'Medium' -Message 'No SubscriptionManager policy value found; client likely not bound to a collector via GPO.'
+    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-SubscriptionManagerMissing' -Severity 'Medium' -Message 'No SubscriptionManager policy value found; client likely not bound to a collector via GPO.'
   }
 
   return [pscustomobject]@{
@@ -226,7 +226,7 @@ function Invoke-WecutilQc {
     return (wecutil qc /q 2>&1 | Out-String).Trim()
   }
   catch {
-    Add-Finding -Code 'WEF-WecutilQcFailed' -Severity 'Low' -Message ("wecutil qc /q failed: {0}" -f $_.Exception.Message)
+    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-WecutilQcFailed' -Severity 'Low' -Message ("wecutil qc /q failed: {0}" -f $_.Exception.Message)
     return $null
   }
 }
@@ -324,7 +324,7 @@ $script:ConfigUsedDefaults = [bool]$cfgResult.Meta.UsedDefaults
 $script:ConfigLoadError = $cfgResult.Meta.Error
 
 if ($script:ConfigLoadError) {
-  Add-Finding -Code 'WEF-ConfigLoadFailed' -Severity 'Low' -Message ("Config JSON could not be loaded; using defaults. Error: {0}" -f $script:ConfigLoadError)
+  $null = Add-Finding -FindingList $script:Findings -Code 'WEF-ConfigLoadFailed' -Severity 'Low' -Message ("Config JSON could not be loaded; using defaults. Error: {0}" -f $script:ConfigLoadError)
 }
 
 $winrmState = Get-WinRmState
@@ -335,11 +335,14 @@ if ($IncludeWecutilCheck) {
   $wecutilQcOutput = Invoke-WecutilQc
 }
 
+$winrmServiceStatus = if ($winrmState.PSObject.Properties.Name -contains 'Status') { $winrmState.Status } else { $null }
+$winrmStartMode = if ($winrmState.PSObject.Properties.Name -contains 'StartMode') { $winrmState.StartMode } else { $null }
+
 $indicators = [pscustomobject]@{
   ComputerName                  = $env:COMPUTERNAME
   Timestamp                     = Get-Date
-  WinRM_ServiceStatus           = $winrmState.Status
-  WinRM_StartMode               = $winrmState.StartMode
+  WinRM_ServiceStatus           = $winrmServiceStatus
+  WinRM_StartMode               = $winrmStartMode
   SubscriptionManagerPolicy     = $subMgrInfo.ValueJoined
   SubscriptionManagerValueCount = $subMgrInfo.ValueCount
   SubscriptionManagerValues     = $subMgrInfo.Values
@@ -390,7 +393,7 @@ if ($ExportPath) {
     $result.Indicators | Export-Csv -Path $indicatorsPath -NoTypeInformation -Encoding $encoding -Delimiter $delimiter
   }
   catch {
-    Add-Finding -Code 'WEF-ExportFailed' -Severity 'Low' -Message ("CSV export failed: {0}" -f $_.Exception.Message)
+    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-ExportFailed' -Severity 'Low' -Message ("CSV export failed: {0}" -f $_.Exception.Message)
 
     # Refresh result after adding export failure finding
     $result = [pscustomobject]@{
@@ -408,7 +411,7 @@ if ($script:Config.ConsoleSummary) {
 
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings.ToArray()) -Summary $result.Summary -Metadata @{ Indicators = $result.Indicators }
+$v2Result = New-V2ResultObject -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $result.Summary -Metadata @{ Indicators = $result.Indicators }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

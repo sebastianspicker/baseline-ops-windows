@@ -36,6 +36,30 @@ function Get-CallerValue {
 
 <#
 .SYNOPSIS
+  Converts scalar or enumerable input into a mutable ArrayList.
+.PARAMETER InputObject
+  Object, array, or enumerable collection to copy into the ArrayList.
+#>
+function ConvertTo-ArrayList {
+  [CmdletBinding()]
+  param([AllowNull()][object]$InputObject)
+
+  $list = [System.Collections.ArrayList]::new()
+  if ($null -eq $InputObject) { return ,$list }
+
+  if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
+    foreach ($item in $InputObject) {
+      [void]$list.Add($item)
+    }
+    return ,$list
+  }
+
+  [void]$list.Add($InputObject)
+  return ,$list
+}
+
+<#
+.SYNOPSIS
   Tests whether the current session is running with administrative privileges.
 #>
 function Test-IsAdmin {
@@ -180,6 +204,7 @@ function New-SafeFileName {
 
 Export-ModuleMember -Function `
   Get-CallerValue, `
+  ConvertTo-ArrayList, `
   Test-IsAdmin, `
   Require-Admin, `
   Ensure-Directory, `

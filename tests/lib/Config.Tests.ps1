@@ -11,7 +11,7 @@ Unit tests for ConvertTo-Hashtable and Read-ConfigWithDefaults.
 param()
 
 BeforeAll {
-  Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force
+  Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force -DisableNameChecking
   Import-Module (Join-Path $PSScriptRoot '../../lib/Config.psm1') -Force
 
   $tempRoot = if ([string]::IsNullOrWhiteSpace($env:TEMP)) { [System.IO.Path]::GetTempPath() } else { $env:TEMP }

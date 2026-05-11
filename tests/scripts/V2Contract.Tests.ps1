@@ -134,4 +134,21 @@ Describe 'v2 parameter contract' {
       $helpBlock | Should -Not -Match '(?m)^\s*\..*?-Remediate\b'
     }
   }
+
+  It 'Scripts with filtered finding counts force array semantics before reading Count' {
+    foreach ($name in @('47-WDAG-Readiness-Audit.ps1', '49-DriverSigning-Integrity-Audit.ps1')) {
+      $path = Join-Path (Join-Path $PSScriptRoot '../../scripts') $name
+      $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+      $content | Should -Match '@\(\$Findings \| Where-Object \{ \$_.Severity -eq ''High'' \}\)\.Count'
+      $content | Should -Match '@\(\$Findings \| Where-Object \{ \$_.Severity -eq ''Medium'' \}\)\.Count'
+    }
+  }
+
+  It '27-Defender-Health-Audit permits an omitted SettingsJsonPath during config load' {
+    $path = Join-Path $PSScriptRoot '../../scripts/27-Defender-Health-Audit.ps1'
+    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+
+    $content | Should -Match '\[AllowEmptyString\(\)\]\s*\[string\]\$Path'
+  }
 }

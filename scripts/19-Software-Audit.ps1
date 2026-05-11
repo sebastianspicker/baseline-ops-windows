@@ -119,9 +119,9 @@
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$CatalogPath,
-  [string]$StatePath  = "PATH\TO\PROOF\sw-inventory.json",
+  [string]$StatePath,
   [switch]$Strict,
-  [string]$ConfigPath = "PATH\TO\JSON\config.json"
+  [string]$ConfigPath
 
 ,
   [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
@@ -134,7 +134,7 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
@@ -186,7 +186,10 @@ if (-not $isWindowsHost) {
 # -------------------- Settings --------------------
 $Script:EventLogName     = 'Application'
 $Script:EventSourceName  = 'Software-Audit'
-$Script:FallbackEventLog = "PATH\TO\PROOF\sw-inventory.eventlog-fallback.txt"
+if ([string]::IsNullOrWhiteSpace($StatePath)) {
+  $StatePath = Join-Path ([System.IO.Path]::GetTempPath()) 'sw-inventory.json'
+}
+$Script:FallbackEventLog = Join-Path ([System.IO.Path]::GetTempPath()) 'sw-inventory.eventlog-fallback.txt'
 
 $Script:DefaultCatalogJson = @"
 {

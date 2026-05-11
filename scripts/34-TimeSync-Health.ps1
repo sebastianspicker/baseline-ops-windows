@@ -78,7 +78,8 @@ param(
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
@@ -432,7 +433,7 @@ if (-not $NoConsoleSummary) {
     'Health'     = $healthLabel
   }
 
-  $findingsAL = [System.Collections.ArrayList]@($Findings)
+  $findingsAL = ConvertTo-ArrayList -InputObject $Findings
   Write-ConsoleSummary -Summary $result.Summary -Findings $findingsAL `
     -Title 'TimeSync Health Summary' `
     -CustomFields $customFields

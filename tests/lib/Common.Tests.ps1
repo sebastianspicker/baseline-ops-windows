@@ -16,7 +16,7 @@ param()
 BeforeAll {
   # Import the module
   $modulePath = Join-Path $PSScriptRoot '../../lib/Common.psm1'
-  Import-Module $modulePath -Force
+  Import-Module $modulePath -Force -DisableNameChecking
 
   # Test directory
   $tempRoot = if ([string]::IsNullOrWhiteSpace($env:TEMP)) { [System.IO.Path]::GetTempPath() } else { $env:TEMP }
@@ -141,8 +141,11 @@ Describe "Require-Admin" {
   }
 
   It "Accepts a custom message parameter" {
-    # Just verifies the parameter binding works; on non-Windows this warns rather than throwing
-    { Require-Admin -Message 'Custom admin message' } | Should -Not -Throw
+    if ($IsWindows -and -not (Test-IsAdmin)) {
+      { Require-Admin -Message 'Custom admin message' } | Should -Throw 'Custom admin message'
+    } else {
+      { Require-Admin -Message 'Custom admin message' } | Should -Not -Throw
+    }
   }
 }
 

@@ -74,7 +74,7 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
@@ -235,7 +235,7 @@ function Convert-ToDesiredObjectSafe {
     return ($InputValue | ConvertFrom-Json)
   } catch {
     $hint = if (Test-Path -LiteralPath $InputValue) { ' (file read failed or invalid JSON)' } else { ' (path not found; then tried as inline JSON and parse failed)' }
-    Add-Finding -Code 'SECOPT-DesiredLoadFailed' -Severity 'Medium' -Message ("Desired JSON could not be loaded/parsed{0}; continuing with baseline checks only. Error: {1}" -f $hint, $_.Exception.Message)
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredLoadFailed' -Severity 'Medium' -Message ("Desired JSON could not be loaded/parsed{0}; continuing with baseline checks only. Error: {1}" -f $hint, $_.Exception.Message)
     return $null
   }
 }
@@ -313,18 +313,18 @@ $script:CurrentValues.Add([pscustomobject]@{
 }) | Out-Null
 
 if ($null -eq $lmVal) {
-  Add-Finding -Code 'SECOPT-LmCompatibilityMissing' -Severity 'Info' -Message 'LmCompatibilityLevel is not set (policy/default may still apply).'
+  Add-Finding -FindingList $script:Findings -Code 'SECOPT-LmCompatibilityMissing' -Severity 'Info' -Message 'LmCompatibilityLevel is not set (policy/default may still apply).'
 } else {
   $lmValInt = [int]$lmVal
   if ($lmValInt -lt 3) {
-    Add-Finding -Code 'SECOPT-LmCompatibilityWeak' -Severity 'High' -Message ("LmCompatibilityLevel={0} is low (legacy/NTLM risk)." -f $lmValInt) -Extra @{ Level = $lmValInt }
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-LmCompatibilityWeak' -Severity 'High' -Message ("LmCompatibilityLevel={0} is low (legacy/NTLM risk)." -f $lmValInt) -Extra @{ Level = $lmValInt }
   }
 }
 
 if ($null -eq $uacVal) {
-  Add-Finding -Code 'SECOPT-UACMissing' -Severity 'Info' -Message 'EnableLUA is not set (policy/default may still apply).'
+  Add-Finding -FindingList $script:Findings -Code 'SECOPT-UACMissing' -Severity 'Info' -Message 'EnableLUA is not set (policy/default may still apply).'
 } elseif ([int]$uacVal -eq 0) {
-  Add-Finding -Code 'SECOPT-UACDisabled' -Severity 'High' -Message 'EnableLUA=0 indicates UAC is disabled; changes may require reboot/logoff.'
+  Add-Finding -FindingList $script:Findings -Code 'SECOPT-UACDisabled' -Severity 'High' -Message 'EnableLUA=0 indicates UAC is disabled; changes may require reboot/logoff.'
 }
 
 # -------------------------
@@ -337,9 +337,9 @@ if ($null -ne $desired) { $desiredLoaded = $true }
 
 if (-not $desiredLoaded) {
   if ([string]::IsNullOrWhiteSpace($DesiredJson)) {
-    Add-Finding -Code 'SECOPT-DesiredNotProvided' -Severity 'Info' -Message 'No DesiredJson provided; running baseline checks only.'
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredNotProvided' -Severity 'Info' -Message 'No DesiredJson provided; running baseline checks only.'
   } else {
-    Add-Finding -Code 'SECOPT-DesiredSkipped' -Severity 'Low' -Message 'Desired compare/remediation skipped because desired state is not available.'
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredSkipped' -Severity 'Low' -Message 'Desired compare/remediation skipped because desired state is not available.'
   }
 } else {
   foreach ($pathProp in $desired.PSObject.Properties) {
@@ -347,7 +347,7 @@ if (-not $desiredLoaded) {
     $vals = $pathProp.Value
 
     if (-not $vals -or -not $vals.PSObject -or $vals.PSObject.Properties.Count -eq 0) {
-      Add-Finding -Code 'SECOPT-DesiredEmptyPath' -Severity 'Low' -Message ("Desired JSON has no values under path: {0}" -f $path)
+      Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredEmptyPath' -Severity 'Low' -Message ("Desired JSON has no values under path: {0}" -f $path)
       continue
     }
 
@@ -364,13 +364,13 @@ if (-not $desiredLoaded) {
       }
 
       if ([string]::IsNullOrWhiteSpace($typeRaw)) {
-        Add-Finding -Code 'SECOPT-DesiredMalformed' -Severity 'Medium' -Message ("Desired JSON malformed at {0}\{1} (expected Type/Value)." -f $path, $name)
+        Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredMalformed' -Severity 'Medium' -Message ("Desired JSON malformed at {0}\{1} (expected Type/Value)." -f $path, $name)
         continue
       }
 
       $type = Normalize-RegistryType -TypeRaw $typeRaw
       if (-not $type) {
-        Add-Finding -Code 'SECOPT-DesiredBadType' -Severity 'Medium' -Message ("Unsupported registry type '{0}' for {1}\{2}." -f $typeRaw, $path, $name)
+        Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredBadType' -Severity 'Medium' -Message ("Unsupported registry type '{0}' for {1}\{2}." -f $typeRaw, $path, $name)
         continue
       }
 
@@ -378,7 +378,7 @@ if (-not $desiredLoaded) {
       try {
         $want = Normalize-ValueForType -Type $type -Value $valueRaw
       } catch {
-        Add-Finding -Code 'SECOPT-DesiredValueInvalid' -Severity 'Medium' -Message ("Desired value invalid for {0}\{1} (Type={2}): {3}" -f $path, $name, $type, $_.Exception.Message)
+        Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredValueInvalid' -Severity 'Medium' -Message ("Desired value invalid for {0}\{1} (Type={2}): {3}" -f $path, $name, $type, $_.Exception.Message)
         continue
       }
 
@@ -389,7 +389,7 @@ if (-not $desiredLoaded) {
         try {
           $haveNorm = Normalize-ValueForType -Type $type -Value $have
         } catch {
-          Add-Finding -Code 'SECOPT-CurrentNormalizeFailed' -Severity 'Low' -Message ("Could not normalize current value at {0}\{1} (Type={2}): {3}" -f $path, $name, $type, $_.Exception.Message)
+          Add-Finding -FindingList $script:Findings -Code 'SECOPT-CurrentNormalizeFailed' -Severity 'Low' -Message ("Could not normalize current value at {0}\{1} (Type={2}): {3}" -f $path, $name, $type, $_.Exception.Message)
           $haveNorm = $have
         }
       }
@@ -409,7 +409,7 @@ if (-not $desiredLoaded) {
       }
 
       if ($isDrift) {
-        Add-Finding -Code 'SECOPT-Drift' -Severity 'Medium' -Message ("Drift detected: {0}\{1} Current='{2}' Desired='{3}' (Type={4})." -f $path, $name, $have, $want, $type) -Extra @{ Path = $path; Name = $name; Current = $have; Desired = $want; Type = $type }
+        Add-Finding -FindingList $script:Findings -Code 'SECOPT-Drift' -Severity 'Medium' -Message ("Drift detected: {0}\{1} Current='{2}' Desired='{3}' (Type={4})." -f $path, $name, $have, $want, $type) -Extra @{ Path = $path; Name = $name; Current = $have; Desired = $want; Type = $type }
 
         if ($Mode -eq 'Remediate') {
           if ($PSCmdlet.ShouldProcess("$path\$name", "Set to '$want' ($type)")) {
@@ -418,7 +418,7 @@ if (-not $desiredLoaded) {
               $row.Remediated = $true
             } catch {
               $row.RemediateError = $_.Exception.Message
-              Add-Finding -Code 'SECOPT-RemediateFailed' -Severity 'High' -Message ("Remediation failed at {0}\{1}: {2}" -f $path, $name, $_.Exception.Message)
+              Add-Finding -FindingList $script:Findings -Code 'SECOPT-RemediateFailed' -Severity 'High' -Message ("Remediation failed at {0}\{1}: {2}" -f $path, $name, $_.Exception.Message)
             }
           }
         }
@@ -459,7 +459,7 @@ if ($ExportPath) {
 }
 
 if (-not $script:Quiet) {
-  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
   Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
     -CustomFields ([ordered]@{
       Mode          = $Mode
@@ -498,7 +498,7 @@ if (-not $script:Quiet) {
 
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '38-SecurityOptions-Drift.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $summary -Metadata @{ CurrentValues = [object[]]$script:CurrentValues; Drift = [object[]]$script:Drift; DesiredLoaded = $desiredLoaded }
+$v2Result = New-V2ResultObject -ScriptName '38-SecurityOptions-Drift.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ CurrentValues = [object[]]$script:CurrentValues; Drift = [object[]]$script:Drift; DesiredLoaded = $desiredLoaded }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

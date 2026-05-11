@@ -81,7 +81,7 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
@@ -173,7 +173,7 @@ function Load-Config {
   if ([string]::IsNullOrWhiteSpace($pathDisplay)) { $pathDisplay = "<empty>" }
 
   if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -Path $Path -PathType Leaf)) {
-    Add-Finding -Code 'CFG-NotFound' -Severity 'Info' -Message ("Config JSON not found; using defaults. Path='{0}'." -f $pathDisplay) -TypeName 'StorageAudit.Finding'
+    Add-Finding -FindingList $Findings -Code 'CFG-NotFound' -Severity 'Info' -Message ("Config JSON not found; using defaults. Path='{0}'." -f $pathDisplay) -TypeName 'StorageAudit.Finding'
     return $cfg
   }
 
@@ -197,7 +197,7 @@ function Load-Config {
     return $cfg
   }
   catch {
-    Add-Finding -Code 'CFG-InvalidJson' -Severity 'Info' -Message ("Config JSON invalid/unreadable; using defaults. Path='{0}'. Error='{1}'." -f $Path, $_.Exception.Message) -TypeName 'StorageAudit.Finding'
+    Add-Finding -FindingList $Findings -Code 'CFG-InvalidJson' -Severity 'Info' -Message ("Config JSON invalid/unreadable; using defaults. Path='{0}'. Error='{1}'." -f $Path, $_.Exception.Message) -TypeName 'StorageAudit.Finding'
     return $cfg
   }
 }
@@ -238,7 +238,7 @@ $Findings = New-FindingsList
 
 if (-not (Test-CmdletAvailable -Name 'Get-PhysicalDisk')) {
   Add-Finding -FindingList $Findings -Code 'STO-CmdletMissing' -Severity 'Critical' -Message 'Required cmdlet missing: Get-PhysicalDisk (Storage module/OS).' -TypeName 'StorageAudit.Finding'
-  $v2Result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings @($Findings.ToArray()) -Summary @{} -Metadata @{}
+  $v2Result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary @{} -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 1
@@ -246,7 +246,7 @@ if (-not (Test-CmdletAvailable -Name 'Get-PhysicalDisk')) {
 
 $hasReliability = Test-CmdletAvailable -Name 'Get-StorageReliabilityCounter'
 if (-not $hasReliability) {
-  Add-Finding -Code 'STO-ReliabilityCmdletMissing' -Severity 'Info' -Message 'Get-StorageReliabilityCounter is not available (OS/stack dependent).' -TypeName 'StorageAudit.Finding'
+  Add-Finding -FindingList $Findings -Code 'STO-ReliabilityCmdletMissing' -Severity 'Info' -Message 'Get-StorageReliabilityCounter is not available (OS/stack dependent).' -TypeName 'StorageAudit.Finding'
 }
 
 $Config = Load-Config -Path $ConfigJsonPath
@@ -261,16 +261,16 @@ foreach ($d in $disks) {
   $diskKey = Get-DiskKey -Disk $d
 
   if ($null -ne $d.HealthStatus -and $d.HealthStatus -ne 'Healthy') {
-    Add-Finding -Code 'STO-HealthNotHealthy' -Severity 'High' -Message ("Disk HealthStatus={0}." -f $d.HealthStatus) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+    Add-Finding -FindingList $Findings -Code 'STO-HealthNotHealthy' -Severity 'High' -Message ("Disk HealthStatus={0}." -f $d.HealthStatus) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
   }
 
   $op = @($d.OperationalStatus)
   if ($op.Count -gt 0 -and ($op -notcontains 'OK')) {
-    Add-Finding -Code 'STO-OperationalNotOK' -Severity 'High' -Message ("Disk OperationalStatus={0}." -f ($op -join ',')) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+    Add-Finding -FindingList $Findings -Code 'STO-OperationalNotOK' -Severity 'High' -Message ("Disk OperationalStatus={0}." -f ($op -join ',')) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
   }
 
   if ([string]::IsNullOrWhiteSpace([string]$d.SerialNumber)) {
-    Add-Finding -Code 'STO-SerialMissing' -Severity 'Low' -Message 'Disk SerialNumber is empty (provider/controller dependent).' -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+    Add-Finding -FindingList $Findings -Code 'STO-SerialMissing' -Severity 'Low' -Message 'Disk SerialNumber is empty (provider/controller dependent).' -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
   }
 }
 
@@ -310,31 +310,31 @@ if ($hasReliability) {
 
       if ($null -ne $r.Temperature) {
         if ($r.Temperature -ge $tHigh) {
-          Add-Finding -Code 'STO-TempHigh' -Severity 'High' -Message ("Temperature={0}C (>= {1}C)." -f $r.Temperature, $tHigh) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+          Add-Finding -FindingList $Findings -Code 'STO-TempHigh' -Severity 'High' -Message ("Temperature={0}C (>= {1}C)." -f $r.Temperature, $tHigh) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
         }
         elseif ($r.Temperature -ge $tWarn) {
-          Add-Finding -Code 'STO-TempWarn' -Severity 'Medium' -Message ("Temperature={0}C (>= {1}C)." -f $r.Temperature, $tWarn) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+          Add-Finding -FindingList $Findings -Code 'STO-TempWarn' -Severity 'Medium' -Message ("Temperature={0}C (>= {1}C)." -f $r.Temperature, $tWarn) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
         }
       }
 
       if ($null -ne $r.UncorrectableErrors -and $r.UncorrectableErrors -ge $thrUnc) {
-        Add-Finding -Code 'STO-UncorrectableErrors' -Severity 'High' -Message ("UncorrectableErrors={0} (>= {1})." -f $r.UncorrectableErrors, $thrUnc) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+        Add-Finding -FindingList $Findings -Code 'STO-UncorrectableErrors' -Severity 'High' -Message ("UncorrectableErrors={0} (>= {1})." -f $r.UncorrectableErrors, $thrUnc) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
       }
 
       if ($null -ne $r.ReadErrorsTotal -and $r.ReadErrorsTotal -ge $thrRead) {
-        Add-Finding -Code 'STO-ReadErrors' -Severity 'Medium' -Message ("ReadErrorsTotal={0} (>= {1})." -f $r.ReadErrorsTotal, $thrRead) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+        Add-Finding -FindingList $Findings -Code 'STO-ReadErrors' -Severity 'Medium' -Message ("ReadErrorsTotal={0} (>= {1})." -f $r.ReadErrorsTotal, $thrRead) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
       }
 
       if ($null -ne $r.WriteErrorsTotal -and $r.WriteErrorsTotal -ge $thrWrite) {
-        Add-Finding -Code 'STO-WriteErrors' -Severity 'Medium' -Message ("WriteErrorsTotal={0} (>= {1})." -f $r.WriteErrorsTotal, $thrWrite) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+        Add-Finding -FindingList $Findings -Code 'STO-WriteErrors' -Severity 'Medium' -Message ("WriteErrorsTotal={0} (>= {1})." -f $r.WriteErrorsTotal, $thrWrite) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
       }
 
       if ($null -ne $r.Wear -and $r.Wear -le $wearWarn) {
-        Add-Finding -Code 'STO-WearWarn' -Severity 'Medium' -Message ("Wear={0} (<= {1}; provider-dependent semantics)." -f $r.Wear, $wearWarn) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+        Add-Finding -FindingList $Findings -Code 'STO-WearWarn' -Severity 'Medium' -Message ("Wear={0} (<= {1}; provider-dependent semantics)." -f $r.Wear, $wearWarn) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
       }
     }
     catch {
-      Add-Finding -Code 'STO-ReliabilityUnavailable' -Severity 'Info' -Message ("ReliabilityCounter unavailable: {0}" -f $_.Exception.Message) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
+      Add-Finding -FindingList $Findings -Code 'STO-ReliabilityUnavailable' -Severity 'Info' -Message ("ReliabilityCounter unavailable: {0}" -f $_.Exception.Message) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $diskKey }
     }
   }
 }
@@ -362,7 +362,7 @@ if ($ExportPath) {
 }
 
 if (-not $NoConsole) {
-  $findingsAL = [System.Collections.ArrayList]@($Findings.ToArray())
+  $findingsAL = ConvertTo-ArrayList -InputObject $Findings.ToArray()
   Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
     -CustomFields ([ordered]@{
       PhysicalDisks   = $summary.PhysicalDisks
@@ -386,7 +386,7 @@ if (-not $NoConsole) {
 
 # V2 output contract
 $resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary $summary -Metadata @{ Disks = @($disks); Reliability = @($rel); Config = $Config }
+$v2Result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $summary -Metadata @{ Disks = @($disks); Reliability = @($rel); Config = $Config }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 

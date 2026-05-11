@@ -3,7 +3,8 @@
 [CmdletBinding()]
 param(
   [string]$RootPath = '',
-  [switch]$SkipAnalyzer
+  [switch]$SkipAnalyzer,
+  [switch]$RequireAnalyzer
 )
 
 Set-StrictMode -Version Latest
@@ -111,9 +112,17 @@ if (-not $SkipAnalyzer) {
       Write-Success -Message 'PSScriptAnalyzer: OK'
     } else {
       Write-Warn -Message "PSScriptAnalyzer settings not found: $settingsPath"
+      if ($RequireAnalyzer) {
+        Write-ErrorLine -Message 'PSScriptAnalyzer is required, but settings were not found.'
+        exit 1
+      }
     }
   } else {
     Write-Warn -Message 'Invoke-ScriptAnalyzer not available. Skipping analyzer.'
+    if ($RequireAnalyzer) {
+      Write-ErrorLine -Message 'PSScriptAnalyzer is required, but Invoke-ScriptAnalyzer is not available.'
+      exit 1
+    }
   }
 }
 

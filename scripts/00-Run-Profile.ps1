@@ -37,7 +37,7 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
@@ -170,11 +170,20 @@ $defaults = if (Has-Property -Object $profileDoc -Name 'Defaults') { $profileDoc
 $integrity = if (Has-Property -Object $profileDoc -Name 'Integrity') { $profileDoc.Integrity } else { [pscustomobject]@{} }
 $expectedHashes = if (Has-Property -Object $integrity -Name 'ExpectedHashes') { ConvertTo-HashtableSafe -InputObject $integrity.ExpectedHashes } else { @{} }
 
-# CLI parameters intentionally win over profile defaults: an operator invoking
-# the runner should be able to redirect output without editing the profile file.
-$globalMode = if ($PSBoundParameters.ContainsKey('Mode')) { $Mode } elseif (Has-Property -Object $defaults -Name 'Mode') { [string]$defaults.Mode } else { 'Audit' }
-$effectiveOutputFormat = if ($PSBoundParameters.ContainsKey('OutputFormat')) { $OutputFormat } elseif (Has-Property -Object $defaults -Name 'OutputFormat' -and -not [string]::IsNullOrWhiteSpace([string]$defaults.OutputFormat)) { [string]$defaults.OutputFormat } else { $OutputFormat }
-$effectiveOutputPath = if ($PSBoundParameters.ContainsKey('OutputPath')) { $OutputPath } elseif (Has-Property -Object $defaults -Name 'OutputPath' -and -not [string]::IsNullOrWhiteSpace([string]$defaults.OutputPath)) { [string]$defaults.OutputPath } else { $OutputPath }
+# Profile JSON is untrusted run input. The operator's CLI invocation owns
+# runner-level side effects such as remediation mode and output destinations.
+if (-not $PSBoundParameters.ContainsKey('Mode') -and (Has-Property -Object $defaults -Name 'Mode') -and [string]$defaults.Mode -eq 'Remediate') {
+  Write-Warning "Ignoring profile Defaults.Mode='Remediate'. Pass -Mode Remediate on the runner CLI to remediate."
+}
+if (-not $PSBoundParameters.ContainsKey('OutputFormat') -and (Has-Property -Object $defaults -Name 'OutputFormat') -and -not [string]::IsNullOrWhiteSpace([string]$defaults.OutputFormat)) {
+  Write-Warning "Ignoring profile Defaults.OutputFormat. Pass -OutputFormat on the runner CLI to change output format."
+}
+if (-not $PSBoundParameters.ContainsKey('OutputPath') -and (Has-Property -Object $defaults -Name 'OutputPath') -and -not [string]::IsNullOrWhiteSpace([string]$defaults.OutputPath)) {
+  Write-Warning "Ignoring profile Defaults.OutputPath. Pass -OutputPath on the runner CLI to write result output."
+}
+$globalMode = if ($PSBoundParameters.ContainsKey('Mode')) { $Mode } else { 'Audit' }
+$effectiveOutputFormat = $OutputFormat
+$effectiveOutputPath = $OutputPath
 $profileStrict = [bool]($Strict -or ((Has-Property -Object $defaults -Name 'Strict') -and $defaults.Strict))
 $profileRequireSigned = [bool]($RequireSigned -or ((Has-Property -Object $integrity -Name 'RequireSigned') -and $integrity.RequireSigned))
 
@@ -238,16 +247,8 @@ while ($pending.Count -gt 0) {
       $stepArgs += @($step.Args)
     }
 
-    # Profile steps must not override runner-owned path, integrity, or confirmation controls.
-    $stepArgs = @(Remove-ProfileStepBlockedArgs -ArgsList $stepArgs -BlockedNames @('RootPath', 'ConfigPath', 'ExpectedHash', 'Confirm', 'WhatIf') -ScriptName $scriptName)
-
-    # Legacy profile compatibility: normalize removed v1 token "-Remediate" to v2 mode.
-    if (@($stepArgs | Where-Object { [string]$_ -ieq '-Remediate' }).Count -gt 0) {
-      $stepArgs = @($stepArgs | Where-Object { [string]$_ -ine '-Remediate' })
-      if (-not (Test-StepArgHasToken -ArgsList $stepArgs -Name 'Mode')) {
-        $stepArgs += @('-Mode','Remediate')
-      }
-    }
+    # Profile steps must not override runner-owned mode, path, integrity, or confirmation controls.
+    $stepArgs = @(Remove-ProfileStepBlockedArgs -ArgsList $stepArgs -BlockedNames @('Mode', 'Remediate', 'RootPath', 'ConfigPath', 'ExpectedHash', 'Confirm', 'WhatIf') -ScriptName $scriptName)
 
     if (-not (Test-StepArgHasToken -ArgsList $stepArgs -Name 'Mode')) {
       $stepArgs += @('-Mode', $globalMode)
@@ -383,6 +384,7 @@ if ($PassThru) {
   $runResult
 }
 
+if ($WhatIfPreference -and $failed -eq 0) { exit 0 }
 if ($failed -gt 0) { exit 1 }
 if ($partial -gt 0 -or $skipped -gt 0) { exit 2 }
 exit 0

@@ -60,10 +60,19 @@ $allowedExt = @(
 
 $files = @()
 if (Get-Command -Name git -ErrorAction SilentlyContinue) {
-  $files = & git -C $RootPath ls-files
-  $files = $files | ForEach-Object { Join-Path $RootPath $_ }
-} else {
-  Write-Warning 'git not found; falling back to recursive file scan.'
+  $gitRootCheck = & git -C $RootPath rev-parse --is-inside-work-tree 2>$null
+  if ($LASTEXITCODE -eq 0 -and [string]$gitRootCheck -eq 'true') {
+    $files = & git -C $RootPath ls-files
+    $files = $files | ForEach-Object { Join-Path $RootPath $_ }
+  }
+
+  if (-not $files -or @($files).Count -eq 0) {
+    $global:LASTEXITCODE = 0
+  }
+}
+
+if (-not $files -or @($files).Count -eq 0) {
+  Write-Warning 'git tracked-file list unavailable; falling back to recursive file scan.'
   $files = Get-ChildItem -Path $RootPath -File -Recurse | ForEach-Object { $_.FullName }
 }
 
@@ -83,6 +92,7 @@ foreach ($f in $files) {
 $findings = New-Object System.Collections.Generic.List[object]
 
 foreach ($p in $patterns) {
+  if (-not $filtered -or @($filtered).Count -eq 0) { break }
   $patternMatches = Select-String -Path $filtered -Pattern $p.Regex -AllMatches -ErrorAction SilentlyContinue
   foreach ($m in $patternMatches) {
     $findings.Add([pscustomobject]@{

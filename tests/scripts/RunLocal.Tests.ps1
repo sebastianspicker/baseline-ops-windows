@@ -64,7 +64,7 @@ exit 1
 
       $linkPath = Join-Path $scriptsDir '01-Link.ps1'
       try {
-        New-Item -ItemType SymbolicLink -Path $linkPath -Target (Join-Path $outsideDir 'evil.ps1') -Force | Out-Null
+        New-Item -ItemType SymbolicLink -Path $linkPath -Target (Join-Path $outsideDir 'evil.ps1') -Force -ErrorAction Stop | Out-Null
       } catch {
         Set-ItResult -Skipped -Because 'Symbolic links are not available in this environment.'
         return

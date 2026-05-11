@@ -9,6 +9,25 @@ Provides functions to read JSON configuration files, merge them with built-in
 defaults, and convert PSCustomObjects to hashtables.
 #>
 
+function Sanitize-ConfigPath {
+  [CmdletBinding()]
+  param(
+    [string]$Path,
+    [switch]$MustExist
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+
+  try {
+    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+    if ([string]::IsNullOrWhiteSpace($expanded) -or $expanded -match '\.\.') { return $null }
+    if ($MustExist -and -not (Test-Path -LiteralPath $expanded)) { return $null }
+    return [System.IO.Path]::GetFullPath($expanded)
+  } catch {
+    return $null
+  }
+}
+
 <#
 .SYNOPSIS
   Converts a PSCustomObject to a hashtable.
@@ -70,7 +89,7 @@ function Read-ConfigWithDefaults {
   $config = @{}
   foreach ($k in $Defaults.Keys) { $config[$k] = $Defaults[$k] }
 
-  $sanitized = if ([string]::IsNullOrWhiteSpace($Path)) { $null } else { Sanitize-Path -Path $Path -MustExist }
+  $sanitized = if ([string]::IsNullOrWhiteSpace($Path)) { $null } else { Sanitize-ConfigPath -Path $Path -MustExist }
   if (-not $sanitized) {
     if ([string]::IsNullOrWhiteSpace($Path)) {
         $meta.UsedDefaultsBecause = 'No ConfigPath provided.'

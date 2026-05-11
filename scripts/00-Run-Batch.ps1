@@ -4,7 +4,7 @@
 Run a categorized batch of scripts via profile orchestration.
 #>
 
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
   [ValidateSet('All','Audit','Remediation','Collection','Utility','Monitoring')]
   [string]$Category = 'Audit',

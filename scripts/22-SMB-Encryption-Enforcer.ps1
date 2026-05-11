@@ -179,9 +179,9 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
@@ -463,7 +463,7 @@ if ($EnableRejectUnencryptedAccess -and -not $hasRejectUnencryptedAccess) {
   $msg = 'RejectUnencryptedAccess is not available on this OS/build. Cannot enable it.'
   Write-Warning $msg
   Add-Finding -FindingList $script:Findings -Code 'SMB-UnsupportedFeature' -Severity 'Critical' -Message $msg
-  $v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings @($script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+  $v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 1
@@ -472,7 +472,7 @@ if ($ApplyClientRequireEncryption -and -not $hasClientRequireEncryption) {
   $msg = 'Client RequireEncryption is not available on this OS/build. Cannot enable it.'
   Write-Warning $msg
   Add-Finding -FindingList $script:Findings -Code 'SMB-UnsupportedFeature' -Severity 'Critical' -Message $msg
-  $v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings @($script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+  $v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 1
@@ -499,14 +499,14 @@ try {
 
     'Audit' {
       if (-not $serverCfgBefore.EncryptData) {
-        Add-Finding -Code 'SMB-Encryption-Disabled' -Severity 'Medium' -Message 'Server-wide SMB encryption is disabled.'
+        Add-Finding -FindingList $script:Findings -Code 'SMB-Encryption-Disabled' -Severity 'Medium' -Message 'Server-wide SMB encryption is disabled.'
       }
       if ($hasRejectUnencryptedAccess -and -not $serverCfgBefore.RejectUnencryptedAccess) {
-        Add-Finding -Code 'SMB-RejectUnencrypted-Disabled' -Severity 'Low' -Message 'SMB server RejectUnencryptedAccess is disabled.'
+        Add-Finding -FindingList $script:Findings -Code 'SMB-RejectUnencrypted-Disabled' -Severity 'Low' -Message 'SMB server RejectUnencryptedAccess is disabled.'
       }
       foreach ($s in $sharesBefore) {
         if (-not $s.EncryptData) {
-          Add-Finding -Code 'SMB-Share-NotEncrypted' -Severity 'Low' -Message "Share '$($s.Name)' encryption is disabled." -Extra @{ Share = $s.Name }
+          Add-Finding -FindingList $script:Findings -Code 'SMB-Share-NotEncrypted' -Severity 'Low' -Message "Share '$($s.Name)' encryption is disabled." -Extra @{ Share = $s.Name }
         }
       }
     }
@@ -624,7 +624,7 @@ try {
 
   # Console-only output (no pipeline pollution)
   $summaryObj = [pscustomobject]@{ ComputerName = $result.ComputerName; StartTime = $result.Started; EndTime = $result.Finished }
-  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
   Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
     -CustomFields ([ordered]@{
       Mode             = $result.Mode
@@ -654,7 +654,7 @@ try {
 
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result -Metadata @{}
+$v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

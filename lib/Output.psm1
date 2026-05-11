@@ -380,12 +380,17 @@ function Write-KeyValue {
   param(
     [Parameter(Mandatory)][string]$Key,
     [AllowNull()][AllowEmptyString()][string]$Value,
-    [int]$KeyWidth = $script:UiDefaults.KeyWidth,
+    [object]$KeyWidth = $script:UiDefaults.KeyWidth,
     [Alias('KeyColor')][object]$KeyStyle = 'Muted',
-    [Alias('ValueColor','ValueRole')][object]$ValueStyle = 'Info',
+    [Alias('ValueColor','ValueRole','Color','Level','Style')][object]$ValueStyle = 'Info',
     [int]$Indent = 0,
     [string]$EmptyValueText = '(empty)'
   )
+
+  if ($KeyWidth -isnot [int]) {
+    if ($null -ne $KeyWidth) { $ValueStyle = $KeyWidth }
+    $KeyWidth = $script:UiDefaults.KeyWidth
+  }
 
   $prefix = if ($Indent -gt 0) { ' ' * $Indent } else { '' }
   $valueText = if ([string]::IsNullOrWhiteSpace($Value)) { $EmptyValueText } else { $Value }
@@ -429,9 +434,15 @@ function Write-UiBullet {
 function Write-UiList {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory)][AllowEmptyString()][string[]]$Items,
-    [object]$Style = 'Info'
+    [string]$Header,
+    [AllowNull()][AllowEmptyString()][string[]]$Items,
+    [Alias('Color','ItemColor')][object]$Style = 'Info',
+    [object]$HeaderColor = 'Info'
   )
+  if ($null -eq $Items -or @($Items).Count -eq 0) { return }
+  if (-not [string]::IsNullOrWhiteSpace($Header)) {
+    Write-UiLine -Message $Header -Style $HeaderColor
+  }
   foreach ($item in @($Items)) {
     Write-UiLine -Message ("  - " + $item) -Style $Style
   }

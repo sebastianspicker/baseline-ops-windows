@@ -113,7 +113,7 @@ param(
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
@@ -220,7 +220,7 @@ function Merge-ConfigObject {
 function Get-ConfigFromJson {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory)][string]$Path,
+    [string]$Path,
     [Parameter(Mandatory)]$DefaultsObject
   )
   $cfg = Copy-ObjectDeep -InputObject $DefaultsObject -Depth 12
@@ -597,7 +597,7 @@ try {
     }
     if ($isWin -and ($null -eq $result.BackupDirectoryRaw -or $result.BackupDirectoryRaw -eq 0)) {
       $reasonsList.Add("BackupDirectory is not configured or disabled")
-      Add-Finding -Code 'LAPS-MissingBackup' -Severity 'High' -Message "Windows LAPS backup directory is not configured or is disabled."
+      Add-Finding -FindingList $script:Findings -Code 'LAPS-MissingBackup' -Severity 'High' -Message "Windows LAPS backup directory is not configured or is disabled."
     }
   }
   if ($result.NeedsRotate -and $Remediate -and $isWin) {
@@ -627,13 +627,13 @@ try {
   if ($Remediate -and $isLeg -and $result.NeedsRotate) { $ok = $false; $reasonsList.Add("Remediation for Legacy LAPS is not implemented") }
   $result.OkOverall = $ok
   if (-not $result.OkOverall) {
-      Add-Finding -Code 'LAPS-NotCompliant' -Severity 'Medium' -Message "LAPS health check failed: $([string]::Join('; ', $result.Reasons))" -Extra @{ Reasons = $result.Reasons }
+      Add-Finding -FindingList $script:Findings -Code 'LAPS-NotCompliant' -Severity 'Medium' -Message "LAPS health check failed: $([string]::Join('; ', $result.Reasons))" -Extra @{ Reasons = $result.Reasons }
   }
 } catch {
   $result.OkOverall = $false
   $msg = "Unhandled error: $($_.Exception.Message)"
   $reasonsList.Add($msg)
-  Add-Finding -Code 'LAPS-Error' -Severity 'High' -Message $msg
+  Add-Finding -FindingList $script:Findings -Code 'LAPS-Error' -Severity 'High' -Message $msg
 }
 $result.Reasons = @($reasonsList)
 # Event log (best effort)
@@ -702,7 +702,7 @@ if ($result.DiagnosticsCollected) {
 }
 # V2 output contract
 $resultToken = if (-not $result.OkOverall) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result -Metadata @{}
+$v2Result = New-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 # Exit code for CI/MDM

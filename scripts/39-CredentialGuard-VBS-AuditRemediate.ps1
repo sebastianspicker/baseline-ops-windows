@@ -99,8 +99,8 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
@@ -326,27 +326,27 @@ $current = [pscustomobject]@{
 # -----------------------------
 
 if ($null -eq $current.EnableVirtualizationBasedSecurity) {
-  Add-Finding -Code 'CG-VBS-NotConfigured' -Severity 'High' -Message 'VBS not configured (registry key absent).'
+  Add-Finding -FindingList $Findings -Code 'CG-VBS-NotConfigured' -Severity 'High' -Message 'VBS not configured (registry key absent).'
 } elseif ($current.EnableVirtualizationBasedSecurity -ne 1) {
-  Add-Finding -Code 'CG-VBS-NotEnabled' -Severity 'High' -Message 'EnableVirtualizationBasedSecurity is not 1.'
+  Add-Finding -FindingList $Findings -Code 'CG-VBS-NotEnabled' -Severity 'High' -Message 'EnableVirtualizationBasedSecurity is not 1.'
 }
 
 if ($null -eq $current.RequirePlatformSecurityFeatures) {
-  Add-Finding -Code 'CG-PlatformSecurityFeatures-NotConfigured' -Severity 'Medium' -Message 'RequirePlatformSecurityFeatures not configured (registry key absent).'
+  Add-Finding -FindingList $Findings -Code 'CG-PlatformSecurityFeatures-NotConfigured' -Severity 'Medium' -Message 'RequirePlatformSecurityFeatures not configured (registry key absent).'
 } elseif ($current.RequirePlatformSecurityFeatures -notin 1, 3) {
-  Add-Finding -Code 'CG-PlatformSecurityFeatures-Invalid' -Severity 'Medium' -Message 'RequirePlatformSecurityFeatures is not 1 or 3.'
+  Add-Finding -FindingList $Findings -Code 'CG-PlatformSecurityFeatures-Invalid' -Severity 'Medium' -Message 'RequirePlatformSecurityFeatures is not 1 or 3.'
 }
 
 if ($null -eq $current.LsaCfgFlags) {
-  Add-Finding -Code 'CG-LsaCfgFlags-NotConfigured' -Severity 'Medium' -Message 'LsaCfgFlags not configured (registry key absent).'
+  Add-Finding -FindingList $Findings -Code 'CG-LsaCfgFlags-NotConfigured' -Severity 'Medium' -Message 'LsaCfgFlags not configured (registry key absent).'
 } elseif ($current.LsaCfgFlags -notin 0, 1, 2) {
-  Add-Finding -Code 'CG-LsaCfgFlags-Invalid' -Severity 'Medium' -Message ("LsaCfgFlags has an unexpected value: {0}" -f $current.LsaCfgFlags)
+  Add-Finding -FindingList $Findings -Code 'CG-LsaCfgFlags-Invalid' -Severity 'Medium' -Message ("LsaCfgFlags has an unexpected value: {0}" -f $current.LsaCfgFlags)
 } elseif ($current.LsaCfgFlags -eq 0) {
-  Add-Finding -Code 'CG-LsaCfgFlags-Disabled' -Severity 'High' -Message 'LsaCfgFlags=0 (Credential Guard configured as disabled).'
+  Add-Finding -FindingList $Findings -Code 'CG-LsaCfgFlags-Disabled' -Severity 'High' -Message 'LsaCfgFlags=0 (Credential Guard configured as disabled).'
 }
 
 if ($current.LsaCfgFlags -eq 1 -and $Mode -eq 'Remediate' -and $effective.LsaCfgFlags -ne 1) {
-  Add-Finding -Code 'CG-UEFI-Lock-Note' -Severity 'Low' -Message 'LsaCfgFlags=1 (UEFI lock) may prevent changing/disabling it via registry.'
+  Add-Finding -FindingList $Findings -Code 'CG-UEFI-Lock-Note' -Severity 'Low' -Message 'LsaCfgFlags=1 (UEFI lock) may prevent changing/disabling it via registry.'
 }
 
 # -----------------------------
@@ -467,7 +467,7 @@ if ($effective.ShowSummary) {
 
 # V2 output contract
 $resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After; Config = $result.Config }
+$v2Result = New-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After; Config = $result.Config }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

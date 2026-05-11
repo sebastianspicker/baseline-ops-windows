@@ -129,12 +129,12 @@ param(
   [switch]$NoColor
 )
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Evidence.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 # v2-init
@@ -178,8 +178,8 @@ Set-StrictMode -Version Latest
 # -----------------------------
 # Globals / Defaults (anonymized)
 # -----------------------------
-$DefaultProofOutFile = $null
-$DefaultEvidenceDir  = $null
+$DefaultProofOutFile = Join-Path ([System.IO.Path]::GetTempPath()) 'IOC-Sweep-Defender-proof.json'
+$DefaultEvidenceDir  = Join-Path ([System.IO.Path]::GetTempPath()) 'IOC-Sweep-Defender-evidence'
 # -----------------------------
 # Console helpers (host-only)
 # -----------------------------
@@ -222,14 +222,14 @@ function New-DefaultCatalog {
 function Load-Catalog {
   param([string]$CatalogPath,[string]$ConfigPath)
   $res = [ordered]@{ Catalog = $null; Source = 'Default'; Errors = @() }
-  $sanitizedCatalog = Sanitize-Path -Path $CatalogPath -MustExist
+  $sanitizedCatalog = if ([string]::IsNullOrWhiteSpace($CatalogPath)) { $null } else { Sanitize-Path -Path $CatalogPath -MustExist }
   if ($sanitizedCatalog) {
     $c = Read-JsonFileSafe -Path $sanitizedCatalog
     if ($c) { $res.Catalog = $c; $res.Source = 'CatalogPath'; return $res }
     $res.Errors += ("CatalogPath not loaded: {0}" -f $sanitizedCatalog)
   }
   $cfg = $null
-  $sanitizedConfig = Sanitize-Path -Path $ConfigPath -MustExist
+  $sanitizedConfig = if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $null } else { Sanitize-Path -Path $ConfigPath -MustExist }
   if ($sanitizedConfig) {
     $cfg = Read-JsonFileSafe -Path $sanitizedConfig
     if (-not $cfg) { $res.Errors += ("ConfigPath not loaded: {0}" -f $sanitizedConfig) }
@@ -314,7 +314,7 @@ $Proof = [ordered]@{
     PassThru         = [bool]$PassThru
   }
   Catalog   = @{ Source = ""; Errors = @() }
-  Scan      = @{}
+  Scan      = [pscustomobject]@{}
   Findings  = @{
     Files     = @()
     Registry  = @()
@@ -378,7 +378,7 @@ try {
         $scanInfo.Result = "exit:$($p.ExitCode)"
       }
     }
-    $Proof.Scan = $scanInfo
+    $Proof.Scan = [pscustomobject]$scanInfo
   } catch {
     $Proof.Errors += "Defender scan failed: $($_.Exception.Message)"
     $ok = $false
@@ -417,7 +417,7 @@ try {
         Match     = [ordered]@{ Sha256 = $matchSha; Signer = $matchSig }
       }
       $Proof.Findings.Files += $finding
-      Add-Finding -Code 'IOC-FileMatch' -Severity 'High' -Message "IOC file match: $p" -Extra $finding
+      Add-Finding -FindingList $script:Findings -Code 'IOC-FileMatch' -Severity 'High' -Message "IOC file match: $p" -Extra $finding
     }
   }
   foreach ($g in @($cat.FileGlobs)) {
@@ -491,7 +491,7 @@ try {
           Action   = (Get-ObjPropValue $r 'Action')
         }
         $Proof.Findings.Registry += $finding
-        Add-Finding -Code 'IOC-RegistryMatch' -Severity 'High' -Message "IOC registry match: $path" -Extra $finding
+        Add-Finding -FindingList $script:Findings -Code 'IOC-RegistryMatch' -Severity 'High' -Message "IOC registry match: $path" -Extra $finding
         if ($Remediate -and ((Get-ObjPropValue $r 'Action') -eq 'neutralize')) {
           try {
             if ($PSCmdlet.ShouldProcess($path, 'Neutralize registry value')) {
@@ -531,7 +531,7 @@ try {
           Action      = $action
         }
         $Proof.Findings.Services += $finding
-        Add-Finding -Code 'IOC-ServiceMatch' -Severity 'High' -Message "IOC service match: $($svc.Name)" -Extra $finding
+        Add-Finding -FindingList $script:Findings -Code 'IOC-ServiceMatch' -Severity 'High' -Message "IOC service match: $($svc.Name)" -Extra $finding
         if ($Remediate -and ($action -in @('disable','stop'))) {
           try {
             if ($PSCmdlet.ShouldProcess($svc.Name, "Contain service ($action)")) {
@@ -572,7 +572,7 @@ try {
           Action  = $action
         }
         $Proof.Findings.Tasks += $finding
-        Add-Finding -Code 'IOC-TaskMatch' -Severity 'High' -Message "IOC task match: $full" -Extra $finding
+        Add-Finding -FindingList $script:Findings -Code 'IOC-TaskMatch' -Severity 'High' -Message "IOC task match: $full" -Extra $finding
         if ($Remediate -and ($action -eq 'disable')) {
           try {
             if ($PSCmdlet.ShouldProcess($full, 'Disable scheduled task')) {
@@ -614,7 +614,7 @@ try {
           Action    = (Get-ObjPropValue $pRule 'Action')
         }
         $Proof.Findings.Processes += $finding
-        Add-Finding -Code 'IOC-ProcessMatch' -Severity 'High' -Message "IOC process match: $($pr.Name) ($($pr.Id))" -Extra $finding
+        Add-Finding -FindingList $script:Findings -Code 'IOC-ProcessMatch' -Severity 'High' -Message "IOC process match: $($pr.Name) ($($pr.Id))" -Extra $finding
       }
     }
   }
@@ -640,7 +640,7 @@ try {
             ProcessName   = $pName
           }
           $nFind += $finding
-          Add-Finding -Code 'IOC-NetworkIPMatch' -Severity 'High' -Message "IOC network match: IP $($c.RemoteAddress)" -Extra $finding
+          Add-Finding -FindingList $script:Findings -Code 'IOC-NetworkIPMatch' -Severity 'High' -Message "IOC network match: IP $($c.RemoteAddress)" -Extra $finding
         }
       }
     }
@@ -665,7 +665,7 @@ try {
                 Data  = $dat
               }
               $nFind += $finding
-              Add-Finding -Code 'IOC-NetworkDomainMatch' -Severity 'High' -Message "IOC network match: Domain $entry" -Extra $finding
+              Add-Finding -FindingList $script:Findings -Code 'IOC-NetworkDomainMatch' -Severity 'High' -Message "IOC network match: Domain $entry" -Extra $finding
             }
           }
         }
@@ -734,8 +734,8 @@ if (@($Proof.Catalog.Errors).Count -gt 0) {
 } else {
   Write-UiStatus -Label "Catalog load" -State "OK" -Detail "No issues"
 }
-$scanReq = Get-OrDefault $Proof.Scan.Requested "n/a"
-$scanRes = Get-OrDefault $Proof.Scan.Result "n/a"
+$scanReq = Get-OrDefault (Get-ObjPropValue $Proof.Scan 'Requested') "n/a"
+$scanRes = Get-OrDefault (Get-ObjPropValue $Proof.Scan 'Result') "n/a"
 Write-KeyValue "Scan" ("{0} -> {1}" -f $scanReq, $scanRes) Cyan
 Write-KeyValue "Proof" $outFile Gray
 Write-KeyValue "Evidence" $evDir Gray
@@ -775,8 +775,7 @@ if ($errCount -gt 0) {
 }
 # V2 output contract
 $resultToken = if ($exitCode -ne 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '11-IOC-Sweep-Defender.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $Proof -Metadata @{}
+$v2Result = New-V2ResultObject -ScriptName '11-IOC-Sweep-Defender.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $Proof -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit $exitCode
-

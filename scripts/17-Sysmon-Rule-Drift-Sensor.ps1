@@ -183,10 +183,10 @@ param(
   [switch]$NoColor
 )
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
@@ -371,7 +371,11 @@ function Get-SysmonChannelStatus {
   try {
     # S9 fix: use Invoke-Wevtutil wrapper with array-based args instead of direct wevtutil call
     $wevtResult = Invoke-Wevtutil -Arguments @('gl', $script:SysmonLogName, '/f:xml') -CaptureOutput
-    $xml = if ($wevtResult -and $wevtResult.Output) { $wevtResult.Output } else { $null }
+    if ($wevtResult -and -not $wevtResult.Success) {
+      $info.Error = (@($wevtResult.Output) -join [Environment]::NewLine).Trim()
+      return $info
+    }
+    $xml = if ($wevtResult -and $wevtResult.Output) { (@($wevtResult.Output) -join [Environment]::NewLine) } else { $null }
     if (-not $xml) { return $info }
     $x = [xml]$xml
     $info.Exists = $true

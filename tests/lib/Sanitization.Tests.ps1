@@ -18,7 +18,7 @@ param()
 
 BeforeAll {
   $script:LibPath = Join-Path $PSScriptRoot '../../lib'
-  Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+  Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
   Import-Module (Join-Path $script:LibPath 'Config.psm1')  -Force
 
   $script:TempDir  = Join-Path ([System.IO.Path]::GetTempPath()) 'SanitizationTests'

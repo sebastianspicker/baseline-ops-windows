@@ -77,11 +77,11 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
@@ -230,8 +230,8 @@ if (-not $Quiet -and $OutputFormat -eq 'Console') {
 }
 
 $resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' }
-  elseif (($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'FAIL' }
-  elseif (($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARN' }
+  elseif (@($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'FAIL' }
+  elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARN' }
   else { 'OK' }
 
 $v2Result = New-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -Mode $Mode `

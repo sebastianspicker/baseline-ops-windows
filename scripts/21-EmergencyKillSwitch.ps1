@@ -145,7 +145,7 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
@@ -164,11 +164,7 @@ $script:__V2Context = @{
   Quiet = [bool]$Quiet
   NoColor = [bool]$NoColor
 }
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
+$Remediate = ($Mode -eq 'Remediate')
 if ($Quiet) {
   $InformationPreference = 'SilentlyContinue'
   $VerbosePreference = 'SilentlyContinue'
@@ -419,8 +415,8 @@ try {
     Write-RollbackLog 'Firewall profiles restored from saved pre-kill-switch state'
     Remove-Item -LiteralPath `$fwStatePath -Force -ErrorAction SilentlyContinue
   } else {
-    Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Allow -DefaultOutboundAction Allow
-    Write-RollbackLog 'No saved firewall state found; firewall profiles reset to Allow (fallback)'
+    Write-RollbackLog 'No saved firewall state found; refusing unsafe Allow/Allow fallback'
+    throw 'No saved firewall state found; refusing to apply unsafe firewall profile fallback.'
   }
   try {
     Get-NetFirewallRule -Name '$($RuleNames -join "','")' | Remove-NetFirewallRule -ErrorAction Stop
@@ -559,20 +555,33 @@ $RuleNames   = @($RuleInName, $RuleOutName, $RuleBgName)
 # -------------------- Execution
 $Run.IsAdmin = Test-IsAdmin
 
-Ensure-EventSource -Source $Run.Effective.EventSource -Log $Run.Effective.EventLog
+if ($Remediate) {
+  Ensure-EventSource -Source $Run.Effective.EventSource -Log $Run.Effective.EventLog
+}
 
-if (-not $Run.IsAdmin) {
+if (-not $Run.IsAdmin -and $Remediate) {
   Write-UiHeader -Title "Kill Switch"
   Write-UiLine -Text "ERROR: Admin privileges required. Aborting." -Color Red
 
-  Write-HealthEvent -Log $Run.Effective.EventLog -Source $Run.Effective.EventSource -Id $Run.Effective.EventId `
-    -Msg "KillSwitch aborted: admin privileges required." -Level 'Error'
+  if ($Remediate) {
+    Write-HealthEvent -Log $Run.Effective.EventLog -Source $Run.Effective.EventSource -Id $Run.Effective.EventId `
+      -Msg "KillSwitch aborted: admin privileges required." -Level 'Error'
+  }
 
   Invoke-KillSwitchConsoleSummary
   [pscustomobject]$Run
   return
 }
 
+if (-not $Remediate) {
+  Update-Outcome
+
+  Write-UiHeader -Title "Kill Switch"
+  Write-UiLine -Text "Audit mode: no kill switch actions applied." -Color Yellow
+  Write-KeyValue -Key 'Reason' -Value $Run.Effective.Reason -ValueColor Cyan
+  Write-KeyValue -Key 'BreakGlass' -Value ($Run.Effective.BreakGlassRemoteAddress -join ', ')
+  Write-KeyValue -Key 'AutoRollbackMinutes' -Value $Run.Effective.AutoRollbackMinutes
+} else {
 try {
   if ($PSCmdlet.ShouldProcess($Run.Effective.RegKey, "Write quarantine registry flag")) {
     Set-QuarantineFlag -RegKey $Run.Effective.RegKey -ReasonText $Run.Effective.Reason -IncludeUser $Run.Effective.IncludeUserInRegistry
@@ -704,6 +713,7 @@ catch {
 finally {
   # Always write console summary, even if an exception is thrown.
   try { Invoke-KillSwitchConsoleSummary } catch { Write-UiLine "Summary failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+}
 }
 
 # V2 output contract

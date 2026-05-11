@@ -120,7 +120,7 @@ param(
   [switch]$NoColor
 )
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
@@ -663,7 +663,7 @@ foreach ($n in @('Domain','Private','Public')) {
   foreach ($r in $resArr) {
       $results.Add($r)
       if ($r.Status -eq 'Drift') {
-          Add-Finding -Code 'FW-Profile-Drift' -Severity 'Medium' -Message "Firewall profile drift: $($r.Target)" -Extra @{ Profile = $r.Target; Detail = $r.Detail }
+          Add-Finding -FindingList $script:Findings -Code 'FW-Profile-Drift' -Severity 'Medium' -Message "Firewall profile drift: $($r.Target)" -Extra @{ Profile = $r.Target; Detail = $r.Detail }
       }
   }
 }
@@ -673,7 +673,7 @@ $inboundResults = Disable-InboundByNameLike -Patterns $patterns -Remediate:$Reme
 foreach ($r in $inboundResults) {
     $results.Add($r)
     if ($r.Status -eq 'Drift') {
-        Add-Finding -Code 'FW-InboundRule-Enabled' -Severity 'Medium' -Message "Risky inbound rule enabled: $($r.DisplayName)" -Extra @{ Name = $r.Name; DisplayName = $r.DisplayName; Pattern = $r.Target }
+        Add-Finding -FindingList $script:Findings -Code 'FW-InboundRule-Enabled' -Severity 'Medium' -Message "Risky inbound rule enabled: $($r.DisplayName)" -Extra @{ Name = $r.Name; DisplayName = $r.DisplayName; Pattern = $r.Target }
     }
 }
 # Ensure rules
@@ -683,7 +683,7 @@ foreach ($rule in $ensureRules) {
   foreach ($r in $ensureResults) {
       $results.Add($r)
       if ($r.Status -eq 'Drift') {
-          Add-Finding -Code 'FW-EnsureRule-Drift' -Severity 'Medium' -Message "Required firewall rule drift/missing: $($r.Target)" -Extra @{ RuleId = $r.Target; Detail = $r.Detail; Name = $r.Name; DisplayName = $r.DisplayName }
+          Add-Finding -FindingList $script:Findings -Code 'FW-EnsureRule-Drift' -Severity 'Medium' -Message "Required firewall rule drift/missing: $($r.Target)" -Extra @{ RuleId = $r.Target; Detail = $r.Detail; Name = $r.Name; DisplayName = $r.DisplayName }
       }
   }
 }
@@ -704,7 +704,7 @@ $eventSummary = "Mode={0}; Elevated={1}; PolicyStore={2}; Changed={3}; Drift={4}
 Write-HealthEvent -Id $eventId -Message $eventSummary -Level $level -Source $EventSource -LogName $EventLogName
 if ($ConsoleSummary) {
   $summaryObj = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; Duration = $duration }
-  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
   Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
     -CustomFields ([ordered]@{
       Mode        = $(if ($Remediate) { 'Remediate' } else { 'Audit' })
@@ -734,7 +734,7 @@ if ($ConsoleSummary) {
 }
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '18-Firewall-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; Duration = $duration }) -Metadata @{ Results = $results }
+$v2Result = New-V2ResultObject -ScriptName '18-Firewall-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; Duration = $duration }) -Metadata @{ Results = $results }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

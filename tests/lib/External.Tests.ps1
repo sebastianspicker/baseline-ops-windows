@@ -14,7 +14,7 @@ param()
 $script:SkipWindowsTests = (-not $IsWindows)
 
 BeforeAll {
-  Import-Module (Join-Path $PSScriptRoot '../../lib/External.psm1') -Force
+  Import-Module (Join-Path $PSScriptRoot '../../lib/External.psm1') -Force -DisableNameChecking
 }
 
 Describe 'Test-CommandExists' {

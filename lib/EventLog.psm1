@@ -1,5 +1,20 @@
 Set-StrictMode -Version Latest
 
+function Get-CallerValue {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Name)
+
+  foreach ($scope in 1..3) {
+    try {
+      $var = Get-Variable -Name $Name -Scope $scope -ErrorAction Stop
+      return $var.Value
+    } catch {
+      # Continue searching outer scopes.
+    }
+  }
+  return $null
+}
+
 <#
 .SYNOPSIS
 Windows Event Log helpers for health scripts.

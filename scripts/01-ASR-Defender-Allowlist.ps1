@@ -146,7 +146,7 @@ param(
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
@@ -499,7 +499,7 @@ if (-not $isWindowsHost) {
 
   Write-AuditJson -Path $AuditPath -Object $final
   $summaryObj = [pscustomobject]@{ ComputerName = $final.ComputerName; Timestamp = $final.Timestamp }
-  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
   Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
     -CustomFields ([ordered]@{
       Mode       = $(if ($final.Remediate) { 'Remediate' } else { 'Audit' })
@@ -619,9 +619,9 @@ try {
     $resultCode = "DRIFT_NO_REMEDIATION"
     Write-HealthEvent -Id 3210 -Msg "Defender/ASR allowlist drift: add=$totalAdd remove=$totalRem rejected=$totalBad (no remediation). JSON=$sourceJson Audit=$AuditPath" -Level Warning
     foreach ($d in $diffs) {
-        if ($d.ToAdd.Count -gt 0) { Add-Finding -Code 'ASR-Drift-Add' -Severity 'Low' -Message "ASR drift (missing): $($d.Name)" -Extra @{ Missing = $d.ToAdd } }
-        if ($d.ToRemove.Count -gt 0) { Add-Finding -Code 'ASR-Drift-Remove' -Severity 'Low' -Message "ASR drift (extra): $($d.Name)" -Extra @{ Extra = $d.ToRemove } }
-        if ($d.Rejected.Count -gt 0) { Add-Finding -Code 'ASR-Rejected' -Severity 'Medium' -Message "ASR risky entry rejected: $($d.Name)" -Extra @{ Rejected = $d.Rejected } }
+        if ($d.ToAdd.Count -gt 0) { Add-Finding -FindingList $script:Findings -Code 'ASR-Drift-Add' -Severity 'Low' -Message "ASR drift (missing): $($d.Name)" -Extra @{ Missing = $d.ToAdd } }
+        if ($d.ToRemove.Count -gt 0) { Add-Finding -FindingList $script:Findings -Code 'ASR-Drift-Remove' -Severity 'Low' -Message "ASR drift (extra): $($d.Name)" -Extra @{ Extra = $d.ToRemove } }
+        if ($d.Rejected.Count -gt 0) { Add-Finding -FindingList $script:Findings -Code 'ASR-Rejected' -Severity 'Medium' -Message "ASR risky entry rejected: $($d.Name)" -Extra @{ Rejected = $d.Rejected } }
     }
   }
   else {
@@ -671,7 +671,7 @@ try {
 
   Write-AuditJson -Path $AuditPath -Object $final
   $summaryObj = [pscustomobject]@{ ComputerName = $final.ComputerName; Timestamp = $final.Timestamp }
-  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
   Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
     -CustomFields ([ordered]@{
       Mode       = $(if ($final.Remediate) { 'Remediate' } else { 'Audit' })
@@ -726,7 +726,7 @@ catch {
 
   Write-AuditJson -Path $AuditPath -Object $final
   $summaryObj = [pscustomobject]@{ ComputerName = $final.ComputerName; Timestamp = $final.Timestamp }
-  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
   Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
     -CustomFields ([ordered]@{
       Mode       = $(if ($final.Remediate) { 'Remediate' } else { 'Audit' })
@@ -754,7 +754,7 @@ catch {
 
 # V2 output contract
 $resultToken = if ($final.Result -eq 'FAILED') { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $final -Metadata @{}
+$v2Result = New-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $final -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

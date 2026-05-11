@@ -14,8 +14,8 @@ param()
 $script:SkipWindowsTests = (-not $IsWindows)
 
 BeforeAll {
-  Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force
-  Import-Module (Join-Path $PSScriptRoot '../../lib/EventLog.psm1') -Force
+  Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force -DisableNameChecking
+  Import-Module (Join-Path $PSScriptRoot '../../lib/EventLog.psm1') -Force -DisableNameChecking
 }
 
 Describe 'Ensure-EventSource' {

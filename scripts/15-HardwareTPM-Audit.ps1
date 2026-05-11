@@ -159,7 +159,7 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
@@ -214,7 +214,7 @@ $script:Findings = New-FindingsList
 # Anonymized defaults
 $EventLogName   = 'Application'
 $EventSource    = 'HardwareTPM-Audit'
-$DefaultOutFile = "PATH/TO/PROOF/HardwareCompliance.json"
+$DefaultOutFile = Join-Path ([System.IO.Path]::GetTempPath()) 'HardwareCompliance.json'
 
 # -----------------------------
 # Helpers (no pipeline formatting)
@@ -539,7 +539,7 @@ try {
 
   # Pretty console output (out-of-band)
   $summaryObj = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }
-  $findingsAL = [System.Collections.ArrayList]@($script:Findings)
+  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
   Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
     -CustomFields ([ordered]@{
       Status = $(if ($ok) { 'COMPLIANT' } else { 'NON-COMPLIANT' })
@@ -602,7 +602,7 @@ foreach ($e in @($errors)) {
 
 # V2 output contract
 $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+$v2Result = New-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

@@ -9,6 +9,21 @@ Provides factory functions to create typed finding objects and manage
 ordered finding lists used by the v2 script result contract.
 #>
 
+function Get-CallerValue {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Name)
+
+  foreach ($scope in 1..5) {
+    try {
+      $value = Get-Variable -Name $Name -Scope $scope -ValueOnly -ErrorAction Stop
+      if ($null -ne $value) { return $value }
+    } catch {
+      continue
+    }
+  }
+  return $null
+}
+
 <#
 .SYNOPSIS
   Creates a new empty findings list.

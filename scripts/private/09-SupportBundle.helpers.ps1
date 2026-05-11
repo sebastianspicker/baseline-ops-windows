@@ -137,8 +137,8 @@ function SB_NewSummary {
     [Parameter(Mandatory)][int]$DaysBack,
     [Parameter(Mandatory)][bool]$IncludeSec,
     [Parameter(Mandatory)][bool]$IncludeDef,
-    [Parameter(Mandatory)][string]$ConfigPath,
-    [Parameter(Mandatory)][string]$ProofDir,
+    [string]$ConfigPath,
+    [string]$ProofDir,
     [string]$ReasonText
   )
 
@@ -263,12 +263,12 @@ function SB_NewDefaultConfig {
 
 function SB_LoadJsonConfig {
   param(
-    [Parameter(Mandatory)][string]$Path,
+    [string]$Path,
     [Parameter(Mandatory)][pscustomobject]$DefaultConfig
   )
 
   try {
-    if (-not (Test-Path -LiteralPath $Path)) { return $DefaultConfig }
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return $DefaultConfig }
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultConfig }
 

@@ -147,7 +147,7 @@ function Resolve-DomainRoleText {
 
 function Import-JsonConfig {
   [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Path)
+  param([string]$Path)
 
   if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -158,7 +158,7 @@ function Import-JsonConfig {
     $raw | ConvertFrom-Json
   }
   catch {
-    Add-Finding -Code 'CONFIG-JsonInvalid' -Severity 'Medium' -Message ("Config JSON could not be loaded from '{0}': {1}" -f $Path, $_.Exception.Message)
+    Add-Finding -FindingList $Findings -Code 'CONFIG-JsonInvalid' -Severity 'Medium' -Message ("Config JSON could not be loaded from '{0}': {1}" -f $Path, $_.Exception.Message)
     $null
   }
 }
@@ -208,7 +208,7 @@ try {
     OsName, OsVersion, OsBuildNumber, WindowsProductName, WindowsVersion, TimeZone
 }
 catch {
-  Add-Finding -Code 'DATA-GetComputerInfo-Failed' -Severity 'High' -Message ("Get-ComputerInfo failed: {0}" -f $_.Exception.Message)
+  Add-Finding -FindingList $Findings -Code 'DATA-GetComputerInfo-Failed' -Severity 'High' -Message ("Get-ComputerInfo failed: {0}" -f $_.Exception.Message)
 }
 
 $cs = $null
@@ -216,7 +216,7 @@ try {
   $cs = Get-CimInstance -ClassName Win32_ComputerSystem
 }
 catch {
-  Add-Finding -Code 'DATA-CIM-Win32_ComputerSystem-Failed' -Severity 'High' -Message ("Get-CimInstance Win32_ComputerSystem failed: {0}" -f $_.Exception.Message)
+  Add-Finding -FindingList $Findings -Code 'DATA-CIM-Win32_ComputerSystem-Failed' -Severity 'High' -Message ("Get-CimInstance Win32_ComputerSystem failed: {0}" -f $_.Exception.Message)
 }
 
 $domainRoleValue = if ($cs -and $null -ne $cs.DomainRole) { [int]$cs.DomainRole } else { $null }
@@ -228,18 +228,18 @@ $domainRoleText  = Resolve-DomainRoleText -DomainRole $domainRoleValue
 
 if ($effective.ExpectedDomain) {
   if (-not $cs) {
-    Add-Finding -Code 'JOIN-Unknown' -Severity 'Medium' -Message 'Domain join status could not be determined (Win32_ComputerSystem not available).'
+    Add-Finding -FindingList $Findings -Code 'JOIN-Unknown' -Severity 'Medium' -Message 'Domain join status could not be determined (Win32_ComputerSystem not available).'
   }
   else {
     if ($cs.PartOfDomain -ne $true) {
-      Add-Finding -Code 'JOIN-NotDomainJoined' -Severity 'High' -Message 'System is not domain-joined (PartOfDomain is False/Null).'
+      Add-Finding -FindingList $Findings -Code 'JOIN-NotDomainJoined' -Severity 'High' -Message 'System is not domain-joined (PartOfDomain is False/Null).'
     }
     else {
       if ([string]::IsNullOrWhiteSpace([string]$cs.Domain)) {
-        Add-Finding -Code 'JOIN-DomainEmpty' -Severity 'Medium' -Message 'PartOfDomain=True but Domain is empty/whitespace (unexpected).'
+        Add-Finding -FindingList $Findings -Code 'JOIN-DomainEmpty' -Severity 'Medium' -Message 'PartOfDomain=True but Domain is empty/whitespace (unexpected).'
       }
       elseif ($cs.Domain.ToLowerInvariant() -ne $effective.ExpectedDomain.ToLowerInvariant()) {
-        Add-Finding -Code 'JOIN-DomainMismatch' -Severity 'High' -Message ("Domain='{0}' differs from ExpectedDomain='{1}'." -f $cs.Domain, $effective.ExpectedDomain)
+        Add-Finding -FindingList $Findings -Code 'JOIN-DomainMismatch' -Severity 'High' -Message ("Domain='{0}' differs from ExpectedDomain='{1}'." -f $cs.Domain, $effective.ExpectedDomain)
       }
     }
   }
@@ -283,7 +283,7 @@ if ($effective.ExportPath) {
     $summary | Export-Csv -Path $effective.ExportPath -NoTypeInformation -Encoding UTF8
   }
   catch {
-    Add-Finding -Code 'EXPORT-Csv-Failed' -Severity 'Medium' -Message ("Export-Csv failed: {0}" -f $_.Exception.Message)
+    Add-Finding -FindingList $Findings -Code 'EXPORT-Csv-Failed' -Severity 'Medium' -Message ("Export-Csv failed: {0}" -f $_.Exception.Message)
 
     $summary = [pscustomobject]@{
       ComputerName   = $summary.ComputerName
@@ -364,7 +364,7 @@ if (-not $NoConsoleSummary) {
 
   if ($effective.ExpectedDomain) {
     $match = ($summary.PartOfDomain -eq $true -and -not [string]::IsNullOrWhiteSpace($summary.Domain) -and ($summary.Domain.ToLowerInvariant() -eq $effective.ExpectedDomain.ToLowerInvariant()))
-    Write-KeyValue -Key 'Expected' -Value $effective.ExpectedDomain -ValueColor (if ($match) { 'Green' } else { 'Yellow' })
+    Write-KeyValue -Key 'Expected' -Value $effective.ExpectedDomain -ValueColor $(if ($match) { 'Green' } else { 'Yellow' })
   }
 
   if ($effective.ExportPath) {
@@ -387,7 +387,7 @@ if (-not $NoConsoleSummary) {
 
 # V2 output contract
 $resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary $result.Summary -Metadata @{}
+$v2Result = New-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

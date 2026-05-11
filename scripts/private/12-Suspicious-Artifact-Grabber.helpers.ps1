@@ -502,7 +502,7 @@ function Collect-Tasks {
     }
 
     foreach ($t in ($flat | Where-Object { $_.Suspicious })) {
-        Add-Finding -Code 'Grabber-SuspiciousTask' -Severity 'Medium' -Message "Suspicious scheduled task detected: $($t.TaskPath)$($t.TaskName)" -Extra $t
+        Add-Finding -FindingList $script:Findings -Code 'Grabber-SuspiciousTask' -Severity 'Medium' -Message "Suspicious scheduled task detected: $($t.TaskPath)$($t.TaskName)" -Extra $t
     }
   } catch {
     Add-Error $res ("tasks: " + $_.Exception.Message)

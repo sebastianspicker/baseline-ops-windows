@@ -112,7 +112,8 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
@@ -420,7 +421,7 @@ if (-not $config.Enabled) {
     ScannedRootsCount    = 0
   }
 
-  $findingsAL = [System.Collections.ArrayList]@($script:Findings.ToArray())
+  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings.ToArray()
 
   if (-not $Quiet) {
     Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
@@ -544,7 +545,7 @@ if ($ExportPath) {
 }
 
 # 5) Console summary
-$findingsAL = [System.Collections.ArrayList]@($script:Findings.ToArray())
+$findingsAL = ConvertTo-ArrayList -InputObject $script:Findings.ToArray()
 if (-not $Quiet) {
   Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
     -CustomFields ([ordered]@{

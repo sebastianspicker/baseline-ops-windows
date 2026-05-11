@@ -1,5 +1,22 @@
 Set-StrictMode -Version Latest
 
+function ConvertTo-ObjectArray {
+  [CmdletBinding()]
+  param([AllowNull()][object]$InputObject)
+
+  if ($null -eq $InputObject) { return ,@() }
+
+  if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
+    $items = New-Object System.Collections.Generic.List[object]
+    foreach ($item in $InputObject) {
+      $items.Add($item) | Out-Null
+    }
+    return ,$items.ToArray()
+  }
+
+  return ,@($InputObject)
+}
+
 <#
 .SYNOPSIS
 Serialization and v2 result object utilities.
@@ -111,11 +128,25 @@ function New-V2ResultObject {
     [Parameter(Mandatory)]
     [ValidateSet('OK','WARN','FAIL')]
     [string]$Result,
-    [object[]]$Findings = @(),
+    [AllowNull()]
+    [object]$Findings = @(),
     [object]$Summary = $null,
     [hashtable]$Metadata = @{},
     [string]$SchemaVersion = '2.0'
   )
+
+  $findingArray = @()
+  if ($null -ne $Findings) {
+    if ($Findings -is [System.Collections.IEnumerable] -and $Findings -isnot [string]) {
+      $tmp = New-Object System.Collections.Generic.List[object]
+      foreach ($finding in $Findings) {
+        $tmp.Add($finding) | Out-Null
+      }
+      $findingArray = $tmp.ToArray()
+    } else {
+      $findingArray = @($Findings)
+    }
+  }
 
   return [pscustomobject]@{
     SchemaVersion = $SchemaVersion
@@ -124,7 +155,7 @@ function New-V2ResultObject {
     ComputerName  = $env:COMPUTERNAME
     TimestampUtc  = (Get-Date).ToUniversalTime()
     Result        = $Result
-    Findings      = @($Findings)
+    Findings      = $findingArray
     Summary       = $Summary
     Metadata      = $Metadata
   }
@@ -203,6 +234,7 @@ function ConvertTo-V2Json {
 }
 
 Export-ModuleMember -Function `
+  ConvertTo-ObjectArray, `
   Save-Json, `
   Save-Csv, `
   New-V2ResultObject, `

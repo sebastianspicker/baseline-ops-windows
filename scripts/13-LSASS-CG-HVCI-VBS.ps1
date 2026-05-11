@@ -144,8 +144,8 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
@@ -240,7 +240,7 @@ function Try-LoadJsonConfig {
     Baseline_Blocklist_Enable           = 1
   }
 
-  $sanitized = Sanitize-Path -Path $Path -MustExist
+  $sanitized = if ([string]::IsNullOrWhiteSpace($Path)) { $null } else { Sanitize-Path -Path $Path -MustExist }
   if (-not $sanitized) {
     return [pscustomobject]@{ Config=$cfg; Loaded=$false; Reason='ConfigPath not set or not found (using defaults)' }
   }
@@ -538,7 +538,7 @@ try {
   if (-not $result.Lsa_PplConfigured) {
     $result.Compliant = $false
     $result.Issues   += "LSASS PPL not configured"
-    Add-Finding -Code 'LSA-PPL-Missing' -Severity 'High' -Message 'LSASS PPL is not configured via registry.'
+    Add-Finding -FindingList $script:Findings -Code 'LSA-PPL-Missing' -Severity 'High' -Message 'LSASS PPL is not configured via registry.'
   }
 
   if ($Strict) {
@@ -554,12 +554,12 @@ try {
   if ($RequireBlockList -and -not $result.Ci_Blocklist_Active) {
     $result.Compliant = $false
     $result.Issues += "Vulnerable Driver Blocklist not active"
-    Add-Finding -Code 'Blocklist-Missing' -Severity 'Medium' -Message 'Vulnerable Driver Blocklist is not active.'
+    Add-Finding -FindingList $script:Findings -Code 'Blocklist-Missing' -Severity 'Medium' -Message 'Vulnerable Driver Blocklist is not active.'
   }
 
-  if (-not $result.Vbs_Running) { Add-Finding -Code 'VBS-NotRunning' -Severity 'Medium' -Message 'Virtualization-Based Security is not running.' }
-  if (-not $result.Cg_Running)  { Add-Finding -Code 'CG-NotRunning' -Severity 'Medium' -Message 'Credential Guard is not running.' }
-  if (-not $result.Hvci_Running) { Add-Finding -Code 'HVCI-NotRunning' -Severity 'Medium' -Message 'Hypervisor-Enforced Code Integrity (HVCI) is not running.' }
+  if (-not $result.Vbs_Running) { Add-Finding -FindingList $script:Findings -Code 'VBS-NotRunning' -Severity 'Medium' -Message 'Virtualization-Based Security is not running.' }
+  if (-not $result.Cg_Running)  { Add-Finding -FindingList $script:Findings -Code 'CG-NotRunning' -Severity 'Medium' -Message 'Credential Guard is not running.' }
+  if (-not $result.Hvci_Running) { Add-Finding -FindingList $script:Findings -Code 'HVCI-NotRunning' -Severity 'Medium' -Message 'Hypervisor-Enforced Code Integrity (HVCI) is not running.' }
 
   # -----------------------------
   # Remediation gate
@@ -723,11 +723,8 @@ try {
 
 # V2 output contract
 $resultToken = if ($result.ExitCode -ne 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result $resultToken -Findings @($script:Findings) -Summary $result -Metadata @{}
+$v2Result = New-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 
 exit $result.ExitCode
-
-
-
