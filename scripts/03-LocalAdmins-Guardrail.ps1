@@ -163,26 +163,9 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 $script:Quiet = [bool]$Quiet
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor, $NoPipelineOutput
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '03-LocalAdmins-Guardrail.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$null = $NoPipelineOutput
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -194,7 +177,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -207,7 +190,7 @@ $script:EventLogName           = 'Application'
 $script:AdministratorsGroupSid = 'S-1-5-32-544'   # Builtin\Administrators (language-neutral)
 
 # Safe default when JSON is missing/unreadable:
-# An empty allow-list means: no removals (fail-safe), adds only possible via ExtraAllow + -Remediate.
+# An empty allow-list means: no removals (fail-safe), adds only possible via ExtraAllow + Remediate mode.
 $script:DefaultAllowList = @()
 
 # ---------------- Helper Functions ----------------
@@ -221,7 +204,9 @@ function Try-ReadJsonFile {
     if ($Path -and (Test-Path -LiteralPath $Path)) {
       return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
     }
-  } catch { <# best-effort: JSON file may be missing or invalid #> }
+  } catch {
+    Write-Verbose ("JSON read failed for '{0}': {1}" -f $Path,$_.Exception.Message)
+  }
 
   return $null
 }
@@ -242,7 +227,9 @@ function Get-Config {
       $cfg2 = Try-ReadJsonFile -Path $alt
       if ($cfg2) { return $cfg2 }
     }
-  } catch { <# best-effort: fallback config path may not exist #> }
+  } catch {
+    Write-Verbose ("Fallback config lookup failed: {0}" -f $_.Exception.Message)
+  }
 
   return $null
 }
@@ -259,7 +246,9 @@ function Read-AllowListFromJson {
     } elseif ($Json -and $Json.Allowed) {
       foreach ($x in @($Json.Allowed)) { if ($null -ne $x) { [void]$all.Add($x.ToString()) } }
     }
-  } catch { <# best-effort: JSON shape may not match expected allow-list format #> }
+  } catch {
+    Write-Verbose ("Allow-list JSON parsing failed: {0}" -f $_.Exception.Message)
+  }
 
   return $all.ToArray()
 }
@@ -304,7 +293,10 @@ function Resolve-ToSid {
     if ($IdOrName -match '^S-\d-\d+-.+$') {
       return (New-Object System.Security.Principal.SecurityIdentifier($IdOrName)).Value
     }
-  } catch { return $null }
+  } catch {
+    Write-Verbose ("SID literal resolution failed for '{0}': {1}" -f $IdOrName,$_.Exception.Message)
+    return $null
+  }
 
   # NTAccount -> SID
   try {
@@ -319,7 +311,9 @@ function Resolve-ToSid {
         $lu = Get-LocalUser -Name $name -ErrorAction Stop
         return $lu.SID.Value
       }
-    } catch { <# best-effort: local user shorthand resolution may fail #> }
+    } catch {
+      Write-Verbose ("Local user shorthand resolution failed for '{0}': {1}" -f $IdOrName,$_.Exception.Message)
+    }
   }
 
   return $null
@@ -333,7 +327,9 @@ function Get-BuiltinAdministratorSid {
   try {
     $adm = Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' } | Select-Object -First 1
     if ($adm) { return $adm.SID.Value }
-  } catch { <# best-effort: LocalAccounts module may not be available #> }
+  } catch {
+    Write-Verbose ("Builtin Administrator SID lookup failed: {0}" -f $_.Exception.Message)
+  }
 
   return $null
 }
@@ -356,18 +352,30 @@ function ConvertTo-AdminMemberRecord {
   )
 
   $sidString = $null
-  try { if ($RawMember.SID -and $RawMember.SID.Value) { $sidString = [string]$RawMember.SID.Value } } catch { <# best-effort: SID property may vary by provider #> }
-  if (-not $sidString) { try { if ($RawMember.SID) { $sidString = [string]$RawMember.SID } } catch { <# best-effort: SID fallback #> } }
+  try { if ($RawMember.SID -and $RawMember.SID.Value) { $sidString = [string]$RawMember.SID.Value } } catch {
+    Write-Verbose ("Member SID.Value read failed: {0}" -f $_.Exception.Message)
+  }
+  if (-not $sidString) { try { if ($RawMember.SID) { $sidString = [string]$RawMember.SID } } catch {
+    Write-Verbose ("Member SID fallback read failed: {0}" -f $_.Exception.Message)
+  } }
 
   $name = $null
-  try { $name = [string]$RawMember.Name } catch { <# best-effort: Name property may not exist #> }
-  if ([string]::IsNullOrWhiteSpace($name)) { try { $name = [string]$RawMember.ToString() } catch { <# best-effort: ToString fallback #> } }
+  try { $name = [string]$RawMember.Name } catch {
+    Write-Verbose ("Member Name read failed: {0}" -f $_.Exception.Message)
+  }
+  if ([string]::IsNullOrWhiteSpace($name)) { try { $name = [string]$RawMember.ToString() } catch {
+    Write-Verbose ("Member ToString fallback failed: {0}" -f $_.Exception.Message)
+  } }
 
   $principalSource = $null
-  try { $principalSource = [string]$RawMember.PrincipalSource } catch { <# best-effort: PrincipalSource may not exist on all OS versions #> }
+  try { $principalSource = [string]$RawMember.PrincipalSource } catch {
+    Write-Verbose ("Member PrincipalSource read failed: {0}" -f $_.Exception.Message)
+  }
 
   $objectClass = $null
-  try { $objectClass = [string]$RawMember.ObjectClass } catch { <# best-effort: ObjectClass may not exist #> }
+  try { $objectClass = [string]$RawMember.ObjectClass } catch {
+    Write-Verbose ("Member ObjectClass read failed: {0}" -f $_.Exception.Message)
+  }
 
   [pscustomobject]@{
     PSTypeName      = 'LocalAdmins.Guardrail.Member'
@@ -402,7 +410,9 @@ function Get-AdministratorsGroupMembers {
       try {
         $nt = New-Object System.Security.Principal.NTAccount($name)
         $sid = ($nt.Translate([System.Security.Principal.SecurityIdentifier])).Value
-      } catch { <# best-effort: ADSI member SID translation may fail for orphaned/external accounts #> }
+      } catch {
+        Write-Verbose ("ADSI member SID translation failed for '{0}': {1}" -f $name,$_.Exception.Message)
+      }
 
       $src =
         if ($name -match '^AzureAD\\') { 'Microsoft Entra group' }
@@ -437,7 +447,7 @@ function Is-DomainLikePrincipal {
   ))
 }
 
-function New-GuardrailResult {
+function Get-GuardrailResult {
   [CmdletBinding()]
   param([Parameter(Mandatory)] [string]$GroupName)
 
@@ -485,13 +495,15 @@ function New-GuardrailResult {
 
 # ---------------- Main ----------------
 
-Ensure-EventSource -Source $script:EventSource -LogName $script:EventLogName
+if (-not (Ensure-EventSource -Source $script:EventSource -LogName $script:EventLogName)) {
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 
 $result = $null
 
 try {
   $adminGroupName = Get-AdministratorsGroupName
-  $result = New-GuardrailResult -GroupName $adminGroupName
+  $result = Get-GuardrailResult -GroupName $adminGroupName
 
   # Load config (optional)
   $cfg = Get-Config -Path $ConfigPath
@@ -661,8 +673,10 @@ try {
 
   if (-not $result) {
     $groupNameFallback = '(unknown)'
-    try { $groupNameFallback = Get-AdministratorsGroupName } catch { <# best-effort: group name resolution in error handler #> }
-    $result = New-GuardrailResult -GroupName $groupNameFallback
+    try { $groupNameFallback = Get-AdministratorsGroupName } catch {
+      Write-Verbose ("Fallback administrators group name resolution failed: {0}" -f $_.Exception.Message)
+    }
+    $result = Get-GuardrailResult -GroupName $groupNameFallback
   }
 
   $result.Errors += ("Fatal error: " + $errMsg)
@@ -687,8 +701,8 @@ try {
         ConfigLoaded     = [string]$result.ConfigLoaded
       })
     if (@($result.Errors).Count -gt 0) {
-      Write-ColorLine "Errors:" 'Red'
-      foreach ($e in $result.Errors) { Write-ColorLine ("- {0}" -f $e) 'Red' }
+      Write-UiLine "Errors:" 'Red'
+      foreach ($e in $result.Errors) { Write-UiLine ("- {0}" -f $e) 'Red' }
       Write-UiLine ""
     }
   }
@@ -696,7 +710,7 @@ try {
 
 # V2 output contract
 $resultToken = if ($result.DriftDetected) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $result -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

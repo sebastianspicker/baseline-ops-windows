@@ -51,23 +51,31 @@ Describe "Ensure-Directory" {
   }
 
   It "Creates a new directory" {
-    Ensure-Directory -Path $script:TestDir
+    Ensure-Directory -Path $script:TestDir | Should -BeTrue
     Test-Path -LiteralPath $script:TestDir | Should -Be $true
   }
 
   It "Does not throw when directory exists" {
     New-Item -Path $script:TestDir -ItemType Directory -Force | Out-Null
-    { Ensure-Directory -Path $script:TestDir } | Should -Not -Throw
+    Ensure-Directory -Path $script:TestDir | Should -BeTrue
   }
 
-  It "Handles empty path gracefully" {
-    { Ensure-Directory -Path '' } | Should -Throw
+  It "Returns false for empty path" {
+    Ensure-Directory -Path '' | Should -BeFalse
   }
 
   It "Creates nested directories" {
     $nestedPath = Join-Path $script:TestDir 'Level1\Level2\Level3'
-    Ensure-Directory -Path $nestedPath
+    Ensure-Directory -Path $nestedPath | Should -BeTrue
     Test-Path -LiteralPath $nestedPath | Should -Be $true
+  }
+
+  It "Returns false when directory creation fails" {
+    Mock -ModuleName Common -CommandName Test-Path -MockWith { $false }
+    Mock -ModuleName Common -CommandName New-Item -MockWith { throw 'Access denied' }
+
+    Ensure-Directory -Path (Join-Path $script:TestDir 'blocked') -ErrorAction SilentlyContinue |
+      Should -BeFalse
   }
 }
 
@@ -80,8 +88,12 @@ Describe "Ensure-DirectoryForFile" {
 
   It "Creates parent directory for file path" {
     $filePath = Join-Path $script:TestDir 'subdir\test.txt'
-    Ensure-DirectoryForFile -FilePath $filePath
+    Ensure-DirectoryForFile -FilePath $filePath | Should -BeTrue
     Test-Path -LiteralPath (Join-Path $script:TestDir 'subdir') | Should -Be $true
+  }
+
+  It "Returns false when file path has no parent directory" {
+    Ensure-DirectoryForFile -FilePath 'file.txt' | Should -BeFalse
   }
 }
 
@@ -96,6 +108,28 @@ Describe "Sanitize-Path" {
     $env:COMMON_TEST_TMP = $tempRoot
     $result = Sanitize-Path -Path '%COMMON_TEST_TMP%'
     $result | Should -Not -BeNullOrEmpty
+  }
+
+  It "Rejects traversal after expanding environment variables" {
+    $previousWindir = $env:WINDIR
+    $previousTemp = $env:TEMP
+    $previousSystemRoot = $env:SYSTEMROOT
+
+    try {
+      $safeRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'CommonModuleEnvRoot'
+      $env:WINDIR = $safeRoot
+      $env:TEMP = $safeRoot
+      $env:SYSTEMROOT = $safeRoot
+
+      Sanitize-Path -Path '%WINDIR%\..\..' | Should -BeNullOrEmpty
+      Sanitize-Path -Path '%TEMP%\..\..\Windows' | Should -BeNullOrEmpty
+      Sanitize-Path -Path '%SYSTEMROOT%\..\Windows\System32' | Should -BeNullOrEmpty
+      Sanitize-Path -Path '%WINDIR%\System32' | Should -Not -BeNullOrEmpty
+    } finally {
+      $env:WINDIR = $previousWindir
+      $env:TEMP = $previousTemp
+      $env:SYSTEMROOT = $previousSystemRoot
+    }
   }
 
   It "Returns null for path traversal attempt" {
@@ -152,7 +186,7 @@ Describe "Require-Admin" {
 Describe "Ensure-Directory path traversal guard" {
   It "Does not create directory when path contains .." {
     $traversalPath = Join-Path ([System.IO.Path]::GetTempPath()) "test-ensure-dir/../../../should-not-create"
-    Ensure-Directory -Path $traversalPath
+    Ensure-Directory -Path $traversalPath | Should -BeFalse
     Test-Path -LiteralPath $traversalPath | Should -Be $false
   }
 }
@@ -169,31 +203,31 @@ Describe "Get-CallerValue" {
   }
 }
 
-Describe "New-SafeFileName" {
+Describe "Get-SafeFileName" {
   It "Passes through a valid filename unchanged" {
-    New-SafeFileName -Name 'report-2025.json' | Should -Be 'report-2025.json'
+    Get-SafeFileName -Name 'report-2025.json' | Should -Be 'report-2025.json'
   }
 
   It "Replaces special characters with underscores" {
-    New-SafeFileName -Name 'file<>:"/\|?*name.txt' | Should -Be 'file_________name.txt'
+    Get-SafeFileName -Name 'file<>:"/\|?*name.txt' | Should -Be 'file_________name.txt'
   }
 
   It "Replaces control characters with underscores" {
-    $input = "file$([char]0x00)$([char]0x1F)name"
-    $result = New-SafeFileName -Name $input
+    $rawFileName = "file$([char]0x00)$([char]0x1F)name"
+    $result = Get-SafeFileName -Name $rawFileName
     $result | Should -Be 'file__name'
   }
 
   It "Handles a name with no special characters" {
-    New-SafeFileName -Name 'simple-file_name.log' | Should -Be 'simple-file_name.log'
+    Get-SafeFileName -Name 'simple-file_name.log' | Should -Be 'simple-file_name.log'
   }
 
   It "Throws on null input" {
-    { New-SafeFileName -Name $null } | Should -Throw
+    { Get-SafeFileName -Name $null } | Should -Throw
   }
 
   It "Throws on empty string (Mandatory parameter)" {
-    { New-SafeFileName -Name '' } | Should -Throw
+    { Get-SafeFileName -Name '' } | Should -Throw
   }
 }
 

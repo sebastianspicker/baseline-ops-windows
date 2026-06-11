@@ -1,30 +1,4 @@
 # Helper functions extracted from 09-SupportBundle.ps1
-function SB_WriteUi {
-  param(
-    [AllowNull()]
-    [AllowEmptyString()]
-    [string]$Message,
-
-    [ConsoleColor]$Color = [ConsoleColor]::Gray,
-    [switch]$NoNewline
-  )
-
-  # Never throw on empty UI output; it's UI, not logic.
-  if ($null -eq $Message) { return }
-
-  if ($script:UseInformationStream) {
-    if ([string]::IsNullOrEmpty($Message)) { return }
-    Write-Information -MessageData $Message -InformationAction Continue
-    return
-  }
-
-  if ($NoNewline) {
-    Write-UiLine $Message -ForegroundColor $Color -NoNewline
-  } else {
-    Write-UiLine $Message -ForegroundColor $Color
-  }
-}
-
 function SB_WriteLog {
   param(
     [AllowNull()]
@@ -40,10 +14,10 @@ function SB_WriteLog {
 
   $prefix = "[{0}] " -f $Level
   switch ($Level) {
-    'INFO'  { SB_WriteUi -Message ($prefix + $Message) -Color Gray }
-    'OK'    { SB_WriteUi -Message ($prefix + $Message) -Color Green }
-    'WARN'  { SB_WriteUi -Message ($prefix + $Message) -Color Yellow }
-    'ERROR' { SB_WriteUi -Message ($prefix + $Message) -Color Red }
+    'INFO'  { Write-UiLine -Message ($prefix + $Message) -ForegroundColor Gray -UseInformationStream:$script:UseInformationStream }
+    'OK'    { Write-UiLine -Message ($prefix + $Message) -ForegroundColor Green -UseInformationStream:$script:UseInformationStream }
+    'WARN'  { Write-UiLine -Message ($prefix + $Message) -ForegroundColor Yellow -UseInformationStream:$script:UseInformationStream }
+    'ERROR' { Write-UiLine -Message ($prefix + $Message) -ForegroundColor Red -UseInformationStream:$script:UseInformationStream }
   }
 }
 
@@ -51,9 +25,9 @@ function SB_WriteSection {
   param([Parameter(Mandatory)][string]$Title)
 
   $line = ('-' * 72)
-  SB_WriteUi -Message ("[INFO] {0}" -f $line) -Color DarkGray
-  SB_WriteUi -Message ("[INFO] {0}" -f $Title) -Color Cyan
-  SB_WriteUi -Message ("[INFO] {0}" -f $line) -Color DarkGray
+  Write-UiLine -Message ("[INFO] {0}" -f $line) -ForegroundColor DarkGray -UseInformationStream:$script:UseInformationStream
+  Write-UiLine -Message ("[INFO] {0}" -f $Title) -ForegroundColor Cyan -UseInformationStream:$script:UseInformationStream
+  Write-UiLine -Message ("[INFO] {0}" -f $line) -ForegroundColor DarkGray -UseInformationStream:$script:UseInformationStream
 }
 
 function SB_WriteHealthEvent {
@@ -72,26 +46,12 @@ function SB_WriteHealthEvent {
 }
 
 # -------------------- Basic helpers --------------------
-function SB_IsAdmin {
-  try {
-    $p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  } catch { return $false }
-}
-
-function SB_EnsureDir {
-  param([Parameter(Mandatory)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-  }
-}
-
 function SB_SaveTextFile {
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Text
   )
-  SB_EnsureDir -Path (Split-Path -Parent $Path)
+  [void](Ensure-Directory -Path (Split-Path -Parent $Path))
   $Text | Out-File -FilePath $Path -Encoding utf8
 }
 
@@ -100,13 +60,8 @@ function SB_SaveJsonFile {
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)]$Object
   )
-  SB_EnsureDir -Path (Split-Path -Parent $Path)
+  [void](Ensure-Directory -Path (Split-Path -Parent $Path))
   ($Object | ConvertTo-Json -Depth 40) | Out-File -FilePath $Path -Encoding utf8
-}
-
-function SB_SafeFileName {
-  param([Parameter(Mandatory)][string]$Name)
-  return ($Name -replace '[<>:"/\\|?*\x00-\x1F]', '_')
 }
 
 # -------------------- Structured records --------------------
@@ -225,7 +180,9 @@ function SB_ShowSummary {
   SB_WriteLog -Message ("WorkDir         : {0}" -f $(if (-not [string]::IsNullOrWhiteSpace($Summary.WorkDir)) { $Summary.WorkDir } else { '(not created)' })) -Level 'INFO'
   SB_WriteLog -Message ("Zip             : {0}" -f $(if (-not [string]::IsNullOrWhiteSpace($Summary.ZipPath)) { $Summary.ZipPath } else { '(not created)' })) -Level 'INFO'
 
-  SB_WriteUi -Message "" -Color Gray
+  if (-not $script:UseInformationStream) {
+    Write-UiLine -Message '' -ForegroundColor Gray
+  }
   SB_WriteLog -Message ("Records         : {0}" -f $records.Count) -Level 'INFO'
   SB_WriteLog -Message ("Successful      : {0}" -f $ok.Count) -Level 'OK'
 
@@ -339,7 +296,7 @@ function SB_ExportEventLogEvtx {
     [int]$DaysBack = 7
   )
 
-  SB_EnsureDir -Path (Split-Path -Parent $OutFile)
+  [void](Ensure-Directory -Path (Split-Path -Parent $OutFile))
 
   $ms    = [int64]($DaysBack * 24 * 60 * 60 * 1000)
   $xpath = "*[System[TimeCreated[timediff(@SystemTime) <= $ms]]]"
@@ -370,7 +327,7 @@ function SB_ExportEventLogFallback {
 
     $csv = $OutFileBase + '.csv'
     $txt = $OutFileBase + '.txt'
-    SB_EnsureDir -Path (Split-Path -Parent $csv)
+    [void](Ensure-Directory -Path (Split-Path -Parent $csv))
 
     $events |
       Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, LogName, Message |
@@ -397,7 +354,7 @@ function SB_CopyIfExists {
       return (SB_NewRecord -Name 'CopyProof' -Ok $true -ArtifactPath $null -Note ("Skip (not found): {0}" -f $Path) -Error $null)
     }
 
-    SB_EnsureDir -Path $DestDir
+    [void](Ensure-Directory -Path $DestDir)
     Copy-Item -LiteralPath $Path -Destination $DestDir -Recurse -Force -ErrorAction Stop
     return (SB_NewRecord -Name 'CopyProof' -Ok $true -ArtifactPath $DestDir -Note ("Copied: {0}" -f (Split-Path -Leaf $Path)) -Error $null)
   } catch {
@@ -414,7 +371,7 @@ function SB_ExportTextCommand {
   )
 
   try {
-    SB_EnsureDir -Path $OutDir
+    [void](Ensure-Directory -Path $OutDir)
     $path = Join-Path $OutDir ($Name + '.txt')
     $text = (& $Command | Out-String -Width 4000)
     SB_SaveTextFile -Path $path -Text $text
@@ -436,7 +393,7 @@ function SB_ExportSystemReports {
   $list += (SB_ExportTextCommand -Name 'whoami_all'          -OutDir $OutDir -Command { cmd.exe /c 'whoami /all' })
 
   $list += (SB_TryStep -Name 'Report:hotfixes' -Code {
-    SB_EnsureDir -Path $OutDir
+    [void](Ensure-Directory -Path $OutDir)
     $path = Join-Path $OutDir 'hotfixes.json'
     $hotfix = Get-HotFix | Select-Object HotFixID, InstalledOn, Description, InstalledBy
     SB_SaveJsonFile -Path $path -Object $hotfix
@@ -506,7 +463,7 @@ function SB_ExportDefenderStatus {
   param([Parameter(Mandatory)][string]$OutDir)
 
   $list = @()
-  SB_EnsureDir -Path $OutDir
+  [void](Ensure-Directory -Path $OutDir)
 
   $list += (SB_TryStep -Name 'Defender:status' -Code {
     $cmd = Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue
@@ -555,7 +512,7 @@ function SB_ResolveMpCmdRun {
 function SB_NewDefenderSupportCab {
   param([Parameter(Mandatory)][string]$OutDir)
 
-  SB_EnsureDir -Path $OutDir
+  [void](Ensure-Directory -Path $OutDir)
 
   $mpCmdRun   = SB_ResolveMpCmdRun
   $cabDefault = 'C:\ProgramData\Microsoft\Windows Defender\Support\MpSupportFiles.cab'

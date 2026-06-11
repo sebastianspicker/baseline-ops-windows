@@ -7,16 +7,16 @@ Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 function Test-Check {
     param([bool]$Condition, [string]$Message)
     if ($Condition) {
-        Write-Host "[OK] $Message" -ForegroundColor Green
+        Write-Information -MessageData "[OK] $Message" -InformationAction Continue
     } else {
-        Write-Host "[FAIL] $Message" -ForegroundColor Red
+        Write-Information -MessageData "[FAIL] $Message" -InformationAction Continue
         $script:ExitCode = 1
     }
 }
 
 $script:ExitCode = 0
 
-Write-Host "--- Testing Sanitize-Path ---"
+Write-Information -MessageData "--- Testing Sanitize-Path ---" -InformationAction Continue
 # Use current directory for portable test
 $curr = (Get-Location).Path
 $p1 = Sanitize-Path -Path $curr
@@ -25,7 +25,7 @@ Test-Check ($null -ne $p1) "Basic path normalization ($curr)"
 $p3 = Sanitize-Path -Path '../../Windows/System32'
 Test-Check ($null -eq $p3) "Path traversal detection (..)"
 
-Write-Host "`n--- Testing Read-ConfigWithDefaults ---"
+Write-Information -MessageData "`n--- Testing Read-ConfigWithDefaults ---" -InformationAction Continue
 $tempFile = Join-Path $PSScriptRoot "test_config.json"
 $cfgJson = @'
 {
@@ -46,7 +46,7 @@ if ($null -eq $res -or $null -eq $res.Config) {
 
 if (Test-Path $tempFile) { Remove-Item $tempFile }
 
-Write-Host "`n--- Testing ConvertTo-Hashtable ---"
+Write-Information -MessageData "`n--- Testing ConvertTo-Hashtable ---" -InformationAction Continue
 $obj = [pscustomobject]@{ A = 1; B = 2 }
 $ht = ConvertTo-Hashtable -Object $obj
 Test-Check ($ht -is [hashtable]) "Object to hashtable conversion"
@@ -57,5 +57,5 @@ if ($script:ExitCode -ne 0) {
     Write-Error "Verification tests failed."
     exit 1
 } else {
-    Write-Host "`nAll verification tests passed!" -ForegroundColor Green
+    Write-Information -MessageData "`nAll verification tests passed!" -InformationAction Continue
 }

@@ -116,12 +116,9 @@ Describe 'v2 parameter contract' {
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
         if ($errors) { return $false }
 
-        $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
-        if (($paramNames -notcontains 'Mode') -or ($paramNames -contains 'Remediate')) { return $false }
-
         $content = Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8
         $helpBlock = [regex]::Match($content, '(?s)<#.*?#>').Value
-        ($helpBlock -match '\.PARAMETER\s+Mode') -and ($helpBlock -match '(?m)-Mode\s+Remediate\b')
+        $helpBlock -match '\.PARAMETER\s+Remediate|-Remediate\b'
       } |
       Select-Object -ExpandProperty Name
 
@@ -131,7 +128,7 @@ Describe 'v2 parameter contract' {
       $helpBlock = [regex]::Match($content, '(?s)<#.*?#>').Value
 
       $helpBlock | Should -Not -Match '\.PARAMETER\s+Remediate'
-      $helpBlock | Should -Not -Match '(?m)^\s*\..*?-Remediate\b'
+      $helpBlock | Should -Not -Match '-Remediate\b'
     }
   }
 
@@ -150,5 +147,54 @@ Describe 'v2 parameter contract' {
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
 
     $content | Should -Match '\[AllowEmptyString\(\)\]\s*\[string\]\$Path'
+  }
+}
+
+Describe 'migrated v2 initialization runtime smoke' {
+  $migratedInitCases = @(
+    @{ Name = '47-WDAG-Readiness-Audit.ps1'; Path = (Join-Path $PSScriptRoot '../../scripts/47-WDAG-Readiness-Audit.ps1') }
+  )
+
+  It '<_.Name> preserves v2 output switches after Initialize-V2Context migration' -ForEach $migratedInitCases {
+    $case = $_
+    if ($env:OS -eq 'Windows_NT') {
+      Set-ItResult -Skipped -Because 'Smoke uses the unsupported-host branch to avoid Windows provider side effects.'
+      return
+    }
+
+    $result = & $case.Path -OutputFormat None -PassThru -Quiet -NoColor
+    $exitCode = $LASTEXITCODE
+
+    $exitCode | Should -Be 0
+    $result.ScriptName | Should -Be $case.Name
+    $result.Mode | Should -Be 'Audit'
+    $result.Summary.Mode | Should -Be 'Audit'
+    $result.Summary.Supported | Should -BeFalse
+    $result.Metadata.UnsupportedHost | Should -BeTrue
+  }
+}
+
+Describe 'unsupported-host v2 result contract' {
+  $unsupportedHostCases = @(
+    @{ Name = '07-ScheduledTasks-Hygiene.ps1'; Path = (Join-Path $PSScriptRoot '../../scripts/07-ScheduledTasks-Hygiene.ps1') },
+    @{ Name = '21-EmergencyKillSwitch.ps1'; Path = (Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1') },
+    @{ Name = '09-SupportBundle.ps1'; Path = (Join-Path $PSScriptRoot '../../scripts/09-SupportBundle.ps1') }
+  )
+
+  It '<_.Name> reports unsupported host as WARN, not success' -ForEach $unsupportedHostCases {
+    $case = $_
+    if ($env:OS -eq 'Windows_NT') {
+      Set-ItResult -Skipped -Because 'Unsupported-host branch requires a non-Windows host.'
+      return
+    }
+
+    $result = & $case.Path -OutputFormat None -PassThru -Confirm:$false
+    $exitCode = $LASTEXITCODE
+
+    $exitCode | Should -Be 2
+    $result.Result | Should -Be 'WARN'
+    $result.Summary.Supported | Should -BeFalse
+    $result.Metadata.UnsupportedHost | Should -BeTrue
+    @($result.Summary.Notes) | Should -Contain 'Skipped: this script is only supported on Windows hosts.'
   }
 }

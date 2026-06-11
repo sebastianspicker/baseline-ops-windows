@@ -108,30 +108,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -143,7 +121,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -290,7 +268,7 @@ function Write-PrettySummary {
 
 Require-Admin
 
-$Findings       = New-FindingsList
+$Findings       = Get-FindingsList
 $Changes        = New-Object System.Collections.Generic.List[string]
 $ConfigWarnings = New-Object System.Collections.Generic.List[string]
 
@@ -307,6 +285,12 @@ $effective = @{
 $cfgResult = Read-ConfigWithDefaults -Path $ConfigPath -Defaults @{} -ReturnNullWhenMissing -ReturnNullOnError
 $cfg     = $cfgResult.Config
 $cfgMeta = $cfgResult.Meta
+
+if ($cfgMeta.Error) {
+  $ConfigWarnings.Add("Config load failed: $($cfgMeta.Error); using parameters/defaults.") | Out-Null
+  [void](Add-Finding -FindingList $Findings -Code 'CG-ConfigLoadFailed' -Severity 'Medium' `
+    -Message ("Config JSON could not be loaded; using parameters/defaults. Error: {0}" -f $cfgMeta.Error))
+}
 
 if ($cfgMeta.Loaded -and $null -ne $cfg) {
   Apply-ConfigOverrides -Config $cfg -Effective $effective -Warnings $ConfigWarnings
@@ -354,33 +338,58 @@ if ($current.LsaCfgFlags -eq 1 -and $Mode -eq 'Remediate' -and $effective.LsaCfg
 # -----------------------------
 
 $rebootRequired = $false
+$registryWriteFailed = $false
+
+function Add-CgRegistryWriteFailureFinding {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][int]$Value
+  )
+
+  $null = Add-Finding -FindingList $Findings -Code 'CG-RegWriteFailed' -Severity 'High' `
+    -Message ("Failed to write Credential Guard registry value '{0}' at '{1}'. Hardening not applied." -f $Name, $Path) `
+    -Extra @{ Path = $Path; Name = $Name; Value = $Value }
+}
 
 if ($Mode -eq 'Remediate') {
 
   if ($current.EnableVirtualizationBasedSecurity -ne 1) {
     $action = 'Set EnableVirtualizationBasedSecurity=1 (reboot required)'
     if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, $action)) {
-      Set-RegDword -Path $dgPath -Name 'EnableVirtualizationBasedSecurity' -Value 1
-      $rebootRequired = $true
-      $Changes.Add(("EnableVirtualizationBasedSecurity: {0} -> 1" -f $current.EnableVirtualizationBasedSecurity)) | Out-Null
+      if (Set-RegDword -Path $dgPath -Name 'EnableVirtualizationBasedSecurity' -Value 1) {
+        $rebootRequired = $true
+        $Changes.Add(("EnableVirtualizationBasedSecurity: {0} -> 1" -f $current.EnableVirtualizationBasedSecurity)) | Out-Null
+      } else {
+        Add-CgRegistryWriteFailureFinding -Path $dgPath -Name 'EnableVirtualizationBasedSecurity' -Value 1
+        $registryWriteFailed = $true
+      }
     }
   }
 
   if ($current.RequirePlatformSecurityFeatures -ne $effective.RequirePlatformSecurityFeatures) {
     $action = "Set RequirePlatformSecurityFeatures=$($effective.RequirePlatformSecurityFeatures) (reboot required)"
     if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, $action)) {
-      Set-RegDword -Path $dgPath -Name 'RequirePlatformSecurityFeatures' -Value $effective.RequirePlatformSecurityFeatures
-      $rebootRequired = $true
-      $Changes.Add(("RequirePlatformSecurityFeatures: {0} -> {1}" -f $current.RequirePlatformSecurityFeatures, $effective.RequirePlatformSecurityFeatures)) | Out-Null
+      if (Set-RegDword -Path $dgPath -Name 'RequirePlatformSecurityFeatures' -Value $effective.RequirePlatformSecurityFeatures) {
+        $rebootRequired = $true
+        $Changes.Add(("RequirePlatformSecurityFeatures: {0} -> {1}" -f $current.RequirePlatformSecurityFeatures, $effective.RequirePlatformSecurityFeatures)) | Out-Null
+      } else {
+        Add-CgRegistryWriteFailureFinding -Path $dgPath -Name 'RequirePlatformSecurityFeatures' -Value $effective.RequirePlatformSecurityFeatures
+        $registryWriteFailed = $true
+      }
     }
   }
 
   if ($current.LsaCfgFlags -ne $effective.LsaCfgFlags) {
     $action = "Set LsaCfgFlags=$($effective.LsaCfgFlags) (reboot required)"
     if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, $action)) {
-      Set-RegDword -Path $lsaPath -Name 'LsaCfgFlags' -Value $effective.LsaCfgFlags
-      $rebootRequired = $true
-      $Changes.Add(("LsaCfgFlags: {0} -> {1}" -f $current.LsaCfgFlags, $effective.LsaCfgFlags)) | Out-Null
+      if (Set-RegDword -Path $lsaPath -Name 'LsaCfgFlags' -Value $effective.LsaCfgFlags) {
+        $rebootRequired = $true
+        $Changes.Add(("LsaCfgFlags: {0} -> {1}" -f $current.LsaCfgFlags, $effective.LsaCfgFlags)) | Out-Null
+      } else {
+        Add-CgRegistryWriteFailureFinding -Path $lsaPath -Name 'LsaCfgFlags' -Value $effective.LsaCfgFlags
+        $registryWriteFailed = $true
+      }
     }
   }
 }
@@ -413,6 +422,7 @@ $result = [pscustomobject]@{
       LsaCfgFlags                       = $effective.LsaCfgFlags
     }
     RebootRequired = $rebootRequired
+    RegistryWriteFailed = $registryWriteFailed
     Compliant      = $compliant
     FindingsCount  = $Findings.Count
     Changes        = $Changes
@@ -441,13 +451,13 @@ $result = [pscustomobject]@{
 
 if ($effective.ExportPath) {
   $dir = Split-Path -Path $effective.ExportPath -Parent
-  if ($dir -and -not (Test-Path -LiteralPath $dir)) { Ensure-Directory -Path $dir }
+  if ($dir -and -not (Test-Path -LiteralPath $dir)) { [void](Ensure-Directory -Path $dir) }
   $result | ConvertTo-Json -Depth 6 | Set-Content -Path $effective.ExportPath -Encoding UTF8
 }
 
 if ($effective.ExportCsvBasePath) {
   if (-not (Test-Path -LiteralPath $effective.ExportCsvBasePath)) {
-    Ensure-Directory -Path $effective.ExportCsvBasePath
+    [void](Ensure-Directory -Path $effective.ExportCsvBasePath)
   }
 
   ($result.Summary | Select-Object * ) |
@@ -466,8 +476,8 @@ if ($effective.ShowSummary) {
 }
 
 # V2 output contract
-$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After; Config = $result.Config }
+$resultToken = if ($registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After; Config = $result.Config }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

@@ -157,26 +157,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -188,7 +170,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -197,7 +179,7 @@ if (-not $isWindowsHost) {
 if (-not $Quiet) { $InformationPreference = 'Continue' }   # Information stream shown by default
 
 # C10: canonical findings list
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 $EventSource      = 'OfficeBrowser-Hardening'
 $EventLog         = 'Application'
@@ -256,7 +238,7 @@ $DefaultCatalogJson = @"
 . (Join-Path $PSScriptRoot 'private/04-OfficeBrowser-Hardening-Proof.helpers.ps1')
 
 function Set-RegValueProof {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Product,
     [Parameter(Mandatory)][string]$Area,
@@ -279,7 +261,7 @@ function Set-RegValueProof {
   if (-not $compliant) {
     if ($Remediate) {
       if (-not $PSCmdlet.ShouldProcess("$Path\$Name", "Set $Type value")) {
-        return (New-ProofItem -Product $Product -Area $Area -Policy $Policy -Target $Path -Name $Name -Type $Type -Expected $expected -Actual $cur -Compliant $false -Changed $false -Message 'Set skipped by confirmation/WhatIf')
+        return (Get-ProofItem -Product $Product -Area $Area -Policy $Policy -Target $Path -Name $Name -Type $Type -Expected $expected -Actual $cur -Compliant $false -Changed $false -Message 'Set skipped by confirmation/WhatIf')
       }
 
       try {
@@ -302,12 +284,12 @@ function Set-RegValueProof {
     }
   }
 
-  New-ProofItem -Product $Product -Area $Area -Policy $Policy -Target $Path -Name $Name -Type $Type -Expected $expected -Actual $cur -Compliant $compliant -Changed $changed -Message $msg
+  Get-ProofItem -Product $Product -Area $Area -Policy $Policy -Target $Path -Name $Name -Type $Type -Expected $expected -Actual $cur -Compliant $compliant -Changed $changed -Message $msg
 }
 
 
 function Ensure-Edge {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][object]$EdgeCfg,
     [switch]$Remediate
@@ -410,7 +392,7 @@ function Ensure-Edge {
       $compliant = ($cur -eq $expected)
       if (-not $msg) { $msg = $(if ($compliant -and $changed) { 'Set applied' } elseif (-not $compliant) { 'Set attempted but differs' } else { $null }) }
 
-      $r = New-ProofItem -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartupURLs' -Target $urlsKey -Name $name -Type String -Expected $expected -Actual $cur -Compliant $compliant -Changed $changed -Message $msg
+      $r = Get-ProofItem -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartupURLs' -Target $urlsKey -Name $name -Type String -Expected $expected -Actual $cur -Compliant $compliant -Changed $changed -Message $msg
       $items.Add($r) | Out-Null
       $i++
     }
@@ -423,7 +405,9 @@ function Ensure-Edge {
           if ($prop.Name -match '^\d+$') { $current[$prop.Name] = [string]$prop.Value }
         }
       }
-    } catch { <# best-effort: registry key may not exist #> }
+    } catch {
+      Write-Verbose ("Edge startup URL registry read failed for '{0}': {1}" -f $urlsKey,$_.Exception.Message)
+    }
 
     $want = @{}
     $i = 1
@@ -436,7 +420,7 @@ function Ensure-Edge {
       $compliant = ($expected -eq $actual)
       $msg       = $(if (-not $compliant) { 'Drift detected' } else { $null })
 
-      $r = New-ProofItem -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartupURLs' -Target $urlsKey -Name $k -Type String -Expected $expected -Actual $actual -Compliant $compliant -Changed $false -Message $msg
+      $r = Get-ProofItem -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartupURLs' -Target $urlsKey -Name $k -Type String -Expected $expected -Actual $actual -Compliant $compliant -Changed $false -Message $msg
       $items.Add($r) | Out-Null
     }
   }
@@ -449,7 +433,9 @@ function Ensure-Edge {
 # Main
 # -----------------------------
 
-Ensure-EventSource -Source $EventSource -Log $EventLog
+if (-not (Ensure-EventSource -Source $EventSource -Log $EventLog)) {
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 
 $isAdmin     = Test-IsAdmin
 $globalNotes = New-Object System.Collections.Generic.List[string]
@@ -521,7 +507,7 @@ try {
 
   Write-HealthEvent -Id $eventId -Msg $msg -Level $level -Source $EventSource -Log $EventLog
 } catch {
-  # ignore event log failures
+  Write-Verbose ("Office/browser health event write failed: {0}" -f $_.Exception.Message)
 }
 
 Write-ConsoleSummary -AllItems @($allSafe) -CatalogInfo $catalogInfo -ProofPath $proofPath -IsAdmin $isAdmin -Remediate ([bool]$Remediate) -Strict ([bool]$Strict) -Notes @($globalNotes)
@@ -539,7 +525,7 @@ foreach ($nc in @($nonCompliant)) {
 
 # V2 output contract
 $resultToken = if (-not $overallOk) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; OverallOk = $overallOk; Timestamp = Get-Date }) -Metadata @{ Notes = @($globalNotes) }
+$v2Result = Get-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; OverallOk = $overallOk; Timestamp = Get-Date }) -Metadata @{ Notes = @($globalNotes) }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 

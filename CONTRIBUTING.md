@@ -14,7 +14,11 @@ Keep changes small, reviewable, and safe for endpoint operations.
 1. Create a branch.
 2. Implement focused changes.
 3. Run local checks.
-4. Open PR with scope, risks, and validation evidence.
+4. Open a PR with scope, risks, and validation evidence.
+
+Keep PRs scoped to one behavior change or documentation cleanup. If a change
+touches orchestration, profile parsing, remediation, or runner integrity, call
+that out explicitly in the PR summary and include a focused regression test.
 
 ## Required local checks
 
@@ -41,6 +45,8 @@ Root docs are intentionally minimal:
 - `CHANGELOG.md`
 
 Move implementation plans and experiments to PR descriptions.
+Do not commit generated evidence, local audit ledgers, remediation scratch
+plans, deprecated docs, or machine-specific harness state.
 
 ## Security reporting
 

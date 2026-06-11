@@ -153,26 +153,8 @@ Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChe
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '16-Sysmon-Config-Updater.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -184,14 +166,14 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '16-Sysmon-Config-Updater.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '16-Sysmon-Config-Updater.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
 }
 
 # C10: canonical findings list
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 # -----------------------------
 # Helper functions (EN comments for GitHub)
 # -----------------------------
@@ -239,7 +221,9 @@ function Resolve-SysmonExe {
           if (Test-Path -LiteralPath $cand) { return $cand }
         }
       }
-    } catch { <# best-effort: Sysmon service image path probing #> }
+      } catch {
+        Write-Verbose ("Sysmon service image path probe failed for '{0}': {1}" -f $svc,$_.Exception.Message)
+      }
   }
   if ($Hint -and (Test-Path -LiteralPath $Hint)) { return $Hint }
   foreach($c in @(
@@ -254,7 +238,9 @@ function Resolve-SysmonExe {
 }
 function Get-SysmonServiceName(){
   foreach($n in 'Sysmon64','Sysmon'){
-    try { $null = Get-Service -Name $n -ErrorAction Stop; return $n } catch { <# best-effort: probing for Sysmon service name variant #> }
+    try { $null = Get-Service -Name $n -ErrorAction Stop; return $n } catch {
+      Write-Verbose ("Sysmon service name probe failed for '{0}': {1}" -f $n,$_.Exception.Message)
+    }
   }
   return $null
 }
@@ -265,7 +251,9 @@ function Get-SysmonEngineVersion([string]$Exe,[switch]$SkipProcessLaunch){
     $pv = (Get-Item -LiteralPath $Exe -ErrorAction Stop).VersionInfo.ProductVersion
     $v  = Parse-Version $pv
     if ($v) { return $v }
-  } catch { <# best-effort: file version metadata may not be available #> }
+  } catch {
+    Write-Verbose ("Sysmon file version metadata read failed for '{0}': {1}" -f $Exe,$_.Exception.Message)
+  }
   # Fallback: parse help text (sysmon -?). This launches the Sysmon binary, so
   # WhatIf runs can suppress it and stay side-effect free.
   if ($SkipProcessLaunch) { return $null }
@@ -280,7 +268,9 @@ function Get-SysmonEngineVersion([string]$Exe,[switch]$SkipProcessLaunch){
     Remove-Item $tempOut,$tempErr -Force -ErrorAction SilentlyContinue
     $m = [regex]::Match($txt, '(?i)\bsysmon v(?<v>\d+\.\d+(?:\.\d+)?)\b')
     if ($m.Success) { return Parse-Version $m.Groups['v'].Value }
-  } catch { <# best-effort: Sysmon help text version extraction fallback #> }
+  } catch {
+    Write-Verbose ("Sysmon help text version extraction failed for '{0}': {1}" -f $Exe,$_.Exception.Message)
+  }
   return $null
 }
 function Load-JsonOrDefault {
@@ -345,7 +335,9 @@ function Validate-ConfigXml([string]$file){
     return $false, $_.Exception.Message
   }
 }
-function Ensure-SysmonChannel([switch]$DoIt,[int]$MiB,[System.Management.Automation.PSCmdlet]$Cmdlet){
+function Ensure-SysmonChannel {
+  [CmdletBinding(SupportsShouldProcess = $true)]
+  param([switch]$DoIt,[int]$MiB,[System.Management.Automation.PSCmdlet]$Cmdlet)
   $name = 'Microsoft-Windows-Sysmon/Operational'
   $ok=$true; $msgs=@()
   try {
@@ -358,8 +350,13 @@ function Ensure-SysmonChannel([switch]$DoIt,[int]$MiB,[System.Management.Automat
       # they use the parent script's ShouldProcess decision.
       if ($DoIt) {
         if ($Cmdlet.ShouldProcess($name, 'Enable Sysmon Operational event channel')) {
-          Invoke-Wevtutil -Arguments @('sl', $name, '/e:true') | Out-Null
-          $msgs += "enabled"
+          $wevtOk = Invoke-Wevtutil -Arguments @('sl', $name, '/e:true')
+          if ($wevtOk) {
+            $msgs += "enabled"
+          } else {
+            $ok=$false
+            $msgs += "enable failed"
+          }
         } else {
           $ok=$false
           $msgs += "enable skipped by ShouldProcess"
@@ -372,8 +369,13 @@ function Ensure-SysmonChannel([switch]$DoIt,[int]$MiB,[System.Management.Automat
       $want = [int64]$MiB * 1024 * 1024
       if ($cur -lt $want -and $DoIt) {
         if ($Cmdlet.ShouldProcess($name, "Resize Sysmon Operational event channel to $MiB MiB")) {
-          Invoke-Wevtutil -Arguments @('sl', $name, "/ms:$want") | Out-Null
-          $msgs += ("size=" + $MiB + "MiB")
+          $wevtOk = Invoke-Wevtutil -Arguments @('sl', $name, "/ms:$want")
+          if ($wevtOk) {
+            $msgs += ("size=" + $MiB + "MiB")
+          } else {
+            $ok=$false
+            $msgs += "resize failed"
+          }
         } else {
           $ok=$false
           $msgs += "resize skipped by ShouldProcess"
@@ -386,10 +388,13 @@ function Ensure-SysmonChannel([switch]$DoIt,[int]$MiB,[System.Management.Automat
 }
 function Write-State([string]$p,[hashtable]$obj){
   try {
-    Ensure-Directory (Split-Path -Parent $p)
+    [void](Ensure-Directory (Split-Path -Parent $p))
     ($obj | ConvertTo-Json -Depth 8) | Out-File -LiteralPath $p -Encoding UTF8 -Force
     return $true
-  } catch { return $false }
+    } catch {
+      Write-Verbose ("Sysmon state write failed for '{0}': {1}" -f $p,$_.Exception.Message)
+      return $false
+    }
 }
 function Get-SysmonCurrentConfigSha256 {
   param([string]$Exe)
@@ -470,7 +475,9 @@ function Write-PrettySummary {
 # -----------------------------
 # Main
 # -----------------------------
-Ensure-EventSource
+if (-not (Ensure-EventSource)) {
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 $ok = $true
 $needUpdate = $false
 $installed = $false
@@ -763,13 +770,15 @@ foreach ($w in @($warns)) {
   if ($w -match 'Engine below')  { $code = 'SYSMON-EngineOld'; $sev = 'High' }
   if ($w -match 'drift')         { $code = 'SYSMON-Drift'; $sev = 'Medium' }
   if ($w -match 'Install|Update'){ $code = 'SYSMON-ApplyFail'; $sev = 'High' }
-  if ($w -match 'Channel')       { $code = 'SYSMON-Channel'; $sev = 'Low' }
+  if ($w -match 'Channel not compliant: .*enable failed') { $code = 'Sysmon-ChannelEnableFailed'; $sev = 'Medium' }
+  elseif ($w -match 'Channel not compliant: .*resize failed') { $code = 'Sysmon-ChannelResizeFailed'; $sev = 'Medium' }
+  elseif ($w -match 'Channel')   { $code = 'SYSMON-Channel'; $sev = 'Low' }
   if ($w -match 'not elevated')  { $code = 'SYSMON-NoAdmin'; $sev = 'Medium' }
   Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $w
 }
 # V2 output contract
 $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '16-Sysmon-Config-Updater.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '16-Sysmon-Config-Updater.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

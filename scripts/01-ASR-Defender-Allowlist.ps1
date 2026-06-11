@@ -153,26 +153,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '01-ASR-Defender-Allowlist.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -184,7 +166,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -192,7 +174,7 @@ if (-not $isWindowsHost) {
 
 # ----------------------------- Helpers --------------------------------------------
 
-function New-DefaultDesiredConfig {
+function Get-DefaultDesiredConfig {
   [CmdletBinding()]
   param()
 
@@ -212,7 +194,7 @@ function New-DefaultDesiredConfig {
   }
 }
 
-function New-NullSafeDesiredFromCurrent {
+function Get-NullSafeDesiredFromCurrent {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory=$true)][object]$Preference
@@ -234,7 +216,7 @@ function New-NullSafeDesiredFromCurrent {
   }
 }
 
-function New-MinimumBaselineDesiredConfig {
+function Get-MinimumBaselineDesiredConfig {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory=$true)][object]$Preference
@@ -250,7 +232,7 @@ function New-MinimumBaselineDesiredConfig {
   # Implementation:
   # - Desired = current lists (no removals), plus a minimal/empty baseline for the categories above.
   #   This prevents unintended removals, while ensuring a defined schema.
-  $cur = New-NullSafeDesiredFromCurrent -Preference $Preference
+  $cur = Get-NullSafeDesiredFromCurrent -Preference $Preference
 
   [pscustomobject]@{
     Defender = [pscustomobject]@{
@@ -309,6 +291,7 @@ function Write-AuditJson {
 
     ($Object | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $Path -Encoding UTF8
   } catch {
+    Write-Verbose ("ASR JSON save failed for '{0}': {1}" -f $Path,$_.Exception.Message)
   }
 }
 
@@ -471,8 +454,10 @@ function Apply-Diff {
 }
 
 # ----------------------------- Main ------------------------------------------------
-$script:Findings = New-FindingsList
-$null = Ensure-EventSource
+$script:Findings = Get-FindingsList
+if (-not (Ensure-EventSource)) {
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
 if (-not $isWindowsHost) {
@@ -523,7 +508,7 @@ if (-not $isWindowsHost) {
       Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f $row.Name,$row.Add,$row.Remove,$row.Rejected) -ForegroundColor Gray
     }
   }
-  $v2Result = New-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $final -Metadata @{ UnsupportedHost = $true }
+  $v2Result = Get-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $final -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 0
@@ -576,11 +561,11 @@ try {
     switch ($BaselineMode) {
       'Current' {
         $notes.Add("No usable JSON; baseline applied: desired state equals current state (no changes).")
-        $desired = New-NullSafeDesiredFromCurrent -Preference $pref
+        $desired = Get-NullSafeDesiredFromCurrent -Preference $pref
       }
       'Minimum' {
         $notes.Add("No usable JSON; baseline applied: minimum baseline (conservative, no broad default exclusions).")
-        $desired = New-MinimumBaselineDesiredConfig -Preference $pref
+        $desired = Get-MinimumBaselineDesiredConfig -Preference $pref
       }
     }
   }
@@ -588,7 +573,7 @@ try {
   if (-not $desired) {
     $baselineUsed = 'DefaultSchema'
     $notes.Add("Internal fallback used (empty schema).")
-    $desired = New-DefaultDesiredConfig
+    $desired = Get-DefaultDesiredConfig
   }
 
   $jDef = $desired.Defender
@@ -754,7 +739,7 @@ catch {
 
 # V2 output contract
 $resultToken = if ($final.Result -eq 'FAILED') { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $final -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $final -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

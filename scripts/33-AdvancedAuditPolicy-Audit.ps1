@@ -83,30 +83,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -118,14 +96,14 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
 }
 
-# C10: use canonical New-FindingsList from Results.psm1
-$script:Findings = New-FindingsList
+# C10: use canonical Get-FindingsList from Results.psm1
+$script:Findings = Get-FindingsList
 
 # -------------------- Helpers --------------------
 
@@ -350,7 +328,7 @@ if ($Mode -eq 'Remediate') {
     $msg = "Mode=Remediate requires a valid -DesiredPolicyJson (not defaults). Example: PATH/TO/JSON/auditpolicy.json"
     Write-Warning $msg
     Add-Finding -FindingList $script:Findings -Code 'AuditPol-NoDesiredPolicy' -Severity 'Critical' -Message $msg
-    $v2Result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+    $v2Result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
     Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
     if ($PassThru) { $v2Result }
     exit 1
@@ -429,7 +407,7 @@ Write-FindingsConsole -Findings $script:Findings
 
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ ParsedPolicies = $policies }
+$v2Result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ ParsedPolicies = $policies }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

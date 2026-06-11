@@ -104,11 +104,11 @@ foreach ($p in $patterns) {
 }
 
 if ($findings.Count -gt 0) {
-  Write-Host "Secret scan: potential matches found: $($findings.Count)" -ForegroundColor Yellow
+  Write-Information -MessageData "Secret scan: potential matches found: $($findings.Count)" -InformationAction Continue
   $findings | Sort-Object File,Line | ForEach-Object {
-    Write-Host ("- {0}:{1} ({2})" -f $_.File, $_.Line, $_.Pattern) -ForegroundColor Yellow
+    Write-Information -MessageData ("- {0}:{1} ({2})" -f $_.File, $_.Line, $_.Pattern) -InformationAction Continue
   }
   if ($FailOnMatch) { exit 1 }
 } else {
-  Write-Host 'Secret scan: no matches found.' -ForegroundColor Green
+  Write-Information -MessageData 'Secret scan: no matches found.' -InformationAction Continue
 }

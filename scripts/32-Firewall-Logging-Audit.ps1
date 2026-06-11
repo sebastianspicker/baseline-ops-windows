@@ -110,30 +110,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '32-Firewall-Logging-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -145,7 +123,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '32-Firewall-Logging-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '32-Firewall-Logging-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -155,9 +133,6 @@ if (-not $isWindowsHost) {
 
 
 # Ensure-Cmdlet imported from lib/External.psm1
-
-$script:FindingsTimeUtc = $true
-
 
 function TryParse-Bool {
   param([object]$Value)
@@ -237,13 +212,13 @@ function Resolve-DesiredSettings {
   # Parameter overrides only if user actually provided them
   if ($BoundParams.ContainsKey('EnableDropped')) {
     $p = TryParse-Bool $BoundParams['EnableDropped']
-    if ($null -eq $p) { Add-Finding -FindingList $script:Findings -Code 'FW-InvalidParamEnableDropped' -Severity 'Medium' -Message 'EnableDropped could not be parsed; using JSON/defaults.' }
+    if ($null -eq $p) { Add-Finding -Code 'FW-InvalidParamEnableDropped' -Severity 'Medium' -Message 'EnableDropped could not be parsed; using JSON/defaults.' -TimeUtc }
     else { $enableDropped = $p; $source = 'Params' }
   }
 
   if ($BoundParams.ContainsKey('EnableAllowed')) {
     $p = TryParse-Bool $BoundParams['EnableAllowed']
-    if ($null -eq $p) { Add-Finding -FindingList $script:Findings -Code 'FW-InvalidParamEnableAllowed' -Severity 'Medium' -Message 'EnableAllowed could not be parsed; using JSON/defaults.' }
+    if ($null -eq $p) { Add-Finding -Code 'FW-InvalidParamEnableAllowed' -Severity 'Medium' -Message 'EnableAllowed could not be parsed; using JSON/defaults.' -TimeUtc }
     else { $enableAllowed = $p; $source = 'Params' }
   }
 
@@ -254,19 +229,19 @@ function Resolve-DesiredSettings {
 
   if ($BoundParams.ContainsKey('LogMaxSizeKB')) {
     $p = TryParse-Int $BoundParams['LogMaxSizeKB']
-    if ($null -eq $p) { Add-Finding -FindingList $script:Findings -Code 'FW-InvalidParamLogMaxSizeKB' -Severity 'Medium' -Message 'LogMaxSizeKB could not be parsed; using JSON/defaults.' }
+    if ($null -eq $p) { Add-Finding -Code 'FW-InvalidParamLogMaxSizeKB' -Severity 'Medium' -Message 'LogMaxSizeKB could not be parsed; using JSON/defaults.' -TimeUtc }
     else { $logMaxSizeKB = $p; $source = 'Params' }
   }
 
   # Set-NetFirewallProfile max log size: 1..32767 KB. [web:21]
   if ($logMaxSizeKB -lt 1 -or $logMaxSizeKB -gt 32767) {
-    Add-Finding -FindingList $script:Findings -Code 'FW-InvalidDesiredLogMaxSize' -Severity 'Medium' -Message ("Desired LogMaxSizeKB '" + $logMaxSizeKB + "' is outside 1..32767; using default 20480.")
+    Add-Finding -Code 'FW-InvalidDesiredLogMaxSize' -Severity 'Medium' -Message ("Desired LogMaxSizeKB '" + $logMaxSizeKB + "' is outside 1..32767; using default 20480.") -TimeUtc
     $logMaxSizeKB = 20480
     if ($source -eq 'Params') { $source = 'Params(DefaultFallback)' } else { $source = 'JSON/Defaults' }
   }
 
   if ([string]::IsNullOrWhiteSpace($logFileName)) {
-    Add-Finding -FindingList $script:Findings -Code 'FW-InvalidDesiredLogFileName' -Severity 'Medium' -Message 'Desired LogFileName is empty; using default firewall log path.'
+    Add-Finding -Code 'FW-InvalidDesiredLogFileName' -Severity 'Medium' -Message 'Desired LogFileName is empty; using default firewall log path.' -TimeUtc
     $logFileName = "$env:SystemRoot\System32\LogFiles\Firewall\pfirewall.log"
     if ($source -eq 'Params') { $source = 'Params(DefaultFallback)' } else { $source = 'JSON/Defaults' }
   }
@@ -286,6 +261,7 @@ function Get-ProfileSnapshot {
 }
 
 function Set-ProfileLoggingIfNeeded {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$ProfileName,
     [Parameter(Mandatory)][string]$DesiredLogFileName,
@@ -297,16 +273,24 @@ function Set-ProfileLoggingIfNeeded {
   $current = Get-NetFirewallProfile -Name $ProfileName
 
   if ($current.LogFileName -ne $DesiredLogFileName) {
-    Set-NetFirewallProfile -Name $ProfileName -LogFileName $DesiredLogFileName
+    if ($PSCmdlet.ShouldProcess($ProfileName, "Set firewall log file to $DesiredLogFileName")) {
+      Set-NetFirewallProfile -Name $ProfileName -LogFileName $DesiredLogFileName
+    }
   }
   if ([int]$current.LogMaxSizeKilobytes -ne $DesiredMaxKB) {
-    Set-NetFirewallProfile -Name $ProfileName -LogMaxSizeKilobytes $DesiredMaxKB
+    if ($PSCmdlet.ShouldProcess($ProfileName, "Set firewall log max size to $DesiredMaxKB KB")) {
+      Set-NetFirewallProfile -Name $ProfileName -LogMaxSizeKilobytes $DesiredMaxKB
+    }
   }
   if ([bool]$current.LogBlocked -ne $DesiredLogBlocked) {
-    Set-NetFirewallProfile -Name $ProfileName -LogBlocked $DesiredLogBlocked
+    if ($PSCmdlet.ShouldProcess($ProfileName, "Set firewall blocked logging to $DesiredLogBlocked")) {
+      Set-NetFirewallProfile -Name $ProfileName -LogBlocked $DesiredLogBlocked
+    }
   }
   if ([bool]$current.LogAllowed -ne $DesiredLogAllowed) {
-    Set-NetFirewallProfile -Name $ProfileName -LogAllowed $DesiredLogAllowed
+    if ($PSCmdlet.ShouldProcess($ProfileName, "Set firewall allowed logging to $DesiredLogAllowed")) {
+      Set-NetFirewallProfile -Name $ProfileName -LogAllowed $DesiredLogAllowed
+    }
   }
 }
 
@@ -403,12 +387,12 @@ Ensure-Cmdlet -Name 'Set-NetFirewallProfile'
 
 # region Execution
 
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 $jsonSettings = Get-DesiredSettingsFromJson -Path $SettingsJsonPath
 if (-not $jsonSettings) {
   if (-not [string]::IsNullOrWhiteSpace($SettingsJsonPath) -and $SettingsJsonPath -ne 'PATH/TO/JSON/firewall-logging.json') {
-    Add-Finding -FindingList $script:Findings -Code 'FW-JsonNotLoaded' -Severity 'Low' -Message ("Settings JSON not loaded or invalid: '" + $SettingsJsonPath + "'. Using parameters/defaults.")
+    Add-Finding -Code 'FW-JsonNotLoaded' -Severity 'Low' -Message ("Settings JSON not loaded or invalid: '" + $SettingsJsonPath + "'. Using parameters/defaults.") -TimeUtc
   }
 }
 
@@ -419,28 +403,28 @@ $before = Get-ProfileSnapshot
 foreach ($p in $before) {
 
   if ($p.Enabled -ne $true) {
-    Add-Finding -FindingList $script:Findings -Code 'FW-ProfileDisabled' -Severity 'High' -Message ("Firewall profile '" + $p.Name + "' is disabled (Enabled=False).") -Extra @{ Profile = $p.Name }
+    Add-Finding -Code 'FW-ProfileDisabled' -Severity 'High' -Message ("Firewall profile '" + $p.Name + "' is disabled (Enabled=False).") -Extra @{ Profile = $p.Name } -TimeUtc
   }
 
   if ([string]::IsNullOrWhiteSpace($p.LogFileName)) {
-    Add-Finding -FindingList $script:Findings -Code 'FW-LogPathEmpty' -Severity 'Medium' -Message ("Firewall profile '" + $p.Name + "' has an empty LogFileName.") -Extra @{ Profile = $p.Name }
+    Add-Finding -Code 'FW-LogPathEmpty' -Severity 'Medium' -Message ("Firewall profile '" + $p.Name + "' has an empty LogFileName.") -Extra @{ Profile = $p.Name } -TimeUtc
   }
 
   # Recommendation: change logging size to at least 20480 KB. [web:6]
   if ([int]$p.LogMaxSizeKilobytes -lt 20480) {
-    Add-Finding -FindingList $script:Findings -Code 'FW-LogSizeTooSmall' -Severity 'Medium' -Message ("Firewall profile '" + $p.Name + "' has LogMaxSizeKilobytes=" + $p.LogMaxSizeKilobytes + "KB (recommended >= 20480KB).") -Extra @{ Profile = $p.Name; Size = $p.LogMaxSizeKilobytes }
+    Add-Finding -Code 'FW-LogSizeTooSmall' -Severity 'Medium' -Message ("Firewall profile '" + $p.Name + "' has LogMaxSizeKilobytes=" + $p.LogMaxSizeKilobytes + "KB (recommended >= 20480KB).") -Extra @{ Profile = $p.Name; Size = $p.LogMaxSizeKilobytes } -TimeUtc
   }
 
   if ($p.LogFileName -and ($p.LogFileName -ne $desired.LogFileName)) {
-    Add-Finding -FindingList $script:Findings -Code 'FW-LogPathMismatch' -Severity 'Low' -Message ("Firewall profile '" + $p.Name + "' LogFileName='" + $p.LogFileName + "', desired='" + $desired.LogFileName + "'.") -Extra @{ Profile = $p.Name; Current = $p.LogFileName; Desired = $desired.LogFileName }
+    Add-Finding -Code 'FW-LogPathMismatch' -Severity 'Low' -Message ("Firewall profile '" + $p.Name + "' LogFileName='" + $p.LogFileName + "', desired='" + $desired.LogFileName + "'.") -Extra @{ Profile = $p.Name; Current = $p.LogFileName; Desired = $desired.LogFileName } -TimeUtc
   }
 
   if ([bool]$p.LogBlocked -ne [bool]$desired.EnableDropped) {
-    Add-Finding -FindingList $script:Findings -Code 'FW-LogBlockedMismatch' -Severity 'Low' -Message ("Firewall profile '" + $p.Name + "' LogBlocked=" + $p.LogBlocked + ", desired=" + $desired.EnableDropped + ".") -Extra @{ Profile = $p.Name; Current = $p.LogBlocked; Desired = $desired.EnableDropped }
+    Add-Finding -Code 'FW-LogBlockedMismatch' -Severity 'Low' -Message ("Firewall profile '" + $p.Name + "' LogBlocked=" + $p.LogBlocked + ", desired=" + $desired.EnableDropped + ".") -Extra @{ Profile = $p.Name; Current = $p.LogBlocked; Desired = $desired.EnableDropped } -TimeUtc
   }
 
   if ([bool]$p.LogAllowed -ne [bool]$desired.EnableAllowed) {
-    Add-Finding -FindingList $script:Findings -Code 'FW-LogAllowedMismatch' -Severity 'Low' -Message ("Firewall profile '" + $p.Name + "' LogAllowed=" + $p.LogAllowed + ", desired=" + $desired.EnableAllowed + ".") -Extra @{ Profile = $p.Name; Current = $p.LogAllowed; Desired = $desired.EnableAllowed }
+    Add-Finding -Code 'FW-LogAllowedMismatch' -Severity 'Low' -Message ("Firewall profile '" + $p.Name + "' LogAllowed=" + $p.LogAllowed + ", desired=" + $desired.EnableAllowed + ".") -Extra @{ Profile = $p.Name; Current = $p.LogAllowed; Desired = $desired.EnableAllowed } -TimeUtc
   }
 }
 
@@ -449,7 +433,7 @@ if ($Mode -eq 'Remediate') {
   $logDir = Split-Path -Path $desired.LogFileName -Parent
   if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
     if ($PSCmdlet.ShouldProcess($logDir, 'Create firewall log directory')) {
-      Ensure-Directory -Path $logDir
+      [void](Ensure-Directory -Path $logDir)
     }
   }
 
@@ -504,7 +488,7 @@ if ($FailOnHigh) {
 
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '32-Firewall-Logging-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result.Summary -Metadata @{ Desired = $result.Desired; ProfilesBefore = $result.ProfilesBefore; ProfilesAfter = $result.ProfilesAfter }
+$v2Result = Get-V2ResultObject -ScriptName '32-Firewall-Logging-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result.Summary -Metadata @{ Desired = $result.Desired; ProfilesBefore = $result.ProfilesBefore; ProfilesAfter = $result.ProfilesAfter }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 

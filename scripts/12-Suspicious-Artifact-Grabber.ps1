@@ -105,7 +105,7 @@
 
 .EXAMPLE
   # Load a specific catalog JSON
-  .\IR-Grabber.ps1 -CatalogPath "PATH/TO/JSON/catalog.json" -Force
+  .\IR-Grabber.ps1 -CatalogPath "C:\ProgramData\WinMdmSecurity\grabber.catalog.json" -Force
 
 .EXAMPLE
   # Hash all process images (more I/O)
@@ -114,7 +114,7 @@
 .EXAMPLE
   # Automated usage: run and then consume the generated summary
   .\IR-Grabber.ps1 -Force
-  Get-Content -Raw "PATH/TO/OUTPUT/ir/H2/<timestamp>/Summary.json" | ConvertFrom-Json
+  Get-Content -Raw "$env:TEMP\win-mdm-ir-grabber\<timestamp>\Summary.json" | ConvertFrom-Json
 
 .NOTES
   Operational guidance:
@@ -159,30 +159,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -194,7 +172,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -243,18 +221,22 @@ function Reset-Trigger {
       }
       New-ItemProperty -Path $rk -Name 'Request' -PropertyType DWord -Value 0 -Force | Out-Null
     }
-  } catch { <# best-effort: trigger registry reset may fail without admin rights #> }
+  } catch {
+    Write-Verbose ("Artifact grabber trigger registry reset failed: {0}" -f $_.Exception.Message)
+  }
 }
 
 
 # -------------------------
 # MAIN
 # -------------------------
-$script:Findings = New-FindingsList
-Ensure-EventSource
+$script:Findings = Get-FindingsList
+if (-not (Ensure-EventSource)) {
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 
 $errors   = New-Object System.Collections.Generic.List[string]
-$findings = $false
+$hasFindings = $false
 $ok       = $true
 $summary  = $null
 $catalogNote = $null
@@ -263,7 +245,7 @@ try {
   Write-Information ("IR Grabber starting (v{0})" -f $ScriptVersion)
 
   $cat = Load-Catalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath -CatalogLoadNote ([ref]$catalogNote)
-  if (-not $cat) { $cat = New-BaseClone $DefaultCatalog }
+  if (-not $cat) { $cat = Get-BaseClone $DefaultCatalog }
 
   $tr = Read-Trigger -cat $cat -Force:$Force -CollectSamples:$CollectSamples
   if (-not $tr.Want) {
@@ -289,7 +271,7 @@ try {
     return
   }
 
-  $ts = New-RunId
+  $ts = Get-RunId
 
   $base = $null
   try { $base = [string]$cat.OutputBase } catch { $base = $null }
@@ -299,7 +281,7 @@ try {
   $work = Join-Path $base $ts
   $zip  = Join-Path $base ("Grabber-{0}-{1}.zip" -f $env:COMPUTERNAME,$ts)
 
-  Ensure-Directory $work
+  [void](Ensure-Directory $work)
 
   $summary = [ordered]@{
     Host    = $env:COMPUTERNAME
@@ -335,7 +317,7 @@ try {
   $tRes = Collect-Tasks -outDir $tDir -cat $cat
   $summary.Counts.Tasks = $tRes.Counts
   if ($tRes.Errors.Count -gt 0) { $tRes.Errors | ForEach-Object { [void]$errors.Add($_) } }
-  if (Safe-ToInt $tRes.Counts.Suspicious 0 -gt 0) { $findings = $true }
+  if (Safe-ToInt $tRes.Counts.Suspicious 0 -gt 0) { $hasFindings = $true }
 
   # WMI persistence
   $wDir = Join-Path $work 'wmi'
@@ -344,7 +326,7 @@ try {
   if ($wRes.Errors.Count -gt 0) { $wRes.Errors | ForEach-Object { [void]$errors.Add($_) } }
 
   $wmiTotal = (Safe-ToInt $wRes.Counts.Filters 0) + (Safe-ToInt $wRes.Counts.Bindings 0) + (Safe-ToInt $wRes.Counts.Cmd 0) + (Safe-ToInt $wRes.Counts.ActiveScript 0) + (Safe-ToInt $wRes.Counts.NTEventLog 0) + (Safe-ToInt $wRes.Counts.LogFile 0)
-  if ($wmiTotal -gt 0) { $findings = $true }
+  if ($wmiTotal -gt 0) { $hasFindings = $true }
 
   # Autoruns
   $aDir = Join-Path $work 'autoruns'
@@ -355,7 +337,7 @@ try {
   # Samples (optional)
   if ($tr.Samples -or (Safe-ToBool $cat.Samples.Enable $false)) {
     $sDir = Join-Path $work 'samples'
-    Ensure-Directory $sDir
+    [void](Ensure-Directory $sDir)
 
     $maxFileMB  = Safe-ToInt $tr.MaxFileMB (Safe-ToInt $cat.Samples.MaxFileSizeMB 20)
     $maxTotalMB = Safe-ToInt $tr.MaxTotalMB (Safe-ToInt $cat.Samples.MaxTotalMB 100)
@@ -381,7 +363,7 @@ try {
         $sha = $null
         if ($okc) { 
             $sha = Get-FileSha256 -Path $dstOrWhy
-            Add-Finding -FindingList $script:Findings -Code 'Grabber-SampleCollected' -Severity 'Low' -Message "Suspicious sample collected: $path" -Extra @{ Path = $path; Sha256 = $sha; Evidence = $dstOrWhy }
+            [void](Add-Finding -FindingList $script:Findings -Code 'Grabber-SampleCollected' -Severity 'Low' -Message "Suspicious sample collected: $path" -Extra @{ Path = $path; Sha256 = $sha; Evidence = $dstOrWhy })
         }
 
         $summary.Samples += [pscustomobject]@{
@@ -401,7 +383,7 @@ try {
       MaxFileMB  = $maxFileMB
       MaxTotalMB = $maxTotalMB
     }
-    if ($copiedCount -gt 0) { $findings = $true }
+    if ($copiedCount -gt 0) { $hasFindings = $true }
   }
 
   if ($errors.Count -gt 0) { $summary.Errors = @($errors) }
@@ -418,7 +400,7 @@ try {
   $msg = "IR Grabber: bundle created -> " + $zip
   if ($errors.Count -gt 0) { $msg = $msg + " | Errors: " + (@($errors) -join " | ") }
 
-  $warn = ($errors.Count -gt 0) -or [bool]$Strict -or $findings -or (-not $ok)
+  $warn = ($errors.Count -gt 0) -or [bool]$Strict -or $hasFindings -or (-not $ok)
   $eventId = 10020
   $level = 'Information'
   if ($warn) { $eventId = 10021; $level = 'Warning' }
@@ -433,15 +415,17 @@ try {
 } finally {
   if ($null -ne $summary) {
     if ($errors.Count -gt 0) { $summary.Errors = @($errors) }
-    try { Print-ConsoleSummary -Summary $summary -Errors $errors -Findings $findings -CatalogLoadNote $catalogNote } catch { <# best-effort: console summary display in finally block #> }
+    try { Print-ConsoleSummary -Summary $summary -Errors $errors -Findings $hasFindings -CatalogLoadNote $catalogNote } catch {
+      Write-Verbose ("IR grabber console summary failed: {0}" -f $_.Exception.Message)
+    }
   } else {
     Write-UiStatus -Label 'IR Grabber' -State 'FAIL' -Text "No summary object created."
   }
 } # end script try
 
 # V2 output contract
-$resultToken = if ($errors.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{}
+$resultToken = if ($errors.Count -gt 0) { 'FAIL' } elseif ($hasFindings -or $script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result $resultToken -Findings $script:Findings.ToArray() -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

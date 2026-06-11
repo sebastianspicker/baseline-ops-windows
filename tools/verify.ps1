@@ -3,8 +3,7 @@
 [CmdletBinding()]
 param(
   [string]$RootPath = '',
-  [switch]$SkipAnalyzer,
-  [switch]$RequireAnalyzer
+  [switch]$SkipAnalyzer
 )
 
 Set-StrictMode -Version Latest
@@ -26,13 +25,51 @@ if ([string]::IsNullOrWhiteSpace($RootPath)) {
 
 $bootstrapPath = [System.IO.Path]::Combine($RootPath, 'scripts', '_lib', 'Bootstrap.ps1')
 if (-not (Test-Path -LiteralPath $bootstrapPath)) {
-  Write-Host "ERROR: Bootstrap not found: $bootstrapPath" -ForegroundColor Red
+  Write-Error "Bootstrap not found: $bootstrapPath"
   exit 1
 }
 . $bootstrapPath
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 
 Write-Section -Title 'verify.ps1 - Static Checks'
+
+$script:GateResults = New-Object System.Collections.Generic.List[object]
+
+function Add-GateResult {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][ValidateSet('PASS','FAILED','SKIPPED')][string]$Status,
+    [string]$Detail = ''
+  )
+
+  [void]$script:GateResults.Add([pscustomobject]@{
+      Name   = $Name
+      Status = $Status
+      Detail = $Detail
+    })
+}
+
+function Complete-Verification {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][ValidateSet('PASS','FAILED','PARTIAL')][string]$Verdict,
+    [Parameter(Mandatory)][int]$ExitCode
+  )
+
+  Write-Section -Title 'Verification Gate Summary'
+  foreach ($gate in $script:GateResults) {
+    Write-UiLine ("{0,-12} {1,-8} {2}" -f $gate.Name, $gate.Status, $gate.Detail)
+  }
+
+  switch ($Verdict) {
+    'PASS' { Write-Success -Message 'VERDICT: PASS' }
+    'PARTIAL' { Write-Warn -Message 'VERDICT: PARTIAL' }
+    'FAILED' { Write-ErrorLine -Message 'VERDICT: FAILED' }
+  }
+
+  exit $ExitCode
+}
 
 if (-not (Test-Path -LiteralPath (Join-Path $RootPath 'scripts'))) {
   Write-ErrorLine -Message "scripts/ folder not found under $RootPath"
@@ -78,52 +115,55 @@ if ($parseErrors.Count -gt 0) {
   $parseErrors | Sort-Object File,Line,Column | ForEach-Object {
     Write-UiLine ("- {0}:{1}:{2} {3}" -f $_.File, $_.Line, $_.Column, $_.Message) -ForegroundColor Yellow
   }
-  exit 1
+  Add-GateResult -Name 'Parse' -Status 'FAILED' -Detail ("{0} file(s), {1} parse error(s)" -f $targets.Count, $parseErrors.Count)
+  Complete-Verification -Verdict 'FAILED' -ExitCode 1
 }
 
 Write-Success -Message 'Parse checks: OK'
+Add-GateResult -Name 'Parse' -Status 'PASS' -Detail ("{0} file(s)" -f $targets.Count)
 
-if (-not $SkipAnalyzer) {
-  $settingsPath = Join-Path $RootPath 'PSScriptAnalyzerSettings.psd1'
-  if (Get-Command -Name Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue) {
-    if (Test-Path -LiteralPath $settingsPath) {
-      Write-Info -Message 'Running PSScriptAnalyzer...'
-      $analyzerPaths = @()
-      foreach ($p in @(
-        (Join-Path $RootPath 'scripts'),
-        (Join-Path $RootPath 'lib'),
-        (Join-Path $RootPath 'tools')
-      )) {
-        if (Test-Path -LiteralPath $p) { $analyzerPaths += $p }
-      }
-
-      $analyzer = @()
-      foreach ($path in $analyzerPaths) {
-        $result = Invoke-ScriptAnalyzer -Path $path -Settings $settingsPath -Recurse -ErrorAction Continue
-        if ($result) { $analyzer += $result }
-      }
-      if ($analyzer -and $analyzer.Count -gt 0) {
-        Write-Warn -Message ("PSScriptAnalyzer reported {0} issue(s)." -f $analyzer.Count)
-        $analyzer | Sort-Object ScriptName,Line,Column | ForEach-Object {
-          Write-UiLine ("- {0}:{1}:{2} {3} ({4})" -f $_.ScriptName, $_.Line, $_.Column, $_.Message, $_.RuleName) -ForegroundColor Yellow
-        }
-        exit 2
-      }
-      Write-Success -Message 'PSScriptAnalyzer: OK'
-    } else {
-      Write-Warn -Message "PSScriptAnalyzer settings not found: $settingsPath"
-      if ($RequireAnalyzer) {
-        Write-ErrorLine -Message 'PSScriptAnalyzer is required, but settings were not found.'
-        exit 1
-      }
-    }
-  } else {
-    Write-Warn -Message 'Invoke-ScriptAnalyzer not available. Skipping analyzer.'
-    if ($RequireAnalyzer) {
-      Write-ErrorLine -Message 'PSScriptAnalyzer is required, but Invoke-ScriptAnalyzer is not available.'
-      exit 1
-    }
-  }
+if ($SkipAnalyzer) {
+  Write-Warn -Message 'PSScriptAnalyzer: SKIPPED (-SkipAnalyzer)'
+  Add-GateResult -Name 'Analyzer' -Status 'SKIPPED' -Detail 'Skipped by explicit -SkipAnalyzer request'
+  Complete-Verification -Verdict 'PARTIAL' -ExitCode 0
 }
 
-Write-Success -Message 'verify.ps1 completed successfully'
+$settingsPath = Join-Path $RootPath 'PSScriptAnalyzerSettings.psd1'
+if (-not (Get-Command -Name Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue)) {
+  Write-ErrorLine -Message 'Invoke-ScriptAnalyzer not available. Analyzer did not run.'
+  Add-GateResult -Name 'Analyzer' -Status 'FAILED' -Detail 'Invoke-ScriptAnalyzer not available'
+  Complete-Verification -Verdict 'FAILED' -ExitCode 2
+}
+
+if (-not (Test-Path -LiteralPath $settingsPath)) {
+  Write-ErrorLine -Message "PSScriptAnalyzer settings not found: $settingsPath"
+  Add-GateResult -Name 'Analyzer' -Status 'FAILED' -Detail 'Settings file missing'
+  Complete-Verification -Verdict 'FAILED' -ExitCode 2
+}
+
+Write-Info -Message 'Running PSScriptAnalyzer...'
+$analyzerPaths = @()
+foreach ($p in @(
+  (Join-Path $RootPath 'scripts'),
+  (Join-Path $RootPath 'lib'),
+  (Join-Path $RootPath 'tools')
+)) {
+  if (Test-Path -LiteralPath $p) { $analyzerPaths += $p }
+}
+
+$analyzer = @()
+foreach ($path in $analyzerPaths) {
+  $result = Invoke-ScriptAnalyzer -Path $path -Settings $settingsPath -Recurse -ErrorAction Continue
+  if ($result) { $analyzer += $result }
+}
+if ($analyzer -and $analyzer.Count -gt 0) {
+  Write-Warn -Message ("PSScriptAnalyzer reported {0} issue(s)." -f $analyzer.Count)
+  $analyzer | Sort-Object ScriptName,Line,Column | ForEach-Object {
+    Write-UiLine ("- {0}:{1}:{2} {3} ({4})" -f $_.ScriptName, $_.Line, $_.Column, $_.Message, $_.RuleName) -ForegroundColor Yellow
+  }
+  Add-GateResult -Name 'Analyzer' -Status 'FAILED' -Detail ("{0} issue(s)" -f $analyzer.Count)
+  Complete-Verification -Verdict 'FAILED' -ExitCode 2
+}
+Write-Success -Message 'PSScriptAnalyzer: OK'
+Add-GateResult -Name 'Analyzer' -Status 'PASS' -Detail ("{0} path(s)" -f $analyzerPaths.Count)
+Complete-Verification -Verdict 'PASS' -ExitCode 0

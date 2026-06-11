@@ -38,46 +38,16 @@ param(
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '00-Run-Profile.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 # Has-Property moved to lib/Common.psm1
-
-function ConvertTo-HashtableSafe {
-  [CmdletBinding()]
-  param([object]$InputObject)
-
-  if ($null -eq $InputObject) { return @{} }
-  if ($InputObject -is [hashtable]) { return $InputObject }
-
-  $hash = @{}
-  foreach ($p in $InputObject.PSObject.Properties) {
-    $hash[$p.Name] = $p.Value
-  }
-  return $hash
-}
 
 function Test-StepArgHasToken {
   [CmdletBinding()]
@@ -97,7 +67,7 @@ function Test-StepArgHasToken {
 # Profile JSON is untrusted run input. The runner owns deployment roots,
 # integrity controls, and confirmation policy; a profile step may add
 # script-specific arguments but must not weaken those run-level decisions.
-function Remove-ProfileStepBlockedArgs {
+function Get-ProfileStepAllowedArgs {
   [CmdletBinding()]
   param(
     [string[]]$ArgsList,
@@ -168,7 +138,7 @@ if ($LASTEXITCODE -ne 0) {
 $profileDoc = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
 $defaults = if (Has-Property -Object $profileDoc -Name 'Defaults') { $profileDoc.Defaults } else { [pscustomobject]@{} }
 $integrity = if (Has-Property -Object $profileDoc -Name 'Integrity') { $profileDoc.Integrity } else { [pscustomobject]@{} }
-$expectedHashes = if (Has-Property -Object $integrity -Name 'ExpectedHashes') { ConvertTo-HashtableSafe -InputObject $integrity.ExpectedHashes } else { @{} }
+$expectedHashes = if (Has-Property -Object $integrity -Name 'ExpectedHashes') { ConvertTo-Hashtable -Object $integrity.ExpectedHashes } else { @{} }
 
 # Profile JSON is untrusted run input. The operator's CLI invocation owns
 # runner-level side effects such as remediation mode and output destinations.
@@ -194,6 +164,9 @@ $results = New-Object System.Collections.ArrayList
 $stepStatus = @{}
 $pending = New-Object System.Collections.ArrayList
 foreach ($step in @($profileDoc.Steps)) { [void]$pending.Add($step) }
+$profileFindings = New-Object System.Collections.ArrayList
+$dependencyCycleDetected = $false
+$dependencyCycleScripts = @()
 
 Write-Section -Title ("Run Profile: {0}" -f $profileDoc.ProfileName)
 Write-KeyValue -Key 'ProfilePath' -Value (Resolve-Path -LiteralPath $ProfilePath).Path
@@ -247,8 +220,8 @@ while ($pending.Count -gt 0) {
       $stepArgs += @($step.Args)
     }
 
-    # Profile steps must not override runner-owned mode, path, integrity, or confirmation controls.
-    $stepArgs = @(Remove-ProfileStepBlockedArgs -ArgsList $stepArgs -BlockedNames @('Mode', 'Remediate', 'RootPath', 'ConfigPath', 'ExpectedHash', 'Confirm', 'WhatIf') -ScriptName $scriptName)
+    # Profile steps must not override runner-owned mode, path, integrity, output, or confirmation controls.
+    $stepArgs = @(Get-ProfileStepAllowedArgs -ArgsList $stepArgs -BlockedNames @('Mode', 'Remediate', 'RootPath', 'ConfigPath', 'ExpectedHash', 'OutputFormat', 'OutputPath', 'PassThru', 'Confirm', 'WhatIf') -ScriptName $scriptName)
 
     if (-not (Test-StepArgHasToken -ArgsList $stepArgs -Name 'Mode')) {
       $stepArgs += @('-Mode', $globalMode)
@@ -256,14 +229,12 @@ while ($pending.Count -gt 0) {
     if ($profileStrict -and -not (Test-StepArgHasToken -ArgsList $stepArgs -Name 'Strict')) {
       $stepArgs += '-Strict'
     }
-    if ($PassThru -and -not (Test-StepArgHasToken -ArgsList $stepArgs -Name 'PassThru')) {
-      $stepArgs += '-PassThru'
-    }
-
     $runParams = @{
-      ScriptName = $scriptName
-      ScriptArgs = $stepArgs
-      RootPath   = $RootPath
+      ScriptName   = $scriptName
+      ScriptArgs   = $stepArgs
+      RootPath     = $RootPath
+      OutputFormat = 'None'
+      PassThru     = $true
     }
 
     if ($profileRequireSigned) {
@@ -283,6 +254,8 @@ while ($pending.Count -gt 0) {
     $continueOnError = if (Has-Property -Object $step -Name 'ContinueOnError') { [bool]$step.ContinueOnError } else { $false }
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $processExitCode = $null
+    $childResult = $null
     try {
       if ($WhatIfPreference) {
         $exitCode = 0
@@ -291,10 +264,70 @@ while ($pending.Count -gt 0) {
         Write-UiLine -Text ("[SKIP] {0} (-WhatIf)" -f $scriptName) -Style Muted
       } else {
         Write-UiLine -Text ("[RUN ] {0}" -f $scriptName) -Style Header
-        & $runLocalPath @runParams
-        $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
-        $status = if ($exitCode -eq 0) { 'Success' } elseif ($exitCode -eq 2) { 'Partial' } else { 'Failed' }
-        $message = "Exit code: $exitCode"
+        $childOutput = @(& $runLocalPath @runParams)
+        $processExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+        $childResults = @(
+          $childOutput | Where-Object {
+            $null -ne $_ -and
+            $_.PSObject.Properties.Name -contains 'Result' -and
+            @('OK','WARN','FAIL') -contains [string]$_.Result
+          }
+        )
+
+        if ($childResults.Count -gt 0) {
+          $childResult = $childResults[-1]
+          switch ([string]$childResult.Result) {
+            'OK' {
+              $exitCode = 0
+              $status = 'Success'
+            }
+            'WARN' {
+              $exitCode = 2
+              $status = 'Partial'
+            }
+            'FAIL' {
+              $exitCode = 1
+              $status = 'Failed'
+            }
+          }
+          $message = "Child V2 result: $($childResult.Result); process exit code: $processExitCode"
+          $expectedProcessExitCode = switch ([string]$childResult.Result) {
+            'OK' { 0 }
+            'WARN' { 2 }
+            'FAIL' { 1 }
+          }
+          $actualChildExitCode = $processExitCode
+          if (Has-Property -Object $childResult -Name 'RunnerActualExitCode') {
+            $actualChildExitCode = [int]$childResult.RunnerActualExitCode
+          }
+          if ($null -ne $actualChildExitCode -and $actualChildExitCode -ne $expectedProcessExitCode) {
+            [void]$profileFindings.Add([pscustomobject]@{
+                Code       = 'Profile-ChildResultExitMismatch'
+                Severity   = if ([string]$childResult.Result -eq 'OK') { 'High' } else { 'Medium' }
+                Message    = "Child V2 result '$($childResult.Result)' does not match process exit code $actualChildExitCode for $scriptName."
+                ScriptName = $scriptName
+                ChildResult = [string]$childResult.Result
+                ExpectedExitCode = $expectedProcessExitCode
+                ActualExitCode = $actualChildExitCode
+              })
+            $message = "$message; V2 result/exit-code mismatch"
+            if ([string]$childResult.Result -eq 'OK') {
+              $exitCode = 1
+              $status = 'Failed'
+            }
+          }
+          if (Has-Property -Object $childResult -Name 'Findings' -and $null -ne $childResult.Findings) {
+            foreach ($finding in @($childResult.Findings)) {
+              if ($null -ne $finding) {
+                [void]$profileFindings.Add($finding)
+              }
+            }
+          }
+        } else {
+          $exitCode = 1
+          $status = 'Failed'
+          $message = "Child did not emit a valid V2 result. Process exit code: $processExitCode"
+        }
       }
     } catch {
       $exitCode = 1
@@ -310,6 +343,8 @@ while ($pending.Count -gt 0) {
         ScriptName = $scriptName
         Status     = $status
         ExitCode   = $exitCode
+        RunnerExitCode = if ($null -ne $processExitCode) { $processExitCode } else { $exitCode }
+        ChildResult = if ($null -ne $childResult) { [string]$childResult.Result } else { $null }
         DurationMs = $sw.ElapsedMilliseconds
         Message    = $message
       })
@@ -330,6 +365,14 @@ while ($pending.Count -gt 0) {
   }
 
   if (-not $progress -and $pending.Count -gt 0) {
+    $dependencyCycleDetected = $true
+    $dependencyCycleScripts = @($pending | ForEach-Object { [string]$_.Script })
+    [void]$profileFindings.Add([pscustomobject]@{
+        Code     = 'Profile-DependencyCycle'
+        Severity = 'High'
+        Message  = "Dependency cycle or unresolved dependency. Scripts not run: $($dependencyCycleScripts -join ', ')"
+        Scripts  = $dependencyCycleScripts
+      })
     foreach ($remaining in @($pending)) {
       [void]$results.Add([pscustomobject]@{
           ScriptName = [string]$remaining.Script
@@ -347,24 +390,28 @@ $resultsArr = @($results)
 $failed = @($resultsArr | Where-Object { $_.Status -eq 'Failed' }).Count
 $partial = @($resultsArr | Where-Object { $_.Status -eq 'Partial' }).Count
 $skipped = @($resultsArr | Where-Object { $_.Status -eq 'Skipped' }).Count
+$failedForResult = $failed
+if ($dependencyCycleDetected) { $failedForResult++ }
 
-$resultToken = if ($failed -gt 0) { 'FAIL' } elseif ($partial -gt 0 -or $skipped -gt 0) { 'WARN' } else { 'OK' }
+$resultToken = if ($failedForResult -gt 0) { 'FAIL' } elseif ($partial -gt 0 -or $skipped -gt 0) { 'WARN' } else { 'OK' }
 
 $summary = [pscustomobject]@{
   ProfileName   = [string]$profileDoc.ProfileName
   Version       = [string]$profileDoc.Version
   Mode          = $globalMode
   StepsTotal    = $resultsArr.Count
-  StepsFailed   = $failed
+  StepsFailed   = $failedForResult
   StepsPartial  = $partial
   StepsSkipped  = $skipped
+  DependencyCycle = $dependencyCycleDetected
+  DependencyCycleScripts = $dependencyCycleScripts
 }
 
-$runResult = New-V2ResultObject `
+$runResult = Get-V2ResultObject `
   -ScriptName '00-Run-Profile.ps1' `
   -Mode $globalMode `
   -Result $resultToken `
-  -Findings @() `
+  -Findings @($profileFindings) `
   -Summary $summary `
   -Metadata @{ Steps = $resultsArr; Validation = $validation }
 
@@ -384,7 +431,7 @@ if ($PassThru) {
   $runResult
 }
 
-if ($WhatIfPreference -and $failed -eq 0) { exit 0 }
-if ($failed -gt 0) { exit 1 }
+if ($WhatIfPreference -and $failedForResult -eq 0) { exit 0 }
+if ($failedForResult -gt 0) { exit 1 }
 if ($partial -gt 0 -or $skipped -gt 0) { exit 2 }
 exit 0

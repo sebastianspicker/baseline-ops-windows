@@ -61,16 +61,22 @@ Describe 'Get-FileSha256' {
     New-Item -Path $script:SourceDir -ItemType Directory -Force | Out-Null
   }
 
-  It 'Returns SHA256 hash for existing file' {
-    'test content' | Out-File -FilePath $script:TestFile -Encoding UTF8
+  It 'Returns the correct SHA256 hash for known content' {
+    [System.IO.File]::WriteAllBytes($script:TestFile, [System.Text.Encoding]::UTF8.GetBytes('hello world'))
     $result = Get-FileSha256 -Path $script:TestFile
-    $result | Should -Not -BeNullOrEmpty
-    $result | Should -Match '^[A-F0-9]{64}$'
+    $result | Should -Be 'B94D27B9934D3E08A52E52D7DA7DABFAC484EFE37A5380EE9088F7ACE2EFCDE9'
   }
 
   It 'Returns null for missing file' {
     $result = Get-FileSha256 -Path (Join-Path $script:SourceDir 'nonexistent.txt')
     $result | Should -BeNullOrEmpty
+  }
+
+  It 'Returns null when hash computation fails' {
+    'locked content' | Out-File -FilePath $script:TestFile -Encoding UTF8
+    Mock -CommandName Get-FileHash -ModuleName Evidence -MockWith { throw 'Access denied' }
+
+    Get-FileSha256 -Path $script:TestFile | Should -BeNullOrEmpty
   }
 
   It 'Returns consistent hash for same content' {
@@ -124,17 +130,33 @@ Describe 'Copy-ToEvidence' {
   }
 
   It 'Rejects file exceeding MaxFileSizeMB' {
-    # Create a file and set size limit to 0 MB (effectively 0 bytes, but the check is > not >=)
-    # Use MaxFileSizeMB=1 but create a very small file (should pass)
-    $success, $dest = Copy-ToEvidence -SourcePath $script:TestFile -EvidenceBaseDir $script:EvidenceDir -MaxFileSizeMB 1
-    $success | Should -Be $true
+    $largeFile = Join-Path $script:SourceDir 'large.bin'
+    [System.IO.File]::WriteAllBytes($largeFile, (New-Object byte[] ((1MB) + 1)))
+    $total = [ref][int64]123
+
+    $success, $reason = Copy-ToEvidence -SourcePath $largeFile -EvidenceBaseDir $script:EvidenceDir -MaxFileSizeMB 1 -RunningTotalBytes $total
+
+    $success | Should -Be $false
+    $reason | Should -Be 'file-too-large'
+    $total.Value | Should -Be 123
+    @(Get-ChildItem -LiteralPath $script:EvidenceDir -File -Recurse -ErrorAction SilentlyContinue).Count | Should -Be 0
   }
 
   It 'Enforces quota with RunningTotalBytes' {
-    # Set a small quota (1 byte total) so the file exceeds it
+    $total = [ref][int64](1MB)
+    $success, $reason = Copy-ToEvidence -SourcePath $script:TestFile -EvidenceBaseDir $script:EvidenceDir -MaxTotalMB 1 -RunningTotalBytes $total
+
+    $success | Should -Be $false
+    $reason | Should -Be 'quota-exceeded'
+    $total.Value | Should -Be (1MB)
+    @(Get-ChildItem -LiteralPath $script:EvidenceDir -File -Recurse -ErrorAction SilentlyContinue).Count | Should -Be 0
+  }
+
+  It 'Treats MaxTotalMB 0 as unlimited' {
     $total = [ref][int64]0
-    $success, $reason = Copy-ToEvidence -SourcePath $script:TestFile -EvidenceBaseDir $script:EvidenceDir -MaxTotalMB 0 -RunningTotalBytes $total
-    # MaxTotalMB=0 means no limit, so this should succeed
+    $success, $dest = Copy-ToEvidence -SourcePath $script:TestFile -EvidenceBaseDir $script:EvidenceDir -MaxTotalMB 0 -RunningTotalBytes $total
+
     $success | Should -Be $true
+    Test-Path -LiteralPath $dest | Should -Be $true
   }
 }

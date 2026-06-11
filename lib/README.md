@@ -27,7 +27,7 @@ Shared PowerShell modules used to remove script-level duplication and standardiz
 - `Validation.psm1` (v2)
   - path traversal checks, script-name validation, URL/ref validation
 - `Execution.psm1` (v2)
-  - retry helpers, process execution, timed script execution
+  - argument-token parsing and timed child script execution
 - `Serialization.psm1` (v2)
   - JSON/CSV writers (with path-traversal protection) and standardized v2 result objects
 
@@ -39,8 +39,8 @@ script needs severity/finding-specific console summary helpers. Use
 `Serialization.psm1` for machine-readable v2 output and file export; scripts
 should not hand-roll their final JSON/CSV writers.
 
-Use `Execution.psm1` when invoking child PowerShell scripts or native processes,
-especially when argument token parsing or timeout behavior matters. Use
+Use `Execution.psm1` when invoking child PowerShell scripts through the v2
+runner or when argument token parsing matters. Use
 `Validation.psm1` for path, script-name, URL, or reference validation before
 crossing a trust boundary such as profile input, remediation script selection,
 or output-file writing.

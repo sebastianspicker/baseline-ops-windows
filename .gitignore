@@ -14,16 +14,26 @@ Thumbs.db
 # Logs and outputs
 *.log
 *.tmp
+*.temp
 *.bak
 *.old
+*.orig
+*.rej
+*.local
+*.local.*
 
 # Generated artifacts (may contain sensitive data)
 *.csv
 *.tsv
+*.jsonl
 *.zip
 *.evtx
 *.cab
 *.etl
+*.dmp
+*.har
+*.clixml
+*.nupkg
 
 # Common output folders (support bundles / proofs)
 support/
@@ -35,6 +45,8 @@ eventlogs/
 defender/
 defender-support/
 _extracted/
+tmp/
+temp/
 
 # Environment files and credentials
 .env
@@ -62,6 +74,7 @@ progress.md
 ralph-loop/
 plans/
 .claude/
+.codacy/
 
 # Local harness and audit workspace state
 .agents/
@@ -71,9 +84,29 @@ AGENTS.md
 AUDIT.md
 HARNESS_PRINCIPLES.md
 code_review.md
+archive/
+docs/archive/
 docs/agent/
 docs/source-audit/
+docs/tmp/
+docs/temp/
+docs/*audit*.md
+docs/*remediation*.md
+docs/*plan*.md
+docs/*ledger*.md
+docs/*status*.md
+docs/*findings*.md
+docs/*index*.md
+!docs/README.md
+!docs/assets/
+!docs/assets/**
 scripts/topology_inventory.sh
+
+# Vendored, copied, or external source trees
+vendor/
+third_party/
+third-party/
+external/
 
 # CI/test artifacts
 coverage/

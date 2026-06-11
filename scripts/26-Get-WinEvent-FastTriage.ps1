@@ -131,30 +131,8 @@ $script:NoColor = [bool]$NoColor
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '26-Get-WinEvent-FastTriage.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -166,7 +144,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -202,7 +180,7 @@ function Resolve-TriageConfig {
   if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
 
   if (-not (Test-Path -LiteralPath $Path)) {
-    Write-InfoLine ("Config not found: {0}. Using defaults." -f $Path)
+    Write-Info ("Config not found: {0}. Using defaults." -f $Path)
     return $null
   }
 
@@ -212,8 +190,8 @@ function Resolve-TriageConfig {
     return ($raw | ConvertFrom-Json -ErrorAction Stop)
   }
   catch {
-    Write-InfoLine ("Config invalid/unreadable: {0}. Using defaults." -f $Path)
-    Write-InfoLine ("Config error: {0}" -f $_.Exception.Message)
+    Write-Info ("Config invalid/unreadable: {0}. Using defaults." -f $Path)
+    Write-Info ("Config error: {0}" -f $_.Exception.Message)
     return $null
   }
 }
@@ -371,7 +349,7 @@ catch {
     $eventsRaw = @()
   } else {
     Write-Warning "Get-WinEvent query failed: $($_.Exception.Message)"
-    $v2Result = New-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $_.Exception.Message } -Metadata @{}
+    $v2Result = Get-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $_.Exception.Message } -Metadata @{}
     Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
     if ($PassThru) { $v2Result }
     exit 1
@@ -409,6 +387,7 @@ if ($Deduplicate -and $events.Count -gt 1) {
 }
 
 $exported = $false
+$exportError = $null
 if ($ExportPath) {
   try {
     $dir = Split-Path -Path $ExportPath -Parent
@@ -429,7 +408,8 @@ if ($ExportPath) {
     $exported = $true
   }
   catch {
-    Write-Warning ("CSV export failed for '{0}'. Error: {1}" -f $ExportPath, $_.Exception.Message)
+    $exportError = $_.Exception.Message
+    Write-Warning ("CSV export failed for '{0}'. Error: {1}" -f $ExportPath, $exportError)
   }
 }
 
@@ -495,7 +475,7 @@ if (-not $Quiet) {
   Write-UiLine ("ExportPath   : {0}" -f ($(if ($ExportPath) { $ExportPath } else { '<none>' }))) -ForegroundColor DarkGray
   Write-UiLine ("Exported     : {0}" -f $exported) -ForegroundColor DarkGray
 
-  Write-InfoLine ""  # blank line (safe now)
+  Write-Info ""  # blank line (safe now)
 
   if ($levelStats.Count -gt 0) {
     Write-UiLine "Levels:" -ForegroundColor Cyan
@@ -506,7 +486,7 @@ if (-not $Quiet) {
   }
 
   if ($providerStats.Count -gt 0) {
-    Write-InfoLine ""
+    Write-Info ""
     Write-UiLine "Top Providers:" -ForegroundColor Cyan
     foreach ($g in $providerStats) {
       Write-UiLine ("  {0,-40} {1,6}" -f $g.Name, $g.Count) -ForegroundColor Gray
@@ -514,7 +494,7 @@ if (-not $Quiet) {
   }
 
   if ($idStats.Count -gt 0) {
-    Write-InfoLine ""
+    Write-Info ""
     Write-UiLine "Top Event IDs:" -ForegroundColor Cyan
     foreach ($g in $idStats) {
       Write-UiLine ("  {0,-10} {1,6}" -f $g.Name, $g.Count) -ForegroundColor Gray
@@ -522,7 +502,7 @@ if (-not $Quiet) {
   }
 
   if ($collapseSummary.Count -gt 0) {
-    Write-InfoLine ""
+    Write-Info ""
     Write-UiLine "Top Similar (collapsed):" -ForegroundColor Cyan
     foreach ($row in $collapseSummary) {
       $c = Get-LevelColor -LevelDisplayName $row.Level
@@ -534,7 +514,27 @@ if (-not $Quiet) {
 }
 
 # V2 output contract
-$v2Result = New-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+$exportRequested = -not [string]::IsNullOrWhiteSpace($ExportPath)
+$findings = @()
+if ($exportRequested -and -not $exported) {
+  $findings += [pscustomobject]@{
+    Code     = 'EVT-ExportFailed'
+    Severity = 'Medium'
+    Message  = ("Requested CSV export failed for '{0}': {1}" -f $ExportPath, $exportError)
+  }
+}
+$resultToken = if ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$summary = [pscustomobject]@{
+  ComputerName    = $env:COMPUTERNAME
+  Timestamp       = Get-Date
+  EventsReturned  = @($events).Count
+  ExportRequested = $exportRequested
+  ExportPath      = $(if ($exportRequested) { $ExportPath } else { $null })
+  Exported        = $exported
+  ExportError     = $exportError
+}
+$v2Result = Get-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result $resultToken -Findings $findings -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
+if ($resultToken -eq 'WARN') { exit 2 }
 exit 0

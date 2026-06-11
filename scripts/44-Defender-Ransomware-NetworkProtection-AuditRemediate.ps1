@@ -81,7 +81,7 @@ param(
 
   [switch]$ApplyNetworkProtectionServerPrereqs,
 
-  [switch]$DisableDatagramProcessingOnWinServer = $true,
+  [bool]$DisableDatagramProcessingOnWinServer = $true,
 
   [string]$ConfigJsonPath,
 
@@ -106,30 +106,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -141,7 +119,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -162,7 +140,7 @@ function Normalize-OptionalPath {
 
 function Get-OsInfo {
   try { Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop }
-  catch { Get-WmiObject -Class Win32_OperatingSystem }
+  catch { throw "Failed to query Win32_OperatingSystem via CIM: $($_.Exception.Message)" }
 }
 
 function Convert-CfaStateToToken {
@@ -267,33 +245,33 @@ function Write-ConsoleReport {
 
   $headerLine = ("=" * 54)
 
-  Write-ColorLine -Text "" -Color $cInfo
-  Write-ColorLine -Text $headerLine -Color $cDim
-  Write-ColorLine -Text "Defender Audit/Remediation" -Color $cTitle
-  Write-ColorLine -Text $headerLine -Color $cDim
+  Write-UiLine -Text "" -Color $cInfo
+  Write-UiLine -Text $headerLine -Color $cDim
+  Write-UiLine -Text "Defender Audit/Remediation" -Color $cTitle
+  Write-UiLine -Text $headerLine -Color $cDim
 
-  Write-ColorLine -Text ("Computer : {0}" -f $Summary.ComputerName) -Color $cInfo
-  Write-ColorLine -Text ("OS       : {0}" -f $Summary.OS) -Color $cInfo
-  Write-ColorLine -Text ("Mode     : {0}" -f $Summary.Mode) -Color $cInfo
-  Write-ColorLine -Text ("Time     : {0}" -f $Summary.Timestamp) -Color $cInfo
+  Write-UiLine -Text ("Computer : {0}" -f $Summary.ComputerName) -Color $cInfo
+  Write-UiLine -Text ("OS       : {0}" -f $Summary.OS) -Color $cInfo
+  Write-UiLine -Text ("Mode     : {0}" -f $Summary.Mode) -Color $cInfo
+  Write-UiLine -Text ("Time     : {0}" -f $Summary.Timestamp) -Color $cInfo
 
   $findColor = if ($Summary.FindingsCount -eq 0) { $cOk } elseif ($Summary.FindingsCount -lt 3) { $cWarn } else { $cBad }
-  Write-ColorLine -Text ("Findings : {0}" -f $Summary.FindingsCount) -Color $findColor
+  Write-UiLine -Text ("Findings : {0}" -f $Summary.FindingsCount) -Color $findColor
 
-  Write-ColorLine -Text "" -Color $cInfo
-  Write-ColorLine -Text "Desired configuration:" -Color $cTitle
-  Write-ColorLine -Text ("  CFA            : {0}" -f $Summary.DesiredCFA) -Color $cInfo
-  Write-ColorLine -Text ("  NP             : {0}" -f $Summary.DesiredNP) -Color $cInfo
-  Write-ColorLine -Text ("  NP prereqs     : {0}" -f $Summary.ApplyNPPrereqs) -Color $cInfo
-  Write-ColorLine -Text ("  Disable UDP srv: {0}" -f $(if ($Summary.IsServer) { $Summary.DisableDatagram } else { "n/a" })) -Color $cInfo
+  Write-UiLine -Text "" -Color $cInfo
+  Write-UiLine -Text "Desired configuration:" -Color $cTitle
+  Write-UiLine -Text ("  CFA            : {0}" -f $Summary.DesiredCFA) -Color $cInfo
+  Write-UiLine -Text ("  NP             : {0}" -f $Summary.DesiredNP) -Color $cInfo
+  Write-UiLine -Text ("  NP prereqs     : {0}" -f $Summary.ApplyNPPrereqs) -Color $cInfo
+  Write-UiLine -Text ("  Disable UDP srv: {0}" -f $(if ($Summary.IsServer) { $Summary.DisableDatagram } else { "n/a" })) -Color $cInfo
 
-  Write-ColorLine -Text "" -Color $cInfo
-  Write-ColorLine -Text "Before -> After:" -Color $cTitle
+  Write-UiLine -Text "" -Color $cInfo
+  Write-UiLine -Text "Before -> After:" -Color $cTitle
 
   function Write-StateDelta {
     param([string]$Name, [string]$From, [string]$To)
     $color = if ($From -eq $To) { $cOk } else { $cWarn }
-    Write-ColorLine -Text ("  {0,-14}: {1} -> {2}" -f $Name, $From, $To) -Color $color
+    Write-UiLine -Text ("  {0,-14}: {1} -> {2}" -f $Name, $From, $To) -Color $color
   }
 
   Write-StateDelta -Name 'CFA' -From $Before.ControlledFolderAccess -To $After.ControlledFolderAccess
@@ -306,8 +284,8 @@ function Write-ConsoleReport {
   }
 
   if ($findings.Count -gt 0) {
-    Write-ColorLine -Text "" -Color $cInfo
-    Write-ColorLine -Text "Findings (top 20):" -Color $cTitle
+    Write-UiLine -Text "" -Color $cInfo
+    Write-UiLine -Text "Findings (top 20):" -Color $cTitle
 
     foreach ($f in ($findings | Select-Object -First 20)) {
       $sevColor = switch ($f.Severity) {
@@ -315,20 +293,20 @@ function Write-ConsoleReport {
         'Medium' { $cWarn }
         default  { $cInfo }
       }
-      Write-ColorLine -Text ("  [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -Color $sevColor
+      Write-UiLine -Text ("  [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -Color $sevColor
     }
 
     if ($findings.Count -gt 20) {
-      Write-ColorLine -Text ("  (Only first 20 shown; total findings: {0})" -f $findings.Count) -Color $cDim
+      Write-UiLine -Text ("  (Only first 20 shown; total findings: {0})" -f $findings.Count) -Color $cDim
     }
   }
 
   if ($Summary.ExportPath) {
-    Write-ColorLine -Text "" -Color $cInfo
-    Write-ColorLine -Text ("CSV export : {0}" -f $Summary.ExportPath) -Color $cDim
+    Write-UiLine -Text "" -Color $cInfo
+    Write-UiLine -Text ("CSV export : {0}" -f $Summary.ExportPath) -Color $cDim
   }
 
-  Write-ColorLine -Text "" -Color $cInfo
+  Write-UiLine -Text "" -Color $cInfo
 }
 
 # -----------------------------
@@ -344,7 +322,7 @@ Ensure-Cmdlet -Name 'Set-MpPreference'
 # Init + safe defaults
 # -----------------------------
 
-$findingList = New-FindingsList
+$findingList = Get-FindingsList
 
 $ConfigJsonPath = Normalize-OptionalPath -Path $ConfigJsonPath
 $ExportPath     = Normalize-OptionalPath -Path $ExportPath
@@ -524,7 +502,7 @@ Write-ConsoleReport -Summary $summary -Before $before -After $after -FindingList
 
 # V2 output contract
 $resultToken = if ($Strict -and $findingList.Count -gt 0) { 'FAIL' } elseif ($findingList.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $findingList) -Summary $summary -Metadata @{ Before = $before; After = $after }
+$v2Result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $findingList) -Summary $summary -Metadata @{ Before = $before; After = $after }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

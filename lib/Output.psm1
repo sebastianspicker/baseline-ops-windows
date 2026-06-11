@@ -10,28 +10,14 @@ headers, key-value displays, status lines, and bullet lists. All functions
 respect the caller-scope NoColor, Quiet, and NoConsole switches.
 #>
 
+if (-not (Get-Command -Name Get-CallerValue -CommandType Function -ErrorAction SilentlyContinue)) {
+  Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -DisableNameChecking
+}
+
 $script:UiDefaults = [ordered]@{
   SectionWidth = 70
   KeyWidth     = 22
   PrefixWidth  = 7
-}
-
-function Get-CallerSwitchValue {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$Name,
-    [bool]$Default = $false
-  )
-
-  foreach ($scope in 1..3) {
-    try {
-      $var = Get-Variable -Name $Name -Scope $scope -ErrorAction Stop
-      return [bool]$var.Value
-    } catch {
-      # continue
-    }
-  }
-  return $Default
 }
 
 function Resolve-UiColor {
@@ -53,6 +39,7 @@ function Resolve-UiColor {
     '^(Warn|Warning|Drift|Changed)$' { return [ConsoleColor]::Yellow }
     '^(Err|Error|Bad|Fail|Failure|Danger)$' { return [ConsoleColor]::Red }
     '^(Dim|Muted)$' { return [ConsoleColor]::DarkGray }
+    '^(Debug|DEBUG)$' { return [ConsoleColor]::DarkGray }
     '^(Header|Title|Section)$' { return [ConsoleColor]::Cyan }
     default {
       $lower = $name.ToLowerInvariant()
@@ -100,22 +87,25 @@ function Write-UiLine {
   )
 
   if (-not $PSBoundParameters.ContainsKey('NoConsole')) {
-    $NoConsole = Get-CallerSwitchValue -Name 'NoConsole'
+    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    $NoConsole = [bool](Get-CallerValue -Name 'NoConsole')
   }
   if (-not $PSBoundParameters.ContainsKey('Quiet')) {
-    $Quiet = Get-CallerSwitchValue -Name 'Quiet'
+    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    $Quiet = [bool](Get-CallerValue -Name 'Quiet')
   }
   if ($NoConsole -or $Quiet) { return }
 
   $useInfo = $UseWriteInformation -or $UseInformationStream
   if (-not $PSBoundParameters.ContainsKey('UseWriteInformation') -and -not $PSBoundParameters.ContainsKey('UseInformationStream')) {
-    $useInfo = Get-CallerSwitchValue -Name 'UseWriteInformation'
-    if (-not $useInfo) { $useInfo = Get-CallerSwitchValue -Name 'UseInformationStream' }
+    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    $useInfo = [bool](Get-CallerValue -Name 'UseWriteInformation')
+    if (-not $useInfo) { $useInfo = [bool](Get-CallerValue -Name 'UseInformationStream') }
   }
 
   if ($useInfo) {
     if ([string]::IsNullOrEmpty($Message)) {
-      Write-Host ''
+      Write-Information -MessageData '' -InformationAction Continue
       return
     }
     Write-Information -MessageData $Message -InformationAction Continue
@@ -123,19 +113,26 @@ function Write-UiLine {
   }
 
   if (-not $PSBoundParameters.ContainsKey('NoColor')) {
-    $NoColor = Get-CallerSwitchValue -Name 'NoColor'
+    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    $NoColor = [bool](Get-CallerValue -Name 'NoColor')
   }
   if (-not $NoColor) {
-    $callerUseColor = Get-CallerSwitchValue -Name 'UseColor' -Default $true
+    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    $callerUseColor = Get-CallerValue -Name 'UseColor'
+    if ($null -eq $callerUseColor) { $callerUseColor = $true }
     if (-not $callerUseColor) { $NoColor = $true }
   }
 
   $fg = if ($NoColor) { $null } else { Resolve-UiColor -Style $Style }
-  if ($null -ne $fg) {
-    Write-Host $Message -ForegroundColor $fg -NoNewline:$NoNewLine
-  } else {
-    Write-Host $Message -NoNewline:$NoNewLine
+  if ($NoNewLine) {
+    if ($null -ne $fg) {
+      $PSCmdlet.Host.UI.Write($fg, $PSCmdlet.Host.UI.RawUI.BackgroundColor, $Message)
+    } else {
+      $PSCmdlet.Host.UI.Write($Message)
+    }
+    return
   }
+  Write-Information -MessageData $Message -InformationAction Continue
 }
 
 function Write-ConsoleLine {
@@ -150,33 +147,17 @@ function Write-ConsoleLine {
     [switch]$Quiet
   )
 
+  $lineParams = @{}
+  foreach ($key in $PSBoundParameters.Keys) {
+    $lineParams[$key] = $PSBoundParameters[$key]
+  }
+  [void]$lineParams.Remove('Config')
+
   if ($Config -and $Config.PSObject.Properties['ConsoleUseInformation'] -and [bool]$Config.ConsoleUseInformation) {
-    Write-UiLine -Message $Message -Style $Style -NoNewLine:$NoNewLine -UseWriteInformation
-    return
+    $lineParams['UseWriteInformation'] = $true
   }
 
-  if (-not $PSBoundParameters.ContainsKey('NoConsole')) {
-    $NoConsole = Get-CallerSwitchValue -Name 'NoConsole'
-  }
-  if (-not $PSBoundParameters.ContainsKey('Quiet')) {
-    $Quiet = Get-CallerSwitchValue -Name 'Quiet'
-  }
-  if ($NoConsole -or $Quiet) { return }
-
-  if (-not $PSBoundParameters.ContainsKey('NoColor')) {
-    $NoColor = Get-CallerSwitchValue -Name 'NoColor'
-  }
-  if (-not $NoColor) {
-    $callerUseColor = Get-CallerSwitchValue -Name 'UseColor' -Default $true
-    if (-not $callerUseColor) { $NoColor = $true }
-  }
-
-  $fg = if ($NoColor) { $null } else { Resolve-UiColor -Style $Style }
-  if ($null -ne $fg) {
-    Write-Host $Message -ForegroundColor $fg -NoNewline:$NoNewLine
-  } else {
-    Write-Host $Message -NoNewline:$NoNewLine
-  }
+  Write-UiLine @lineParams
 }
 
 function Write-ConsoleHeader {
@@ -343,15 +324,6 @@ function Write-UiHeader {
   if ($Subtitle) { Write-UiLine -Message ("  " + $Subtitle) -Style 'Muted' }
 }
 
-function Write-UiSection {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$Title,
-    [int]$Width = $script:UiDefaults.SectionWidth
-  )
-  Write-Section -Title $Title -Width $Width
-}
-
 function Write-UiSeparator {
   [CmdletBinding()]
   param(
@@ -394,18 +366,14 @@ function Write-KeyValue {
 
   $prefix = if ($Indent -gt 0) { ' ' * $Indent } else { '' }
   $valueText = if ([string]::IsNullOrWhiteSpace($Value)) { $EmptyValueText } else { $Value }
+  [void]$KeyStyle
 
-  $useInfo = Get-CallerSwitchValue -Name 'UseWriteInformation' -Default $false
-  if (-not $useInfo) { $useInfo = Get-CallerSwitchValue -Name 'UseInformationStream' -Default $false }
+  # TODO: Replace caller-scope probing with explicit parameter plumbing.
+  $useInfo = [bool](Get-CallerValue -Name 'UseWriteInformation')
+  if (-not $useInfo) { $useInfo = [bool](Get-CallerValue -Name 'UseInformationStream') }
 
-  if ($useInfo) {
-    $line = $prefix + ("{0,-$KeyWidth}: {1}" -f $Key, $valueText)
-    Write-UiLine -Message $line -Style $ValueStyle -UseWriteInformation
-    return
-  }
-
-  Write-ConsoleLine -Message ($prefix + ("{0,-$KeyWidth}: " -f $Key)) -Style $KeyStyle -NoNewLine
-  Write-ConsoleLine -Message $valueText -Style $ValueStyle
+  $line = $prefix + ("{0,-$KeyWidth}: {1}" -f $Key, $valueText)
+  Write-UiLine -Message $line -Style $ValueStyle -UseWriteInformation:$useInfo
 }
 
 function Write-UiStatus {
@@ -471,16 +439,6 @@ function Write-UiBool {
   Write-KeyValue -Key $Key -Value $Value -ValueStyle $style
 }
 
-function Write-ColorLine {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
-    [object]$Color = 'Info',
-    [switch]$NoNewLine
-  )
-  Write-UiLine -Message $Text -Style $Color -NoNewLine:$NoNewLine
-}
-
 function Write-ConsoleBanner {
   [CmdletBinding()]
   param(
@@ -521,18 +479,6 @@ function Write-ConsoleList {
   if ($Items.Count -gt $MaxItems) {
     Write-UiLine -Message ("  ... ({0} more)" -f ($Items.Count - $MaxItems)) -Style 'Muted'
   }
-}
-
-function Write-InfoLine {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][AllowEmptyString()][string]$Message)
-  Write-Info -Message $Message
-}
-
-function Write-WarnLine {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][AllowEmptyString()][string]$Message)
-  Write-Warn -Message $Message
 }
 
 <#
@@ -580,7 +526,7 @@ function Write-UiSummaryTable {
   $findingsList = @()
   if ($null -ne $Findings) { $findingsList = @($Findings) }
 
-  $counts = [ordered]@{ Critical = 0; High = 0; Medium = 0; Low = 0; Info = 0; OK = 0 }
+  $counts = [ordered]@{ Critical = 0; High = 0; Medium = 0; Low = 0; Info = 0; Skipped = 0; OK = 0 }
   foreach ($f in $findingsList) {
     $sev = if ($f.PSObject.Properties['Severity']) { $f.Severity } else { 'Info' }
     switch -Regex ($sev) {
@@ -588,6 +534,7 @@ function Write-UiSummaryTable {
       '^(High|Error|Err|Fail|Failed)$' { $counts.High++; break }
       '^(Medium|Warn|Warning|Drift)$' { $counts.Medium++; break }
       '^(Low)$' { $counts.Low++; break }
+      '^(Skip|Skipped)$' { $counts.Skipped++; break }
       '^(OK|Pass|Passed|Good|Success)$' { $counts.OK++; break }
       default { $counts.Info++ }
     }
@@ -606,6 +553,7 @@ function Write-UiSummaryTable {
   if ($counts.Medium -gt 0)   { Write-KeyValue -Key '  Medium'   -Value ([string]$counts.Medium)   -ValueStyle 'Warn' }
   if ($counts.Low -gt 0)      { Write-KeyValue -Key '  Low'      -Value ([string]$counts.Low)      -ValueStyle 'Info' }
   if ($counts.Info -gt 0)     { Write-KeyValue -Key '  Info'     -Value ([string]$counts.Info)     -ValueStyle 'Muted' }
+  if ($counts.Skipped -gt 0)  { Write-KeyValue -Key '  Skipped'  -Value ([string]$counts.Skipped)  -ValueStyle 'Muted' }
   if ($counts.OK -gt 0)       { Write-KeyValue -Key '  OK'       -Value ([string]$counts.OK)       -ValueStyle 'Success' }
 
   $overallResult = if ($counts.Critical -gt 0 -or $counts.High -gt 0) { 'FAIL' }
@@ -618,32 +566,43 @@ function Write-UiSummaryTable {
   Write-UiLine -Message ('=' * $Width) -Style 'Dim'
 }
 
-Export-ModuleMember -Function `
-  Write-UiLine, `
-  Write-ConsoleLine, `
-  Write-ConsoleHeader, `
-  Write-Section, `
-  Write-BlankLine, `
-  Write-Info, `
-  Write-InfoLine, `
-  Write-Warn, `
-  Write-WarnLine, `
-  Write-ErrorLine, `
-  Write-Success, `
-  Write-StatusLine, `
-  Write-UiRule, `
-  Write-UiHeader, `
-  Write-UiSection, `
-  Write-UiSeparator, `
-  Write-KeyValue, `
-  Write-UiStatus, `
-  Write-UiBullet, `
-  Write-UiList, `
-  Write-UiBlankLine, `
-  Write-UiBool, `
-  Write-ColorLine, `
-  Write-ConsoleBanner, `
-  Write-ConsoleInfo, `
-  Write-ConsoleList, `
-  Write-UiProgress, `
-  Write-UiSummaryTable
+Set-Alias -Name Write-UiSection -Value Write-Section
+Set-Alias -Name Write-ColorLine -Value Write-UiLine
+Set-Alias -Name Write-InfoLine -Value Write-Info
+Set-Alias -Name Write-WarnLine -Value Write-Warn
+
+$script:OutputExportedFunctions = @(
+  'Write-UiLine'
+  'Write-ConsoleLine'
+  'Write-ConsoleHeader'
+  'Write-Section'
+  'Write-BlankLine'
+  'Write-Info'
+  'Write-Warn'
+  'Write-ErrorLine'
+  'Write-Success'
+  'Write-StatusLine'
+  'Write-UiRule'
+  'Write-UiHeader'
+  'Write-UiSeparator'
+  'Write-KeyValue'
+  'Write-UiStatus'
+  'Write-UiBullet'
+  'Write-UiList'
+  'Write-UiBlankLine'
+  'Write-UiBool'
+  'Write-ConsoleBanner'
+  'Write-ConsoleInfo'
+  'Write-ConsoleList'
+  'Write-UiProgress'
+  'Write-UiSummaryTable'
+)
+
+$script:OutputExportedAliases = @(
+  'Write-UiSection'
+  'Write-ColorLine'
+  'Write-InfoLine'
+  'Write-WarnLine'
+)
+
+Export-ModuleMember -Function $script:OutputExportedFunctions -Alias $script:OutputExportedAliases

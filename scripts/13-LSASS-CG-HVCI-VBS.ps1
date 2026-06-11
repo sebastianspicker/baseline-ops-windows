@@ -13,16 +13,12 @@
 
   The script can run in two modes:
   - Audit mode (default): reads configuration and runtime state and returns a single structured result object.
-  - Remediation mode (-Remediate): applies a baseline configuration (idempotent) and reports whether a reboot is required.
+  - Remediation mode (-Mode Remediate): applies a baseline configuration (idempotent) and reports whether a reboot is required.
 
   Output behavior:
   - Pipeline output is always exactly ONE structured object (suitable for Export-Csv / ConvertTo-Json / Where-Object).
   - Human-friendly console output is printed at the end (pretty summary with color) and does not pollute the pipeline.
   - A detailed, plain-text summary is written to the Windows Event Log.
-
-.PARAMETER Remediate
-  If specified, the script applies the baseline registry settings for the checked controls.
-  The script does not force a reboot; it only reports RebootRequired=True when changes were made.
 
 .PARAMETER Strict
   Controls pass/fail semantics:
@@ -40,7 +36,7 @@
   Optional path to a JSON configuration file to override defaults such as:
   - EventSource / EventLog name
   - Strict / RequireBlockList default behavior
-  - Baseline registry values applied by -Remediate
+  - Baseline registry values applied by Remediate mode
   - Console output colors
 
   If the JSON file is missing or invalid, the script continues with built-in defaults.
@@ -51,6 +47,8 @@
 
 .PARAMETER Mode
   Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+  In Remediate mode, the script applies baseline registry settings for the checked controls.
+  The script does not force a reboot; it only reports RebootRequired=True when changes were made.
 
 .PARAMETER OutputFormat
   Output format: Console, Json, Csv, or None.
@@ -90,7 +88,7 @@
   Runs an audit only. Prints a console summary and returns a single result object to the pipeline.
 
 .EXAMPLE
-  PS> .\13-LSASS-CG-HVCI-VBS.ps1 -Remediate
+  PS> .\13-LSASS-CG-HVCI-VBS.ps1 -Mode Remediate
 
   Applies baseline registry values (if not blocked by policy), reports the actions taken and whether a reboot is required.
 
@@ -105,7 +103,7 @@
   Audits blocklist state but does not fail compliance if the blocklist is disabled.
 
 .EXAMPLE
-  PS> .\13-LSASS-CG-HVCI-VBS.ps1 -ConfigPath "PATH/TO/JSON" -Remediate | ConvertTo-Json -Depth 6
+  PS> .\13-LSASS-CG-HVCI-VBS.ps1 -ConfigPath "PATH/TO/JSON" -Mode Remediate | ConvertTo-Json -Depth 6
 
   Loads settings from JSON (if present) and runs remediation. The structured output is serialized to JSON for logging or upload.
 
@@ -123,7 +121,7 @@
     The script reports RebootRequired=True when it changes registry configuration that typically requires reboot.
 
   Operational guidance:
-  - Treat -Remediate as a configuration change: pilot first, ensure rollback options, and schedule reboots.
+  - Treat Remediate mode as a configuration change: pilot first, ensure rollback options, and schedule reboots.
   - Use the pipeline object for automation; use the console summary for interactive runs.
 
 #>
@@ -150,27 +148,9 @@ Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
 Set-StrictMode -Version Latest
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -182,7 +162,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -271,7 +251,7 @@ function Try-LoadJsonConfig {
   }
 }
 
-function New-EmptyResult {
+function Get-EmptyResult {
   param(
     [bool]$Strict,
     [bool]$RequireBlockList,
@@ -348,12 +328,6 @@ function New-EmptyResult {
     EventId                       = 3600
     ExitCode                      = 0
   }
-}
-
-function Add-Text {
-  param([ref]$Arr,[string]$Text)
-  if ($null -eq $Arr.Value) { $Arr.Value = @() }
-  $Arr.Value += $Text
 }
 
 function Get-ConsoleColorSafe {
@@ -446,7 +420,7 @@ function Write-PrettySummary {
 # -----------------------------
 # Main
 # -----------------------------
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 $eventOkId  = 3600
 $eventBadId = 3610
@@ -461,11 +435,13 @@ if ($PSBoundParameters.ContainsKey('RequireBlockList') -eq $false) { $RequireBlo
 
 $source  = [string]$cfg.EventSource
 $logName = [string]$cfg.EventLog
-Ensure-EventSource -Source $source -Log $logName
+if (-not (Ensure-EventSource -Source $source -Log $logName)) {
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 
 $sanitizedConfigPath = $(if ([string]::IsNullOrWhiteSpace($ConfigPath) -or $ConfigPath -eq 'PATH/TO/JSON') { 'PATH/TO/JSON' } else { $ConfigPath })
 
-$result = New-EmptyResult -Strict $Strict -RequireBlockList $RequireBlockList -Remediate $Remediate -IsAdmin (Test-IsAdmin) -ConfigPath $sanitizedConfigPath -ConfigLoaded $cfgLoad.Loaded -ConfigLoadReason $cfgLoad.Reason
+$result = Get-EmptyResult -Strict $Strict -RequireBlockList $RequireBlockList -Remediate $Remediate -IsAdmin (Test-IsAdmin) -ConfigPath $sanitizedConfigPath -ConfigLoaded $cfgLoad.Loaded -ConfigLoadReason $cfgLoad.Reason
 $result.EventSource = $source
 $result.EventLog    = $logName
 
@@ -530,7 +506,9 @@ try {
   try {
     $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
     $result.HypervisorPresent = [bool]$cs.HypervisorPresent
-  } catch { <# best-effort: HypervisorPresent property may not be available #> }
+  } catch {
+    Write-Verbose ("HypervisorPresent query failed: {0}" -f $_.Exception.Message)
+  }
 
   # -----------------------------
   # Compliance evaluation
@@ -723,7 +701,7 @@ try {
 
 # V2 output contract
 $resultToken = if ($result.ExitCode -ne 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 

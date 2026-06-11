@@ -120,26 +120,8 @@ Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameCheck
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -151,14 +133,14 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
 }
 
 # C10: canonical findings list
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 if ([string]::IsNullOrWhiteSpace($ProofPath)) {
   $ProofPath = Join-Path ([System.IO.Path]::GetTempPath()) 'SecureRemoteAccessGuardrails-proof.json'
 }
@@ -269,10 +251,13 @@ function Get-LocalFirewallRuleByDisplayName {
   catch { return $null }
 }
 function Remove-LocalFirewallRuleByDisplayName {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param([string]$DisplayName)
   try {
     $r = Get-LocalFirewallRuleByDisplayName -DisplayName $DisplayName
-    if ($r) { $r | Remove-NetFirewallRule -ErrorAction Stop | Out-Null }
+    if ($r -and $PSCmdlet.ShouldProcess($DisplayName, 'Remove local firewall rule')) {
+      $r | Remove-NetFirewallRule -ErrorAction Stop | Out-Null
+    }
     return $true
   } catch { return $false }
 }
@@ -280,11 +265,16 @@ function Disable-LocalBuiltinRdpInbound {
   try {
     $rules = Get-NetFirewallRule -PolicyStore PersistentStore -DisplayGroup 'Remote Desktop' -Direction Inbound -ErrorAction Stop
     foreach ($r in @($rules)) {
-      try { $r | Disable-NetFirewallRule -ErrorAction Stop | Out-Null } catch { <# best-effort: individual rule disable may fail #> }
+      try { $r | Disable-NetFirewallRule -ErrorAction Stop | Out-Null } catch {
+        Write-Verbose ("Built-in RDP firewall rule disable failed for '{0}': {1}" -f $r.Name,$_.Exception.Message)
+      }
     }
-  } catch { <# best-effort: built-in RDP rules may not exist on all editions #> }
+  } catch {
+    Write-Verbose ("Built-in RDP firewall rule enumeration failed: {0}" -f $_.Exception.Message)
+  }
 }
 function Ensure-RdpFirewallRules {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param([psobject]$Rdp,[switch]$Remediate)
   $actions = @()
   $drifts  = @()
@@ -419,6 +409,7 @@ function Ensure-RdpFirewallRules {
 # Local group enforcement
 # ----------------------------
 function Ensure-RdpGroupMembership {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param([psobject]$Rdp,[switch]$Remediate)
   $actions = @()
   $drifts  = @()
@@ -462,6 +453,7 @@ function Ensure-RdpGroupMembership {
 # Remote Assistance enforcement
 # ----------------------------
 function Ensure-RemoteAssistance {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param([psobject]$Ra,[switch]$Remediate)
   $actions = @()
   $drifts  = @()
@@ -504,7 +496,9 @@ function Ensure-RemoteAssistance {
 # ----------------------------
 # Main
 # ----------------------------
-Ensure-EventSource -Source $ScriptEventSource -LogName $ScriptEventLog
+if (-not (Ensure-EventSource -Source $ScriptEventSource -LogName $ScriptEventLog)) {
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 $start      = Get-Date
 $isElevated = Test-IsElevated
 $changes = @()
@@ -734,7 +728,7 @@ foreach ($d in @($drifts)) {
 }
 # V2 output contract
 $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

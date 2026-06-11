@@ -114,30 +114,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -149,7 +127,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -305,7 +283,7 @@ function Get-CodeIntegrityLsaEvents {
 # ----------------------------
 # Config (defaults + JSON overlay)
 # ----------------------------
-function New-DefaultConfig {
+function Get-DefaultConfig {
   return @{
     Mode                 = 'Audit'
     TargetRunAsPPL       = 1
@@ -536,7 +514,7 @@ function Write-PrettySummary {
 Require-Admin
 
 $configPath = if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath } else { Get-TokenValue -ArgsList $LegacyArgs -Token 'Config' }
-$cfgResult = Read-ConfigWithDefaults -Path $configPath -Defaults (New-DefaultConfig) -AsHashtable -OnWarning { param($m) Write-WarnLine $m }
+$cfgResult = Read-ConfigWithDefaults -Path $configPath -Defaults (Get-DefaultConfig) -AsHashtable -OnWarning { param($m) Write-Warn $m }
 $config = $cfgResult.Config
 $config = Apply-ArgsOverlay -Config $config -ArgsList $LegacyArgs
 $config['Mode'] = if ($Mode -eq 'Remediate') { 'Remediate' } else { 'Audit' }
@@ -556,9 +534,27 @@ $CILookbackHours = $config['CILookbackHours']
 $ExportPath = $config['ExportPath']
 $Quiet = $config['Quiet']
 
-$Findings = New-FindingsList
+$Findings = Get-FindingsList
 $Changes  = New-Object 'System.Collections.Generic.List[string]'
 $rebootRequired = $false
+$registryWriteFailed = $false
+
+if ($cfgResult.Meta.Error) {
+  [void](Add-Finding -FindingList $Findings -Code 'LSA-ConfigLoadFailed' -Severity 'Medium' `
+    -Message ("Config JSON could not be loaded; using parameters/defaults. Error: {0}" -f $cfgResult.Meta.Error))
+}
+
+function Add-LsaRegistryWriteFailureFinding {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][int]$Value
+  )
+
+  $null = Add-Finding -FindingList $Findings -Code 'LSA-RegWriteFailed' -Severity 'High' `
+    -Message ("Failed to write LSA protection registry value '{0}' at '{1}'. Hardening not applied." -f $Name, $Path) `
+    -Extra @{ Path = $Path; Name = $Name; Value = $Value }
+}
 
 $lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
 
@@ -591,9 +587,13 @@ if ($Mode -eq 'Remediate') {
     } else {
       if ($current.RunAsPPL -ne 0) {
         if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Set registry value to 0")) {
-          Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value 0
-          $rebootRequired = $true
-          $Changes.Add(("RunAsPPL: {0} -> 0" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
+          if (Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value 0) {
+            $rebootRequired = $true
+            $Changes.Add(("RunAsPPL: {0} -> 0" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
+          } else {
+            Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPL' -Value 0
+            $registryWriteFailed = $true
+          }
         }
       }
     }
@@ -601,9 +601,13 @@ if ($Mode -eq 'Remediate') {
     if ($ManageBoot) {
       if ($current.RunAsPPLBoot -ne 0) {
         if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPLBoot", "Set registry value to 0")) {
-          Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0
-          $rebootRequired = $true
-          $Changes.Add(("RunAsPPLBoot: {0} -> 0" -f (Format-Nullable $current.RunAsPPLBoot))) | Out-Null
+          if (Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0) {
+            $rebootRequired = $true
+            $Changes.Add(("RunAsPPLBoot: {0} -> 0" -f (Format-Nullable $current.RunAsPPLBoot))) | Out-Null
+          } else {
+            Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0
+            $registryWriteFailed = $true
+          }
         }
       }
     }
@@ -612,18 +616,26 @@ if ($Mode -eq 'Remediate') {
 
     if ($current.RunAsPPL -ne $TargetRunAsPPL) {
       if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Set registry value to $TargetRunAsPPL")) {
-        Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value $TargetRunAsPPL
-        $rebootRequired = $true
-        $Changes.Add(("RunAsPPL: {0} -> {1}" -f (Format-Nullable $current.RunAsPPL), $TargetRunAsPPL)) | Out-Null
+        if (Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value $TargetRunAsPPL) {
+          $rebootRequired = $true
+          $Changes.Add(("RunAsPPL: {0} -> {1}" -f (Format-Nullable $current.RunAsPPL), $TargetRunAsPPL)) | Out-Null
+        } else {
+          Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPL' -Value $TargetRunAsPPL
+          $registryWriteFailed = $true
+        }
       }
     }
 
     if ($ManageBoot) {
       if ($current.RunAsPPLBoot -ne $TargetRunAsPPL) {
         if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPLBoot", "Set registry value to $TargetRunAsPPL")) {
-          Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value $TargetRunAsPPL
-          $rebootRequired = $true
-          $Changes.Add(("RunAsPPLBoot: {0} -> {1}" -f (Format-Nullable $current.RunAsPPLBoot), $TargetRunAsPPL)) | Out-Null
+          if (Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value $TargetRunAsPPL) {
+            $rebootRequired = $true
+            $Changes.Add(("RunAsPPLBoot: {0} -> {1}" -f (Format-Nullable $current.RunAsPPLBoot), $TargetRunAsPPL)) | Out-Null
+          } else {
+            Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPLBoot' -Value $TargetRunAsPPL
+            $registryWriteFailed = $true
+          }
         }
       }
     }
@@ -650,6 +662,7 @@ $result = [pscustomobject]@{
     ManageRunAsPPLBoot  = $ManageBoot
     DisableMethod       = $DisableMethod
     RebootRequired      = $rebootRequired
+    RegistryWriteFailed = $registryWriteFailed
     FindingsCount       = [int]$Findings.Count
     Changes             = @($Changes.ToArray())
     Timestamp           = (Get-Date)
@@ -672,8 +685,8 @@ if ($ExportPath) {
 if ($OutputFormat -eq 'Console' -and -not $Quiet) { Write-PrettySummary -Result $result }
 
 # V2 output contract
-$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After }
+$resultToken = if ($registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

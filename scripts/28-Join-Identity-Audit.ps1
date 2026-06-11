@@ -75,30 +75,8 @@ Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '28-Join-Identity-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -110,7 +88,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -118,8 +96,7 @@ if (-not $isWindowsHost) {
 
 # region Helpers
 
-$script:FindingsTimestampLocal = $true
-$Findings = New-FindingsList
+$Findings = Get-FindingsList
 
 function Get-StringOrNull {
   [CmdletBinding()]
@@ -158,7 +135,7 @@ function Import-JsonConfig {
     $raw | ConvertFrom-Json
   }
   catch {
-    Add-Finding -FindingList $Findings -Code 'CONFIG-JsonInvalid' -Severity 'Medium' -Message ("Config JSON could not be loaded from '{0}': {1}" -f $Path, $_.Exception.Message)
+    Add-Finding -Code 'CONFIG-JsonInvalid' -Severity 'Medium' -Message ("Config JSON could not be loaded from '{0}': {1}" -f $Path, $_.Exception.Message) -TimestampLocal
     $null
   }
 }
@@ -208,7 +185,7 @@ try {
     OsName, OsVersion, OsBuildNumber, WindowsProductName, WindowsVersion, TimeZone
 }
 catch {
-  Add-Finding -FindingList $Findings -Code 'DATA-GetComputerInfo-Failed' -Severity 'High' -Message ("Get-ComputerInfo failed: {0}" -f $_.Exception.Message)
+  Add-Finding -Code 'DATA-GetComputerInfo-Failed' -Severity 'High' -Message ("Get-ComputerInfo failed: {0}" -f $_.Exception.Message) -TimestampLocal
 }
 
 $cs = $null
@@ -216,7 +193,7 @@ try {
   $cs = Get-CimInstance -ClassName Win32_ComputerSystem
 }
 catch {
-  Add-Finding -FindingList $Findings -Code 'DATA-CIM-Win32_ComputerSystem-Failed' -Severity 'High' -Message ("Get-CimInstance Win32_ComputerSystem failed: {0}" -f $_.Exception.Message)
+  Add-Finding -Code 'DATA-CIM-Win32_ComputerSystem-Failed' -Severity 'High' -Message ("Get-CimInstance Win32_ComputerSystem failed: {0}" -f $_.Exception.Message) -TimestampLocal
 }
 
 $domainRoleValue = if ($cs -and $null -ne $cs.DomainRole) { [int]$cs.DomainRole } else { $null }
@@ -228,18 +205,18 @@ $domainRoleText  = Resolve-DomainRoleText -DomainRole $domainRoleValue
 
 if ($effective.ExpectedDomain) {
   if (-not $cs) {
-    Add-Finding -FindingList $Findings -Code 'JOIN-Unknown' -Severity 'Medium' -Message 'Domain join status could not be determined (Win32_ComputerSystem not available).'
+    Add-Finding -Code 'JOIN-Unknown' -Severity 'Medium' -Message 'Domain join status could not be determined (Win32_ComputerSystem not available).' -TimestampLocal
   }
   else {
     if ($cs.PartOfDomain -ne $true) {
-      Add-Finding -FindingList $Findings -Code 'JOIN-NotDomainJoined' -Severity 'High' -Message 'System is not domain-joined (PartOfDomain is False/Null).'
+      Add-Finding -Code 'JOIN-NotDomainJoined' -Severity 'High' -Message 'System is not domain-joined (PartOfDomain is False/Null).' -TimestampLocal
     }
     else {
       if ([string]::IsNullOrWhiteSpace([string]$cs.Domain)) {
-        Add-Finding -FindingList $Findings -Code 'JOIN-DomainEmpty' -Severity 'Medium' -Message 'PartOfDomain=True but Domain is empty/whitespace (unexpected).'
+        Add-Finding -Code 'JOIN-DomainEmpty' -Severity 'Medium' -Message 'PartOfDomain=True but Domain is empty/whitespace (unexpected).' -TimestampLocal
       }
       elseif ($cs.Domain.ToLowerInvariant() -ne $effective.ExpectedDomain.ToLowerInvariant()) {
-        Add-Finding -FindingList $Findings -Code 'JOIN-DomainMismatch' -Severity 'High' -Message ("Domain='{0}' differs from ExpectedDomain='{1}'." -f $cs.Domain, $effective.ExpectedDomain)
+        Add-Finding -Code 'JOIN-DomainMismatch' -Severity 'High' -Message ("Domain='{0}' differs from ExpectedDomain='{1}'." -f $cs.Domain, $effective.ExpectedDomain) -TimestampLocal
       }
     }
   }
@@ -283,7 +260,7 @@ if ($effective.ExportPath) {
     $summary | Export-Csv -Path $effective.ExportPath -NoTypeInformation -Encoding UTF8
   }
   catch {
-    Add-Finding -FindingList $Findings -Code 'EXPORT-Csv-Failed' -Severity 'Medium' -Message ("Export-Csv failed: {0}" -f $_.Exception.Message)
+    Add-Finding -Code 'EXPORT-Csv-Failed' -Severity 'Medium' -Message ("Export-Csv failed: {0}" -f $_.Exception.Message) -TimestampLocal
 
     $summary = [pscustomobject]@{
       ComputerName   = $summary.ComputerName
@@ -339,10 +316,10 @@ if (-not $NoConsoleSummary) {
   $statusColor = if ($Findings.Count -gt 0) { 'Yellow' } else { 'Green' }
   $statusText  = if ($Findings.Count -gt 0) { 'ATTENTION' } else { 'OK' }
 
-  Write-ColorLine '' 'Gray'
-  Write-ColorLine '========================================' 'DarkGray'
-  Write-ColorLine (' Identity Audit - {0}' -f $statusText) $statusColor
-  Write-ColorLine '========================================' 'DarkGray'
+  Write-UiLine '' 'Gray'
+  Write-UiLine '========================================' 'DarkGray'
+  Write-UiLine (' Identity Audit - {0}' -f $statusText) $statusColor
+  Write-UiLine '========================================' 'DarkGray'
 
   Write-KeyValue -Key 'Computer' -Value $summary.ComputerName -ValueColor 'Cyan'
   Write-KeyValue -Key 'DNS'      -Value $summary.DNSHostName -ValueColor 'Gray'
@@ -372,22 +349,22 @@ if (-not $NoConsoleSummary) {
   }
 
   if ($Findings.Count -gt 0) {
-    Write-ColorLine '' 'Gray'
-    Write-ColorLine 'Findings:' 'Yellow'
+    Write-UiLine '' 'Gray'
+    Write-UiLine 'Findings:' 'Yellow'
     foreach ($f in ($Findings | Sort-Object @{Expression={ Get-SeverityRank -Severity $_.Severity }; Descending = $true }, Code)) {
       $c = switch ($f.Severity) { 'High' { 'Red' } 'Medium' { 'Yellow' } default { 'Gray' } }
-      Write-ColorLine ("- [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) $c
+      Write-UiLine ("- [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) $c
     }
   }
 
-  Write-ColorLine '' 'Gray'
+  Write-UiLine '' 'Gray'
 }
 
 # endregion Pretty console output
 
 # V2 output contract
 $resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

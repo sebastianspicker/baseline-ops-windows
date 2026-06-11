@@ -139,26 +139,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '05-WUFB-Proofing.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -170,14 +152,14 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
 }
 
 # C10: canonical findings list
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 # -----------------------------
 # Console helpers (no pipeline)
@@ -210,7 +192,7 @@ function Get-REG {
 }
 
 function Set-WufbDword {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
@@ -242,7 +224,7 @@ function Set-WufbDword {
 }
 
 function Set-REGSZ {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
@@ -274,7 +256,7 @@ function Set-REGSZ {
 }
 
 function Remove-REGValue {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
@@ -328,7 +310,7 @@ function Add-Result {
 # Catalog defaults + loader
 # -----------------------------
 
-function New-DefaultCatalog {
+function Get-DefaultCatalog {
   [CmdletBinding()]
   param()
 
@@ -354,7 +336,7 @@ function Load-Catalog {
     [System.Collections.Generic.List[string]]$Notes
   )
 
-  $default = New-DefaultCatalog
+  $default = Get-DefaultCatalog
 
   if ($CatalogPath) {
     if (Test-Path -LiteralPath $CatalogPath) {
@@ -423,7 +405,7 @@ function Get-SafeProofPath {
   }
 }
 
-function New-FirstErrorNote {
+function Get-FirstErrorNote {
   [CmdletBinding()]
   param([Parameter(Mandatory)]$ErrorRecord)
 
@@ -478,8 +460,10 @@ Write-KeyValue -Key 'Mode'  -Value $modeText
 Write-UiLine ""
 
 try {
-  $eventSourceReady = Ensure-EventSource
-  if (-not $eventSourceReady) { $notes.Add("Event source not ensured. EventLog write may fail.") | Out-Null }
+  if (-not (Ensure-EventSource)) {
+    Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+    $notes.Add("Event source not ensured. EventLog write may fail.") | Out-Null
+  }
 
   $isAdmin = Test-IsAdmin
   $Proof.Result.Elevated = $isAdmin
@@ -634,14 +618,16 @@ try {
 
 } catch {
   $ok = $false
-  $notes.Add((New-FirstErrorNote -ErrorRecord $_)) | Out-Null
+  $notes.Add((Get-FirstErrorNote -ErrorRecord $_)) | Out-Null
   $eventLogStatus = "Not written (error)"
 
   try {
     $fallback = Join-Path $env:ProgramData 'WUfB-Proofing\proof-error.json'
     Save-Json -InputObject $Proof -Path $fallback -Depth 12 -NoBom
     $proofWrittenPath = $fallback
-  } catch { <# best-effort: fallback proof save on fatal error #> }
+  } catch {
+    Write-Verbose ("Fallback WUfB proof save failed: {0}" -f $_.Exception.Message)
+  }
 } finally {
   $hasDriftFinal = ($drifts.Count -gt 0)
 
@@ -741,7 +727,7 @@ foreach ($d in @($drifts)) {
 
 # V2 output contract
 $resultToken = if (-not $ok) { 'FAIL' } elseif ($hasDriftFinal) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Ok = $ok; HasDrift = $hasDriftFinal; Timestamp = Get-Date }) -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Ok = $ok; HasDrift = $hasDriftFinal; Timestamp = Get-Date }) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

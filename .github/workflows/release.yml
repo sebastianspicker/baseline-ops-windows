@@ -1,0 +1,97 @@
+name: Release Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to upload assets to
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          fi
+          if [[ ! "$tag" =~ ^v ]]; then
+            echo "Release tag must start with v: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "asset=win-mdm-security-hardening-kit-${tag}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          git archive \
+            --format=zip \
+            --output="dist/${{ steps.release.outputs.asset }}" \
+            HEAD \
+            README.md CHANGELOG.md CONTRIBUTING.md LICENSE SECURITY.md PSScriptAnalyzerSettings.psd1 \
+            docs examples lib scripts tools
+          sha256sum "dist/${{ steps.release.outputs.asset }}" > "dist/${{ steps.release.outputs.asset }}.sha256"
+
+      - name: Attest package provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: dist/${{ steps.release.outputs.asset }}
+
+      - name: Download attestation bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh attestation download \
+            "dist/${{ steps.release.outputs.asset }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --format jsonl \
+            > "dist/${{ steps.release.outputs.asset }}.intoto.jsonl"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload \
+            "${{ steps.release.outputs.tag }}" \
+            "dist/${{ steps.release.outputs.asset }}" \
+            "dist/${{ steps.release.outputs.asset }}.sha256" \
+            "dist/${{ steps.release.outputs.asset }}.intoto.jsonl" \
+            --clobber

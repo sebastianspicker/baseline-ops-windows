@@ -26,15 +26,9 @@
   - DenyActionPathRegex: Array of regex patterns for denied executable/working directory locations.
   - DenyCommandLineRegex: Array of regex patterns considered suspicious in command lines.
   - AllowPublisherOrgRegex: Array of regex patterns matched against certificate subject to allow trusted publishers.
-  - PurgeUnapproved: Boolean; when true, risky tasks are quarantined (export XML + disable) but only if -Remediate is also set.
+  - PurgeUnapproved: Boolean; when true, risky tasks are quarantined (export XML + disable) but only in Remediate mode.
   - QuarantineDir: Directory used to store exported task XML during quarantine.
   - Proof.OutFile: Path to the evidence JSON file.
-.PARAMETER Remediate
-  Enables remediation actions.
-  When set, the script may:
-  - Enable critical tasks that are present but disabled.
-  - Quarantine risky tasks (export XML + disable) only when the catalog property PurgeUnapproved is true.
-  When not set, the script runs in audit-only mode (no changes are made).
 .PARAMETER Strict
   Controls compliance interpretation.
   When set, any drift (missing critical tasks, disabled critical tasks, quarantine errors, or other detected issues) is treated as a failure state.
@@ -47,6 +41,8 @@
   None. This script does not accept pipeline input.
 .PARAMETER Mode
   Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+  In Remediate mode, the script may enable disabled critical tasks and quarantine risky tasks
+  only when the catalog property PurgeUnapproved is true.
 .PARAMETER OutputFormat
   Output format: Console, Json, Csv, or None.
 .PARAMETER OutputPath
@@ -78,12 +74,12 @@
   PS> .\07-ScheduledTasks-Hygiene.ps1 -CatalogPath 'PATH/TO/JSON/tasks-catalog.json'
   Runs an audit using an explicit catalog JSON.
 .EXAMPLE
-  PS> .\07-ScheduledTasks-Hygiene.ps1 -Remediate
+  PS> .\07-ScheduledTasks-Hygiene.ps1 -Mode Remediate
   Runs with remediation enabled:
   - Attempts to enable critical tasks that are disabled.
   - Quarantine occurs only if the loaded catalog sets PurgeUnapproved = true.
 .EXAMPLE
-  PS> .\07-ScheduledTasks-Hygiene.ps1 -Remediate -WhatIf
+  PS> .\07-ScheduledTasks-Hygiene.ps1 -Mode Remediate -WhatIf
   Simulates remediation actions. Shows what would be changed without making any changes.
 .EXAMPLE
   PS> $proof = .\07-ScheduledTasks-Hygiene.ps1
@@ -124,26 +120,8 @@ Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '07-ScheduledTasks-Hygiene.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -155,17 +133,14 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result 'WARN' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit 2
 }
 
 # C10: canonical findings list
-$script:Findings = New-FindingsList
-# =========================
-# Defaults (anonymized)
-# =========================
+$script:Findings = Get-FindingsList
 $DefaultEventSource    = 'TasksHygiene'
 $DefaultQuarantineDir  = Join-Path ([System.IO.Path]::GetTempPath()) 'TasksHygiene-Quarantine'
 $DefaultProofOutFile   = Join-Path ([System.IO.Path]::GetTempPath()) 'TasksHygiene-proof.json'
@@ -190,7 +165,7 @@ function Get-PropValue {
       return $Object.PSObject.Properties[$Name].Value
     }
   } catch {
-    # Intentionally swallow: property access can throw in strict mode or with special types
+    Write-Verbose ("Property lookup failed for '{0}': {1}" -f $Name,$_.Exception.Message)
   }
   return $Default
 }
@@ -241,7 +216,7 @@ function StartsWithAny {
 # =========================
 # Catalog (safe defaults)
 # =========================
-function New-DefaultCatalog {
+function Get-DefaultCatalog {
   param([string]$QuarantineDir,[string]$ProofOutFile)
   return [pscustomobject]([ordered]@{
     CriticalTasks = @(
@@ -474,6 +449,7 @@ function Get-PublisherInfo {
   }
 }
 function Enable-TaskIfPresent {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param([string]$TaskName,[string]$TaskPath,[switch]$Remediate)
   $TaskPath = Normalize-TaskPath $TaskPath
   $full = "$TaskPath$TaskName"
@@ -501,6 +477,7 @@ function Enable-TaskIfPresent {
   }
 }
 function Quarantine-Task {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param([string]$TaskName,[string]$TaskPath,[string]$QuarantineDir,[switch]$Remediate)
   $TaskPath = Normalize-TaskPath $TaskPath
   $full = "$TaskPath$TaskName"
@@ -509,7 +486,7 @@ function Quarantine-Task {
   }
   $act = New-Object System.Collections.Generic.List[string]
   try {
-    Ensure-Directory $QuarantineDir
+    [void](Ensure-Directory $QuarantineDir)
     $xmlObj = Export-TaskXmlObject -TaskName $TaskName -TaskPath $TaskPath
     if ($xmlObj) {
       $safeName = ($full.TrimStart('\') -replace '[\\/:*?"<>|]','_') + ".xml"
@@ -618,11 +595,15 @@ $Proof = [pscustomobject]([ordered]@{
 # Main
 # =========================
 $EventSource = $DefaultEventSource
-Ensure-EventSource -Source $EventSource
+if (-not (Ensure-EventSource -Source $EventSource)) {
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 $ok = $true
 $drifts  = New-Object System.Collections.Generic.List[string]
 $changes = New-Object System.Collections.Generic.List[string]
-$catalogFallback = New-DefaultCatalog -QuarantineDir $DefaultQuarantineDir -ProofOutFile $DefaultProofOutFile
+$enumerationSucceeded = $true
+$enumerationError = $null
+$catalogFallback = Get-DefaultCatalog -QuarantineDir $DefaultQuarantineDir -ProofOutFile $DefaultProofOutFile
 try {
   $isAdmin = Test-IsAdmin
   if (-not $isAdmin) {
@@ -638,7 +619,15 @@ try {
   }
   $proofObj.OutFile = Coalesce-String (Get-PropValue $proofObj 'OutFile' $null) $DefaultProofOutFile
   $all = @()
-  try { $all = Get-ScheduledTask -ErrorAction Stop } catch { $all = @() }  # ScheduledTasks module
+  try {
+    $all = Get-ScheduledTask -ErrorAction Stop
+  } catch {
+    $enumerationSucceeded = $false
+    $enumerationError = $_.Exception.Message
+    $ok = $false
+    $drifts.Add("Scheduled task enumeration failed: $enumerationError")
+    $all = @()
+  }
   $taskInfos = foreach($t in $all) { Get-TaskInfo -Task $t }
   # --- Ensure critical tasks ---
   $criticalRecords = New-Object System.Collections.Generic.List[object]
@@ -683,6 +672,10 @@ try {
         Reasons          = $r.Reasons
       })
       $riskyRecords.Add($entry)
+      $reasonText = (@($r.Reasons) -join '; ')
+      if ([string]::IsNullOrWhiteSpace($reasonText)) { $reasonText = 'risk rule matched' }
+      $ok = $false
+      $drifts.Add(("Suspicious scheduled task: {0} ({1})" -f $ti.FullPath, $reasonText))
       if ([bool]$cat.PurgeUnapproved) {
         $q = Quarantine-Task -TaskName $ti.Name -TaskPath $ti.TaskPath -QuarantineDir $cat.QuarantineDir -Remediate:$Remediate
         if ($q.Ok -and @($q.Actions).Count -gt 0) {
@@ -703,6 +696,8 @@ try {
     Remediate     = [bool]$Remediate
     Strict        = [bool]$Strict
     IsAdmin       = [bool]$isAdmin
+    EnumerationSucceeded = [bool]$enumerationSucceeded
+    EnumerationError = $enumerationError
     ProofOutFile  = $proofObj.OutFile
     QuarantineDir = $cat.QuarantineDir
   })
@@ -761,7 +756,7 @@ catch {
   Write-UiHeader "Scheduled Tasks Hygiene Summary"
   Write-UiStatus -Label "FAIL" -State FAIL -Text $errMsg
   Add-Finding -FindingList $script:Findings -Code 'TASK-Error' -Severity 'High' -Message $errMsg
-  $v2Result = New-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $errMsg } -Metadata @{}
+  $v2Result = Get-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $errMsg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 1
@@ -771,13 +766,24 @@ foreach ($d in @($drifts)) {
   $code = 'TASK-Drift'
   $sev = 'Medium'
   if ($d -match 'Critical missing') { $code = 'TASK-CriticalMissing'; $sev = 'High' }
+  if ($d -match 'Scheduled task enumeration failed') { $code = 'TASK-EnumerationFailed'; $sev = 'High' }
   if ($d -match 'Suspicious')       { $code = 'TASK-Suspicious'; $sev = 'High' }
   if ($d -match 'quarantine')        { $code = 'TASK-QuarantineIssue'; $sev = 'Medium' }
-  Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $d
+  [void](Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $d)
 }
 # V2 output contract
 $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+$v2Summary = [pscustomobject]@{
+  ComputerName = $env:COMPUTERNAME
+  Timestamp = (Get-Date)
+  TotalTasks = $Proof.Summary.TotalTasks
+  CriticalKnown = $Proof.Summary.CriticalKnown
+  RiskyDetected = $Proof.Summary.RiskyDetected
+  EnumerationSucceeded = [bool]$enumerationSucceeded
+  EnumerationError = $enumerationError
+}
+$v2Result = Get-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings $script:Findings.ToArray() -Summary $v2Summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
+if ($resultToken -eq 'WARN') { exit 2 }
 exit 0

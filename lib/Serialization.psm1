@@ -117,7 +117,7 @@ function Save-Csv {
 .PARAMETER SchemaVersion
   Schema version string (default '2.0').
 #>
-function New-V2ResultObject {
+function Get-V2ResultObject {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]
@@ -237,6 +237,6 @@ Export-ModuleMember -Function `
   ConvertTo-ObjectArray, `
   Save-Json, `
   Save-Csv, `
-  New-V2ResultObject, `
+  Get-V2ResultObject, `
   Write-ResultObject, `
   ConvertTo-V2Json

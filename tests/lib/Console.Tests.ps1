@@ -18,6 +18,22 @@ BeforeAll {
   # Import the module
   $modulePath = Join-Path $PSScriptRoot '../../lib/Console.psm1'
   Import-Module $modulePath -Force
+
+  function Join-TestOutputText {
+    param([object[]]$Output)
+
+    ($Output | ForEach-Object {
+      if ($_.PSObject.Properties['MessageData']) {
+        if ($_.MessageData.PSObject.Properties['Message']) {
+          [string]$_.MessageData.Message
+        } else {
+          [string]$_.MessageData
+        }
+      } else {
+        [string]$_
+      }
+    }) -join "`n"
+  }
 }
 
 Describe "Get-SeverityColor" {
@@ -73,6 +89,11 @@ Describe "Get-SeverityColor" {
 
   It "Returns DarkGray for Skip" {
     $result = Get-SeverityColor -Severity 'Skip'
+    $result | Should -Be 'DarkGray'
+  }
+
+  It "Returns DarkGray for Debug" {
+    $result = Get-SeverityColor -Severity 'Debug'
     $result | Should -Be 'DarkGray'
   }
 
@@ -255,6 +276,11 @@ Describe "Get-ConsoleColor" {
     $result = Get-ConsoleColor -Kind 'LOW'
     $result | Should -Be 'Cyan'
   }
+
+  It "Returns DarkGray for DEBUG" {
+    $result = Get-ConsoleColor -Kind 'DEBUG'
+    $result | Should -Be 'DarkGray'
+  }
 }
 
 Describe "Get-SeverityRank" {
@@ -291,6 +317,11 @@ Describe "Get-SeverityRank" {
   It "Returns -2 for Skip" {
     $result = Get-SeverityRank -Severity 'Skip'
     $result | Should -Be -2
+  }
+
+  It "Returns -3 for Debug" {
+    $result = Get-SeverityRank -Severity 'Debug'
+    $result | Should -Be -3
   }
 
   It "Normalizes Error to High (3)" {
@@ -339,6 +370,11 @@ Describe "Get-SeverityPrefix" {
     $result = Get-SeverityPrefix -Severity 'Skip'
     $result | Should -Be '[SKIP] '
   }
+
+  It "Returns [DEBUG] for Debug" {
+    $result = Get-SeverityPrefix -Severity 'Debug'
+    $result | Should -Be '[DEBUG]'
+  }
 }
 
 Describe "Write-ColoredLine" {
@@ -360,6 +396,12 @@ Describe "Write-ColoredLine" {
 }
 
 Describe "Write-PrettyLine" {
+  It "Is an exported compatibility alias for Write-ColoredLine" {
+    $command = Get-Command -Name Write-PrettyLine -Module Console
+    $command.CommandType | Should -Be 'Alias'
+    $command.ResolvedCommandName | Should -Be 'Write-ColoredLine'
+  }
+
   It "Does not throw when called with text" {
     { Write-PrettyLine -Text 'Pretty output' } | Should -Not -Throw
   }
@@ -391,11 +433,13 @@ Describe "Write-SectionHeader" {
 
 Describe "Write-SummaryHeader" {
   It "Does not throw with all parameters" {
-    { Write-SummaryHeader -Title 'Summary' -ComputerName 'TEST-PC' -Timestamp '2026-01-01' -FindingsCount 3 } | Should -Not -Throw
+    $displayName = 'UnitTestHost'
+    { Write-SummaryHeader -Title 'Summary' -ComputerName $displayName -Timestamp '2026-01-01' -FindingsCount 3 } | Should -Not -Throw
   }
 
   It "Does not throw with zero findings" {
-    { Write-SummaryHeader -Title 'Clean' -ComputerName 'PC' -Timestamp 'now' -FindingsCount 0 } | Should -Not -Throw
+    $displayName = 'UnitTestHost'
+    { Write-SummaryHeader -Title 'Clean' -ComputerName $displayName -Timestamp 'now' -FindingsCount 0 } | Should -Not -Throw
   }
 }
 
@@ -433,6 +477,43 @@ Describe "Write-ConsoleSummary" {
       [pscustomobject]@{ Severity = 'Info'; Code = 'T002'; Message = 'Info finding' }
     )
     { Write-ConsoleSummary -Summary $summary -Findings $findings } | Should -Not -Throw
+  }
+
+  It "Renders operator-critical counts, finding codes, skip state, and fail result" {
+    $summary = [pscustomobject]@{ ComputerName = 'PC'; Timestamp = 'now' }
+    $findings = [System.Collections.ArrayList]@(
+      [pscustomobject]@{ Severity = 'High'; Code = 'T-HIGH'; Message = 'high risk' },
+      [pscustomobject]@{ Severity = 'Warning'; Code = 'T-WARN'; Message = 'partial risk' },
+      [pscustomobject]@{ Severity = 'Low'; Code = 'T-LOW'; Message = 'low risk' },
+      [pscustomobject]@{ Severity = 'Info'; Code = 'T-INFO'; Message = 'info' },
+      [pscustomobject]@{ Severity = 'Skip'; Code = 'T-SKIP'; Message = 'not applicable' }
+    )
+
+    $text = Join-TestOutputText -Output (Write-ConsoleSummary -Summary $summary -Findings $findings 6>&1)
+
+    $text | Should -Match 'Findings\s*:\s*5'
+    $text | Should -Match 'T-HIGH'
+    $text | Should -Match 'T-SKIP'
+    $text | Should -Match '\[SKIP\]'
+    $text | Should -Match 'Breakdown:.*High=1'
+    $text | Should -Match 'Breakdown:.*Med=1'
+    $text | Should -Match 'Breakdown:.*Low=1'
+    $text | Should -Match 'Breakdown:.*Info=1'
+    $text | Should -Match 'Breakdown:.*Skip=1'
+    $text | Should -Match 'Result\s*:\s*FAIL'
+  }
+
+  It "Renders partial findings as WARN rather than PASS" {
+    $summary = [pscustomobject]@{ ComputerName = 'PC'; Timestamp = 'now' }
+    $findings = [System.Collections.ArrayList]@(
+      [pscustomobject]@{ Severity = 'Medium'; Code = 'T-MED'; Message = 'partial risk' }
+    )
+
+    $text = Join-TestOutputText -Output (Write-ConsoleSummary -Summary $summary -Findings $findings 6>&1)
+
+    $text | Should -Match 'Findings\s*:\s*1'
+    $text | Should -Match 'T-MED'
+    $text | Should -Match 'Result\s*:\s*WARN'
   }
 }
 

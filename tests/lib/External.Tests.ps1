@@ -14,7 +14,8 @@ param()
 $script:SkipWindowsTests = (-not $IsWindows)
 
 BeforeAll {
-  Import-Module (Join-Path $PSScriptRoot '../../lib/External.psm1') -Force -DisableNameChecking
+  $script:ExternalModulePath = Join-Path $PSScriptRoot '../../lib/External.psm1'
+  Import-Module $script:ExternalModulePath -Force
 }
 
 Describe 'Test-CommandExists' {
@@ -90,6 +91,37 @@ Describe 'Invoke-NativeCommand' {
     $result = Invoke-NativeCommand -Command 'pwsh' -Arguments @('-NoProfile', '-Command', 'exit 1') -CaptureOutput -Quiet
     $result.ExitCode | Should -Be 1
     $result.Success | Should -Be $false
+  }
+
+  It 'Captures stderr separately on non-zero exit with CaptureOutput' {
+    $result = Invoke-NativeCommand -Command 'pwsh' `
+      -Arguments @('-NoProfile', '-Command', '[Console]::Error.WriteLine("native stderr marker"); exit 7') `
+      -CaptureOutput -Quiet
+
+    $result.ExitCode | Should -Be 7
+    $result.Success | Should -Be $false
+    $result.Stderr | Should -Match 'native stderr marker'
+  }
+
+  It 'Includes stderr in warning when non-capture command fails' {
+    $warnings = @()
+    $result = Invoke-NativeCommand -Command 'pwsh' `
+      -Arguments @('-NoProfile', '-Command', '[Console]::Error.WriteLine("warning stderr marker"); exit 9') `
+      -WarningVariable warnings
+
+    $result | Should -Be $false
+    ($warnings | Out-String) | Should -Match 'warning stderr marker'
+  }
+}
+
+Describe 'external tool wrapper structure' {
+  It 'Keeps common wrappers as thin Invoke-ExternalTool delegates' {
+    $moduleText = Get-Content -LiteralPath $script:ExternalModulePath -Raw -Encoding UTF8
+
+    foreach ($name in @('Invoke-Schtasks','Invoke-Auditpol','Invoke-Wevtutil','Invoke-Wecutil','Invoke-RegExe')) {
+      $pattern = '(?s)function\s+{0}\b.*?Invoke-ExternalTool' -f [regex]::Escape($name)
+      $moduleText | Should -Match $pattern
+    }
   }
 }
 

@@ -167,30 +167,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '15-HardwareTPM-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -202,14 +180,14 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
 }
 
 # C10: canonical findings list
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 # Anonymized defaults
 $EventLogName   = 'Application'
@@ -338,12 +316,18 @@ function Get-CimPropValue {
 # -----------------------------
 
 $isAdmin       = Test-IsAdmin
-$eventSourceOk = Ensure-EventSource -Source $EventSource -LogName $EventLogName
+$eventSourceOk = $true
+if (-not (Ensure-EventSource -Source $EventSource -LogName $EventLogName)) {
+  $eventSourceOk = $false
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 
 $drifts = New-Object System.Collections.Generic.List[string]
 $notes  = New-Object System.Collections.Generic.List[string]
 $errors = New-Object System.Collections.Generic.List[string]
 $ok     = $true
+$fatalComplianceFailure = $false
+$eventWriteSucceeded = $null
 
 $proof = [ordered]@{
   Time     = (Get-Date).ToString('s')
@@ -391,6 +375,7 @@ try {
 
   if (-not $tpm) {
     $ok = $false
+    $fatalComplianceFailure = $true
     Add-ListItem -List ([ref]$drifts) -Text "TPM not present or not accessible"
   } else {
     $proof.Results.TPM.SpecVersion  = [string](Get-CimPropValue -Object $tpm -Name 'SpecVersion')
@@ -535,11 +520,17 @@ try {
   if (-not $ok) { $eventId = 4900; $level = 'Warning' }
   if ($Strict -and $drifts.Count -gt 0) { $eventId = 4900; $level = 'Warning' }
 
-  Write-HealthEvent -Id $eventId -Message $msg -Level $level -Source $EventSource -LogName $EventLogName
+  $eventWriteSucceeded = Write-HealthEvent -Id $eventId -Message $msg -Level $level -Source $EventSource -LogName $EventLogName
+  if ($eventWriteSucceeded -eq $false) {
+    Add-ListItem -List ([ref]$notes) -Text 'Required event log write failed.'
+  }
 
   # Pretty console output (out-of-band)
   $summaryObj = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }
-  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
+  $findingsAL = [System.Collections.ArrayList]::new()
+  foreach ($finding in @($script:Findings.ToArray())) {
+    [void]$findingsAL.Add($finding)
+  }
   Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
     -CustomFields ([ordered]@{
       Status = $(if ($ok) { 'COMPLIANT' } else { 'NON-COMPLIANT' })
@@ -550,31 +541,31 @@ try {
   if ($tpm) {
     $tpmPresent = [bool]$tpm.Present
     $tpmKind = if ($tpmPresent) { 'OK' } else { 'ERR' }
-    Write-ColorLine -Text ("TPM    : {0}" -f $(if ($tpmPresent) { "Present" } else { "Missing/No Access" })) -Color $tpmKind
+    Write-UiLine -Text ("TPM    : {0}" -f $(if ($tpmPresent) { "Present" } else { "Missing/No Access" })) -Color $tpmKind
     if ($tpmPresent) {
-      Write-ColorLine -Text ("         SpecVersion={0}, Owned={1}, Enabled={2}, Activated={3}, Ready={4}" -f $tpm.SpecVersion,$tpm.IsOwned,$tpm.Enabled,$tpm.Activated,$tpm.Ready) -Color 'DIM'
+      Write-UiLine -Text ("         SpecVersion={0}, Owned={1}, Enabled={2}, Activated={3}, Ready={4}" -f $tpm.SpecVersion,$tpm.IsOwned,$tpm.Enabled,$tpm.Activated,$tpm.Ready) -Color 'DIM'
     }
   }
   # SecureBoot status
-  Write-ColorLine -Text ("Secure : {0}" -f $(if ($proof.Results.SecureBoot) { "Secure Boot ON" } else { "Secure Boot OFF/Unknown" })) -Color $(if ($proof.Results.SecureBoot) { 'OK' } else { 'WARN' })
+  Write-UiLine -Text ("Secure : {0}" -f $(if ($proof.Results.SecureBoot) { "Secure Boot ON" } else { "Secure Boot OFF/Unknown" })) -Color $(if ($proof.Results.SecureBoot) { 'OK' } else { 'WARN' })
   # BitLocker status
   $blOk = $proof.Results.BitLockerOsProtected
-  Write-ColorLine -Text ("BL(OS) : {0}" -f $(if ($blOk) { "Protection ON" } else { "Protection OFF/Unknown" })) -Color $(if ($blOk) { 'OK' } else { 'WARN' })
+  Write-UiLine -Text ("BL(OS) : {0}" -f $(if ($blOk) { "Protection ON" } else { "Protection OFF/Unknown" })) -Color $(if ($blOk) { 'OK' } else { 'WARN' })
   # Drifts
   Write-UiLine ""
   if ($drifts.Count -gt 0) {
-    Write-ColorLine -Text "Drifts :" -Color 'ERR'
-    foreach ($d in $drifts) { Write-ColorLine -Text ("- {0}" -f $d) -Color 'ERR' }
+    Write-UiLine -Text "Drifts :" -Color 'ERR'
+    foreach ($d in $drifts) { Write-UiLine -Text ("- {0}" -f $d) -Color 'ERR' }
   } else {
-    Write-ColorLine -Text "Drifts : (none)" -Color 'OK'
+    Write-UiLine -Text "Drifts : (none)" -Color 'OK'
   }
   # Notes
   if ($notes.Count -gt 0) {
     Write-UiLine ""
-    Write-ColorLine -Text "Notes  :" -Color 'WARN'
-    foreach ($n in $notes) { Write-ColorLine -Text ("- {0}" -f $n) -Color 'WARN' }
+    Write-UiLine -Text "Notes  :" -Color 'WARN'
+    foreach ($n in $notes) { Write-UiLine -Text ("- {0}" -f $n) -Color 'WARN' }
   } else {
-    Write-ColorLine -Text "Notes  : (none)" -Color 'DIM'
+    Write-UiLine -Text "Notes  : (none)" -Color 'DIM'
   }
 
   # Pipeline output: one structured object only
@@ -582,9 +573,10 @@ try {
 }
 catch {
   $errMsg = "Hardware/TPM-Audit failed: " + $_.Exception.Message
+  Add-ListItem -List ([ref]$errors) -Text $errMsg
   Write-HealthEvent -Id 4900 -Message $errMsg -Level 'Error' -Source $EventSource -LogName $EventLogName
   Write-UiHeader -Title "Hardware/TPM Audit Summary"
-  Write-ColorLine -Text $errMsg -Color 'ERR'
+  Write-UiLine -Text $errMsg -Color 'ERR'
 }
 
 # C10: populate canonical findings from drifts and errors
@@ -594,15 +586,29 @@ foreach ($d in @($drifts)) {
   if ($d -match 'TPM')       { $code = 'HW-TPMDrift' }
   if ($d -match 'Secure')    { $code = 'HW-SecureBootDrift' }
   if ($d -match 'BitLocker') { $code = 'HW-BitLockerDrift' }
-  Add-Finding -FindingList $script:Findings -Code $code -Severity 'High' -Message $d
+  [void](Add-Finding -FindingList $script:Findings -Code $code -Severity 'High' -Message $d)
 }
 foreach ($e in @($errors)) {
-  Add-Finding -FindingList $script:Findings -Code 'HW-Error' -Severity 'High' -Message $e
+  [void](Add-Finding -FindingList $script:Findings -Code 'HW-Error' -Severity 'High' -Message $e)
+}
+if ($eventWriteSucceeded -eq $false) {
+  [void](Add-Finding -FindingList $script:Findings -Code 'HW-EventLogWriteFailed' -Severity 'Medium' -Message 'Required event log write failed.')
 }
 
 # V2 output contract
-$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+$resultToken = if ($errors.Count -gt 0 -or $fatalComplianceFailure) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$summary = [pscustomobject]@{
+  ComputerName         = $env:COMPUTERNAME
+  Timestamp            = Get-Date
+  Drifts               = $drifts.ToArray()
+  Errors               = $errors.ToArray()
+  FatalComplianceFailure = $fatalComplianceFailure
+  EventSourceSucceeded = $eventSourceOk
+  EventWriteSucceeded  = $eventWriteSucceeded
+}
+$v2Result = Get-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result $resultToken -Findings $script:Findings.ToArray() -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
+if ($resultToken -eq 'FAIL') { exit 1 }
+if ($eventWriteSucceeded -eq $false) { exit 2 }
 exit 0

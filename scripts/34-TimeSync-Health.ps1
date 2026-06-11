@@ -85,30 +85,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '34-TimeSync-Health.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -120,7 +98,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -276,7 +254,7 @@ function Get-OutputFolderAndBase {
 
 Ensure-Exe -Name 'w32tm.exe'
 
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 $configLoad = Load-Config -Path $ConfigJsonPath
 $ConfigUsed = $configLoad.Config
@@ -440,7 +418,7 @@ if (-not $NoConsoleSummary) {
 }
 
 $resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' } elseif ($findingsCount -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result $resultToken -Findings $Findings -Summary $result.Summary -Metadata @{ Raw = $result.Raw; ConfigUsed = $result.ConfigUsed; ConfigMeta = $result.ConfigMeta }
+$v2Result = Get-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result $resultToken -Findings $Findings -Summary $result.Summary -Metadata @{ Raw = $result.Raw; ConfigUsed = $result.ConfigUsed; ConfigMeta = $result.ConfigMeta }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

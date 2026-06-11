@@ -1,0 +1,56 @@
+name: CodeQL
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - dev
+      - 'fix/**'
+      - 'feat/**'
+      - 'update-*'
+      - 'update/**'
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-actions:
+    name: CodeQL actions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cb06a0a8527b2c6970741b3a0baa15231dc74a4c # v4.34.1
+        with:
+          languages: actions
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@cb06a0a8527b2c6970741b3a0baa15231dc74a4c # v4.34.1

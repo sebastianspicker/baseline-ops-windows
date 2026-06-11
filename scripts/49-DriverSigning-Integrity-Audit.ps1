@@ -85,7 +85,7 @@ Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChe
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -BoundParameters $PSBoundParameters
+Initialize-V2Context -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -97,7 +97,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -107,7 +107,7 @@ if (-not $isWindowsHost) {
 # Main
 # ----------------------------
 
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 $testSigning       = $null
 $noIntegrityChecks = $null
@@ -234,7 +234,7 @@ $resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' }
   elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARN' }
   else { 'OK' }
 
-$v2Result = New-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -Mode $Mode `
+$v2Result = Get-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -Mode $Mode `
   -Result $resultToken -Findings $Findings -Summary $summary `
   -Metadata @{ BcdeditRaw = $bcdeditRaw }
 

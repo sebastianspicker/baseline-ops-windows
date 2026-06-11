@@ -33,26 +33,11 @@ param(
   [switch]$NoColor
 )
 
+. (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '00-Run-Batch.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $runProfilePath = Join-Path $PSScriptRoot '00-Run-Profile.ps1'
@@ -68,7 +53,7 @@ if ($RootPath -eq 'C:\install\mdm\ps1') {
 }
 
 $categoryMap = @{
-  Audit       = @('01','02','03','04','05','06','07','09','10','11','13','14','15','18','19','20','22','23','24','26','27','28','29','30','31','32','33','34','35','36','37','38','39','40','41','42','43','44','45')
+  Audit       = @('01','02','03','04','05','06','07','09','10','11','13','14','15','18','19','20','22','23','24','26','27','28','29','30','31','32','33','34','35','36','37','38','39','40','41','42','43','44','45','46','47','48','49','50','51','52')
   Remediation = @('01','02','03','04','05','06','07','08','13','14','16','18','21','22','25','31','32','33','38','39','40','44')
   Collection  = @('09','10','11','12','20')
   Utility     = @('08','25')

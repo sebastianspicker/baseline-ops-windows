@@ -1,17 +1,27 @@
 name: Lint (shell/yaml/markdown/actions)
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
       - dev
       - 'fix/**'
       - 'feat/**'
+      - 'update-*'
+      - 'update/**'
+    paths-ignore:
+      - 'AGENTS.md'
+      - 'docs/agent/**'
   pull_request:
     branches:
       - main
       - dev
+      - 'fix/**'
       - 'feat/**'
+    paths-ignore:
+      - 'AGENTS.md'
+      - 'docs/agent/**'
 
 permissions: {}
 

@@ -1,13 +1,17 @@
 ---
 name: Bug report
-about: Report a problem in a script
+about: Report incorrect behavior, unsafe output, or a broken script/profile
 labels: bug
 ---
 
 Thanks for helping improve this repo.
 
-## Script name
-Which script is affected? Example: `18-Firewall-Baseline.ps1`
+Do not include secrets, private hostnames, user names, tenant IDs, full support
+bundles, or exploit details in public issues.
+
+## Affected area
+Script, profile, module, workflow, or documentation path. Example:
+`scripts/18-Firewall-Baseline.ps1`.
 
 ## Expected behavior
 What did you expect to happen?
@@ -16,13 +20,17 @@ What did you expect to happen?
 What actually happened?
 
 ## Steps to reproduce
-Provide commands and relevant configuration.
+Provide commands and relevant configuration. Redact environment-specific values.
 
 ## Invocation mode
-Which command did you run, and did you use `-WhatIf` / `-Confirm` or elevation?
+Which command did you run? Include `-Mode`, `-WhatIf`, `-Confirm`, profile path,
+output format, and whether the shell was elevated.
 
 ## Environment
 OS version, PowerShell version, and any relevant tools.
 
 ## Logs or output
 Paste any errors or output (redact sensitive data).
+
+## Regression check
+Did this work in an earlier commit, release, or environment?

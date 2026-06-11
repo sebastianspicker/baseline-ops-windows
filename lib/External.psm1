@@ -122,37 +122,62 @@ function Invoke-NativeCommand {
     return $null
   }
 
+  $stderrPath = $null
   try {
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    $stderr = ''
+
     if ($CaptureOutput) {
-      $output = & $Command @Arguments 2>&1
+      $output = & $Command @Arguments 2> $stderrPath
       $exitCode = $LASTEXITCODE
-      
+
+      if (Test-Path -LiteralPath $stderrPath) {
+        $stderr = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $stderr) { $stderr = '' }
+      }
+
+      $mergedOutput = $output
+      if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+        $stderrLines = $stderr -split "`r?`n" | Where-Object { $_ -ne '' }
+        $mergedOutput = if ($null -eq $mergedOutput) { $stderrLines } else { @($mergedOutput) + $stderrLines }
+      }
+
       if ($exitCode -ne 0 -and -not $Quiet) {
         $msg = "$Command exited with code $exitCode"
-        if ($ThrowOnError) {
-          throw $msg
+        $stderrText = $stderr.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+          $msg = "$msg. Stderr: $stderrText"
         }
+        if ($ThrowOnError) { throw $msg }
         Write-Warning $msg
       }
-      
+
       return [pscustomobject]@{
-        Output   = $output
+        Output   = $mergedOutput
+        Stderr   = $stderr
         ExitCode = $exitCode
         Success  = ($exitCode -eq 0)
       }
     } else {
-      & $Command @Arguments | Out-Null
+      & $Command @Arguments 2> $stderrPath | Out-Null
       $exitCode = $LASTEXITCODE
-      
+
+      if (Test-Path -LiteralPath $stderrPath) {
+        $stderr = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+        if ($null -eq $stderr) { $stderr = '' }
+      }
+
       if ($exitCode -ne 0 -and -not $Quiet) {
         $msg = "$Command exited with code $exitCode"
-        if ($ThrowOnError) {
-          throw $msg
+        $stderrText = $stderr.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+          $msg = "$msg. Stderr: $stderrText"
         }
+        if ($ThrowOnError) { throw $msg }
         Write-Warning $msg
         return $false
       }
-      
+
       return $true
     }
   } catch {
@@ -162,7 +187,29 @@ function Invoke-NativeCommand {
     }
     Write-Warning $msg
     return $null
+  } finally {
+    if ($stderrPath -and (Test-Path -LiteralPath $stderrPath)) {
+      Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
   }
+}
+
+function Invoke-ExternalTool {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [string]$Command,
+
+    [Parameter(Mandatory)]
+    [string[]]$Arguments,
+
+    [switch]$ThrowOnError,
+
+    [switch]$CaptureOutput
+  )
+
+  return (Invoke-NativeCommand -Command $Command -Arguments $Arguments `
+      -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -180,10 +227,7 @@ function Invoke-Schtasks {
     [switch]$CaptureOutput
   )
 
-  $result = Invoke-NativeCommand -Command 'schtasks.exe' -Arguments $Arguments `
-    -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput
-  
-  return $result
+  return (Invoke-ExternalTool -Command 'schtasks.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -201,10 +245,7 @@ function Invoke-Auditpol {
     [switch]$CaptureOutput
   )
 
-  $result = Invoke-NativeCommand -Command 'auditpol.exe' -Arguments $Arguments `
-    -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput
-  
-  return $result
+  return (Invoke-ExternalTool -Command 'auditpol.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -222,10 +263,7 @@ function Invoke-Wevtutil {
     [switch]$CaptureOutput
   )
 
-  $result = Invoke-NativeCommand -Command 'wevtutil.exe' -Arguments $Arguments `
-    -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput
-  
-  return $result
+  return (Invoke-ExternalTool -Command 'wevtutil.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -243,10 +281,7 @@ function Invoke-Wecutil {
     [switch]$CaptureOutput
   )
 
-  $result = Invoke-NativeCommand -Command 'wecutil.exe' -Arguments $Arguments `
-    -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput
-  
-  return $result
+  return (Invoke-ExternalTool -Command 'wecutil.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -266,10 +301,7 @@ function Invoke-RegExe {
 
   $regExe = Join-Path $env:WINDIR 'System32\reg.exe'
   
-  $result = Invoke-NativeCommand -Command $regExe -Arguments $Arguments `
-    -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput
-  
-  return $result
+  return (Invoke-ExternalTool -Command $regExe -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -384,7 +416,7 @@ function Enable-EventLog {
   Maximum log size in bytes.
 #>
 function Set-EventLogMaxSize {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)]
     [string]$LogName,
@@ -393,6 +425,9 @@ function Set-EventLogMaxSize {
     [int64]$MaxSizeBytes
   )
 
+  if (-not $PSCmdlet.ShouldProcess($LogName, "Set event log max size to $MaxSizeBytes bytes")) {
+    return $false
+  }
   $result = Invoke-Wevtutil -Arguments @('sl', $LogName, "/ms:$MaxSizeBytes")
   return ($result -eq $true)
 }
@@ -450,7 +485,7 @@ function Export-EventLog {
   Overwrite an existing task with the same name.
 #>
 function New-MdmScheduledTask {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
@@ -484,6 +519,9 @@ function New-MdmScheduledTask {
   if ($Force) { $taskArgs += '/F' }
   if ($StartTime) { $taskArgs += '/ST', $StartTime }
 
+  if (-not $PSCmdlet.ShouldProcess($TaskName, 'Create scheduled task')) {
+    return $false
+  }
   $result = Invoke-Schtasks -Arguments $taskArgs -ThrowOnError
   return ($result -eq $true)
 }
@@ -495,12 +533,15 @@ function New-MdmScheduledTask {
   Name of the task to remove.
 #>
 function Remove-ScheduledTask {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)]
     [string]$TaskName
   )
 
+  if (-not $PSCmdlet.ShouldProcess($TaskName, 'Remove scheduled task')) {
+    return $false
+  }
   $result = Invoke-Schtasks -Arguments @('/Delete', '/TN', $TaskName, '/F')
   return ($result -eq $true)
 }

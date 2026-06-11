@@ -6,7 +6,7 @@ Pester tests for Output.psm1 module
 .DESCRIPTION
 Unit tests for the Output module. Tests core functions Write-UiLine,
 Write-KeyValue, Write-Section, and Write-BlankLine.
-Uses Mock Write-Host to capture output for assertions.
+Uses Mock Write-Information to capture output for assertions.
 #>
 
 [CmdletBinding()]
@@ -14,6 +14,22 @@ param()
 
 BeforeAll {
   Import-Module (Join-Path $PSScriptRoot '../../lib/Output.psm1') -Force
+
+  function Join-TestOutputText {
+    param([object[]]$Output)
+
+    ($Output | ForEach-Object {
+      if ($_.PSObject.Properties['MessageData']) {
+        if ($_.MessageData.PSObject.Properties['Message']) {
+          [string]$_.MessageData.Message
+        } else {
+          [string]$_.MessageData
+        }
+      } else {
+        [string]$_
+      }
+    }) -join "`n"
+  }
 }
 
 Describe 'Output module export surface' {
@@ -25,123 +41,194 @@ Describe 'Output module export surface' {
       $names | Should -Not -Contain $name
     }
   }
+
+  It 'Exports pass-through compatibility names as aliases' {
+    $expectedAliases = @{
+      'Write-UiSection' = 'Write-Section'
+      'Write-ColorLine' = 'Write-UiLine'
+      'Write-InfoLine'  = 'Write-Info'
+      'Write-WarnLine'  = 'Write-Warn'
+    }
+
+    foreach ($entry in $expectedAliases.GetEnumerator()) {
+      $command = Get-Command -Name $entry.Key -Module Output
+      $command.CommandType | Should -Be 'Alias'
+      $command.ResolvedCommandName | Should -Be $entry.Value
+    }
+  }
 }
 
 Describe 'Write-UiLine' {
-  It 'Calls Write-Host with the provided message' {
-    Mock Write-Host {} -ModuleName Output
+  It 'Writes the provided message to the information stream' {
+    Mock Write-Information {} -ModuleName Output
     Write-UiLine -Message 'Hello World'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $Object -eq 'Hello World' }
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -eq 'Hello World' }
   }
 
-  It 'Calls Write-Host with foreground color for known style' {
-    Mock Write-Host {} -ModuleName Output
+  It 'Writes known style messages to the information stream' {
+    Mock Write-Information {} -ModuleName Output
     Write-UiLine -Message 'Green text' -Style 'Success'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $ForegroundColor -eq [ConsoleColor]::Green }
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -eq 'Green text' }
+  }
+
+  It 'Renders Debug style through the information stream' {
+    Mock Write-Information {} -ModuleName Output
+    Write-UiLine -Message 'Debug text' -Style 'Debug'
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -eq 'Debug text' }
   }
 
   It 'Suppresses output when Quiet switch is set' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     Write-UiLine -Message 'Silent' -Quiet
-    Should -Invoke Write-Host -ModuleName Output -Times 0
+    Should -Invoke Write-Information -ModuleName Output -Times 0
   }
 
   It 'Suppresses output when NoConsole switch is set' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     Write-UiLine -Message 'No console' -NoConsole
-    Should -Invoke Write-Host -ModuleName Output -Times 0
+    Should -Invoke Write-Information -ModuleName Output -Times 0
   }
 
   It 'Handles empty message without error' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     { Write-UiLine -Message '' } | Should -Not -Throw
-    Should -Invoke Write-Host -ModuleName Output -Times 1
+    Should -Invoke Write-Information -ModuleName Output -Times 1
   }
 
   It 'Uses Write-Information when UseWriteInformation is set' {
-    Mock Write-Host {} -ModuleName Output
     Mock Write-Information {} -ModuleName Output
     Write-UiLine -Message 'Info stream' -UseWriteInformation
     Should -Invoke Write-Information -ModuleName Output -Times 1
   }
 
-  It 'Does not apply color when NoColor is set' {
-    Mock Write-Host {} -ModuleName Output
+  It 'Writes plain text when NoColor is set' {
+    Mock Write-Information {} -ModuleName Output
     Write-UiLine -Message 'Plain text' -Style 'Success' -NoColor
-    # When NoColor is set, Write-Host should be called without ForegroundColor
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $null -eq $ForegroundColor }
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -eq 'Plain text' }
+  }
+}
+
+Describe 'Write-ConsoleLine' {
+  It 'Delegates normal console lines through Write-UiLine behavior' {
+    Mock Write-Information {} -ModuleName Output
+    Write-ConsoleLine -Message 'Console text' -Style 'Success'
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -eq 'Console text' }
+  }
+
+  It 'Preserves ConsoleUseInformation config behavior' {
+    Mock Write-Information {} -ModuleName Output
+
+    Write-ConsoleLine -Message 'Info routed' -Config ([pscustomobject]@{ ConsoleUseInformation = $true })
+
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -eq 'Info routed' }
   }
 }
 
 Describe 'Write-KeyValue' {
   It 'Outputs key and value text' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     { Write-KeyValue -Key 'Setting' -Value 'Enabled' } | Should -Not -Throw
-    Should -Invoke Write-Host -ModuleName Output -Times 2  # key part + value part (two calls with NoNewLine pattern)
+    Should -Invoke Write-Information -ModuleName Output -Times 1
   }
 
   It 'Shows empty value text when value is null' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     { Write-KeyValue -Key 'EmptyKey' -Value $null } | Should -Not -Throw
-    Should -Invoke Write-Host -ModuleName Output -Times 2
+    Should -Invoke Write-Information -ModuleName Output -Times 1
   }
 
   It 'Handles custom indent' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     { Write-KeyValue -Key 'Indented' -Value 'test' -Indent 4 } | Should -Not -Throw
   }
 }
 
 Describe 'Write-Section' {
   It 'Outputs section header with rule lines' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     Write-Section -Title 'Test Section'
     # Should be called 3 times: top rule, title, bottom rule
-    Should -Invoke Write-Host -ModuleName Output -Times 3
+    Should -Invoke Write-Information -ModuleName Output -Times 3
   }
 
   It 'Does not throw for any title' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     { Write-Section -Title 'Any Title Here' } | Should -Not -Throw
   }
 }
 
 Describe 'Write-BlankLine' {
-  It 'Outputs an empty line via Write-Host' {
-    Mock Write-Host {} -ModuleName Output
+  It 'Outputs an empty line via Write-Information' {
+    Mock Write-Information {} -ModuleName Output
     Write-BlankLine
-    Should -Invoke Write-Host -ModuleName Output -Times 1
+    Should -Invoke Write-Information -ModuleName Output -Times 1
   }
 }
 
 Describe 'Write-Info' {
   It 'Outputs info-prefixed message' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     Write-Info -Message 'Information text'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $Object -match 'INFO.*Information text' }
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -match 'INFO.*Information text' }
   }
 }
 
 Describe 'Write-Warn' {
   It 'Outputs warn-prefixed message' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     Write-Warn -Message 'Warning text'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $Object -match 'WARN.*Warning text' }
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -match 'WARN.*Warning text' }
   }
 }
 
 Describe 'Write-ErrorLine' {
   It 'Outputs fail-prefixed message' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     Write-ErrorLine -Message 'Error text'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $Object -match 'FAIL.*Error text' }
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -match 'FAIL.*Error text' }
   }
 }
 
 Describe 'Write-Success' {
   It 'Outputs ok-prefixed message' {
-    Mock Write-Host {} -ModuleName Output
+    Mock Write-Information {} -ModuleName Output
     Write-Success -Message 'Pass text'
-    Should -Invoke Write-Host -ModuleName Output -Times 1 -ParameterFilter { $Object -match 'OK.*Pass text' }
+    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -match 'OK.*Pass text' }
+  }
+}
+
+Describe 'Write-UiSummaryTable operator meaning' {
+  It 'Renders total findings, severity counts, OK count, and fail result' {
+    $findings = @(
+      [pscustomobject]@{ Severity = 'High'; Code = 'HIGH-1'; Message = 'high risk' }
+      [pscustomobject]@{ Severity = 'Medium'; Code = 'MED-1'; Message = 'partial risk' }
+      [pscustomobject]@{ Severity = 'Low'; Code = 'LOW-1'; Message = 'low risk' }
+      [pscustomobject]@{ Severity = 'Info'; Code = 'INFO-1'; Message = 'info' }
+      [pscustomobject]@{ Severity = 'OK'; Code = 'OK-1'; Message = 'passed' }
+    )
+
+    $text = Join-TestOutputText -Output (Write-UiSummaryTable -Findings $findings 6>&1)
+
+    $text | Should -Match 'Total findings\s*:\s*5'
+    $text | Should -Match 'High\s*:\s*1'
+    $text | Should -Match 'Medium\s*:\s*1'
+    $text | Should -Match 'Low\s*:\s*1'
+    $text | Should -Match 'Info\s*:\s*1'
+    $text | Should -Match 'OK\s*:\s*1'
+    $text | Should -Match 'Overall result\s*:\s*FAIL'
+  }
+
+  It 'Renders skipped and partial state without hiding the warning result' {
+    $findings = @(
+      [pscustomobject]@{ Severity = 'Skipped'; Code = 'SKIP-1'; Message = 'not applicable' }
+      [pscustomobject]@{ Severity = 'Warning'; Code = 'WARN-1'; Message = 'partial' }
+    )
+
+    $text = Join-TestOutputText -Output (Write-UiSummaryTable -Findings $findings 6>&1)
+
+    $text | Should -Match 'Total findings\s*:\s*2'
+    $text | Should -Match 'Skipped\s*:\s*1'
+    $text | Should -Match 'Medium\s*:\s*1'
+    $text | Should -Match 'Overall result\s*:\s*WARN'
   }
 }

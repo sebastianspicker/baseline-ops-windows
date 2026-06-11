@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## [2.2.0] - 2026-04-18
 
-### Added
+### Added in 2.2.0
 
 - **v2 UnsupportedHost platform guard** added to all 49 numbered scripts
   (`01`–`49`). Every script now returns `Result=OK` with
@@ -40,7 +40,7 @@ All notable changes to this project are documented in this file.
   `ConvertTo-Hashtable` are now automatically discovered by `Invoke-Pester`.
 - Scripts 50–52 added to `examples/profiles/full-audit.json`.
 
-### Changed
+### Changed in 2.2.0
 
 - **`#Requires -RunAsAdministrator`** added to scripts 24, 32, 38, 39,
   40, and 44. These scripts already called `Require-Admin` at runtime;
@@ -62,7 +62,7 @@ All notable changes to this project are documented in this file.
   `[switch]$ShowOkInConsole` in `18-Firewall-Baseline.ps1`
   (`PSAvoidDefaultValueSwitchParameter` compliance).
 
-### Fixed
+### Fixed in 2.2.0
 
 - Stale `# TODO: This script exceeds 800 lines` markers removed from
   scripts 04, 09, and 12 (helpers already extracted; budget met).
@@ -71,7 +71,7 @@ All notable changes to this project are documented in this file.
 
 ## [2.1.0] - 2026-04-11
 
-### Added
+### Added in 2.1.0
 
 - **4 new security audit scripts**: `46-SecureBoot-UEFI-Audit.ps1` (Secure Boot
   and UEFI firmware verification), `47-WDAG-Readiness-Audit.ps1` (Application
@@ -88,7 +88,7 @@ All notable changes to this project are documented in this file.
 - **`CustomFields` parameter** in `Write-ConsoleSummary` (`lib/Console.psm1`)
   for injecting domain-specific key-value lines into summary output.
 
-### Changed
+### Changed in 2.1.0
 
 - **Batch categories expanded**: 17 scripts added to Audit category
   (03, 04, 06, 07, 11, 13, 14, 18, 20, 22, 24, 31, 32, 34, 38, 39, 40, 41),
@@ -107,14 +107,14 @@ All notable changes to this project are documented in this file.
 - **`Get-StatusColor` 'Note' mapping added** to `lib/Console.psm1` regex
   normalizer, enabling drop-in replacement in script 08.
 
-### Fixed
+### Fixed in 2.1.0
 
 - **3 orphan scripts** (07-ScheduledTasks-Hygiene, 24-Cert-AutoEnrollment-Health,
   41-NTLM-Audit-Client) added to batch categories in `00-Run-Batch.ps1`.
 
 ## [2.0.2] - 2026-03-21
 
-### Fixed
+### Fixed in 2.0.2
 
 - **Security hardening (Phase 2.1, S6-S17)**: auditpol subcategory input validation,
   registry key path allowlist enforcement, firewall RulePrefix validation, direct
@@ -122,7 +122,8 @@ All notable changes to this project are documented in this file.
   dangerous winget `ExtraArgs` filtering, hardcoded WinRM CIM filter safety comment,
   SupportBundle wevtutil refactored to wrapper, `Export-ScheduledTask` path traversal
   check, environment variable expansion before traversal check in `Evidence.psm1`,
-  `New-MdmScheduledTask` TaskName input validation, Sysmon drift sensor ScriptPath validation.
+  `New-MdmScheduledTask` TaskName input validation, and Sysmon drift sensor
+  ScriptPath validation.
 - **Static analysis fixes (Phase 2.2)**: added `Set-StrictMode -Version Latest` to
   3 scripts missing it, fixed `$null` ordering (`$LASTEXITCODE -eq $null` to
   `$null -eq $LASTEXITCODE`), removed unused variable assignments (`$eventLogReady`,
@@ -135,7 +136,7 @@ All notable changes to this project are documented in this file.
 - **Path traversal guards (Phase 4.3)**: added `Assert-NoPathTraversal` for
   config-driven output paths in `09-SupportBundle.ps1` and `12-Suspicious-Artifact-Grabber.ps1`.
 
-### Changed
+### Changed in 2.0.2
 
 - **Convention alignment (Phase 2.3)**: `ErrorActionPreference = 'Stop'` added to
   10 scripts (now 100%), `exit 0` added to 40 scripts (now 100%), v2 output contract
@@ -148,7 +149,8 @@ All notable changes to this project are documented in this file.
   `Read-Json`, `Read-JsonFile`, `Expand-Env`, `Ensure-Directory`).
 - **Hardcoded paths replaced with env variables (Phase 4.3)**: `C:\Windows\` to
   `$env:SystemRoot`, `C:\Program Files\` to `$env:ProgramFiles`,
-  `C:\Program Files (x86)\` to `${env:ProgramFiles(x86)}` across scripts 07, 08, 16.
+  `C:\Program Files (x86)\` to `${env:ProgramFiles(x86)}` across scripts 07,
+  08, and 16.
 - **Write-Rule name collision resolved (Phase 4.3)**: renamed `Console.psm1`'s
   `Write-Rule` to `Write-DecorativeRule`; updated all internal and script callers.
 - **Invoke-Git collision resolved (Phase 4.3)**: renamed local `Invoke-Git` in
@@ -161,7 +163,7 @@ All notable changes to this project are documented in this file.
   `-ForegroundColor` calls with semantic `-Style` tokens (`Header`, `Warning`,
   `Muted`, `Accent`) in 6 scripts.
 
-### Added
+### Added in 2.0.2
 
 - **176 new Pester tests (329 to 505)**: 7 new test files for previously untested
   lib modules (`Config`, `Results`, `JsonCatalog`, `Evidence`, `EventLog`,
@@ -173,7 +175,7 @@ All notable changes to this project are documented in this file.
 
 ## [2.0.1] - 2026-03-17
 
-### Fixed
+### Fixed in 2.0.1
 
 - **Invoke-NativeProcess deadlock** (`lib/Execution.psm1`): stdout/stderr
   `ReadToEnd()` was called after `WaitForExit()`, causing a classic pipe-buffer
@@ -190,17 +192,19 @@ All notable changes to this project are documented in this file.
   must not contain single quotes) before heredoc construction.
 - **schtasks invocation hardened** (`scripts/21-EmergencyKillSwitch.ps1`):
   converted bare-token schtasks call to array-based invocation.
-- **Runtime bugs in Output aliases** (`lib/Output.psm1`, scripts): `Write-Ui -BlankLine`
-  and `Write-Ui -Text` callers used parameters the wrapper did not expose; fixed
-  to canonical `Write-BlankLine` and `Write-UiLine -Text`.
+- **Runtime bugs in Output aliases** (`lib/Output.psm1`, scripts):
+  `Write-Ui -BlankLine` and `Write-Ui -Text` callers used parameters the
+  wrapper did not expose; fixed to canonical `Write-BlankLine` and
+  `Write-UiLine -Text`.
 - **CI: Pester exit code** (`.github/workflows/ci.yml`): `Invoke-Pester` was
   called without `-CI`, so Pester 5 returned exit code 0 even when tests failed —
   test failures silently passed CI. Added `-CI` flag.
 - **CI: Scorecard permissions** (`.github/workflows/scorecard.yml`): replaced
-  overly broad `permissions: read-all` with minimal `permissions: { contents: read }`;
-  job-level write scopes already set correctly.
+  overly broad `permissions: read-all` with minimal
+  `permissions: { contents: read }`; job-level write scopes already set
+  correctly.
 
-### Changed
+### Changed in 2.0.1
 
 - **Alias cleanup — Output.psm1**: removed 16 alias wrapper functions
   (`Write-ConsoleKV`, `Write-UiKV`, `Write-UiKv`, `Write-UiKeyValue`,
@@ -230,7 +234,7 @@ All notable changes to this project are documented in this file.
 
 ## [2.0.0] - 2026-02-27
 
-### Added
+### Added in 2.0.0
 
 - New orchestration layer:
   - `scripts/00-Validate-Profile.ps1`
@@ -244,7 +248,7 @@ All notable changes to this project are documented in this file.
 - Example profiles under `examples/profiles/`.
 - New module and orchestration tests.
 
-### Changed
+### Changed in 2.0.0
 
 - Root documentation cleaned up to core docs only.
 - One-off migration helpers moved from `tools/` to `scripts/dev/`.
@@ -255,7 +259,7 @@ All notable changes to this project are documented in this file.
   - legacy top-level `-Remediate` script parameter removed in productive scripts.
   - remediation guarded via `-Mode Remediate` + `SupportsShouldProcess`.
 
-### Fixed
+### Fixed in 2.0.0
 
 - `Get-FindingStats` now handles empty findings collections.
 - Pester suite stabilized for non-Windows environments via OS-aware skips.

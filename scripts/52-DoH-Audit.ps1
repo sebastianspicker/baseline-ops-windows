@@ -83,7 +83,7 @@ Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChe
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
 Set-StrictMode -Version Latest
-Initialize-V2Context -BoundParameters $PSBoundParameters
+Initialize-V2Context -ScriptName '52-DoH-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -95,7 +95,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '52-DoH-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() `
+  $result = Get-V2ResultObject -ScriptName '52-DoH-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() `
     -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
@@ -140,7 +140,7 @@ $script:DoHModeMap = @{
 # Main
 # ----------------------------
 
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 $enableAutoDoh          = $null
 $dohModeLabel           = 'NotConfigured'
@@ -218,7 +218,7 @@ try {
     $dohBootstrapAddresses = @($bootstrapRaw -split '[\r\n\s]+' | Where-Object { $_ -ne '' })
   }
 } catch {
-  # Non-critical; not all environments configure bootstrap addresses
+  Write-Verbose ("DoH bootstrap address query failed: {0}" -f $_.Exception.Message)
 }
 
 # 4. Check if plaintext fallback is explicitly prohibited
@@ -236,7 +236,7 @@ try {
     }
   }
 } catch {
-  # Non-critical check
+  Write-Verbose ("DoH plaintext fallback query failed: {0}" -f $_.Exception.Message)
 }
 
 # ----------------------------
@@ -272,7 +272,7 @@ $resultToken  = if ($Strict -and $findingsCount -gt 0) { 'FAIL' }
   elseif ($findingsCount -gt 0) { 'WARN' }
   else { 'OK' }
 
-$v2Result = New-V2ResultObject -ScriptName '52-DoH-Audit.ps1' -Mode $Mode `
+$v2Result = Get-V2ResultObject -ScriptName '52-DoH-Audit.ps1' -Mode $Mode `
   -Result $resultToken -Findings $Findings -Summary $summary `
   -Metadata @{ UnknownResolvers = $unknownResolvers; DohNameServers = $dohNameServers }
 

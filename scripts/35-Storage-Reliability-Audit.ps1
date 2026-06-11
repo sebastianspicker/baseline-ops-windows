@@ -87,30 +87,8 @@ Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '35-Storage-Reliability-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -122,7 +100,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -135,7 +113,7 @@ function Test-CmdletAvailable {
   return [bool](Get-Command -Name $Name -ErrorAction SilentlyContinue)
 }
 
-function New-DefaultConfig {
+function Get-DefaultConfig {
   # Conservative defaults to reduce false positives.
   [pscustomobject]@{
     Thresholds = [pscustomobject]@{
@@ -167,7 +145,7 @@ function Get-DiskKey {
 function Load-Config {
   param([string]$Path)
 
-  $cfg = New-DefaultConfig
+  $cfg = Get-DefaultConfig
 
   $pathDisplay = $Path
   if ([string]::IsNullOrWhiteSpace($pathDisplay)) { $pathDisplay = "<empty>" }
@@ -210,20 +188,26 @@ function Resolve-PhysicalDisk {
     if (-not [string]::IsNullOrWhiteSpace([string]$DiskRow.UniqueId)) {
       return Get-PhysicalDisk -UniqueId $DiskRow.UniqueId -ErrorAction Stop
     }
-  } catch { <# best-effort: UniqueId resolution may fail #> }
+  } catch {
+    Write-Verbose ("Physical disk UniqueId resolution failed for '{0}': {1}" -f $DiskRow.UniqueId,$_.Exception.Message)
+  }
 
   try {
     if ($null -ne $DiskRow.DeviceId -and "$($DiskRow.DeviceId)" -ne "") {
       $pd = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq $DiskRow.DeviceId } | Select-Object -First 1
       if ($pd) { return $pd }
     }
-  } catch { <# best-effort: DeviceId resolution may fail #> }
+  } catch {
+    Write-Verbose ("Physical disk DeviceId resolution failed for '{0}': {1}" -f $DiskRow.DeviceId,$_.Exception.Message)
+  }
 
   try {
     if (-not [string]::IsNullOrWhiteSpace([string]$DiskRow.FriendlyName)) {
       return (Get-PhysicalDisk -FriendlyName $DiskRow.FriendlyName -ErrorAction Stop | Select-Object -First 1)
     }
-  } catch { <# best-effort: FriendlyName resolution may fail #> }
+  } catch {
+    Write-Verbose ("Physical disk FriendlyName resolution failed for '{0}': {1}" -f $DiskRow.FriendlyName,$_.Exception.Message)
+  }
 
   throw "Unable to resolve PhysicalDisk object for '$($DiskRow.FriendlyName)'."
 }
@@ -234,11 +218,11 @@ function Resolve-PhysicalDisk {
 
 # region Main
 
-$Findings = New-FindingsList
+$Findings = Get-FindingsList
 
 if (-not (Test-CmdletAvailable -Name 'Get-PhysicalDisk')) {
   Add-Finding -FindingList $Findings -Code 'STO-CmdletMissing' -Severity 'Critical' -Message 'Required cmdlet missing: Get-PhysicalDisk (Storage module/OS).' -TypeName 'StorageAudit.Finding'
-  $v2Result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary @{} -Metadata @{}
+  $v2Result = Get-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary @{} -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 1
@@ -252,7 +236,10 @@ if (-not $hasReliability) {
 $Config = Load-Config -Path $ConfigJsonPath
 
 $script:UseWriteInformation = $false
-try { $script:UseWriteInformation = [bool]$Config.Output.UseWriteInformation } catch { <# best-effort: config property may not exist #> $script:UseWriteInformation = $false }
+try { $script:UseWriteInformation = [bool]$Config.Output.UseWriteInformation } catch {
+  Write-Verbose ("Storage output config read failed: {0}" -f $_.Exception.Message)
+  $script:UseWriteInformation = $false
+}
 
 $disks = Get-PhysicalDisk | Select-Object `
   FriendlyName, SerialNumber, UniqueId, DeviceId, MediaType, Size, HealthStatus, OperationalStatus, BusType
@@ -293,8 +280,12 @@ if ($hasReliability) {
 
       # Thresholds (robust parsing)
       $tWarn = 55; $tHigh = 65
-      try { $tWarn = [int]$Config.Thresholds.TemperatureWarnC } catch { <# best-effort: config threshold cast #> }
-      try { $tHigh = [int]$Config.Thresholds.TemperatureHighC } catch { <# best-effort: config threshold cast #> }
+      try { $tWarn = [int]$Config.Thresholds.TemperatureWarnC } catch {
+        Write-Verbose ("TemperatureWarnC threshold cast failed: {0}" -f $_.Exception.Message)
+      }
+      try { $tHigh = [int]$Config.Thresholds.TemperatureHighC } catch {
+        Write-Verbose ("TemperatureHighC threshold cast failed: {0}" -f $_.Exception.Message)
+      }
       if ($tHigh -lt $tWarn) { $tHigh = $tWarn + 10 }
 
       $thrUnc = 1; $thrRead = 1; $thrWrite = 1; $wearWarn = 20
@@ -351,7 +342,7 @@ $summary = [pscustomobject]@{
 if ($ExportPath) {
   $folder = Split-Path -Path $ExportPath -Parent
   if (-not $folder) { $folder = (Get-Location).Path }
-  Ensure-Directory -Path $folder
+  [void](Ensure-Directory -Path $folder)
 
   $base = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
 
@@ -386,7 +377,7 @@ if (-not $NoConsole) {
 
 # V2 output contract
 $resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $summary -Metadata @{ Disks = @($disks); Reliability = @($rel); Config = $Config }
+$v2Result = Get-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $summary -Metadata @{ Disks = @($disks); Reliability = @($rel); Config = $Config }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 

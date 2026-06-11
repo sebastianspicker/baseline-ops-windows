@@ -28,7 +28,7 @@ function Get-CallerValue {
 .SYNOPSIS
   Creates a new empty findings list.
 #>
-function New-FindingsList {
+function Get-FindingsList {
   [CmdletBinding()]
   param()
   $list = New-Object System.Collections.Generic.List[object]
@@ -49,11 +49,13 @@ function New-FindingsList {
 .PARAMETER Extra
   Additional properties to attach to the finding object.
 #>
-function New-FindingObject {
+function Get-FindingObject {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$Code,
-    [Parameter(Mandatory)][string]$Severity,
+    [Parameter(Mandatory)]
+    [ValidateSet('Critical','High','Medium','Low','Info','Warning','Warn','Error','OK','Pass','Fail','Skip','Skipped','Debug')]
+    [string]$Severity,
     [Parameter(Mandatory)][string]$Message,
     [string]$TypeName,
     [hashtable]$Extra
@@ -98,11 +100,15 @@ function Add-Finding {
   param(
     [Alias('Findings','List')][System.Collections.Generic.List[object]]$FindingList,
     [Parameter(Mandatory)][string]$Code,
-    [Parameter(Mandatory)][string]$Severity,
+    [Parameter(Mandatory)]
+    [ValidateSet('Critical','High','Medium','Low','Info','Warning','Warn','Error','OK','Pass','Fail','Skip','Skipped','Debug')]
+    [string]$Severity,
     [Parameter(Mandatory)][string]$Message,
     [string]$TypeName,
     [string]$ProfileName,
-    [hashtable]$Extra
+    [hashtable]$Extra,
+    [switch]$TimeUtc,
+    [switch]$TimestampLocal
   )
 
   if ($null -eq $FindingList) {
@@ -119,14 +125,12 @@ function Add-Finding {
   }
   if ($ProfileName) { $extraFields['Profile'] = $ProfileName }
 
-  $useUtc = Get-CallerValue -Name 'FindingsTimeUtc'
-  $useLocal = Get-CallerValue -Name 'FindingsTimestampLocal'
-  if ($useUtc) { $extraFields['TimeUtc'] = (Get-Date).ToUniversalTime() }
-  if ($useLocal) { $extraFields['Timestamp'] = (Get-Date) }
+  if ($TimeUtc) { $extraFields['TimeUtc'] = (Get-Date).ToUniversalTime() }
+  if ($TimestampLocal) { $extraFields['Timestamp'] = (Get-Date) }
 
-  $obj = New-FindingObject -Code $Code -Severity $Severity -Message $Message -TypeName $TypeName -Extra $extraFields
+  $obj = Get-FindingObject -Code $Code -Severity $Severity -Message $Message -TypeName $TypeName -Extra $extraFields
   $FindingList.Add($obj) | Out-Null
-  return $FindingList
+  return , $FindingList
 }
 
-Export-ModuleMember -Function New-FindingsList,New-FindingObject,Add-Finding
+Export-ModuleMember -Function Get-FindingsList,Get-FindingObject,Add-Finding

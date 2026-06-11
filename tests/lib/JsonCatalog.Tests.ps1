@@ -62,3 +62,34 @@ Describe 'Read-JsonFileSafe' {
     $result.Value | Should -Be 42
   }
 }
+
+Describe 'Read-JsonFileWithStatus' -Tag 'Config' {
+  BeforeEach {
+    if (Test-Path -LiteralPath $script:TestDir) {
+      Remove-Item -LiteralPath $script:TestDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -Path $script:TestDir -ItemType Directory -Force | Out-Null
+  }
+
+  It 'Distinguishes a missing explicit file from an omitted path' {
+    $omitted = Read-JsonFileWithStatus -Path ''
+    $missing = Read-JsonFileWithStatus -Path (Join-Path $script:TestDir 'missing.json')
+
+    $omitted.Meta.Status | Should -Be 'NotProvided'
+    $omitted.Meta.Provided | Should -BeFalse
+    $missing.Meta.Status | Should -Be 'Missing'
+    $missing.Meta.Provided | Should -BeTrue
+    $missing.Meta.Error | Should -Not -BeNullOrEmpty
+  }
+
+  It 'Reports invalid JSON with an explicit status and error' {
+    'not valid json {{{' | Out-File -FilePath $script:TestJsonFile -Encoding UTF8
+
+    $result = Read-JsonFileWithStatus -Path $script:TestJsonFile
+
+    $result.Data | Should -BeNullOrEmpty
+    $result.Meta.Loaded | Should -BeFalse
+    $result.Meta.Status | Should -Be 'Invalid'
+    $result.Meta.Error | Should -Not -BeNullOrEmpty
+  }
+}

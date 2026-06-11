@@ -18,6 +18,15 @@ param()
 
 $script:SkipRegistryTests = (-not $IsWindows) -or (-not (Get-PSDrive -Name HKCU -ErrorAction SilentlyContinue))
 
+$allowedPrefixSetters = @(
+  [pscustomobject]@{ Name = 'Set-RegDword'; Args = @{ Value = 1 } }
+  [pscustomobject]@{ Name = 'Set-RegString'; Args = @{ Value = 'x' } }
+  [pscustomobject]@{ Name = 'Set-RegQword'; Args = @{ Value = [int64]1 } }
+  [pscustomobject]@{ Name = 'Set-RegExpandString'; Args = @{ Value = '%TEMP%' } }
+  [pscustomobject]@{ Name = 'Set-RegMultiString'; Args = @{ Value = @('a') } }
+  [pscustomobject]@{ Name = 'Set-RegBinary'; Args = @{ Value = @([byte]0) } }
+)
+
 BeforeAll {
   # Import the module
   $modulePath = Join-Path $PSScriptRoot '../../lib/Registry.psm1'
@@ -26,12 +35,38 @@ BeforeAll {
   # Test registry path (safe location in HKCU)
   $script:TestKeyPath = 'HKCU:\Software\RegistryModuleTests'
   $script:TestKeyPath2 = 'HKCU:\Software\RegistryModuleTests\SubKey'
+
+  function Assert-RegistryValueKind {
+    param(
+      [Parameter(Mandatory)][string]$Path,
+      [Parameter(Mandatory)][string]$Name,
+      [Parameter(Mandatory)][Microsoft.Win32.RegistryValueKind]$ExpectedKind
+    )
+
+    (Get-Item -LiteralPath $Path).GetValueKind($Name) | Should -Be $ExpectedKind
+  }
 }
 
 AfterAll {
   # Cleanup test keys
   if (Test-Path -LiteralPath $script:TestKeyPath) {
     Remove-Item -LiteralPath $script:TestKeyPath -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
+Describe "Set-Reg* AllowedPrefixes" {
+  It "<_.Name> rejects path outside AllowedPrefixes" -ForEach $allowedPrefixSetters {
+    $case = $_
+    $params = @{
+      Path = 'HKLM:\SAM\RegistryModuleTests'
+      Name = 'v'
+      AllowedPrefixes = @('HKLM:\SOFTWARE')
+    }
+    foreach ($key in $case.Args.Keys) {
+      $params[$key] = $case.Args[$key]
+    }
+
+    { & $case.Name @params } | Should -Throw '*allowed prefixes*'
   }
 }
 
@@ -104,6 +139,7 @@ Describe "Set-RegDword" -Skip:$script:SkipRegistryTests {
     
     $value = Get-ItemProperty -Path $script:TestKeyPath -Name 'MyDword'
     $value.MyDword | Should -Be 42
+    Assert-RegistryValueKind -Path $script:TestKeyPath -Name 'MyDword' -ExpectedKind ([Microsoft.Win32.RegistryValueKind]::DWord)
   }
 
   It "Updates existing DWORD value" {
@@ -133,6 +169,7 @@ Describe "Set-RegString" -Skip:$script:SkipRegistryTests {
     
     $value = Get-ItemProperty -Path $script:TestKeyPath -Name 'MyString'
     $value.MyString | Should -Be 'TestValue'
+    Assert-RegistryValueKind -Path $script:TestKeyPath -Name 'MyString' -ExpectedKind ([Microsoft.Win32.RegistryValueKind]::String)
   }
 }
 
@@ -258,6 +295,7 @@ Describe "Set-RegQword" -Skip:$script:SkipRegistryTests {
     $result | Should -Be $true
     $value = Get-ItemProperty -Path $script:TestKeyPath -Name 'MyQword'
     $value.MyQword | Should -Be 123456789012345
+    Assert-RegistryValueKind -Path $script:TestKeyPath -Name 'MyQword' -ExpectedKind ([Microsoft.Win32.RegistryValueKind]::QWord)
   }
 
   It "Throws for empty name" {
@@ -277,6 +315,7 @@ Describe "Set-RegExpandString" -Skip:$script:SkipRegistryTests {
     $result | Should -Be $true
     $value = Get-ItemProperty -Path $script:TestKeyPath -Name 'MyExpand'
     $value.MyExpand | Should -Match 'test'
+    Assert-RegistryValueKind -Path $script:TestKeyPath -Name 'MyExpand' -ExpectedKind ([Microsoft.Win32.RegistryValueKind]::ExpandString)
   }
 
   It "Throws for empty name" {
@@ -296,6 +335,7 @@ Describe "Set-RegMultiString" -Skip:$script:SkipRegistryTests {
     $result | Should -Be $true
     $value = Get-ItemProperty -Path $script:TestKeyPath -Name 'MyMulti'
     @($value.MyMulti).Count | Should -Be 3
+    Assert-RegistryValueKind -Path $script:TestKeyPath -Name 'MyMulti' -ExpectedKind ([Microsoft.Win32.RegistryValueKind]::MultiString)
   }
 
   It "Throws for empty name" {
@@ -316,6 +356,7 @@ Describe "Set-RegBinary" -Skip:$script:SkipRegistryTests {
     $value = Get-ItemProperty -Path $script:TestKeyPath -Name 'MyBinary'
     $value.MyBinary[0] | Should -Be 0x01
     $value.MyBinary[2] | Should -Be 0xFF
+    Assert-RegistryValueKind -Path $script:TestKeyPath -Name 'MyBinary' -ExpectedKind ([Microsoft.Win32.RegistryValueKind]::Binary)
   }
 
   It "Throws for empty name" {

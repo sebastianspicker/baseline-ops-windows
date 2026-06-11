@@ -1,12 +1,16 @@
 name: OpenSSF Scorecard
 
 on:
+  workflow_dispatch:
   branch_protection_rule:
   schedule:
     - cron: '27 4 * * 1'
   push:
     branches:
       - main
+    paths-ignore:
+      - 'AGENTS.md'
+      - 'docs/agent/**'
 
 permissions:
   contents: read
@@ -16,6 +20,10 @@ jobs:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+      checks: read
+      pull-requests: read
+      issues: read
       security-events: write
       id-token: write
     steps:

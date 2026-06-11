@@ -1,17 +1,27 @@
 name: ci
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
       - dev
       - 'fix/**'
       - 'feat/**'
+      - 'update-*'
+      - 'update/**'
+    paths-ignore:
+      - 'AGENTS.md'
+      - 'docs/agent/**'
   pull_request:
     branches:
       - main
       - dev
+      - 'fix/**'
       - 'feat/**'
+    paths-ignore:
+      - 'AGENTS.md'
+      - 'docs/agent/**'
 
 permissions: {}
 
@@ -126,10 +136,20 @@ jobs:
         run: |
           if (Test-Path testResults.xml) {
             $xml = [xml](Get-Content testResults.xml)
-            $total = $xml.'test-results'.total
-            $passed = $xml.'test-results'.passed
-            $failed = $xml.'test-results'.failures
-            "## Test Results`n| Metric | Count |`n|--------|-------|`n| Passed | $passed |`n| Failed | $failed |`n| Total | $total |" >> $env:GITHUB_STEP_SUMMARY
+            $root = $xml.'test-results'
+            function Get-TestResultValue {
+              param([string]$Name)
+              $value = $root.$Name
+              if ($null -eq $value -or $value -eq '') { return '0' }
+              return [string]$value
+            }
+            $total = Get-TestResultValue 'total'
+            $passed = Get-TestResultValue 'passed'
+            $failed = Get-TestResultValue 'failures'
+            $skipped = Get-TestResultValue 'skipped'
+            $inconclusive = Get-TestResultValue 'inconclusive'
+            $notRun = Get-TestResultValue 'not-run'
+            "## Test Results`n| Metric | Count |`n|--------|-------|`n| Passed | $passed |`n| Failed | $failed |`n| Skipped | $skipped |`n| Inconclusive | $inconclusive |`n| Not run | $notRun |`n| Total | $total |" >> $env:GITHUB_STEP_SUMMARY
           }
 
   test-smoke-linux:
@@ -156,3 +176,33 @@ jobs:
         shell: pwsh
         run: |
           ./tools/verify.ps1 -RootPath $PWD -SkipAnalyzer
+
+  fuzz-profile-validation:
+    name: Fuzz profile validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: verify
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Run fuzz/property tests
+        run: npm test

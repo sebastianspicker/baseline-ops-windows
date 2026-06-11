@@ -264,7 +264,7 @@ $cmbMode.Add_SelectedIndexChanged({
   }
 })
 
-function Update-ScriptList {
+function Refresh-ScriptList {
   $root = $txtRoot.Text.Trim()
   $listScripts.Items.Clear()
   foreach ($item in (Get-ScriptListItems -RootPath $root)) {
@@ -272,7 +272,7 @@ function Update-ScriptList {
   }
 }
 
-function Start-BackgroundRun {
+function Invoke-BackgroundRun {
   param(
     [scriptblock]$ScriptBlock,
     [object[]]$ScriptArguments
@@ -297,9 +297,14 @@ function Start-BackgroundRun {
       try {
         [void]$state.PowerShell.EndInvoke($state.AsyncResult)
       } catch {
+        Write-Verbose ("Background run failed: {0}" -f $_.Exception.Message)
       } finally {
-        try { $state.PowerShell.Dispose() } catch {}
-        try { $state.Runspace.Dispose() } catch {}
+        try { $state.PowerShell.Dispose() } catch {
+          Write-Verbose ("PowerShell instance disposal failed: {0}" -f $_.Exception.Message)
+        }
+        try { $state.Runspace.Dispose() } catch {
+          Write-Verbose ("Runspace disposal failed: {0}" -f $_.Exception.Message)
+        }
       }
     }, $cleanupState)
 }
@@ -310,7 +315,7 @@ $btnBrowseRoot.Add_Click({
   $dlg.SelectedPath = $txtRoot.Text.Trim()
   if ($dlg.ShowDialog() -eq 'OK') {
     $txtRoot.Text = $dlg.SelectedPath
-    Update-ScriptList
+    Refresh-ScriptList
   }
 })
 
@@ -382,7 +387,7 @@ $btnRunScript.Add_Click({
     }
   }
 
-  Start-BackgroundRun -ScriptBlock $sb -ScriptArguments @($runLocal, $selected.Name, $root, $scriptArgs, $txtOutput, $btnRunScript, $btnRunProfile, $statusLabel)
+  Invoke-BackgroundRun -ScriptBlock $sb -ScriptArguments @($runLocal, $selected.Name, $root, $scriptArgs, $txtOutput, $btnRunScript, $btnRunProfile, $statusLabel)
 })
 
 $btnRunProfile.Add_Click({
@@ -443,10 +448,10 @@ $btnRunProfile.Add_Click({
     }
   }
 
-  Start-BackgroundRun -ScriptBlock $sb -ScriptArguments @($runProfile, $profilePathText, $root, $mode, $parsedExtra.Named, @($parsedExtra.Positional), $txtOutput, $btnRunScript, $btnRunProfile, $statusLabel)
+  Invoke-BackgroundRun -ScriptBlock $sb -ScriptArguments @($runProfile, $profilePathText, $root, $mode, $parsedExtra.Named, @($parsedExtra.Positional), $txtOutput, $btnRunScript, $btnRunProfile, $statusLabel)
 })
 
-$txtRoot.Add_TextChanged({ Update-ScriptList })
-$form.Add_Load({ Update-ScriptList })
+$txtRoot.Add_TextChanged({ Refresh-ScriptList })
+$form.Add_Load({ Refresh-ScriptList })
 
 [void]$form.ShowDialog()

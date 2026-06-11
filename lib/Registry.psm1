@@ -47,6 +47,37 @@ function Get-RegValue {
   }
 }
 
+function Set-RegTypedValue {
+  [CmdletBinding(SupportsShouldProcess = $true)]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][object]$Value,
+    [Parameter(Mandatory)]
+    [ValidateSet('DWord','String','QWord','ExpandString','MultiString','Binary')]
+    [string]$PropertyType,
+    [Parameter(Mandatory)][string]$DisplayType,
+    [string[]]$AllowedPrefixes
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "Registry value name cannot be empty." }
+  if ($AllowedPrefixes -and -not ($AllowedPrefixes | Where-Object { $Path.StartsWith($_, 'OrdinalIgnoreCase') })) {
+    throw "Registry path not in allowed prefixes"
+  }
+
+  try {
+    Ensure-RegistryKey -Path $Path
+    if (-not $PSCmdlet.ShouldProcess("$Path\$Name", "Set $DisplayType registry value")) {
+      return $false
+    }
+    $null = New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType $PropertyType -Value $Value -Force -ErrorAction Stop
+    return $true
+  } catch {
+    Write-Error "Failed to set $DisplayType '$Name' at '$Path': $($_.Exception.Message)"
+    return $false
+  }
+}
+
 <#
 .SYNOPSIS
   Sets a REG_DWORD registry value, creating the key if needed.
@@ -58,7 +89,7 @@ function Get-RegValue {
   Integer value to write.
 #>
 function Set-RegDword {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
@@ -66,19 +97,7 @@ function Set-RegDword {
     [string[]]$AllowedPrefixes
   )
 
-  if ([string]::IsNullOrWhiteSpace($Name)) { throw "Registry value name cannot be empty." }
-  if ($AllowedPrefixes -and -not ($AllowedPrefixes | Where-Object { $Path.StartsWith($_, 'OrdinalIgnoreCase') })) {
-    throw "Registry path not in allowed prefixes"
-  }
-
-  try {
-    Ensure-RegistryKey -Path $Path
-    $null = New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType DWord -Value $Value -Force -ErrorAction Stop
-    return $true
-  } catch {
-    Write-Error "Failed to set REG_DWORD '$Name' at '$Path': $($_.Exception.Message)"
-    return $false
-  }
+  return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType DWord -DisplayType 'REG_DWORD' -AllowedPrefixes $AllowedPrefixes)
 }
 
 <#
@@ -92,7 +111,7 @@ function Set-RegDword {
   String value to write.
 #>
 function Set-RegString {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
@@ -100,19 +119,7 @@ function Set-RegString {
     [string[]]$AllowedPrefixes
   )
 
-  if ([string]::IsNullOrWhiteSpace($Name)) { throw "Registry value name cannot be empty." }
-  if ($AllowedPrefixes -and -not ($AllowedPrefixes | Where-Object { $Path.StartsWith($_, 'OrdinalIgnoreCase') })) {
-    throw "Registry path not in allowed prefixes"
-  }
-
-  try {
-    Ensure-RegistryKey -Path $Path
-    $null = New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType String -Value $Value -Force -ErrorAction Stop
-    return $true
-  } catch {
-    Write-Error "Failed to set REG_SZ '$Name' at '$Path': $($_.Exception.Message)"
-    return $false
-  }
+  return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType String -DisplayType 'REG_SZ' -AllowedPrefixes $AllowedPrefixes)
 }
 
 <#
@@ -124,7 +131,7 @@ function Set-RegString {
   Value name to remove.
 #>
 function Remove-RegValueIfExists {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name
@@ -135,6 +142,9 @@ function Remove-RegValueIfExists {
   try {
     $props = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
     if ($null -ne $props.PSObject.Properties[$Name]) {
+      if (-not $PSCmdlet.ShouldProcess("$Path\$Name", 'Remove registry value')) {
+        return $false
+      }
         Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop
         return $true
     }
@@ -156,23 +166,15 @@ function Remove-RegValueIfExists {
   64-bit integer value to write.
 #>
 function Set-RegQword {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
-    [Parameter(Mandatory)][int64]$Value
+    [Parameter(Mandatory)][int64]$Value,
+    [string[]]$AllowedPrefixes
   )
 
-  if ([string]::IsNullOrWhiteSpace($Name)) { throw "Registry value name cannot be empty." }
-
-  try {
-    Ensure-RegistryKey -Path $Path
-    $null = New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType QWord -Value $Value -Force -ErrorAction Stop
-    return $true
-  } catch {
-    Write-Error "Failed to set REG_QWORD '$Name' at '$Path': $($_.Exception.Message)"
-    return $false
-  }
+  return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType QWord -DisplayType 'REG_QWORD' -AllowedPrefixes $AllowedPrefixes)
 }
 
 <#
@@ -186,23 +188,15 @@ function Set-RegQword {
   String value with expandable environment variables.
 #>
 function Set-RegExpandString {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
-    [Parameter(Mandatory)][string]$Value
+    [Parameter(Mandatory)][string]$Value,
+    [string[]]$AllowedPrefixes
   )
 
-  if ([string]::IsNullOrWhiteSpace($Name)) { throw "Registry value name cannot be empty." }
-
-  try {
-    Ensure-RegistryKey -Path $Path
-    $null = New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType ExpandString -Value $Value -Force -ErrorAction Stop
-    return $true
-  } catch {
-    Write-Error "Failed to set REG_EXPAND_SZ '$Name' at '$Path': $($_.Exception.Message)"
-    return $false
-  }
+  return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType ExpandString -DisplayType 'REG_EXPAND_SZ' -AllowedPrefixes $AllowedPrefixes)
 }
 
 <#
@@ -216,23 +210,15 @@ function Set-RegExpandString {
   Array of strings to write.
 #>
 function Set-RegMultiString {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
-    [Parameter(Mandatory)][string[]]$Value
+    [Parameter(Mandatory)][string[]]$Value,
+    [string[]]$AllowedPrefixes
   )
 
-  if ([string]::IsNullOrWhiteSpace($Name)) { throw "Registry value name cannot be empty." }
-
-  try {
-    Ensure-RegistryKey -Path $Path
-    $null = New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType MultiString -Value $Value -Force -ErrorAction Stop
-    return $true
-  } catch {
-    Write-Error "Failed to set REG_MULTI_SZ '$Name' at '$Path': $($_.Exception.Message)"
-    return $false
-  }
+  return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType MultiString -DisplayType 'REG_MULTI_SZ' -AllowedPrefixes $AllowedPrefixes)
 }
 
 <#
@@ -246,23 +232,15 @@ function Set-RegMultiString {
   Byte array to write.
 #>
 function Set-RegBinary {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
-    [Parameter(Mandatory)][byte[]]$Value
+    [Parameter(Mandatory)][byte[]]$Value,
+    [string[]]$AllowedPrefixes
   )
 
-  if ([string]::IsNullOrWhiteSpace($Name)) { throw "Registry value name cannot be empty." }
-
-  try {
-    Ensure-RegistryKey -Path $Path
-    $null = New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType Binary -Value $Value -Force -ErrorAction Stop
-    return $true
-  } catch {
-    Write-Error "Failed to set REG_BINARY '$Name' at '$Path': $($_.Exception.Message)"
-    return $false
-  }
+  return (Set-RegTypedValue -Path $Path -Name $Name -Value ([byte[]]$Value) -PropertyType Binary -DisplayType 'REG_BINARY' -AllowedPrefixes $AllowedPrefixes)
 }
 
 <#
@@ -389,7 +367,7 @@ function Get-RegString {
   Remove the key and all subkeys.
 #>
 function Remove-RegistryKeyIfExists {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][string]$Path,
     [switch]$Recurse
@@ -398,6 +376,9 @@ function Remove-RegistryKeyIfExists {
   if (-not (Test-Path -LiteralPath $Path)) { return $false }
 
   try {
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Remove registry key')) {
+      return $false
+    }
     if ($Recurse) {
       Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
     } else {

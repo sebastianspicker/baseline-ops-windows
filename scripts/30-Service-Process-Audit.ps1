@@ -79,34 +79,13 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '30-Service-Process-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -118,7 +97,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -164,17 +143,7 @@ function Import-OptionalJsonConfig {
     [string]$Path
   )
 
-  if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
-  if (-not (Test-Path -LiteralPath $Path)) { return $null }
-
-  try {
-    $jsonText = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
-    if ([string]::IsNullOrWhiteSpace($jsonText)) { return $null }
-    return ($jsonText | ConvertFrom-Json -ErrorAction Stop) # ConvertFrom-Json converts JSON to objects. [web:38]
-  }
-  catch {
-    return $null
-  }
+  Read-JsonFileWithStatus -Path $Path
 }
 
 # Defaults used when JSON is missing/unreadable/invalid
@@ -189,7 +158,23 @@ $Config = [ordered]@{
   ConsoleMaxServices    = 60      # prevent “wall of text” by default
 }
 
-$jsonCfg = Import-OptionalJsonConfig -Path $ConfigJsonPath
+$configLoad = Import-OptionalJsonConfig -Path $ConfigJsonPath
+$jsonCfg = $configLoad.Data
+$configMeta = $configLoad.Meta
+$configPathProvided = -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)
+$configLoadIssue = $configPathProvided -and -not [bool]$configMeta.Loaded
+$findings = @()
+
+if ($configLoadIssue) {
+  $findings += [pscustomobject]@{
+    Code     = 'CFG-ConfigLoadFailed'
+    Severity = 'Medium'
+    Message  = ("Explicit ConfigJsonPath was not loaded ({0}). Defaults were used." -f $configMeta.Status)
+    Path     = $ConfigJsonPath
+    Status   = $configMeta.Status
+    Error    = $configMeta.Error
+  }
+}
 
 if ($null -ne $jsonCfg) {
   if ($null -ne $jsonCfg.TopN) {
@@ -228,10 +213,14 @@ function Get-SafeProcessSnapshot {
   )
 
   $startTime = $null
-  try { $startTime = $Process.StartTime } catch { <# best-effort: StartTime may throw for system/idle processes #> }
+  try { $startTime = $Process.StartTime } catch {
+    Write-Verbose ("Process StartTime read failed for PID {0}: {1}" -f $Process.Id,$_.Exception.Message)
+  }
 
   $path = $null
-  try { $path = $Process.Path } catch { <# best-effort: Path may throw for system/protected processes #> }
+  try { $path = $Process.Path } catch {
+    Write-Verbose ("Process path read failed for PID {0}: {1}" -f $Process.Id,$_.Exception.Message)
+  }
 
   [pscustomobject]@{
     Name         = $Process.Name
@@ -308,7 +297,10 @@ $summary = [pscustomobject]@{
   ServiceCount     = $svcEnriched.Count
   RunningServices  = $runningServicesCount
   ConfigJsonPath   = if ([string]::IsNullOrWhiteSpace($ConfigJsonPath)) { $null } else { $ConfigJsonPath }
+  ConfigPathProvided = [bool]$configPathProvided
   ConfigLoaded     = [bool]($null -ne $jsonCfg)
+  ConfigLoadStatus = [string]$configMeta.Status
+  ConfigLoadError  = $configMeta.Error
   ExportEnabled    = [bool]($Config.ExportEnabled -and -not [string]::IsNullOrWhiteSpace($ExportPath))
   ExportBasePath   = if ([string]::IsNullOrWhiteSpace($ExportPath)) { $null } else { $ExportPath }
 }
@@ -347,6 +339,8 @@ if (-not $NoConsole) {
   Write-UiRule -Title "Config"
   if ($summary.ConfigLoaded) {
     Write-ConsoleLine -Message "Config loaded    : True" -Style Ok
+  } elseif ($configLoadIssue) {
+    Write-ConsoleLine -Message ("Config loaded    : False ({0}; defaults in use)" -f $summary.ConfigLoadStatus) -Style Warn
   } else {
     Write-ConsoleLine -Message "Config loaded    : False (defaults in use)" -Style Warn
   }
@@ -405,7 +399,9 @@ if (-not $NoConsole) {
 }
 
 # V2 output contract
-$v2Result = New-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ TopCpu = $topCpu; TopRam = $topRam; Services = $svcEnriched; Config = [pscustomobject]$Config }
+$resultToken = if ($configLoadIssue) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($findings) -Summary $summary -Metadata @{ TopCpu = $topCpu; TopRam = $topRam; Services = $svcEnriched; Config = [pscustomobject]$Config }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
+if ($resultToken -eq 'WARN') { exit 2 }
 exit 0

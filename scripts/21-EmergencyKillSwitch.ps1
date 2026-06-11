@@ -148,31 +148,15 @@ param(
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '21-EmergencyKillSwitch.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
+$Findings = Get-FindingsList
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
 if (-not $isWindowsHost) {
@@ -183,10 +167,10 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result 'WARN' -Findings @($Findings.ToArray()) -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit 2
 }
 
 # -------------------- Safe defaults
@@ -243,6 +227,8 @@ $Run = [ordered]@{
     FirewallProfileSet  = $false
     RulesCreated        = $false
     BreakGlassApplied   = $false
+    BreakGlassCleanupChecked = $false
+    BreakGlassRemoved   = $false
     AdaptersDisabled    = $false
     RollbackScheduled   = $false
 
@@ -310,6 +296,7 @@ function Get-ConfigValue {
 
 
 function Set-QuarantineFlag {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [string]$RegKey,
     [string]$ReasonText,
@@ -331,6 +318,7 @@ function Set-QuarantineFlag {
 }
 
 function New-OrReplaceRule {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [string]$Name,
     [string]$DisplayName,
@@ -345,11 +333,11 @@ function New-OrReplaceRule {
   # Remove existing rule if present (ignore if not found)
   try {
     $existingRule = Get-NetFirewallRule -Name $Name -ErrorAction Stop
-    if ($existingRule) {
+    if ($existingRule -and $PSCmdlet.ShouldProcess($Name, 'Remove existing firewall rule before replacement')) {
       Remove-NetFirewallRule -Name $Name -ErrorAction Stop
     }
   } catch {
-    # Rule doesn't exist, which is fine
+    Write-Verbose ("Existing firewall rule removal skipped for '{0}': {1}" -f $Name,$_.Exception.Message)
   }
 
   $params = @{
@@ -366,7 +354,44 @@ function New-OrReplaceRule {
     $params.RemoteAddress = $RemoteAddress
   }
 
-  New-NetFirewallRule @params | Out-Null
+  try {
+    if (-not $PSCmdlet.ShouldProcess($Name, 'Create replacement firewall rule')) {
+      Add-RunError "Firewall rule '$Name' creation skipped by ShouldProcess."
+      return $false
+    }
+    New-NetFirewallRule @params | Out-Null
+  } catch {
+    $message = "Firewall rule '$Name' creation failed: $($_.Exception.Message)"
+    Add-RunError $message
+    $null = Add-Finding -FindingList $Findings -Code 'Firewall-RuleCreateFailed' -Severity 'High' `
+      -Message $message -Extra @{ RuleName = $Name; Direction = $Direction; Action = $Action }
+    return $false
+  }
+
+  try {
+    $createdRules = @(Get-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue | Where-Object { $null -ne $_ })
+  } catch {
+    $message = "Firewall rule '$Name' verification failed after creation: $($_.Exception.Message)"
+    Add-RunError $message
+    $null = Add-Finding -FindingList $Findings -Code 'Firewall-RuleCreateFailed' -Severity 'High' `
+      -Message $message -Extra @{ RuleName = $Name; Direction = $Direction; Action = $Action }
+    return $false
+  }
+
+  $verifiedRules = @($createdRules | Where-Object {
+      [string]$_.Enabled -eq 'True' -and
+      [string]$_.Direction -eq $Direction -and
+      [string]$_.Action -eq $Action
+    })
+  if ($verifiedRules.Count -eq 0) {
+    $message = "Firewall rule '$Name' was not found, was not enabled, or did not match requested settings after creation."
+    Add-RunError $message
+    $null = Add-Finding -FindingList $Findings -Code 'Firewall-RuleCreateFailed' -Severity 'High' `
+      -Message $message -Extra @{ RuleName = $Name; Direction = $Direction; Action = $Action }
+    return $false
+  }
+
+  return $true
 }
 
 function Schedule-AutoRollback {
@@ -451,7 +476,7 @@ try {
   return $true
 }
 
-function Update-Outcome {
+function Resolve-Outcome {
   # Consider isolation "active" only if at least the firewall default policy was set OR rules were created.
   $Run.Outcome.IsolationActive = [bool]($Run.Actions.FirewallProfileSet -or $Run.Actions.RulesCreated -or $Run.Actions.AdaptersDisabled)
 }
@@ -459,7 +484,7 @@ function Update-Outcome {
 function Invoke-KillSwitchConsoleSummary {
   $Run.EndTime = Get-Date
   $Run.Duration = New-TimeSpan -Start $Run.StartTime -End $Run.EndTime
-  Update-Outcome
+  Resolve-Outcome
 
   $summaryObj = [pscustomobject]@{ ComputerName = $Run.ComputerName; Timestamp = $Run.EndTime }
   Write-ConsoleSummary -Summary $summaryObj -Findings ([System.Collections.ArrayList]::new()) `
@@ -480,6 +505,8 @@ function Invoke-KillSwitchConsoleSummary {
   Write-UiBool -Key 'FirewallProfileSet' -Value $Run.Actions.FirewallProfileSet
   Write-UiBool -Key 'RulesCreated'       -Value $Run.Actions.RulesCreated
   Write-UiBool -Key 'BreakGlassApplied'  -Value $Run.Actions.BreakGlassApplied
+  Write-UiBool -Key 'BreakGlassCleanupChecked' -Value $Run.Actions.BreakGlassCleanupChecked
+  Write-UiBool -Key 'BreakGlassRemoved'  -Value $Run.Actions.BreakGlassRemoved
   Write-UiBool -Key 'AdaptersDisabled'   -Value $Run.Actions.AdaptersDisabled
   Write-UiBool -Key 'RollbackScheduled'  -Value $Run.Actions.RollbackScheduled
   # ConfirmDeclined warning
@@ -556,7 +583,9 @@ $RuleNames   = @($RuleInName, $RuleOutName, $RuleBgName)
 $Run.IsAdmin = Test-IsAdmin
 
 if ($Remediate) {
-  Ensure-EventSource -Source $Run.Effective.EventSource -Log $Run.Effective.EventLog
+  if (-not (Ensure-EventSource -Source $Run.Effective.EventSource -Log $Run.Effective.EventLog)) {
+    Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+  }
 }
 
 if (-not $Run.IsAdmin -and $Remediate) {
@@ -574,7 +603,7 @@ if (-not $Run.IsAdmin -and $Remediate) {
 }
 
 if (-not $Remediate) {
-  Update-Outcome
+  Resolve-Outcome
 
   Write-UiHeader -Title "Kill Switch"
   Write-UiLine -Text "Audit mode: no kill switch actions applied." -Color Yellow
@@ -631,18 +660,17 @@ try {
   }
 
   if ($PSCmdlet.ShouldProcess("Windows Defender Firewall Rules", "Create kill switch rules")) {
-    New-OrReplaceRule -Name $RuleInName  -DisplayName "$($Run.Effective.RulePrefix) Inbound Block"  -Direction Inbound  -Action Block -Description "Kill switch: block inbound"
-    New-OrReplaceRule -Name $RuleOutName -DisplayName "$($Run.Effective.RulePrefix) Outbound Block" -Direction Outbound -Action Block -Description "Kill switch: block outbound"
-    $Run.Actions.RulesCreated = $true
+    $inRuleCreated = New-OrReplaceRule -Name $RuleInName  -DisplayName "$($Run.Effective.RulePrefix) Inbound Block"  -Direction Inbound  -Action Block -Description "Kill switch: block inbound"
+    $outRuleCreated = New-OrReplaceRule -Name $RuleOutName -DisplayName "$($Run.Effective.RulePrefix) Outbound Block" -Direction Outbound -Action Block -Description "Kill switch: block outbound"
+    $Run.Actions.RulesCreated = [bool]($inRuleCreated -and $outRuleCreated)
   } else {
     $Run.Actions.ConfirmDeclined = $true
   }
 
   if ($Run.Effective.BreakGlassRemoteAddress -and $Run.Effective.BreakGlassRemoteAddress.Count -gt 0) {
     if ($PSCmdlet.ShouldProcess("Windows Defender Firewall Rules", "Create break-glass inbound allow rule")) {
-      New-OrReplaceRule -Name $RuleBgName -DisplayName "$($Run.Effective.RulePrefix) BreakGlass Inbound Allow" `
+      $Run.Actions.BreakGlassApplied = New-OrReplaceRule -Name $RuleBgName -DisplayName "$($Run.Effective.RulePrefix) BreakGlass Inbound Allow" `
         -Direction Inbound -Action Allow -RemoteAddress $Run.Effective.BreakGlassRemoteAddress -Description "Kill switch: break-glass inbound allow"
-      $Run.Actions.BreakGlassApplied = $true
     } else {
       $Run.Actions.ConfirmDeclined = $true
     }
@@ -651,13 +679,19 @@ try {
       # Absence of break-glass addresses means "remove our managed break-glass
       # rule", not "leave a stale inbound allow rule behind".
       if ($PSCmdlet.ShouldProcess($RuleBgName, "Remove break-glass inbound allow rule")) {
-        $rule = Get-NetFirewallRule -Name $RuleBgName -ErrorAction Stop
-        if ($rule) { $rule | Remove-NetFirewallRule -ErrorAction Stop }
+        $Run.Actions.BreakGlassCleanupChecked = $true
+        $rule = Get-NetFirewallRule -Name $RuleBgName -ErrorAction SilentlyContinue
+        if ($rule) {
+          $rule | Remove-NetFirewallRule -ErrorAction Stop
+          $Run.Actions.BreakGlassRemoved = $true
+        }
       } else {
         $Run.Actions.ConfirmDeclined = $true
       }
     } catch {
-      Write-Warning "Could not remove break-glass firewall rule: $($_.Exception.Message)"
+      $message = "Break-glass firewall rule removal failed: $($_.Exception.Message)"
+      Add-RunError $message
+      Write-Warning $message
     }
   }
 
@@ -673,7 +707,7 @@ try {
     }
   }
 
-  Update-Outcome
+  Resolve-Outcome
 
   $level = if ($Run.Outcome.IsolationActive) { 'Warning' } else { 'Information' }
   $eventMsg = @"
@@ -717,8 +751,24 @@ finally {
 }
 
 # V2 output contract
-$resultToken = if ($Run.Errors.Count -gt 0) { 'FAIL' } elseif (($Run.Actions.Values | Where-Object { $_ -eq $true }).Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary ([pscustomobject]$Run) -Metadata @{}
+$completedActionNames = @(
+  'RegistryWritten',
+  'EventLogWritten',
+  'FirewallProfileSet',
+  'RulesCreated',
+  'BreakGlassApplied',
+  'BreakGlassRemoved',
+  'AdaptersDisabled',
+  'RollbackScheduled'
+)
+$successfulActions = @($completedActionNames | Where-Object { $Run.Actions[$_] -eq $true })
+$actionsDeclinedOrDryRun = ($WhatIfPreference -eq $true -or $Run.Actions.ConfirmDeclined)
+if ($Run.Errors.Count -eq 0 -and $successfulActions.Count -eq 0 -and $actionsDeclinedOrDryRun) {
+  $null = Add-Finding -FindingList $Findings -Code 'KS-ActionsDeclinedOrDryRun' -Severity 'Medium' `
+    -Message 'Kill switch ran but no protective actions were completed.'
+}
+$resultToken = if ($Run.Errors.Count -gt 0) { 'FAIL' } elseif ($successfulActions.Count -gt 0 -or $Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary ([pscustomobject]$Run) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 if ($Run.Errors.Count -gt 0) { exit 1 }

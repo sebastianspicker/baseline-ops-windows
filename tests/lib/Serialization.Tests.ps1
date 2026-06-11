@@ -4,9 +4,9 @@ BeforeAll {
   Import-Module (Join-Path $PSScriptRoot '../../lib/Serialization.psm1') -Force
 }
 
-Describe 'New-V2ResultObject' {
+Describe 'Get-V2ResultObject' {
   It 'Creates required contract fields' {
-    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{ A = 1 } -Metadata @{}
+    $obj = Get-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{ A = 1 } -Metadata @{}
     $obj.SchemaVersion | Should -Be '2.0'
     $obj.ScriptName | Should -Be 'x.ps1'
     $obj.Mode | Should -Be 'Audit'
@@ -14,24 +14,24 @@ Describe 'New-V2ResultObject' {
   }
 
   It 'Includes ComputerName and TimestampUtc' {
-    $obj = New-V2ResultObject -ScriptName 'y.ps1' -Mode 'Remediate' -Result 'WARN' -Findings @() -Summary @{} -Metadata @{}
+    $obj = Get-V2ResultObject -ScriptName 'y.ps1' -Mode 'Remediate' -Result 'WARN' -Findings @() -Summary @{} -Metadata @{}
     $obj.PSObject.Properties.Name | Should -Contain 'ComputerName'
     $obj.PSObject.Properties.Name | Should -Contain 'TimestampUtc'
   }
 
   It 'Stores Findings as array' {
     $findings = @([pscustomobject]@{ Code = 'A'; Severity = 'High' })
-    $obj = New-V2ResultObject -ScriptName 'z.ps1' -Mode 'Audit' -Result 'FAIL' -Findings $findings -Summary @{} -Metadata @{}
+    $obj = Get-V2ResultObject -ScriptName 'z.ps1' -Mode 'Audit' -Result 'FAIL' -Findings $findings -Summary @{} -Metadata @{}
     @($obj.Findings).Count | Should -Be 1
     $obj.Findings[0].Code | Should -Be 'A'
   }
 
   It 'Rejects invalid Mode via ValidateSet' {
-    { New-V2ResultObject -ScriptName 'z.ps1' -Mode 'Invalid' -Result 'OK' -Findings @() -Summary @{} -Metadata @{} } | Should -Throw
+    { Get-V2ResultObject -ScriptName 'z.ps1' -Mode 'Invalid' -Result 'OK' -Findings @() -Summary @{} -Metadata @{} } | Should -Throw
   }
 
   It 'Rejects invalid Result via ValidateSet' {
-    { New-V2ResultObject -ScriptName 'z.ps1' -Mode 'Audit' -Result 'INVALID' -Findings @() -Summary @{} -Metadata @{} } | Should -Throw
+    { Get-V2ResultObject -ScriptName 'z.ps1' -Mode 'Audit' -Result 'INVALID' -Findings @() -Summary @{} -Metadata @{} } | Should -Throw
   }
 }
 
@@ -147,29 +147,36 @@ Describe 'Save-Csv' {
 
 Describe 'Write-ResultObject' {
   It 'Throws for Json without OutputPath' {
-    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+    $obj = Get-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
     { Write-ResultObject -ResultObject $obj -OutputFormat Json } | Should -Throw
   }
 
   It 'Throws for Csv without OutputPath' {
-    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+    $obj = Get-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
     { Write-ResultObject -ResultObject $obj -OutputFormat Csv } | Should -Throw
   }
 
   It 'Does not throw for None format' {
-    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+    $obj = Get-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
     { Write-ResultObject -ResultObject $obj -OutputFormat None } | Should -Not -Throw
   }
 
   It 'Does not throw for Console format' {
-    $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+    $obj = Get-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
     { Write-ResultObject -ResultObject $obj -OutputFormat Console } | Should -Not -Throw
+  }
+
+  It 'Treats Console and None formats as intentional no-ops' {
+    $obj = Get-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+
+    @(Write-ResultObject -ResultObject $obj -OutputFormat Console 6>&1) | Should -HaveCount 0
+    @(Write-ResultObject -ResultObject $obj -OutputFormat None 6>&1) | Should -HaveCount 0
   }
 
   It 'Writes JSON file when OutputPath is provided' {
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("wr-json-{0}.json" -f [guid]::NewGuid().ToString('N'))
     try {
-      $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
+      $obj = Get-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'OK' -Findings @() -Summary @{} -Metadata @{}
       Write-ResultObject -ResultObject $obj -OutputFormat Json -OutputPath $tmp
       Test-Path -LiteralPath $tmp | Should -Be $true
     } finally {
@@ -181,7 +188,7 @@ Describe 'Write-ResultObject' {
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("wr-csv-{0}.csv" -f [guid]::NewGuid().ToString('N'))
     try {
       $findings = @([pscustomobject]@{ Code = 'T1'; Severity = 'High'; Message = 'fail' })
-      $obj = New-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'FAIL' -Findings $findings -Summary @{} -Metadata @{}
+      $obj = Get-V2ResultObject -ScriptName 'x.ps1' -Mode 'Audit' -Result 'FAIL' -Findings $findings -Summary @{} -Metadata @{}
       Write-ResultObject -ResultObject $obj -OutputFormat Csv -OutputPath $tmp
       Test-Path -LiteralPath $tmp | Should -Be $true
     } finally {

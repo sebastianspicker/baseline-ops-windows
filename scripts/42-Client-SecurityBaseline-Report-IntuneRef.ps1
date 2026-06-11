@@ -82,30 +82,8 @@ $script:Quiet = [bool]$Quiet
 $script:NoConsoleSummary = [bool]$NoConsoleSummary
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -117,7 +95,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -155,7 +133,7 @@ function ConvertTo-DisplayString {
   return $s
 }
 
-function New-ObjectList {
+function Get-ObjectList {
   # Strong list internally, but do NOT expose as typed parameter to avoid empty-collection binding issues. [web:56]
   New-Object 'System.Collections.Generic.List[object]'
 }
@@ -185,7 +163,7 @@ function Add-Row {
   throw ("Add-Row: Unsupported list type: {0}" -f $List.GetType().FullName)
 }
 
-function New-ReferenceDefaults {
+function Get-ReferenceDefaults {
   return @{
     Metadata = @{
       Name    = 'DefaultReference'
@@ -221,7 +199,7 @@ function Load-ReferenceJson {
   $result = [ordered]@{ Loaded=$false; Path=$null; Error=$null; Reference=$null }
 
   if ([string]::IsNullOrWhiteSpace($Path)) {
-    $result.Reference = New-ReferenceDefaults
+    $result.Reference = Get-ReferenceDefaults
     return [pscustomobject]$result
   }
 
@@ -230,21 +208,21 @@ function Load-ReferenceJson {
   try {
     if (-not (Test-Path -LiteralPath $Path)) {
       $result.Error = "Reference JSON not found: $Path"
-      $result.Reference = New-ReferenceDefaults
+      $result.Reference = Get-ReferenceDefaults
       return [pscustomobject]$result
     }
 
     $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($raw)) {
       $result.Error = "Reference JSON is empty: $Path"
-      $result.Reference = New-ReferenceDefaults
+      $result.Reference = Get-ReferenceDefaults
       return [pscustomobject]$result
     }
 
     $obj = $raw | ConvertFrom-Json -ErrorAction Stop
     if ($null -eq $obj) {
       $result.Error = "Reference JSON parsed to null: $Path"
-      $result.Reference = New-ReferenceDefaults
+      $result.Reference = Get-ReferenceDefaults
       return [pscustomobject]$result
     }
 
@@ -254,7 +232,7 @@ function Load-ReferenceJson {
   }
   catch {
     $result.Error = $_.Exception.Message
-    $result.Reference = New-ReferenceDefaults
+    $result.Reference = Get-ReferenceDefaults
     return [pscustomobject]$result
   }
 }
@@ -333,6 +311,22 @@ function Get-LevelForMatch {
 
 $refInfo = Load-ReferenceJson -Path $ReferenceJsonPath
 $ref     = $refInfo.Reference
+$partialReasons = New-Object 'System.Collections.Generic.List[string]'
+$sourceStatus = [ordered]@{
+  Reference = [ordered]@{
+    Requested = -not [string]::IsNullOrWhiteSpace($ReferenceJsonPath)
+    Loaded    = [bool]$refInfo.Loaded
+    Error     = $refInfo.Error
+  }
+  FirewallProfile = [ordered]@{
+    Attempted = $false
+    Succeeded = $null
+    Error     = $null
+  }
+}
+if ($sourceStatus.Reference.Requested -and -not $refInfo.Loaded) {
+  [void]$partialReasons.Add("Reference JSON failed: $($refInfo.Error)")
+}
 
 $dgRuntime   = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
 $lsaRuntime  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
@@ -342,7 +336,7 @@ $psSBPolicy  = Join-Path $psPolicy 'ScriptBlockLogging'
 $psMLPolicy  = Join-Path $psPolicy 'ModuleLogging'
 $psTRPolicy  = Join-Path $psPolicy 'Transcription'
 
-$rows = New-ObjectList
+$rows = Get-ObjectList
 
 # Credential Guard / VBS - runtime intent
 $enableVbs = Get-RegValue -Path $dgRuntime  -Name 'EnableVirtualizationBasedSecurity'
@@ -453,6 +447,7 @@ Add-Row -List $rows -Data @{
 
 # Firewall profiles
 if (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue) {
+  $sourceStatus.FirewallProfile.Attempted = $true
   try {
     foreach ($p in (Get-NetFirewallProfile -ErrorAction Stop)) {
       Add-Row -List $rows -Data @{
@@ -467,7 +462,11 @@ if (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue) {
         Interpretation = $null
       }
     }
+    $sourceStatus.FirewallProfile.Succeeded = $true
   } catch {
+    $sourceStatus.FirewallProfile.Succeeded = $false
+    $sourceStatus.FirewallProfile.Error = $_.Exception.Message
+    [void]$partialReasons.Add("Firewall profile source failed: $($sourceStatus.FirewallProfile.Error)")
     Add-Row -List $rows -Data @{
       Section = 'FirewallProfile'
       Source  = 'NetSecurity'
@@ -475,6 +474,9 @@ if (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue) {
     }
   }
 } else {
+  $sourceStatus.FirewallProfile.Succeeded = $false
+  $sourceStatus.FirewallProfile.Error = 'Get-NetFirewallProfile not available.'
+  [void]$partialReasons.Add($sourceStatus.FirewallProfile.Error)
   Add-Row -List $rows -Data @{
     Section = 'FirewallProfile'
     Source  = 'NetSecurity'
@@ -489,13 +491,19 @@ $summary = [pscustomobject]@{
   ReferenceJsonPath  = if ($ReferenceJsonPath) { 'PATH/TO/JSON' } else { $null }
   ReferenceLoaded    = $refInfo.Loaded
   ReferenceLoadError = $refInfo.Error
+  Partial            = ($partialReasons.Count -gt 0)
+  PartialReasons     = $partialReasons.ToArray()
+  SourceStatus       = [pscustomobject]@{
+    Reference       = [pscustomobject]$sourceStatus.Reference
+    FirewallProfile = [pscustomobject]$sourceStatus.FirewallProfile
+  }
 }
 $summary.PSObject.TypeNames.Insert(0, 'BaselineReport.Summary')
 
 if ($ExportPath) {
   $folder = Split-Path -Path $ExportPath -Parent
   if (-not $folder) { $folder = (Get-Location).Path }
-  Ensure-Directory -Path $folder
+  [void](Ensure-Directory -Path $folder)
 
   $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
   $base = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
@@ -563,9 +571,26 @@ if (-not $script:Quiet -and -not $script:NoConsoleSummary) {
 }
 
 # V2 output contract
-$v2Result = New-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ Rows = @($rows.ToArray()); RefInfo = $refInfo }
+$findings = @()
+if ($sourceStatus.Reference.Requested -and -not $refInfo.Loaded) {
+  $findings += [pscustomobject]@{
+    Code     = 'BASELINE-ReferenceLoadFailed'
+    Severity = 'Medium'
+    Message  = ("Requested reference JSON was not loaded: {0}" -f $refInfo.Error)
+  }
+}
+if ($sourceStatus.FirewallProfile.Succeeded -eq $false) {
+  $findings += [pscustomobject]@{
+    Code     = 'BASELINE-SourceFailed'
+    Severity = 'Medium'
+    Message  = ("Firewall profile source failed: {0}" -f $sourceStatus.FirewallProfile.Error)
+  }
+}
+$resultToken = if ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result $resultToken -Findings $findings -Summary $summary -Metadata @{ Rows = @($rows.ToArray()); RefInfo = $refInfo }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 
 #endregion Main
+if ($resultToken -eq 'WARN') { exit 2 }
 exit 0

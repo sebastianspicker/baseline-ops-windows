@@ -84,7 +84,7 @@ Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChe
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
 Set-StrictMode -Version Latest
-Initialize-V2Context -BoundParameters $PSBoundParameters
+Initialize-V2Context -ScriptName '50-AMSI-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -96,7 +96,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '50-AMSI-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() `
+  $result = Get-V2ResultObject -ScriptName '50-AMSI-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() `
     -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
@@ -120,7 +120,7 @@ $script:PsLoggingPath      = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShe
 # Main
 # ----------------------------
 
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 $registeredProviders   = @()
 $defenderPresent       = $false
@@ -190,10 +190,10 @@ foreach ($check in $bypassChecks) {
       $bypassArtifactsFound += $check.Code
       Add-Finding -FindingList $script:Findings -Code $check.Code -Severity 'High' `
         -Message $check.Message
-    }
-  } catch {
-    # Key absence is normal; silently continue
   }
+} catch {
+  Write-Verbose ("AMSI bypass registry artifact query failed for '{0}\\{1}': {2}" -f $check.Path,$check.Name,$_.Exception.Message)
+}
 }
 
 # 3. PowerShell Script Block Logging (indicates AMSI integration is meaningful)
@@ -226,7 +226,7 @@ try {
       -Message 'Windows Script Host is disabled for the current user (HKCU Enabled=0). AMSI cannot scan WSH scripts for this user.'
   }
 } catch {
-  # Non-critical — WSH may not be present on all systems
+  Write-Verbose ("Windows Script Host AMSI registry query failed: {0}" -f $_.Exception.Message)
 }
 
 # ----------------------------
@@ -262,7 +262,7 @@ $resultToken  = if ($Strict -and $findingsCount -gt 0) { 'FAIL' }
   elseif ($findingsCount -gt 0) { 'WARN' }
   else { 'OK' }
 
-$v2Result = New-V2ResultObject -ScriptName '50-AMSI-Audit.ps1' -Mode $Mode `
+$v2Result = Get-V2ResultObject -ScriptName '50-AMSI-Audit.ps1' -Mode $Mode `
   -Result $resultToken -Findings $Findings -Summary $summary `
   -Metadata @{ BypassArtifactCodes = $bypassArtifactsFound }
 

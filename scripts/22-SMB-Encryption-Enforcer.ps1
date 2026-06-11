@@ -186,30 +186,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '22-SMB-Encryption-Enforcer.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -221,7 +199,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -360,6 +338,7 @@ function Invoke-SetSmbClientConfiguration {
 }
 
 function Set-IfDifferent {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param(
     [Parameter(Mandatory)][bool]$Current,
     [Parameter(Mandatory)][bool]$Desired,
@@ -377,12 +356,6 @@ function Set-IfDifferent {
 
   return $false
 }
-
-function Test-IsConsoleHost {
-  # Avoid color/control sequences in non-interactive hosts.
-  return ($Host.Name -match 'ConsoleHost')
-}
-
 
 function Format-Bool {
   param($Value)
@@ -411,8 +384,8 @@ function Write-PrettySettingChange {
   $changed = ($b -ne $a)
   $color = if ($changed) { [ConsoleColor]::Yellow } else { [ConsoleColor]::Gray }
 
-  Write-ColorLine -Text ('{0,-32}: ' -f $Label) -Color ([ConsoleColor]::DarkGray) -NoNewline
-  Write-ColorLine -Text ('{0} -> {1}' -f $b, $a) -Color $color
+  Write-UiLine -Text ('{0,-32}: ' -f $Label) -Color ([ConsoleColor]::DarkGray) -NoNewline
+  Write-UiLine -Text ('{0} -> {1}' -f $b, $a) -Color $color
 }
 
 # -------------------------
@@ -457,13 +430,13 @@ $hasClientRequireEncryption = ($clientCfgProbe.PSObject.Properties.Name -contain
 # -------------------------
 # Main
 # -------------------------
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 if ($EnableRejectUnencryptedAccess -and -not $hasRejectUnencryptedAccess) {
   $msg = 'RejectUnencryptedAccess is not available on this OS/build. Cannot enable it.'
   Write-Warning $msg
   Add-Finding -FindingList $script:Findings -Code 'SMB-UnsupportedFeature' -Severity 'Critical' -Message $msg
-  $v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+  $v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 1
@@ -472,7 +445,7 @@ if ($ApplyClientRequireEncryption -and -not $hasClientRequireEncryption) {
   $msg = 'Client RequireEncryption is not available on this OS/build. Cannot enable it.'
   Write-Warning $msg
   Add-Finding -FindingList $script:Findings -Code 'SMB-UnsupportedFeature' -Severity 'Critical' -Message $msg
-  $v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+  $v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 1
@@ -635,8 +608,8 @@ try {
     })
   # Server / Client section
   Write-UiLine ''
-  Write-ColorLine -Text 'Server / Client' -Color ([ConsoleColor]::Cyan)
-  Write-ColorLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
+  Write-UiLine -Text 'Server / Client' -Color ([ConsoleColor]::Cyan)
+  Write-UiLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
   Write-PrettySettingChange -Label 'Server EncryptData' `
     -Before $result.ServerEncryptData_Before -After $result.ServerEncryptData_After -Supported:$true
   Write-PrettySettingChange -Label 'Server RejectUnencryptedAccess' `
@@ -654,7 +627,7 @@ try {
 
 # V2 output contract
 $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

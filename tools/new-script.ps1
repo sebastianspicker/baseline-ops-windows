@@ -125,7 +125,7 @@ $modeBody
   Mode = `$Mode
 }
 
-`$result = New-V2ResultObject -ScriptName '$Name.ps1' -Mode `$Mode -Result 'OK' -Findings @() -Summary `$summary -Metadata @{}
+`$result = Get-V2ResultObject -ScriptName '$Name.ps1' -Mode `$Mode -Result 'OK' -Findings @() -Summary `$summary -Metadata @{}
 
 if (-not `$Quiet -and `$OutputFormat -eq 'Console') {
   Write-Section -Title '$Name'
@@ -138,4 +138,4 @@ exit 0
 "@
 
 Set-Content -LiteralPath $filePath -Value $template -Encoding UTF8
-Write-Host "Created $filePath"
+Write-Information -MessageData "Created $filePath" -InformationAction Continue

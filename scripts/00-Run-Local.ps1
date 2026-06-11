@@ -92,25 +92,8 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Execution.psm1') -Force
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '00-Run-Local.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 if ($RootPath -eq 'C:\install\mdm\ps1') {
@@ -245,19 +228,23 @@ function Invoke-TargetScript {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$Path,
-    [string[]]$Arguments = @()
+    [string[]]$Arguments = @(),
+    [switch]$CaptureV2Result
   )
 
   # ScriptArgs arrives from profile JSON or CLI token arrays. Parse it once and
   # splat typed named arguments so child scripts see normal PowerShell binding.
-  if (-not $Arguments -or $Arguments.Count -eq 0) {
-    & $Path
-    return
-  }
-
-  $parsed = Convert-ArgumentTokens -Arguments $Arguments
+  $parsed = Convert-ArgumentTokens -Arguments @($Arguments)
   $namedArgs = $parsed.Named
   $positionalArgs = @($parsed.Positional)
+
+  if ($CaptureV2Result) {
+    $namedArgs['PassThru'] = $true
+    $namedArgs['OutputFormat'] = 'None'
+    if ($namedArgs.ContainsKey('OutputPath')) {
+      $namedArgs.Remove('OutputPath')
+    }
+  }
 
   if ($positionalArgs.Count -gt 0) {
     & $Path @namedArgs @positionalArgs
@@ -271,5 +258,45 @@ if ($WhatIfPreference) {
   exit 0
 }
 
-Invoke-TargetScript -Path $scriptPath -Arguments $ScriptArgs
-exit $(if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE })
+$targetOutput = @(Invoke-TargetScript -Path $scriptPath -Arguments $ScriptArgs -CaptureV2Result:$PassThru)
+$targetExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+
+if ($PassThru) {
+  $v2Results = @(
+    $targetOutput | Where-Object {
+      $null -ne $_ -and
+      $_.PSObject.Properties.Name -contains 'Result' -and
+      @('OK','WARN','FAIL') -contains [string]$_.Result
+    }
+  )
+
+  if ($v2Results.Count -gt 0) {
+    $targetResult = $v2Results[-1]
+    $expectedTargetExitCode = switch ([string]$targetResult.Result) {
+      'OK' { 0 }
+      'WARN' { 2 }
+      'FAIL' { 1 }
+    }
+    if ($targetExitCode -ne $expectedTargetExitCode) {
+      $targetResult | Add-Member -NotePropertyName RunnerExitMismatch -NotePropertyValue $true -Force
+      $targetResult | Add-Member -NotePropertyName RunnerExpectedExitCode -NotePropertyValue $expectedTargetExitCode -Force
+      $targetResult | Add-Member -NotePropertyName RunnerActualExitCode -NotePropertyValue $targetExitCode -Force
+      Write-Warning "Target V2 result '$($targetResult.Result)' does not match process exit code $targetExitCode. Expected $expectedTargetExitCode."
+    }
+    $targetResult
+    switch ([string]$targetResult.Result) {
+      'OK' { exit 0 }
+      'WARN' { exit 2 }
+      'FAIL' { exit 1 }
+    }
+  }
+
+  if ($targetOutput.Count -gt 0) {
+    Write-Warning "Target script emitted output but no valid V2 result."
+  } else {
+    Write-Warning "Target script did not emit a V2 result."
+  }
+  exit 1
+}
+
+exit $targetExitCode

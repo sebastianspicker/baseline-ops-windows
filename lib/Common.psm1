@@ -19,6 +19,15 @@ function Get-CallerValue {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Name)
 
+  # Ambient variable contract for remaining callers:
+  # - Output.psm1: Write-UiLine reads NoConsole, Quiet,
+  #   UseWriteInformation, UseInformationStream, NoColor, and UseColor;
+  #   Write-ConsoleLine reads NoConsole, Quiet, NoColor, and UseColor;
+  #   Write-KeyValue reads UseWriteInformation and UseInformationStream.
+  # - EventLog.psm1: Ensure-EventSource and Write-HealthEvent read
+  #   EventSource and EventLogName. Deprecated EventSourceName/EventLog
+  #   fallback reads warn before use.
+  # TODO: Replace these hidden caller-scope contracts with explicit parameters.
   # Search scopes 1 through 3 (immediate caller up to 3 levels up).
   # Scope 1 = direct caller, 2 = caller's caller, 3 = one more level up.
   # Limitation: variables defined more than 3 scopes above will not be found.
@@ -105,16 +114,24 @@ function Require-Admin {
   Directory path to ensure exists.
 #>
 function Ensure-Directory {
+  [OutputType([bool])]
   [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Path)
+  param([Parameter(Mandatory)][AllowEmptyString()][string]$Path)
 
-  if ([string]::IsNullOrWhiteSpace($Path)) { return }
+  if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
   if ($Path -match '\.\.') {
     Write-Warning "Ensure-Directory: Path must not contain '..' (path traversal not allowed)."
-    return
+    return $false
   }
-  if (-not (Test-Path -LiteralPath $Path)) {
-    New-Item -Path $Path -ItemType Directory -Force | Out-Null
+  try {
+    if (-not (Test-Path -LiteralPath $Path)) {
+      $literalSafePath = [System.Management.Automation.WildcardPattern]::Escape($Path)
+      New-Item -Path $literalSafePath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    }
+    return $true
+  } catch {
+    Write-Error "Ensure-Directory: Failed to create '$Path': $($_.Exception.Message)"
+    return $false
   }
 }
 
@@ -125,12 +142,13 @@ function Ensure-Directory {
   File path whose parent directory should be ensured.
 #>
 function Ensure-DirectoryForFile {
+  [OutputType([bool])]
   [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$FilePath)
+  param([Parameter(Mandatory)][AllowEmptyString()][string]$FilePath)
 
   $dir = Split-Path -Path $FilePath -Parent
-  if ([string]::IsNullOrWhiteSpace($dir)) { return }
-  Ensure-Directory -Path $dir
+  if ([string]::IsNullOrWhiteSpace($dir)) { return $false }
+  return (Ensure-Directory -Path $dir)
 }
 
 <#
@@ -173,6 +191,7 @@ function Sanitize-Path {
     # Normalize and resolve full path; GetFullPath can throw on invalid chars
     return [System.IO.Path]::GetFullPath($expanded)
   } catch {
+    Write-Verbose ("Path sanitization failed for '{0}': {1}" -f $Path,$_.Exception.Message)
     return $null
   }
 }
@@ -196,7 +215,7 @@ function Has-Property {
 .PARAMETER Name
   The candidate file name to sanitize.
 #>
-function New-SafeFileName {
+function Get-SafeFileName {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Name)
   return ($Name -replace '[<>:"/\\|?*\x00-\x1F]', '_')
@@ -211,4 +230,4 @@ Export-ModuleMember -Function `
   Ensure-DirectoryForFile, `
   Sanitize-Path, `
   Has-Property, `
-  New-SafeFileName
+  Get-SafeFileName

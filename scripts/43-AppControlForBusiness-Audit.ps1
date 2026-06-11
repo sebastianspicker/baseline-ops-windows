@@ -120,30 +120,8 @@ Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '43-AppControlForBusiness-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($OutputPath) -and -not [string]::IsNullOrWhiteSpace($ExportPath)) {
@@ -158,7 +136,7 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath) -and -not [string]::IsNullOrWhiteS
 # --------------------------
 # Findings
 # --------------------------
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 $Findings = $script:Findings
 $strictModeEnabled = [bool]$Strict
 $noColorEnabled = [bool]$NoColor
@@ -174,7 +152,7 @@ if (-not $isWindowsHost) {
     Notes         = @('Skipped: App Control for Business auditing is only supported on Windows hosts.')
   }
 
-  $resultObject = New-V2ResultObject `
+  $resultObject = Get-V2ResultObject `
     -ScriptName '43-AppControlForBusiness-Audit.ps1' `
     -Mode 'Audit' `
     -Result 'WARN' `
@@ -248,7 +226,9 @@ function Get-ChildItemDepthLimited {
       foreach ($f in @(Get-ChildItem -LiteralPath $Path -File -ErrorAction SilentlyContinue)) {
         $results.Add($f) | Out-Null
       }
-    } catch { <# best-effort: directory enumeration may fail due to permissions #> }
+    } catch {
+      Write-Verbose ("App Control directory enumeration failed for '{0}': {1}" -f $Path,$_.Exception.Message)
+    }
     return @($results.ToArray())
   }
 
@@ -437,7 +417,7 @@ if (-not $config.Enabled) {
     }
   }
 
-  $disabledResult = New-V2ResultObject `
+  $disabledResult = Get-V2ResultObject `
     -ScriptName '43-AppControlForBusiness-Audit.ps1' `
     -Mode 'Audit' `
     -Result 'WARN' `
@@ -577,7 +557,7 @@ if (-not $Quiet) {
 $findingsArr = @($findingsAL)
 
 $resultToken = if ($strictModeEnabled -and $findingsArr.Count -gt 0) { 'FAIL' } elseif ($findingsArr.Count -gt 0) { 'WARN' } else { 'OK' }
-$resultObject = New-V2ResultObject `
+$resultObject = Get-V2ResultObject `
   -ScriptName '43-AppControlForBusiness-Audit.ps1' `
   -Mode 'Audit' `
   -Result $resultToken `

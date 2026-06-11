@@ -1,0 +1,13 @@
+{
+  "name": "win-mdm-security-hardening-kit",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Developer-only verification harness for the Windows MDM security hardening kit.",
+  "scripts": {
+    "test": "node --test tests/fuzz/*.test.mjs",
+    "fuzz": "node --test tests/fuzz/*.test.mjs"
+  },
+  "devDependencies": {
+    "fast-check": "4.8.0"
+  }
+}

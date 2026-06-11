@@ -130,30 +130,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '31-PowerShell-Logging-Baseline.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 # ---------------------------
@@ -180,6 +158,7 @@ function Get-ModuleNamesConfigured {
 }
 
 function Remove-AllModuleNames {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param([string]$ModuleNamesKeyPath)
 
   if (-not (Test-Path -LiteralPath $ModuleNamesKeyPath)) { return }
@@ -351,7 +330,7 @@ if (-not $isWindowsHost) {
     Notes        = @('Skipped: PowerShell logging baseline auditing is only supported on Windows hosts.')
   }
 
-  $result = New-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -359,7 +338,20 @@ if (-not $isWindowsHost) {
 
 Require-Admin
 
-$Findings = New-FindingsList
+$Findings = Get-FindingsList
+$registryWriteFailed = $false
+
+function Add-RegistryWriteFailureFinding {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][object]$Value
+  )
+
+  $null = Add-Finding -FindingList $Findings -Code 'PSLOG-RegWriteFailed' -Severity 'High' `
+    -Message ("Failed to write PowerShell logging registry value '{0}' at '{1}'. Hardening not applied." -f $Name, $Path) `
+    -Extra @{ Path = $Path; Name = $Name; Value = $Value }
+}
 
 # Defaults (used when JSON missing/invalid)
 $defaults = @{
@@ -442,32 +434,62 @@ if ($targetEnableScriptBlockLogging -and $Mode -eq 'Audit') {
 
 # Remediate (HKLM only)
 if ($Mode -eq 'Remediate') {
-  if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell logging policy keys (HKLM)')) {
+  $transPath = Join-Path $hklmBase 'Transcription'
+  $sbPath    = Join-Path $hklmBase 'ScriptBlockLogging'
+  $modPath   = Join-Path $hklmBase 'ModuleLogging'
+  $modNames  = Join-Path $modPath 'ModuleNames'
 
-    $transPath = Join-Path $hklmBase 'Transcription'
-    $sbPath    = Join-Path $hklmBase 'ScriptBlockLogging'
-    $modPath   = Join-Path $hklmBase 'ModuleLogging'
-    $modNames  = Join-Path $modPath 'ModuleNames'
-
-    Ensure-RegistryKey -Path $hklmBase
-    Ensure-RegistryKey -Path $transPath
-    Ensure-RegistryKey -Path $sbPath
-    Ensure-RegistryKey -Path $modPath
-    Ensure-RegistryKey -Path $modNames
-
-    if ($targetEnableTranscription) {
-      Set-RegDword  -Path $transPath -Name 'EnableTranscripting' -Value 1
-      Set-RegString -Path $transPath -Name 'OutputDirectory'     -Value $targetTranscriptDir
-      if ($targetEnableInvocationHeader) { Set-RegDword -Path $transPath -Name 'EnableInvocationHeader' -Value 1 }
+  if ($targetEnableTranscription) {
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell transcription policy keys (HKLM)')) {
+      Ensure-RegistryKey -Path $hklmBase
+      Ensure-RegistryKey -Path $transPath
+      if (-not (Set-RegDword -Path $transPath -Name 'EnableTranscripting' -Value 1)) {
+        Add-RegistryWriteFailureFinding -Path $transPath -Name 'EnableTranscripting' -Value 1
+        $registryWriteFailed = $true
+      }
+      if (-not (Set-RegString -Path $transPath -Name 'OutputDirectory' -Value $targetTranscriptDir)) {
+        Add-RegistryWriteFailureFinding -Path $transPath -Name 'OutputDirectory' -Value $targetTranscriptDir
+        $registryWriteFailed = $true
+      }
+      if ($targetEnableInvocationHeader) {
+        if (-not (Set-RegDword -Path $transPath -Name 'EnableInvocationHeader' -Value 1)) {
+          Add-RegistryWriteFailureFinding -Path $transPath -Name 'EnableInvocationHeader' -Value 1
+          $registryWriteFailed = $true
+        }
+      }
+      if (-not (Test-Path -LiteralPath $targetTranscriptDir)) {
+        $null = New-Item -Path $targetTranscriptDir -ItemType Directory -Force
+      }
     }
+  }
 
-    if ($targetEnableScriptBlockLogging) {
-      Set-RegDword -Path $sbPath -Name 'EnableScriptBlockLogging' -Value 1
-      if ($targetEnableScriptBlockInvocationLogging) { Set-RegDword -Path $sbPath -Name 'EnableScriptBlockInvocationLogging' -Value 1 }
+  if ($targetEnableScriptBlockLogging) {
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell script block logging policy keys (HKLM)')) {
+      Ensure-RegistryKey -Path $hklmBase
+      Ensure-RegistryKey -Path $sbPath
+      if (-not (Set-RegDword -Path $sbPath -Name 'EnableScriptBlockLogging' -Value 1)) {
+        Add-RegistryWriteFailureFinding -Path $sbPath -Name 'EnableScriptBlockLogging' -Value 1
+        $registryWriteFailed = $true
+      }
+      if ($targetEnableScriptBlockInvocationLogging) {
+        if (-not (Set-RegDword -Path $sbPath -Name 'EnableScriptBlockInvocationLogging' -Value 1)) {
+          Add-RegistryWriteFailureFinding -Path $sbPath -Name 'EnableScriptBlockInvocationLogging' -Value 1
+          $registryWriteFailed = $true
+        }
+      }
     }
+  }
 
-    if ($targetEnableModuleLogging) {
-      Set-RegDword -Path $modPath -Name 'EnableModuleLogging' -Value 1
+  if ($targetEnableModuleLogging) {
+    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell module logging policy keys (HKLM)')) {
+      Ensure-RegistryKey -Path $hklmBase
+      Ensure-RegistryKey -Path $modPath
+      Ensure-RegistryKey -Path $modNames
+
+      if (-not (Set-RegDword -Path $modPath -Name 'EnableModuleLogging' -Value 1)) {
+        Add-RegistryWriteFailureFinding -Path $modPath -Name 'EnableModuleLogging' -Value 1
+        $registryWriteFailed = $true
+      }
       Remove-AllModuleNames -ModuleNamesKeyPath $modNames
 
       $i = 1
@@ -475,10 +497,6 @@ if ($Mode -eq 'Remediate') {
         $null = New-ItemProperty -Path $modNames -Name ([string]$i) -PropertyType String -Value $m -Force
         $i++
       }
-    }
-
-    if ($targetEnableTranscription -and -not (Test-Path -LiteralPath $targetTranscriptDir)) {
-      $null = New-Item -Path $targetTranscriptDir -ItemType Directory -Force
     }
   }
 }
@@ -491,6 +509,7 @@ $summary = [pscustomobject]@{
   ComputerName  = $env:COMPUTERNAME
   Mode          = $Mode
   FindingsCount = ($Findings | Measure-Object).Count
+  RegistryWriteFailed = $registryWriteFailed
   Timestamp     = Get-Date
 
   Target_TranscriptOutputDirectory          = $targetTranscriptDir
@@ -535,8 +554,8 @@ if (-not $QuietConsole) {
 }
 
 # V2 output contract
-$resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings) -Summary $summary -Metadata @{ Current = [pscustomobject]@{ HKLM = [pscustomobject]@{ Before = $currentHKLM; After = $afterHKLM }; HKCU = if ($IncludeHKCU) { [pscustomobject]@{ Before = $currentHKCU; After = $afterHKCU } } else { $null }; Effective = [pscustomobject]@{ Before = $effectiveBefore; After = $effectiveAfter } } }
+$resultToken = if ($registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $summary -Metadata @{ Current = [pscustomobject]@{ HKLM = [pscustomobject]@{ Before = $currentHKLM; After = $afterHKLM }; HKCU = if ($IncludeHKCU) { [pscustomobject]@{ Before = $currentHKCU; After = $afterHKCU } } else { $null }; Effective = [pscustomobject]@{ Before = $effectiveBefore; After = $effectiveAfter } } }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

@@ -208,7 +208,9 @@ Describe 'Direct registry-write paths in audited scripts' {
     $path = Join-Path $PSScriptRoot '../../scripts/16-Sysmon-Config-Updater.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
 
-    $content | Should -Match 'function Ensure-SysmonChannel\(\[switch\]\$DoIt,\[int\]\$MiB,\[System\.Management\.Automation\.PSCmdlet\]\$Cmdlet\)'
+    $content | Should -Match 'function Ensure-SysmonChannel'
+    $content | Should -Match '\[CmdletBinding\(SupportsShouldProcess = \$true\)\]'
+    $content | Should -Match 'param\(\[switch\]\$DoIt,\[int\]\$MiB,\[System\.Management\.Automation\.PSCmdlet\]\$Cmdlet\)'
     $content | Should -Match '\$Cmdlet\.ShouldProcess\(\$name, ''Enable Sysmon Operational event channel''\)'
     $content | Should -Match '\$Cmdlet\.ShouldProcess\(\$name, "Resize Sysmon Operational event channel to \$MiB MiB"\)'
     $content | Should -Match 'Ensure-SysmonChannel -DoIt:\$doIt -MiB \$ChannelSizeMiB -Cmdlet \$PSCmdlet'
@@ -227,11 +229,11 @@ Describe 'Direct registry-write paths in audited scripts' {
     $path = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
 
-    $content | Should -Match '\$Remediate = \(\$Mode -eq ''Remediate''\)'
+    $content | Should -Match 'Initialize-V2Context .* -DeriveRemediate'
     $content | Should -Match 'if \(-not \$Run\.IsAdmin -and \$Remediate\)'
     $content | Should -Match 'if \(-not \$Remediate\)'
     $content | Should -Match 'Audit mode: no kill switch actions applied\.'
-    $content | Should -Match 'if \(\$Remediate\) \{\s*Ensure-EventSource'
+    $content | Should -Match 'if \(\$Remediate\) \{\s*if \(-not \(Ensure-EventSource'
   }
 
   It '21-EmergencyKillSwitch rollback fails closed without saved firewall state' {
@@ -258,5 +260,157 @@ Describe 'Direct registry-write paths in audited scripts' {
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
 
     $content | Should -Match '\$PSCmdlet\.ShouldProcess\(''w32time'', ''Start service''\)'
+  }
+}
+
+Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
+  BeforeAll {
+    $script:EmergencyKillSwitchPath = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
+    $script:WinGetSelfHealPath = Join-Path $PSScriptRoot '../../scripts/08-WinGet-SelfHeal.ps1'
+    Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force
+
+    function global:Get-NetFirewallProfile { }
+    function global:Set-NetFirewallProfile { }
+    function global:Get-NetFirewallRule { }
+    function global:New-NetFirewallRule { }
+    function global:Remove-NetFirewallRule { }
+    function global:Disable-NetAdapter { }
+  }
+
+  AfterAll {
+    foreach ($name in @(
+        'Get-NetFirewallProfile',
+        'Set-NetFirewallProfile',
+        'Get-NetFirewallRule',
+        'New-NetFirewallRule',
+        'Remove-NetFirewallRule',
+        'Disable-NetAdapter'
+      )) {
+      Remove-Item -LiteralPath "Function:\$name" -ErrorAction SilentlyContinue
+    }
+  }
+
+  It '21-EmergencyKillSwitch Audit mode does not mutate registry or firewall state' {
+    $oldOS = $env:OS
+    try {
+      $env:OS = 'Windows_NT'
+
+      Mock -CommandName New-Item -MockWith { throw 'registry mutation should not run in Audit mode' }
+      Mock -CommandName Set-ItemProperty -MockWith { throw 'registry mutation should not run in Audit mode' }
+      Mock -CommandName Set-NetFirewallProfile -MockWith { throw 'firewall mutation should not run in Audit mode' }
+      Mock -CommandName New-NetFirewallRule -MockWith { throw 'firewall mutation should not run in Audit mode' }
+      Mock -CommandName Remove-NetFirewallRule -MockWith { throw 'firewall mutation should not run in Audit mode' }
+      Mock -CommandName Disable-NetAdapter -MockWith { throw 'adapter mutation should not run in Audit mode' }
+
+      $result = & $script:EmergencyKillSwitchPath -Mode Audit -OutputFormat None -PassThru -Confirm:$false 2>&1 3>&1 6>&1
+    } finally {
+      if ($null -eq $oldOS) {
+        Remove-Item -LiteralPath Env:OS -ErrorAction SilentlyContinue
+      } else {
+        $env:OS = $oldOS
+      }
+    }
+
+    $result.Result | Should -Be 'OK'
+    Should -Invoke New-Item -Times 0
+    Should -Invoke Set-ItemProperty -Times 0
+    Should -Invoke Set-NetFirewallProfile -Times 0
+    Should -Invoke New-NetFirewallRule -Times 0
+    Should -Invoke Remove-NetFirewallRule -Times 0
+    Should -Invoke Disable-NetAdapter -Times 0
+  }
+
+  It '21-EmergencyKillSwitch WhatIf in Remediate mode does not perform mutations' {
+    $oldOS = $env:OS
+    $oldTemp = $env:TEMP
+    try {
+      $env:OS = 'Windows_NT'
+      $env:TEMP = $TestDrive
+
+      Mock -CommandName Test-IsAdmin -MockWith { $true }
+      Mock -CommandName Get-NetFirewallProfile -MockWith {
+        [pscustomobject]@{
+          Name                  = 'Domain'
+          Enabled               = 'True'
+          DefaultInboundAction  = 'Allow'
+          DefaultOutboundAction = 'Allow'
+        }
+      }
+      Mock -CommandName New-Item -MockWith { throw 'registry mutation should not run under WhatIf' }
+      Mock -CommandName Set-ItemProperty -MockWith { throw 'registry mutation should not run under WhatIf' }
+      Mock -CommandName Set-Content -MockWith { throw 'firewall state file should not be written under WhatIf' }
+      Mock -CommandName Set-NetFirewallProfile -MockWith { throw 'firewall mutation should not run under WhatIf' }
+      Mock -CommandName New-NetFirewallRule -MockWith { throw 'firewall mutation should not run under WhatIf' }
+      Mock -CommandName Remove-NetFirewallRule -MockWith { throw 'firewall mutation should not run under WhatIf' }
+      Mock -CommandName Disable-NetAdapter -MockWith { throw 'adapter mutation should not run under WhatIf' }
+
+      $result = & $script:EmergencyKillSwitchPath -Mode Remediate -OutputFormat None -PassThru -Confirm:$false -WhatIf 2>&1 3>&1 6>&1
+    } finally {
+      if ($null -eq $oldOS) {
+        Remove-Item -LiteralPath Env:OS -ErrorAction SilentlyContinue
+      } else {
+        $env:OS = $oldOS
+      }
+      if ($null -eq $oldTemp) {
+        Remove-Item -LiteralPath Env:TEMP -ErrorAction SilentlyContinue
+      } else {
+        $env:TEMP = $oldTemp
+      }
+    }
+
+    $result.Result | Should -Be 'WARN'
+    $result.Summary.Actions.ConfirmDeclined | Should -BeTrue
+    Should -Invoke New-Item -Times 0
+    Should -Invoke Set-ItemProperty -Times 0
+    Should -Invoke Set-Content -Times 0
+    Should -Invoke Set-NetFirewallProfile -Times 0
+    Should -Invoke New-NetFirewallRule -Times 0
+    Should -Invoke Remove-NetFirewallRule -Times 0
+    Should -Invoke Disable-NetAdapter -Times 0
+  }
+
+  It '08-WinGet-SelfHeal Audit mode does not launch VC redistributable installers' {
+    $oldOS = $env:OS
+    $oldProgramFiles = $env:ProgramFiles
+    $oldComputerName = $env:COMPUTERNAME
+    try {
+      $env:OS = 'Windows_NT'
+      $env:ProgramFiles = $TestDrive
+      $env:COMPUTERNAME = 'TEST-HOST'
+
+      $installerPath = Join-Path $TestDrive 'vc_redist.x64.exe'
+      Set-Content -LiteralPath $installerPath -Value 'fake installer' -Encoding UTF8
+      $configPath = Join-Path $TestDrive 'winget-selfheal.json'
+      @{
+        VCppRedist = @{
+          x64 = $installerPath
+          Args = '/quiet'
+        }
+      } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+      Mock -CommandName Start-Process -MockWith { throw 'installer launch should not run in Audit mode' }
+
+      $result = & $script:WinGetSelfHealPath -Mode Audit -ConfigPath $configPath -RequirePrivateSource:$false -OutputFormat None -PassThru -NoConsole -Confirm:$false 2>&1 3>&1 6>&1
+    } finally {
+      if ($null -eq $oldOS) {
+        Remove-Item -LiteralPath Env:OS -ErrorAction SilentlyContinue
+      } else {
+        $env:OS = $oldOS
+      }
+      if ($null -eq $oldProgramFiles) {
+        Remove-Item -LiteralPath Env:ProgramFiles -ErrorAction SilentlyContinue
+      } else {
+        $env:ProgramFiles = $oldProgramFiles
+      }
+      if ($null -eq $oldComputerName) {
+        Remove-Item -LiteralPath Env:COMPUTERNAME -ErrorAction SilentlyContinue
+      } else {
+        $env:COMPUTERNAME = $oldComputerName
+      }
+    }
+
+    $result.Summary.Mode | Should -Be 'Audit'
+    @($result.Metadata.Records | Where-Object { $_.Name -eq 'VcRedistX64Remediation' }) | Should -BeNullOrEmpty
+    Should -Invoke Start-Process -Times 0
   }
 }

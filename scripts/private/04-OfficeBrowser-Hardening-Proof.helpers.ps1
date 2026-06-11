@@ -60,7 +60,7 @@ function Convert-RegValue {
   }
 }
 
-function New-ProofItem {
+function Get-ProofItem {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$Product,
@@ -127,15 +127,15 @@ function Ensure-ProofItemLike {
   param([Parameter(Mandatory)]$Obj)
 
   if ($null -eq $Obj) {
-    return (New-ProofItem -Product 'System' -Area 'Pipeline' -Policy 'NullItem' -Target 'N/A' -Name 'Null' -Type String -Expected 'ProofItem' -Actual $null -Compliant $false -Changed $false -Message 'Unexpected null item')
+    return (Get-ProofItem -Product 'System' -Area 'Pipeline' -Policy 'NullItem' -Target 'N/A' -Name 'Null' -Type String -Expected 'ProofItem' -Actual $null -Compliant $false -Changed $false -Message 'Unexpected null item')
   }
   if ((Has-Prop $Obj 'Product') -and (Has-Prop $Obj 'Compliant') -and (Has-Prop $Obj 'Changed')) {
     return $Obj
   }
-  return (New-ProofItem -Product 'System' -Area 'Pipeline' -Policy 'NonProofObject' -Target 'N/A' -Name ($Obj.GetType().FullName) -Type String -Expected 'ProofItem' -Actual ($Obj | Out-String) -Compliant $false -Changed $false -Message 'Non-proof object leaked into pipeline')
+  return (Get-ProofItem -Product 'System' -Area 'Pipeline' -Policy 'NonProofObject' -Target 'N/A' -Name ($Obj.GetType().FullName) -Type String -Expected 'ProofItem' -Actual ($Obj | Out-String) -Compliant $false -Changed $false -Message 'Non-proof object leaked into pipeline')
 }
 
-function New-ResultSummary {
+function Get-ResultSummary {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$Section,
@@ -390,7 +390,7 @@ function Ensure-Firefox {
 
   $enabled = Get-BoolDefault $FirefoxCfg.Enable $true
   if (-not $enabled) {
-    $r = New-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'Enable' -Target 'N/A' -Name 'Enable' -Type String -Expected 'true' -Actual 'false' -Compliant $true -Changed $false -Message 'Skipped (Enable=false)'
+    $r = Get-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'Enable' -Target 'N/A' -Name 'Enable' -Type String -Expected 'true' -Actual 'false' -Compliant $true -Changed $false -Message 'Skipped (Enable=false)'
     $items.Add($r) | Out-Null
     return $items
   }
@@ -421,7 +421,7 @@ function Ensure-Firefox {
       $changed = $false
       $msg     = $null
       try {
-        Ensure-Directory -Path $dist
+        [void](Ensure-Directory -Path $dist)
         $utf8NoBOM = New-Object System.Text.UTF8Encoding($false)
         [System.IO.File]::WriteAllText($polPath, $newJson, $utf8NoBOM)
         $changed = $true
@@ -430,18 +430,18 @@ function Ensure-Firefox {
         $msg = "Write failed: $($_.Exception.Message)"
       }
 
-      $r = New-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'policies.json' -Target $polPath -Name 'policies.json' -Type File -Expected 'AsBuilt' -Actual $(if($changed){'Written'}else{$null}) -Compliant $changed -Changed $changed -Message $msg
+      $r = Get-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'policies.json' -Target $polPath -Name 'policies.json' -Type File -Expected 'AsBuilt' -Actual $(if($changed){'Written'}else{$null}) -Compliant $changed -Changed $changed -Message $msg
       $items.Add($r) | Out-Null
     } else {
-      $r = New-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'policies.json' -Target $polPath -Name 'policies.json' -Type File -Expected 'AsBuilt' -Actual 'Different' -Compliant $false -Changed $false -Message 'Drift detected'
+      $r = Get-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'policies.json' -Target $polPath -Name 'policies.json' -Type File -Expected 'AsBuilt' -Actual 'Different' -Compliant $false -Changed $false -Message 'Drift detected'
       $items.Add($r) | Out-Null
     }
   } else {
-    $r = New-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'policies.json' -Target $polPath -Name 'policies.json' -Type File -Expected 'AsBuilt' -Actual 'Same' -Compliant $true -Changed $false -Message $null
+    $r = Get-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'policies.json' -Target $polPath -Name 'policies.json' -Type File -Expected 'AsBuilt' -Actual 'Same' -Compliant $true -Changed $false -Message $null
     $items.Add($r) | Out-Null
   }
 
-  $r = New-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'DistributionDir' -Target $dist -Name 'DistributionDir' -Type String -Expected 'Auto/Configured' -Actual $dist -Compliant $true -Changed $false -Message $null
+  $r = Get-ProofItem -Product 'Firefox' -Area 'EnterprisePolicies' -Policy 'DistributionDir' -Target $dist -Name 'DistributionDir' -Type String -Expected 'Auto/Configured' -Actual $dist -Compliant $true -Changed $false -Message $null
   $items.Add($r) | Out-Null
 
   return $items
@@ -470,9 +470,9 @@ function Write-ConsoleSummary {
   $firefoxItems = @($safe | Where-Object { $_.Product -eq 'Firefox' })
 
   $sum = @(
-    New-ResultSummary -Section 'Office'  -Items $officeItems
-    New-ResultSummary -Section 'Edge'    -Items $edgeItems
-    New-ResultSummary -Section 'Firefox' -Items $firefoxItems
+    Get-ResultSummary -Section 'Office'  -Items $officeItems
+    Get-ResultSummary -Section 'Edge'    -Items $edgeItems
+    Get-ResultSummary -Section 'Firefox' -Items $firefoxItems
   )
 
   Write-UiLine ""

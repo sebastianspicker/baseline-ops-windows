@@ -155,36 +155,15 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '09-SupportBundle.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -196,16 +175,16 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '09-SupportBundle.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '09-SupportBundle.ps1' -Mode $Mode -Result 'WARN' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit 2
 }
 
 # -------------------- Defaults (anonymized) --------------------
-$DefaultConfigPath = $null
-$DefaultProofDir   = Join-Path ([System.IO.Path]::GetTempPath()) 'SupportBundle'
-$DefaultKbFeedPath = $null
+$DefaultConfigPath = if ([string]::IsNullOrWhiteSpace($ConfigPath)) { Join-Path $PSScriptRoot 'support-bundle.json' } else { $ConfigPath }
+$DefaultProofDir   = Join-Path ([System.IO.Path]::GetTempPath()) 'win-mdm-support-bundles'
+$DefaultKbFeedPath = Join-Path $PSScriptRoot 'kb-feed.json'
 
 # Registry trigger (anonymized)
 $FlagKey     = 'HKLM:\SOFTWARE\Company\Product\SupportBundle'
@@ -215,16 +194,33 @@ $EventSource = 'SupportBundle'
 . (Join-Path $PSScriptRoot 'private/09-SupportBundle.helpers.ps1')
 
 # -------------------- Event log (best effort) --------------------
+function SB_IsWindowsPlatform {
+  [CmdletBinding()]
+  param()
+
+  if ($PSVersionTable.PSEdition -eq 'Core') { return [bool]$IsWindows }
+  return $true
+}
+
 function SB_EnsureEventSource {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
   param()
+  if (-not (SB_IsWindowsPlatform)) {
+    return (SB_NewRecord -Name 'EventSource' -Ok $true -ArtifactPath $null -Note 'Skipped on non-Windows test host' -Error $null)
+  }
+
   try {
     if (-not [System.Diagnostics.EventLog]::SourceExists($EventSource)) {
       if ($PSCmdlet.ShouldProcess($EventSource, 'Register SupportBundle event source')) {
-        New-EventLog -LogName Application -Source $EventSource -ErrorAction SilentlyContinue | Out-Null
+        New-EventLog -LogName Application -Source $EventSource -ErrorAction Stop | Out-Null
+      } else {
+        return (SB_NewRecord -Name 'EventSource' -Ok $true -ArtifactPath $null -Note 'Skipped by ShouldProcess' -Error $null)
       }
     }
-  } catch { <# best-effort: event source registration commonly needs admin #> }
+    return (SB_NewRecord -Name 'EventSource' -Ok $true -ArtifactPath $null -Note 'Available' -Error $null)
+  } catch {
+    return (SB_NewRecord -Name 'EventSource' -Ok $false -ArtifactPath $null -Note $null -Error $_.Exception.Message)
+  }
 }
 
 
@@ -234,6 +230,10 @@ function SB_ResetRegistryTrigger {
     [Parameter(Mandatory)][string]$KeyPath,
     [Parameter(Mandatory)][string]$ZipPath
   )
+
+  if (-not (SB_IsWindowsPlatform)) {
+    return (SB_NewRecord -Name 'RegistryReset' -Ok $true -ArtifactPath $null -Note 'Skipped on non-Windows test host' -Error $null)
+  }
 
   try {
     if (-not $PSCmdlet.ShouldProcess($KeyPath, 'Reset support bundle trigger registry values')) {
@@ -249,10 +249,27 @@ function SB_ResetRegistryTrigger {
   }
 }
 
+function SB_NewRecordFinding {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]$Record
+  )
+
+  $recordName = [string]$Record.Name
+  $severity = if ($recordName -eq 'Bundle:Zip') { 'High' } else { 'Medium' }
+  [pscustomobject]@{
+    Code         = 'SupportBundle-RecordFailed'
+    Severity     = $severity
+    Message      = "SupportBundle step failed: $recordName"
+    RecordName   = $recordName
+    Error        = [string]$Record.Error
+    ArtifactPath = $Record.ArtifactPath
+  }
+}
+
 
 # -------------------- Main --------------------
-SB_EnsureEventSource
-$IsAdminNow   = SB_IsAdmin
+$IsAdminNow   = Test-IsAdmin
 $ComputerName = $env:COMPUTERNAME
 
 SB_WriteLog -Message ("SupportBundle starting (Days={0}, Force={1}, IncludeSecurity={2}, IncludeDefenderSupport={3})." -f $Days, $Force, $IncludeSecurity, $IncludeDefenderSupport) -Level 'INFO'
@@ -261,6 +278,7 @@ SB_WriteLog -Message ("SupportBundle starting (Days={0}, Force={1}, IncludeSecur
 $Summary = SB_NewSummary -ComputerName $ComputerName -IsAdminNow $IsAdminNow -DaysBack $Days `
   -IncludeSec ([bool]$IncludeSecurity) -IncludeDef ([bool]$IncludeDefenderSupport) `
   -ConfigPath $DefaultConfigPath -ProofDir $DefaultProofDir -ReasonText $Reason
+SB_AddRecord -Summary $Summary -Record (SB_EnsureEventSource)
 
 try {
   if (-not $Force) {
@@ -322,7 +340,7 @@ try {
   $workDir   = Join-Path $bundleDir $ts
   $zipPath   = Join-Path $bundleDir ("SupportBundle-{0}-{1}.zip" -f $ComputerName, $ts)
 
-  SB_EnsureDir -Path $workDir
+  [void](Ensure-Directory -Path $workDir)
   $Summary.WorkDir = $workDir
   $Summary.ZipPath = $zipPath
 
@@ -343,7 +361,7 @@ try {
   SB_AddRecord -Summary $Summary -Record (SB_ExportKbStatus -KbFeedPath $DefaultKbFeedPath -OutFile (Join-Path $workDir 'KBStatus.json'))
 
   $evDir = Join-Path $workDir 'eventlogs'
-  SB_EnsureDir -Path $evDir
+  [void](Ensure-Directory -Path $evDir)
 
   $logs = @(
     'Application',
@@ -363,7 +381,7 @@ try {
       continue
     }
 
-    $safe = SB_SafeFileName -Name $log
+    $safe = Get-SafeFileName -Name $log
     $evtxOut = Join-Path $evDir ($safe + '.evtx')
 
     $r = SB_ExportEventLogEvtx -LogName $log -OutFile $evtxOut -DaysBack $Days
@@ -390,12 +408,22 @@ try {
   SB_SaveJsonFile -Path $summaryInBundle -Object $Summary
   SB_AddRecord -Summary $Summary -Record (SB_NewRecord -Name 'Bundle:SummaryJson' -Ok $true -ArtifactPath $summaryInBundle -Note $null -Error $null)
 
-  SB_EnsureDir -Path $bundleDir
+  [void](Ensure-Directory -Path $bundleDir)
   if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
-  Compress-Archive -Path (Join-Path $workDir '*') -DestinationPath $zipPath -Force
-  SB_AddRecord -Summary $Summary -Record (SB_NewRecord -Name 'Bundle:Zip' -Ok $true -ArtifactPath $zipPath -Note $null -Error $null)
+  try {
+    Compress-Archive -Path (Join-Path $workDir '*') -DestinationPath $zipPath -Force
+    SB_AddRecord -Summary $Summary -Record (SB_NewRecord -Name 'Bundle:Zip' -Ok $true -ArtifactPath $zipPath -Note $null -Error $null)
+  } catch {
+    SB_AddRecord -Summary $Summary -Record (SB_NewRecord -Name 'Bundle:Zip' -Ok $false -ArtifactPath $zipPath -Note $null -Error $_.Exception.Message)
+  }
 
-  try { SB_SaveJsonFile -Path ($zipPath + '.summary.json') -Object $Summary } catch { <# best-effort: summary JSON write after zip #> }
+  $sidecarSummaryPath = $zipPath + '.summary.json'
+  try {
+    SB_SaveJsonFile -Path $sidecarSummaryPath -Object $Summary
+    SB_AddRecord -Summary $Summary -Record (SB_NewRecord -Name 'Bundle:SidecarSummaryJson' -Ok $true -ArtifactPath $sidecarSummaryPath -Note $null -Error $null)
+  } catch {
+    SB_AddRecord -Summary $Summary -Record (SB_NewRecord -Name 'Bundle:SidecarSummaryJson' -Ok $false -ArtifactPath $sidecarSummaryPath -Note $null -Error $_.Exception.Message)
+  }
 
   SB_AddRecord -Summary $Summary -Record (SB_ResetRegistryTrigger -KeyPath $FlagKey -ZipPath $zipPath)
 
@@ -408,12 +436,28 @@ try {
 }
 finally {
   # Must never throw: this is best-effort UI in finally.
-  try { SB_ShowSummary -Summary $Summary } catch { <# best-effort: console summary in finally block #> }
+  try { SB_ShowSummary -Summary $Summary } catch {
+    Write-Verbose ("Support bundle summary display failed: {0}" -f $_.Exception.Message)
+  }
 
 }
 
 # V2 output contract
-$v2Result = New-V2ResultObject -ScriptName '09-SupportBundle.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $Summary -Metadata @{}
+$records = @($Summary.Records)
+$recordsOk = @($records | Where-Object { $_.Ok })
+$recordsFailed = @($records | Where-Object { -not $_.Ok })
+$zipRecord = @($records | Where-Object { $_.Name -eq 'Bundle:Zip' })[-1]
+$zipCreated = [bool]($zipRecord -and $zipRecord.Ok)
+
+$Summary | Add-Member -NotePropertyName RecordsOk -NotePropertyValue $recordsOk.Count -Force
+$Summary | Add-Member -NotePropertyName RecordsFailed -NotePropertyValue $recordsFailed.Count -Force
+$Summary | Add-Member -NotePropertyName ZipCreated -NotePropertyValue $zipCreated -Force
+
+$resultToken = if (-not $zipCreated) { 'FAIL' } elseif ($recordsFailed.Count -gt 0) { 'WARN' } else { 'OK' }
+$findings = @($recordsFailed | ForEach-Object { SB_NewRecordFinding -Record $_ })
+$v2Result = Get-V2ResultObject -ScriptName '09-SupportBundle.ps1' -Mode $Mode -Result $resultToken -Findings $findings -Summary $Summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
+if ($resultToken -eq 'FAIL') { exit 1 }
+if ($resultToken -eq 'WARN') { exit 2 }
 exit 0

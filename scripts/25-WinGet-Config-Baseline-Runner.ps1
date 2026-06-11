@@ -109,38 +109,16 @@ param(
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -152,14 +130,14 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
 }
 
 # C10: canonical findings list
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 function Ensure-File {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -230,16 +208,6 @@ function Get-EffectiveSetting {
 
 
 
-function Get-BoolColor {
-  param(
-    [Parameter(Mandatory = $true)][bool]$Value,
-    [System.ConsoleColor]$TrueColor = [System.ConsoleColor]::Green,
-    [System.ConsoleColor]$FalseColor = [System.ConsoleColor]::Yellow
-  )
-  if ($Value) { return $TrueColor }
-  return $FalseColor
-}
-
 function Invoke-WinGet {
   param(
     [Parameter(Mandatory = $true)][string[]]$ArgsWinget,
@@ -269,7 +237,7 @@ function Invoke-WinGet {
   }
 }
 
-function New-SummaryObject {
+function Get-SummaryObject {
   param(
     [string]$ConfigPathResolved,
     [System.Collections.Generic.List[object]]$Results,
@@ -319,7 +287,12 @@ function Invoke-WinGetConsoleSummary {
   }
   if ($Summary.ErrorMessage) { $fields['ErrorMessage'] = $Summary.ErrorMessage }
 
-  Write-ConsoleSummary -Summary $Summary -Findings ([System.Collections.ArrayList]::new()) -CustomFields $fields
+  $findingsAL = [System.Collections.ArrayList]::new()
+  $findingsVar = Get-Variable -Name Findings -Scope Script -ErrorAction SilentlyContinue
+  if ($findingsVar -and $findingsVar.Value) {
+    foreach ($finding in @($findingsVar.Value.ToArray())) { [void]$findingsAL.Add($finding) }
+  }
+  Write-ConsoleSummary -Summary $Summary -Findings $findingsAL -CustomFields $fields
 
   # Phases list
   if ($Summary.Results -and $Summary.Results.Count -gt 0) {
@@ -340,7 +313,7 @@ function Invoke-WinGetConsoleSummary {
   }
 }
 
-function Stop-UserFriendly {
+function Write-UserFriendlyFailure {
   param(
     [Parameter(Mandatory = $true)][string]$Message,
     [Parameter(Mandatory = $true)][int]$ExitCode,
@@ -365,7 +338,7 @@ function Stop-UserFriendly {
   $safeResults = $Results
   if (-not $safeResults) { $safeResults = New-Object System.Collections.Generic.List[object] }
 
-  $summary = New-SummaryObject -ConfigPathResolved $ConfigPathResolved -Results $safeResults -FinalExitCode $ExitCode `
+  $summary = Get-SummaryObject -ConfigPathResolved $ConfigPathResolved -Results $safeResults -FinalExitCode $ExitCode `
     -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
     -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
     -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPathEffective -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage $Message
@@ -401,6 +374,10 @@ if (-not $PSBoundParameters.ContainsKey('SummaryJsonPath')) {
 
 $cfgResult = Read-ConfigWithDefaults -Path $SummaryJsonPath -Defaults @{} -AsHashtable -ReturnNullWhenMissing -ReturnNullOnError
 $jsonSettings = $cfgResult.Config
+if ($cfgResult.Meta.Error) {
+  [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-ConfigLoadFailed' -Severity 'Medium' `
+    -Message ("Summary JSON could not be loaded; using defaults. Error: {0}" -f $cfgResult.Meta.Error))
+}
 if (-not $jsonSettings) { $jsonSettings = @{} }
 
 # Effective settings
@@ -469,7 +446,7 @@ if ((-not $ExtraArgsEffective) -or ($ExtraArgsEffective.Count -eq 0)) {
 $results = New-Object System.Collections.Generic.List[object]
 
 if ([string]::IsNullOrWhiteSpace($ConfigPathEffective)) {
-  Stop-UserFriendly -Message "ConfigPath is missing. Provide -ConfigPath 'PATH/TO/config.dsc.yaml' or set 'ConfigPath' in PATH/TO/JSON." `
+  Write-UserFriendlyFailure -Message "ConfigPath is missing. Provide -ConfigPath 'PATH/TO/config.dsc.yaml' or set 'ConfigPath' in PATH/TO/JSON." `
     -ExitCode 2 -Results $results -ConfigPathResolved $null -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective `
     -DisableInteractivityEffective $DisableInteractivityEffective -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective `
     -QuietConsoleEffective $QuietConsoleEffective -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective
@@ -494,7 +471,7 @@ $rValidate = Invoke-WinGet -ArgsWinget $argsValidate -Phase 'validate' -LogPathE
 $results.Add($rValidate) | Out-Null
 
 if ($FailFastEffective -and $rValidate.ExitCode -ne 0) {
-  $summary = New-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $rValidate.ExitCode `
+  $summary = Get-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $rValidate.ExitCode `
     -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
     -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
     -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage "Validate failed."
@@ -507,7 +484,7 @@ $rTest = Invoke-WinGet -ArgsWinget $argsTest -Phase 'test' -LogPathEffective $Lo
 $results.Add($rTest) | Out-Null
 
 if ($FailFastEffective -and $rTest.ExitCode -ne 0) {
-  $summary = New-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $rTest.ExitCode `
+  $summary = Get-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $rTest.ExitCode `
     -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
     -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
     -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage "Test failed."
@@ -527,12 +504,13 @@ if (($Mode -eq 'Remediate') -and (-not $TestOnlyEffective)) {
 }
 
 $finalExitCode = if (-not $TestOnlyEffective -and $rApply) { [int]$rApply.ExitCode } else { [int]$rTest.ExitCode }
+$finalErrorMessage = if ($finalExitCode -ne 0) { "WinGet finished with a non-zero exit code." } else { $null }
 
-$summary = New-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $finalExitCode `
+$summary = Get-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $finalExitCode `
   -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
   -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
   -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective `
-  -ErrorMessage (if ($finalExitCode -ne 0) { "WinGet finished with a non-zero exit code." } else { $null })
+  -ErrorMessage $finalErrorMessage
 
 Invoke-WinGetConsoleSummary -Summary $summary
 
@@ -547,8 +525,8 @@ foreach ($phaseResult in @($results.ToArray())) {
 }
 
 # V2 output contract
-$resultToken = if ($finalExitCode -ne 0) { 'FAIL' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{}
+$resultToken = if ($finalExitCode -ne 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit $finalExitCode

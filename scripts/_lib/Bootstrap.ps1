@@ -39,7 +39,7 @@ if (-not [string]::IsNullOrWhiteSpace($scriptDir) -and (Test-Path -LiteralPath $
     1. Keep the existing param() block and Bootstrap dot-source unchanged.
     2. Replace the inline "# v2-init" block (from '$null = $Mode,...' through
        the NoColor / Quiet preference lines) with a single call:
-         Initialize-V2Context -BoundParameters $PSBoundParameters
+         Initialize-V2Context -ScriptName 'NN-Script.ps1' -BoundParameters $PSBoundParameters
     3. If the script uses a $Remediate variable, add -DeriveRemediate after
        the call or set it yourself from $Mode.
     4. Set $ErrorActionPreference = 'Stop' after the call (not included in
@@ -49,6 +49,9 @@ if (-not [string]::IsNullOrWhiteSpace($scriptDir) -and (Test-Path -LiteralPath $
   Pass $PSBoundParameters from the calling script so the function can detect
   which parameters were explicitly supplied.
 
+.PARAMETER ScriptName
+  Required script file name to store in the v2 context.
+
 .PARAMETER DeriveRemediate
   When set, creates/updates a script-scope $Remediate variable derived from
   the caller-scope $Mode variable ($Mode -eq 'Remediate').
@@ -56,6 +59,10 @@ if (-not [string]::IsNullOrWhiteSpace($scriptDir) -and (Test-Path -LiteralPath $
 function Initialize-V2Context {
   [CmdletBinding()]
   param(
+    [Parameter(Mandatory)]
+    [ValidateNotNullOrEmpty()]
+    [string]$ScriptName,
+    [string]$ScriptVersion = '1.0',
     [Parameter(Mandatory)]
     [System.Collections.IDictionary]$BoundParameters,
     [switch]$DeriveRemediate
@@ -76,6 +83,8 @@ function Initialize-V2Context {
           $callerPassThru, $callerStrict, $callerQuiet, $callerNoColor
 
   $script:__V2Context = @{
+    ScriptName   = $ScriptName
+    ScriptVersion= $ScriptVersion
     Mode         = $callerMode
     ConfigPath   = $callerConfigPath
     OutputFormat = $callerOutputFormat
@@ -89,17 +98,17 @@ function Initialize-V2Context {
   if ($BoundParameters.ContainsKey('Mode')) {
     $existingRemediate = Get-Variable -Name Remediate -Scope 1 -ErrorAction SilentlyContinue
     if ($existingRemediate) {
-      Set-Variable -Name Remediate -Scope 1 -Value ($callerMode -eq 'Remediate')
+      Set-Variable -Name Remediate -Scope 1 -Value ($callerMode -eq 'Remediate') -WhatIf:$false
     }
   }
 
   if ($DeriveRemediate) {
-    Set-Variable -Name Remediate -Scope 1 -Value ($callerMode -eq 'Remediate')
+    Set-Variable -Name Remediate -Scope 1 -Value ($callerMode -eq 'Remediate') -WhatIf:$false
   }
 
   if ($callerQuiet) {
-    Set-Variable -Name InformationPreference -Scope 1 -Value 'SilentlyContinue'
-    Set-Variable -Name VerbosePreference     -Scope 1 -Value 'SilentlyContinue'
+    Set-Variable -Name InformationPreference -Scope 1 -Value 'SilentlyContinue' -WhatIf:$false
+    Set-Variable -Name VerbosePreference     -Scope 1 -Value 'SilentlyContinue' -WhatIf:$false
   }
 
   if ($callerNoColor) {

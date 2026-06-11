@@ -142,30 +142,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '19-Software-Audit.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -177,7 +155,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -252,12 +230,14 @@ function ConvertFrom-JsonSafe {
 }
 
 # -------------------- Catalog --------------------
-function New-CatalogWrapper {
+function Get-CatalogWrapper {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory=$true)][string]$Source,
     [Parameter(Mandatory=$true)][bool]$Loaded,
-    $CatalogObject
+    $CatalogObject,
+    [object[]]$Issues = @(),
+    [object[]]$Attempts = @()
   )
 
   $wl = @()
@@ -272,9 +252,24 @@ function New-CatalogWrapper {
   if ($null -eq $bl) { $bl = @() }
 
   [pscustomobject]@{
-    Meta      = [pscustomobject]@{ Source = $Source; Loaded = $Loaded }
+    Meta      = [pscustomobject]@{ Source = $Source; Loaded = $Loaded; Issues = @($Issues); Attempts = @($Attempts) }
     Whitelist = @($wl)
     Blacklist = @($bl)
+  }
+}
+
+function Get-CatalogLoadIssue {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)][string]$Kind,
+    [Parameter(Mandatory=$true)]$Meta
+  )
+
+  [pscustomobject]@{
+    Kind   = $Kind
+    Path   = $Meta.Path
+    Status = $Meta.Status
+    Error  = $Meta.Error
   }
 }
 
@@ -282,29 +277,41 @@ function Load-Catalog {
   [CmdletBinding()]
   param(
     [string]$CatalogPath,
-    [string]$ConfigPath
+    [string]$ConfigPath,
+    [bool]$CatalogPathProvided,
+    [bool]$ConfigPathProvided
   )
 
+  $issues = @()
+  $attempts = @()
+
   if (-not [string]::IsNullOrWhiteSpace($CatalogPath)) {
-    $cat = Read-JsonFileSafe -Path $CatalogPath
-    if ($cat) { return (New-CatalogWrapper -Source 'CatalogPath' -Loaded $true -CatalogObject $cat) }
+    $catLoad = Read-JsonFileWithStatus -Path $CatalogPath
+    $attempts += [pscustomobject]@{ Kind = 'CatalogPath'; Meta = $catLoad.Meta }
+    if ($catLoad.Meta.Loaded) { return (Get-CatalogWrapper -Source 'CatalogPath' -Loaded $true -CatalogObject $catLoad.Data -Issues $issues -Attempts $attempts) }
+    if ($CatalogPathProvided) { $issues += (Get-CatalogLoadIssue -Kind 'CatalogPath' -Meta $catLoad.Meta) }
   }
 
   if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $cfg = Read-JsonFileSafe -Path $ConfigPath
+    $cfgLoad = Read-JsonFileWithStatus -Path $ConfigPath
+    $attempts += [pscustomobject]@{ Kind = 'ConfigPath'; Meta = $cfgLoad.Meta }
+    $cfg = $cfgLoad.Data
+    if ($ConfigPathProvided -and -not $cfgLoad.Meta.Loaded) { $issues += (Get-CatalogLoadIssue -Kind 'ConfigPath' -Meta $cfgLoad.Meta) }
     if ($cfg -and (Test-HasProperty $cfg 'Software') -and $cfg.Software -and (Test-HasProperty $cfg.Software 'CatalogPath')) {
       $p = [string]$cfg.Software.CatalogPath
       if (-not [string]::IsNullOrWhiteSpace($p)) {
-        $cat = Read-JsonFileSafe -Path $p
-        if ($cat) { return (New-CatalogWrapper -Source 'ConfigPath:Software.CatalogPath' -Loaded $true -CatalogObject $cat) }
+        $catLoad = Read-JsonFileWithStatus -Path $p
+        $attempts += [pscustomobject]@{ Kind = 'ConfigPath:Software.CatalogPath'; Meta = $catLoad.Meta }
+        if ($catLoad.Meta.Loaded) { return (Get-CatalogWrapper -Source 'ConfigPath:Software.CatalogPath' -Loaded $true -CatalogObject $catLoad.Data -Issues $issues -Attempts $attempts) }
+        $issues += (Get-CatalogLoadIssue -Kind 'ConfigPath:Software.CatalogPath' -Meta $catLoad.Meta)
       }
     }
   }
 
   $fallback = ConvertFrom-JsonSafe -Json $Script:DefaultCatalogJson
-  if ($fallback) { return (New-CatalogWrapper -Source 'EmbeddedDefault' -Loaded $true -CatalogObject $fallback) }
+  if ($fallback) { return (Get-CatalogWrapper -Source 'EmbeddedDefault' -Loaded $true -CatalogObject $fallback -Issues $issues -Attempts $attempts) }
 
-  New-CatalogWrapper -Source 'EmptyFallback' -Loaded $false -CatalogObject $null
+  Get-CatalogWrapper -Source 'EmptyFallback' -Loaded $false -CatalogObject $null -Issues $issues -Attempts $attempts
 }
 
 # -------------------- Event logging (best effort) --------------------
@@ -418,6 +425,7 @@ function Get-AuditStatus {
   param(
     [Parameter(Mandatory=$true)][int]$BlacklistedCount,
     [Parameter(Mandatory=$true)][int]$UnknownCount,
+    [int]$ConfigIssueCount = 0,
     [switch]$Strict
   )
 
@@ -426,7 +434,7 @@ function Get-AuditStatus {
 
   if ($BlacklistedCount -gt 0) {
     $eventId = 4902; $level = 'Error'
-  } elseif ($UnknownCount -gt 0) {
+  } elseif ($UnknownCount -gt 0 -or $ConfigIssueCount -gt 0) {
     $eventId = 4901; $level = 'Warning'
   }
 
@@ -441,7 +449,7 @@ function Get-AuditStatus {
   }
 }
 
-function New-SummaryLines {
+function Get-SummaryLines {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory=$true)][int]$Total,
@@ -467,10 +475,18 @@ function New-SummaryLines {
 }
 
 # -------------------- MAIN --------------------
-$eventSourceReady = Ensure-EventSource
+$eventSourceReady = $true
+if (-not (Ensure-EventSource)) {
+  $eventSourceReady = $false
+  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+}
 
 try {
-  $catalog = Load-Catalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath
+  $catalogPathProvided = $PSBoundParameters.ContainsKey('CatalogPath')
+  $configPathProvided = $PSBoundParameters.ContainsKey('ConfigPath')
+  $catalog = Load-Catalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath `
+    -CatalogPathProvided:$catalogPathProvided `
+    -ConfigPathProvided:$configPathProvided
   $inv     = Get-InstalledSoftware
   $audit   = Test-SoftwareCompliance -Inventory $inv -Catalog $catalog
 
@@ -478,9 +494,21 @@ try {
   $cntBL    = [int](@($audit.Blacklisted).Count)
   $cntWL    = [int](@($audit.Whitelisted).Count)
   $cntUK    = [int](@($audit.Unknown).Count)
+  $catalogIssues = @($catalog.Meta.Issues)
+  $findings = foreach ($issue in $catalogIssues) {
+    [pscustomobject]@{
+      Code     = 'CFG-CatalogLoadFailed'
+      Severity = 'Medium'
+      Message  = ("Explicit catalog/config input was not loaded ({0}: {1}). Defaults were used." -f $issue.Kind, $issue.Status)
+      Kind     = $issue.Kind
+      Path     = $issue.Path
+      Status   = $issue.Status
+      Error    = $issue.Error
+    }
+  }
 
-  $status = Get-AuditStatus -BlacklistedCount $cntBL -UnknownCount $cntUK -Strict:$Strict
-  $summaryLines = New-SummaryLines -Total $cntTotal -Whitelisted $cntWL -Unknown $cntUK -Blacklisted $cntBL -Audit $audit
+  $status = Get-AuditStatus -BlacklistedCount $cntBL -UnknownCount $cntUK -ConfigIssueCount $catalogIssues.Count -Strict:$Strict
+  $summaryLines = Get-SummaryLines -Total $cntTotal -Whitelisted $cntWL -Unknown $cntUK -Blacklisted $cntBL -Audit $audit
 
   $result = [pscustomobject]@{
     Time             = (Get-Date).ToString('s')
@@ -495,6 +523,7 @@ try {
     CountBlacklisted = $cntBL
 
     Summary          = @($summaryLines)
+    Findings         = @($findings)
 
     # Pipeline-friendly structured data
     Whitelisted      = @($audit.Whitelisted)
@@ -508,7 +537,9 @@ try {
       $dir = Split-Path -Parent $StatePath
       if ($dir) { Ensure-Directory -Path $dir | Out-Null }
       ($result | ConvertTo-Json -Depth 7) | Set-Content -Encoding UTF8 -LiteralPath $StatePath
-    } catch { <# best-effort: state file write may fail if path is inaccessible #> }
+    } catch {
+      Write-Verbose ("Software audit state write failed for '{0}': {1}" -f $StatePath,$_.Exception.Message)
+    }
   }
 
   # Event (best effort)
@@ -525,6 +556,7 @@ try {
       Whitelisted = $result.CountWhitelisted
       Unknown     = $result.CountUnknown
       Blacklisted = $result.CountBlacklisted
+      CatalogWarnings = @($catalogIssues).Count
     })
   # Summary lines
   Write-UiLine ""
@@ -564,7 +596,7 @@ try {
 }
 
 # V2 output contract
-$v2Result = New-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

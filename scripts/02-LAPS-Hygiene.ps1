@@ -11,9 +11,6 @@
   - Pipeline output is exactly one structured object (PSCustomObject) for easy filtering and exporting.
   - Human-readable console output is printed separately (not via pipeline), with optional color formatting.
   - Optional event log writing can be enabled/disabled via JSON configuration.
-.PARAMETER Remediate
-  If specified and Windows LAPS is active, triggers password rotation when the script determines rotation is due.
-  If Windows LAPS is not active (Legacy LAPS or no policy), remediation is not performed.
 .PARAMETER MinDaysBeforeRotate
   Rotates earlier than the policy-defined maximum password age by this many days.
   Example: PolicyAge=30 and MinDaysBeforeRotate=5 => rotation becomes due at day 25.
@@ -26,6 +23,8 @@
   None. This script does not accept pipeline input.
 .PARAMETER Mode
   Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+  In Remediate mode, Windows LAPS password rotation is triggered when rotation is due.
+  If Windows LAPS is not active (Legacy LAPS or no policy), remediation is not performed.
 .PARAMETER OutputFormat
   Output format: Console, Json, Csv, or None.
 .PARAMETER OutputPath
@@ -75,7 +74,7 @@
   .\02-LAPS-Hygiene.ps1 -MinDaysBeforeRotate 7
   Checks compliance but treats rotation as due 7 days earlier than the policy maximum age.
 .EXAMPLE
-  .\02-LAPS-Hygiene.ps1 -Remediate
+  .\02-LAPS-Hygiene.ps1 -Mode Remediate
   Checks compliance and triggers Windows LAPS password rotation if rotation is due.
   If Windows LAPS is not active, the script will not attempt remediation.
 .EXAMPLE
@@ -83,7 +82,7 @@
   Uses the specified JSON file to override selected defaults (for example event log, console, remediation options).
 .EXAMPLE
   # Automation-friendly usage (export pipeline object)
-  .\02-LAPS-Hygiene.ps1 -Remediate -MinDaysBeforeRotate 3 | ConvertTo-Json -Depth 6
+  .\02-LAPS-Hygiene.ps1 -Mode Remediate -MinDaysBeforeRotate 3 | ConvertTo-Json -Depth 6
   Runs in remediation mode and exports the single result object as JSON.
 .EXAMPLE
   # CI/MDM-style check (exit code indicates health)
@@ -117,26 +116,8 @@ Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameCheck
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '02-LAPS-Hygiene.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -148,7 +129,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -324,7 +305,9 @@ function Get-ActiveLapsPolicy {
           }
         }
       }
-    } catch { <# best-effort: registry path may not exist or be accessible #> }
+    } catch {
+      Write-Verbose ("LAPS registry policy read failed for '{0}': {1}" -f $r.Path,$_.Exception.Message)
+    }
   }
   $legacyRoot = 'HKLM:\Software\Policies\Microsoft Services\AdmPwd'
   try {
@@ -339,7 +322,9 @@ function Get-ActiveLapsPolicy {
         }
       }
     }
-  } catch { <# best-effort: legacy LAPS registry may not exist #> }
+  } catch {
+    Write-Verbose ("Legacy LAPS registry policy read failed for '{0}': {1}" -f $legacyRoot,$_.Exception.Message)
+  }
   return $null
 }
 function Get-BuiltInAdminNameRid500 {
@@ -350,7 +335,9 @@ function Get-BuiltInAdminNameRid500 {
     try {
       $acc2 = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND SID LIKE '%-500'" -ErrorAction Stop | Select-Object -First 1
       if ($acc2) { return $acc2.Name }
-    } catch { <# best-effort: CIM fallback for admin name discovery #> }
+    } catch {
+      Write-Verbose ("CIM fallback for RID-500 admin name failed: {0}" -f $_.Exception.Message)
+    }
   }
   return 'Administrator'
 }
@@ -365,7 +352,9 @@ function Get-ManagedAdminAccountName {
         $n = [string]$PolicyObject.AdministratorAccountName
         if ($n -and $n.Trim().Length -gt 0) { return $n.Trim() }
       }
-    } catch { <# best-effort: policy property may not exist or be castable #> }
+    } catch {
+      Write-Verbose ("Windows LAPS AdministratorAccountName read failed: {0}" -f $_.Exception.Message)
+    }
   }
   if ($PolicyType -eq 'LegacyLAPS') {
     try {
@@ -373,7 +362,9 @@ function Get-ManagedAdminAccountName {
         $n = [string]$PolicyObject.AdminAccountName
         if ($n -and $n.Trim().Length -gt 0) { return $n.Trim() }
       }
-    } catch { <# best-effort: legacy policy property may not exist or be castable #> }
+    } catch {
+      Write-Verbose ("Legacy LAPS AdminAccountName read failed: {0}" -f $_.Exception.Message)
+    }
   }
   return (Get-BuiltInAdminNameRid500)
 }
@@ -399,7 +390,9 @@ function Get-LocalAdminInfo {
           Source          = 'CIM'
         }
       }
-    } catch { <# best-effort: CIM fallback for local user info #> }
+    } catch {
+      Write-Verbose ("CIM fallback for local user '{0}' failed: {1}" -f $Name,$_.Exception.Message)
+    }
     return [pscustomobject]@{
       Exists          = $false
       Enabled         = $false
@@ -413,13 +406,19 @@ function Get-AADJoin {
   try {
     $out = (dsregcmd /status) 2>$null
     return [bool]($out -match 'AzureAdJoined\s*:\s*YES')
-  } catch { return $false }
+  } catch {
+    Write-Verbose ("Azure AD join detection failed: {0}" -f $_.Exception.Message)
+    return $false
+  }
 }
 function Get-ADJoin {
   # Always return [bool]
   try {
     return [bool](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).PartOfDomain
-  } catch { return $false }
+  } catch {
+    Write-Verbose ("AD domain join detection failed: {0}" -f $_.Exception.Message)
+    return $false
+  }
 }
 function Try-RotateWindowsLAPS {
   # Cmdlets are documented by Microsoft.
@@ -472,7 +471,9 @@ function Get-PolicyPasswordAgeDays {
   )
   if ($PolicyType -eq 'WindowsLAPS') {
     if ($PolicyObject -and $PolicyObject.PSObject.Properties['PasswordAgeDays']) {
-      try { return [int]$PolicyObject.PasswordAgeDays } catch { <# best-effort: property cast may fail #> }
+      try { return [int]$PolicyObject.PasswordAgeDays } catch {
+        Write-Verbose ("Windows LAPS PasswordAgeDays cast failed: {0}" -f $_.Exception.Message)
+      }
     }
     return $DefaultAgeDays
   }
@@ -481,7 +482,9 @@ function Get-PolicyPasswordAgeDays {
       try {
         $hours = [int]$PolicyObject.PasswordAge
         return [math]::Ceiling($hours / 24)
-      } catch { <# best-effort: legacy policy hours-to-days cast may fail #> }
+      } catch {
+        Write-Verbose ("Legacy LAPS PasswordAge cast failed: {0}" -f $_.Exception.Message)
+      }
     }
     return $DefaultAgeDays
   }
@@ -491,14 +494,18 @@ function Get-PolicyComplexity {
   param($PolicyObject)
   try {
     if ($PolicyObject -and $PolicyObject.PSObject.Properties['PasswordComplexity']) { return [int]$PolicyObject.PasswordComplexity }
-  } catch { <# best-effort: policy property cast may fail #> }
+  } catch {
+    Write-Verbose ("LAPS PasswordComplexity cast failed: {0}" -f $_.Exception.Message)
+  }
   return $null
 }
 function Get-WindowsLapsBackupDirectory {
   param($PolicyObject)
   try {
     if ($PolicyObject -and $PolicyObject.PSObject.Properties['BackupDirectory']) { return [int]$PolicyObject.BackupDirectory }
-  } catch { <# best-effort: policy property cast may fail #> }
+  } catch {
+    Write-Verbose ("Windows LAPS BackupDirectory cast failed: {0}" -f $_.Exception.Message)
+  }
   return $null
 }
 function Convert-BackupDirectoryToText {
@@ -510,9 +517,11 @@ function Convert-BackupDirectoryToText {
 }
 # --------------------------- Main --------------------------------------------------
 if ($Config.EventLog.Enabled) {
-  Ensure-EventSource -Source $Config.EventLog.Source -LogName $Config.EventLog.LogName
+  if (-not (Ensure-EventSource -Source $Config.EventLog.Source -LogName $Config.EventLog.LogName)) {
+    Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+  }
 }
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 $reasonsList = New-Object System.Collections.Generic.List[string]
 $result = [pscustomobject]@{
   TimestampUtc          = (Get-Date).ToUniversalTime()
@@ -616,7 +625,9 @@ try {
       $adminInfo2 = Get-LocalAdminInfo -Name $result.ManagedAccount
       $result.PasswordLastSet = $adminInfo2.PasswordLastSet
       if ($adminInfo2.PasswordLastSet) {
-        try { $result.PasswordAgeDays = [math]::Floor((New-TimeSpan -Start $adminInfo2.PasswordLastSet -End (Get-Date)).TotalDays) } catch { <# best-effort: date arithmetic may fail #> }
+        try { $result.PasswordAgeDays = [math]::Floor((New-TimeSpan -Start $adminInfo2.PasswordLastSet -End (Get-Date)).TotalDays) } catch {
+          Write-Verbose ("Post-rotation password age calculation failed: {0}" -f $_.Exception.Message)
+        }
       }
     }
   }
@@ -702,7 +713,7 @@ if ($result.DiagnosticsCollected) {
 }
 # V2 output contract
 $resultToken = if (-not $result.OkOverall) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 # Exit code for CI/MDM

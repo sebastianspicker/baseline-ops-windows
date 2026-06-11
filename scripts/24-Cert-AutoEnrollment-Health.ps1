@@ -79,7 +79,7 @@ param(
 
   [switch]$IncludeExpired,
 
-  [switch]$RequirePrivateKey = $true,
+  [bool]$RequirePrivateKey = $true,
 
   [switch]$NoPulse,
 
@@ -105,30 +105,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($PSBoundParameters.ContainsKey('Mode')) {
-  if (Get-Variable -Name Remediate -ErrorAction SilentlyContinue) {
-    Set-Variable -Name Remediate -Scope Script -Value ($Mode -eq 'Remediate')
-  }
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -140,14 +118,14 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
 }
 
 # C10: canonical findings list
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 
 function Get-ConfigValueInt {
   param(
@@ -249,7 +227,7 @@ function Get-AutoEnrollEvents {
       try {
         $evAll += Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = $p; StartTime = $StartTime } -ErrorAction Stop
       } catch {
-        # Provider not present or access denied; ignore and continue.
+        Write-Verbose ("Certificate auto-enrollment event provider query failed for '{0}': {1}" -f $p,$_.Exception.Message)
       }
     }
 
@@ -412,7 +390,7 @@ Require-Admin
 if (-not (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
   $msg = "Cert: drive is not available. The Microsoft.PowerShell.Security provider/module may be missing."
   Write-Warning $msg
-  $v2Result = New-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $msg } -Metadata @{}
+  $v2Result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $msg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   exit 1
@@ -526,7 +504,7 @@ foreach ($cert in @($certOut)) {
 if ($ExportPath) {
   $folder = Split-Path -Path $ExportPath -Parent
   if (-not $folder) { $folder = (Get-Location).Path }
-  Ensure-Directory -Path $folder
+  [void](Ensure-Directory -Path $folder)
 
   $base = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
 
@@ -553,7 +531,7 @@ if (-not $NoConsoleSummary) {
 
 # V2 output contract
 $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = New-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
+$v2Result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit 0

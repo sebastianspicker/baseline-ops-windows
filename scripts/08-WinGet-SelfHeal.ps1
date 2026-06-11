@@ -14,9 +14,9 @@
   3) Check Microsoft Visual C++ Redistributables:
      - x64 is required (missing => Error).
      - x86 is optional (missing => Warning).
-     If -Remediate is used and installer paths are available, the script attempts installation.
+     In Remediate mode, if installer paths are available, the script attempts installation.
   4) Validate presence of a private WinGet source (name + URL) when RequirePrivateSource is enabled.
-     If -Remediate is used, the script can add the missing source (and update it if already present).
+     In Remediate mode, the script can add the missing source (and update it if already present).
   5) Run "winget source update" to refresh sources.
      A failure is Warning by default, or Error when -FailOnSourceUpdateError is set.
   6) Write a short audit message to the Windows Application Event Log (best-effort).
@@ -24,11 +24,6 @@
   Output conventions:
   - Pipeline output is always structured objects only (no formatted strings).
   - Console output uses Write-UiLine / Write-Information only and is suppressed with -NoConsole.
-.PARAMETER Remediate
-  Enables remediation actions.
-  When set, the script may:
-  - Install missing VC++ Redistributables (if installer paths are configured).
-  - Add a missing private WinGet source (if name and URL are configured).
 .PARAMETER RequirePrivateSource
   Controls whether a private WinGet source is required for an overall "OK" status.
   - $true  : Missing private source => overall NOT OK.
@@ -63,6 +58,7 @@
   - Set:              outputs each record in the Records array as a separate pipeline object.
 .PARAMETER Mode
   Execution mode. 'Audit' reports only; 'Remediate' applies changes.
+  In Remediate mode, the script may install missing VC++ Redistributables and add a missing private WinGet source when configured.
 .PARAMETER OutputFormat
   Output format: Console, Json, Csv, or None.
 .PARAMETER OutputPath
@@ -105,7 +101,7 @@
   PS C:\> .\08-WinGet-SelfHeal.ps1 -NoConsole | ConvertTo-Json -Depth 6
   Runs in "pipeline-only" mode and emits a JSON report suitable for logging.
 .EXAMPLE
-  PS C:\> .\08-WinGet-SelfHeal.ps1 -Remediate -PrivateSourceName "MyPrivateRepo" -PrivateSourceUrl "https://PACKAGE-SOURCE/api" -DiagnoseWingetErrors
+  PS C:\> .\08-WinGet-SelfHeal.ps1 -Mode Remediate -PrivateSourceName "MyPrivateRepo" -PrivateSourceUrl "https://PACKAGE-SOURCE/api" -DiagnoseWingetErrors
   Runs checks and attempts remediation.
   If the private source is missing, it will attempt to add it (name + URL provided via parameters).
   Also includes additional WinGet error decoding on failures.
@@ -142,26 +138,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 $script:NoConsole = [bool]$NoConsole
 $script:PassThruRecords = [bool]$PassThruRecords
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-$Remediate = ($Mode -eq 'Remediate')
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '08-WinGet-SelfHeal.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -173,7 +151,7 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = New-V2ResultObject -ScriptName '08-WinGet-SelfHeal.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '08-WinGet-SelfHeal.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit 0
@@ -197,7 +175,7 @@ function Get-TextOrEmpty {
   if ($null -eq $Value) { return '' }
   return [string]$Value
 }
-function New-CheckRecord {
+function Get-CheckRecord {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$Name,
@@ -252,7 +230,9 @@ function Get-Config {
         return Get-Content -Raw -LiteralPath $sanitizedAlt -Encoding UTF8 | ConvertFrom-Json
       }
     }
-  } catch { <# best-effort: fallback config file may not exist or be invalid JSON #> }
+  } catch {
+    Write-Verbose ("WinGet fallback config read failed: {0}" -f $_.Exception.Message)
+  }
   return $null
 }
 function Get-NestedPropValue {
@@ -287,7 +267,9 @@ function Resolve-WingetPath {
         $p = Join-Path $cand.FullName 'winget.exe'
         if (Test-Path -LiteralPath $p) { return $p }
       }
-    } catch { <# best-effort: WindowsApps directory may not be accessible #> }
+    } catch {
+      Write-Verbose ("WindowsApps winget probe failed: {0}" -f $_.Exception.Message)
+    }
   }
   return $null
 }
@@ -316,7 +298,9 @@ function Invoke-Winget {
   $p.StartInfo = $psi
   $null = $p.Start()
   if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-    try { $p.Kill() } catch { <# best-effort: process may have already exited #> }
+    try { $p.Kill() } catch {
+      Write-Verbose ("Timed-out winget process kill failed: {0}" -f $_.Exception.Message)
+    }
     return @{
       ExitCode = 408
       StdOut   = ''
@@ -348,7 +332,9 @@ function Get-WingetErrorText {
     $res = Invoke-Winget -WingetPath $WingetPath -WingetArgs @('error','--input',"$ExitCode") -TimeoutSec 30
     $t = ($res.StdOut + "`n" + $res.StdErr).Trim()
     if ($t) { return $t }
-  } catch { <# best-effort: winget error diagnostics may not be available #> }
+  } catch {
+    Write-Verbose ("winget error diagnostic lookup failed: {0}" -f $_.Exception.Message)
+  }
   return $null
 }
 function Parse-Version {
@@ -386,7 +372,9 @@ function Test-WingetSupportsAcceptSourceAgreements {
     $h = Invoke-Winget -WingetPath $WingetPath -WingetArgs @('source','update','--help') -TimeoutSec 30
     $t = ($h.StdOut + "`n" + $h.StdErr)
     if ($t -match '--accept-source-agreements') { return $true }
-  } catch { <# best-effort: source update help check #> }
+  } catch {
+    Write-Verbose ("winget source update help check failed: {0}" -f $_.Exception.Message)
+  }
   return $false
 }
 function Invoke-WingetSourceUpdate {
@@ -416,7 +404,9 @@ function Test-VcRedistInstalled {
         $p = Get-ItemProperty -Path $key -ErrorAction Stop
         $installed = ($p.Installed -eq 1) -or ($p.PSObject.Properties['Version'] -and $p.Version)
         if ($installed) { return $true, ($p.Version) }
-      } catch { <# best-effort: VC++ registry key may not exist #> }
+      } catch {
+        Write-Verbose ("VC++ redistributable registry probe failed for '{0}': {1}" -f $key,$_.Exception.Message)
+      }
     }
   }
   return $false, $null
@@ -490,7 +480,7 @@ function Ensure-PrivateSource {
   return $false, "Add failed: $txt"
 }
 # ---------------- Main ----------------
-$script:Findings = New-FindingsList
+$script:Findings = Get-FindingsList
 $records = New-Object System.Collections.Generic.List[object]
 # Settings with sane defaults when config missing:
 # - VC++ install paths are optional; remediation will log a clear error if missing.
@@ -507,7 +497,13 @@ $wingetVersionRaw = $null
 $supportAcceptForSourceUpdate = $false
 try {
   # Do not fail the run if event source registration isn't possible (commonly needs admin). [web:2]
-  try { Ensure-EventSource -Source $EventSource -LogName $EventLogName } catch { <# best-effort: event source registration commonly needs admin #> }
+  try {
+    if (-not (Ensure-EventSource -Source $EventSource -LogName $EventLogName)) {
+      Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+    }
+  } catch {
+    Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+  }
   $cfg = Get-Config -Path $ConfigPath
   if ($cfg) {
     $cfgLoaded = $true
@@ -521,41 +517,41 @@ try {
   $configStatus = 'Warning'
   $configMsg = 'Not loaded. Using defaults/parameters.'
   if ($cfgLoaded) { $configStatus = 'OK'; $configMsg = 'Loaded (path redacted).' }
-  Add-Record -List $records -Record (New-CheckRecord -Name 'Config' -Status $configStatus -Message $configMsg -Data @{
+  Add-Record -List $records -Record (Get-CheckRecord -Name 'Config' -Status $configStatus -Message $configMsg -Data @{
     ConfigPath = 'PATH/TO/JSON'
     RequirePrivateSource = $RequirePrivateSource
   })
   $wg = Resolve-WingetPath
   if (-not $wg) {
-    Add-Record -List $records -Record (New-CheckRecord -Name 'WinGet' -Status 'Error' -Message 'winget.exe not found.')
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'WinGet' -Status 'Error' -Message 'winget.exe not found.')
   } else {
     $env:WINGET_SUPPRESS_PROMPT = "1"
   $verRes = Invoke-Winget -WingetPath $wg -WingetArgs @('--version')
     $v = Parse-Version $verRes.StdOut
     $wingetVersionRaw = ($verRes.StdOut.Trim())
     if ($verRes.ExitCode -ne 0 -or -not $v) {
-      Add-Record -List $records -Record (New-CheckRecord -Name 'WinGet' -Status 'Error' -Message 'Version check failed.' -Data @{
+      Add-Record -List $records -Record (Get-CheckRecord -Name 'WinGet' -Status 'Error' -Message 'Version check failed.' -Data @{
         ExitCode = $verRes.ExitCode; StdErr = $verRes.StdErr.Trim(); StdOut = $verRes.StdOut.Trim()
       })
     } elseif (-not (Is-Version-AtLeast -v $v -maj $MinWingetVersionMajor -min $MinWingetVersionMinor -pat $MinWingetVersionPatch)) {
-      Add-Record -List $records -Record (New-CheckRecord -Name 'WinGet' -Status 'Error' -Message 'Version too old.' -Data @{
+      Add-Record -List $records -Record (Get-CheckRecord -Name 'WinGet' -Status 'Error' -Message 'Version too old.' -Data @{
         Have = $v.Raw; Need = "$MinWingetVersionMajor.$MinWingetVersionMinor.$MinWingetVersionPatch"
       })
     } else {
-      Add-Record -List $records -Record (New-CheckRecord -Name 'WinGet' -Status 'OK' -Message 'OK.' -Data @{
+      Add-Record -List $records -Record (Get-CheckRecord -Name 'WinGet' -Status 'OK' -Message 'OK.' -Data @{
         Version = $v.Raw; Path = $wg
       })
-      Add-Finding -FindingList $script:Findings -Code 'Winget-Found' -Severity 'Low' -Message "WinGet version $($v.Raw) located at $wg"
+      [void](Add-Finding -Code 'Winget-Found' -Severity 'Low' -Message "WinGet version $($v.Raw) located at $wg")
     }
     $supportAcceptForSourceUpdate = Test-WingetSupportsAcceptSourceAgreements -WingetPath $wg
-    Add-Record -List $records -Record (New-CheckRecord -Name 'WinGetSourceUpdateCapabilities' -Status 'OK' -Message 'Capability probe done.' -Data @{
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'WinGetSourceUpdateCapabilities' -Status 'OK' -Message 'Capability probe done.' -Data @{
       AcceptSourceAgreementsForSourceUpdate = $supportAcceptForSourceUpdate
     })
   }
   $vcx64 = $false; $vcx64v = $null
   $vcx64, $vcx64v = Test-VcRedistInstalled -Arch 'x64'
   if (-not $vcx64) {
-    Add-Record -List $records -Record (New-CheckRecord -Name 'VcRedistX64' -Status 'Error' -Message 'Missing.')
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'VcRedistX64' -Status 'Error' -Message 'Missing.')
     if ($Remediate) {
       if ($vcX64Path) {
         $r = $false; $m = $null
@@ -563,59 +559,59 @@ try {
         $st = 'Error'; $ms = 'Install failed.'
         if ($m -eq 'Skipped by ShouldProcess') { $st = 'Skipped'; $ms = $m }
         elseif ($r) { $st = 'OK'; $ms = 'Installed.' }
-        Add-Record -List $records -Record (New-CheckRecord -Name 'VcRedistX64Remediation' -Status $st -Message $ms -Data @{
+        Add-Record -List $records -Record (Get-CheckRecord -Name 'VcRedistX64Remediation' -Status $st -Message $ms -Data @{
           Detail = $m; InstallerPath = $vcX64Path
         })
       } else {
-        Add-Record -List $records -Record (New-CheckRecord -Name 'VcRedistX64Remediation' -Status 'Error' -Message 'Remediation requested but installer path not configured.')
+        Add-Record -List $records -Record (Get-CheckRecord -Name 'VcRedistX64Remediation' -Status 'Error' -Message 'Remediation requested but installer path not configured.')
       }
     }
   } else {
-    Add-Record -List $records -Record (New-CheckRecord -Name 'VcRedistX64' -Status 'OK' -Message 'OK.' -Data @{ Version = $vcx64v })
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'VcRedistX64' -Status 'OK' -Message 'OK.' -Data @{ Version = $vcx64v })
   }
   $vcx86 = $false; $vcx86v = $null
   $vcx86, $vcx86v = Test-VcRedistInstalled -Arch 'x86'
   if ($vcx86) {
-    Add-Record -List $records -Record (New-CheckRecord -Name 'VcRedistX86' -Status 'OK' -Message 'OK.' -Data @{ Version = $vcx86v })
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'VcRedistX86' -Status 'OK' -Message 'OK.' -Data @{ Version = $vcx86v })
   } else {
-    Add-Record -List $records -Record (New-CheckRecord -Name 'VcRedistX86' -Status 'Warning' -Message 'Not installed (optional).')
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'VcRedistX86' -Status 'Warning' -Message 'Not installed (optional).')
     if ($Remediate -and $vcX86Path) {
       $r = $false; $m = $null
       $r, $m = Install-VcRedist -Path $vcX86Path -InstallArgs $vcArgs
       $st = 'Error'; $ms = 'Install failed.'
       if ($m -eq 'Skipped by ShouldProcess') { $st = 'Skipped'; $ms = $m }
       elseif ($r) { $st = 'OK'; $ms = 'Installed.' }
-      Add-Record -List $records -Record (New-CheckRecord -Name 'VcRedistX86Remediation' -Status $st -Message $ms -Data @{
+      Add-Record -List $records -Record (Get-CheckRecord -Name 'VcRedistX86Remediation' -Status $st -Message $ms -Data @{
         Detail = $m; InstallerPath = $vcX86Path
       })
     }
   }
   if ($RequirePrivateSource) {
     if (-not $wg) {
-      Add-Record -List $records -Record (New-CheckRecord -Name 'PrivateSource' -Status 'Error' -Message 'Skipped (winget missing).')
+      Add-Record -List $records -Record (Get-CheckRecord -Name 'PrivateSource' -Status 'Error' -Message 'Skipped (winget missing).')
     } else {
       $havePriv = $false; $privMsg = $null
       $havePriv, $privMsg = Ensure-PrivateSource -WingetPath $wg -Name $privName -Url $privUrl -Type $privType -DoIt:$Remediate -SupportAcceptSourceAgreementsForSourceUpdate:$supportAcceptForSourceUpdate
       $st = 'Error'
       if ($havePriv) { $st = 'OK' }
-      Add-Record -List $records -Record (New-CheckRecord -Name 'PrivateSource' -Status $st -Message $privMsg -Data @{
+      Add-Record -List $records -Record (Get-CheckRecord -Name 'PrivateSource' -Status $st -Message $privMsg -Data @{
         Name = $privName; Url = $privUrl; Type = $privType
       })
     }
   } else {
-    Add-Record -List $records -Record (New-CheckRecord -Name 'PrivateSource' -Status 'Skipped' -Message 'Not required.')
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'PrivateSource' -Status 'Skipped' -Message 'Not required.')
   }
   if ($wg) {
     $upd = Invoke-WingetSourceUpdate -WingetPath $wg -SupportAcceptSourceAgreements:$supportAcceptForSourceUpdate
     if ($upd.ExitCode -eq 0) {
-      Add-Record -List $records -Record (New-CheckRecord -Name 'SourceUpdate' -Status 'OK' -Message 'OK.')
+      Add-Record -List $records -Record (Get-CheckRecord -Name 'SourceUpdate' -Status 'OK' -Message 'OK.')
     } else {
       $hex = Convert-ExitCodeToHex32 -ExitCode $upd.ExitCode
       $diag = $null
       if ($DiagnoseWingetErrors) { $diag = Get-WingetErrorText -WingetPath $wg -ExitCode $upd.ExitCode }
       $st = 'Warning'
       if ($FailOnSourceUpdateError) { $st = 'Error' }
-      Add-Record -List $records -Record (New-CheckRecord -Name 'SourceUpdate' -Status $st -Message 'Failed.' -Data @{
+      Add-Record -List $records -Record (Get-CheckRecord -Name 'SourceUpdate' -Status $st -Message 'Failed.' -Data @{
         ExitCode = $upd.ExitCode
         ExitCodeHex = $hex
         StdErr = $upd.StdErr.Trim()
@@ -625,15 +621,15 @@ try {
       })
     }
   } else {
-    Add-Record -List $records -Record (New-CheckRecord -Name 'SourceUpdate' -Status 'Skipped' -Message 'Skipped (winget missing).')
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'SourceUpdate' -Status 'Skipped' -Message 'Skipped (winget missing).')
   }
 } catch {
-  Add-Record -List $records -Record (New-CheckRecord -Name 'UnhandledException' -Status 'Error' -Message $_.Exception.Message -Data @{
+  Add-Record -List $records -Record (Get-CheckRecord -Name 'UnhandledException' -Status 'Error' -Message $_.Exception.Message -Data @{
     Position = (Get-TextOrEmpty $_.InvocationInfo.PositionMessage)
   })
 } finally {
   if ($records.Count -eq 0) {
-    Add-Record -List $records -Record (New-CheckRecord -Name 'Runtime' -Status 'Error' -Message 'No records were produced (early termination).')
+    Add-Record -List $records -Record (Get-CheckRecord -Name 'Runtime' -Status 'Error' -Message 'No records were produced (early termination).')
   }
   $overallOk = Get-OverallOk -Records $records.ToArray()
   # ---- Event log ----
@@ -669,7 +665,7 @@ try {
   # V2 output contract
   $resultToken = if (-not $overallOk) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
   $v2Summary = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; OverallOk = $overallOk; Timestamp = Get-Date }
-  $v2Result = New-V2ResultObject -ScriptName '08-WinGet-SelfHeal.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $v2Summary -Metadata @{ Records = @($records) }
+  $v2Result = Get-V2ResultObject -ScriptName '08-WinGet-SelfHeal.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $v2Summary -Metadata @{ Records = $records.ToArray() }
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
   if ($overallOk) { exit 0 } else { exit 1 }

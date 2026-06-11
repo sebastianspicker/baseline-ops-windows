@@ -48,25 +48,8 @@ Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
 Set-StrictMode -Version Latest
-# v2-init
-$null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
-$script:__V2Context = @{
-  Mode = $Mode
-  ConfigPath = $ConfigPath
-  OutputFormat = $OutputFormat
-  OutputPath = $OutputPath
-  PassThru = [bool]$PassThru
-  Strict = [bool]$Strict
-  Quiet = [bool]$Quiet
-  NoColor = [bool]$NoColor
-}
-if ($Quiet) {
-  $InformationPreference = 'SilentlyContinue'
-  $VerbosePreference = 'SilentlyContinue'
-}
-if ($NoColor) {
-  $script:NoColor = $true
-}
+# v2-init (migrated to Initialize-V2Context)
+Initialize-V2Context -ScriptName '00-Validate-Profile.ps1' -BoundParameters $PSBoundParameters
 $ErrorActionPreference = 'Stop'
 
 $issues = New-Object System.Collections.ArrayList
@@ -85,6 +68,49 @@ function Add-Issue {
     })
 }
 
+function Get-ValidationExceptionCode {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Message
+  )
+
+  if ($Message -match 'path traversal') { return 'PROFILE-PATH-TRAVERSAL' }
+  if ($Message -like 'Profile file not found:*') { return 'PROFILE-NOT-FOUND' }
+  if ($Message -eq 'Profile file is empty.') { return 'PROFILE-EMPTY' }
+  if ($Message -like 'Profile JSON is invalid:*') { return 'PROFILE-INVALID-JSON' }
+  'PROFILE-VALIDATION-ERROR'
+}
+
+function Write-ValidationFailureResult {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Code,
+    [Parameter(Mandatory)][string]$Message
+  )
+
+  $issue = [pscustomobject]@{
+    Severity = 'High'
+    Code     = $Code
+    Message  = $Message
+  }
+  $summary = [pscustomobject]@{
+    ProfilePath = $ProfilePath
+    Issues      = 1
+    HighIssues  = 1
+    Warnings    = 0
+  }
+  $resultObj = Get-V2ResultObject `
+    -ScriptName '00-Validate-Profile.ps1' `
+    -Mode $Mode `
+    -Result 'FAIL' `
+    -Findings @($issue) `
+    -Summary $summary `
+    -Metadata @{ Component = 'ProfileValidation' }
+
+  Write-ResultObject -ResultObject $resultObj -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $resultObj }
+}
+
 # Has-Property moved to lib/Common.psm1
 
 try {
@@ -99,7 +125,11 @@ try {
     throw 'Profile file is empty.'
   }
 
-  $profileDoc = $raw | ConvertFrom-Json -ErrorAction Stop
+  try {
+    $profileDoc = $raw | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    throw "Profile JSON is invalid: $($_.Exception.Message)"
+  }
 
   foreach ($required in @('ProfileName','Version','Defaults','Steps','Integrity')) {
     if (-not (Has-Property -Object $profileDoc -Name $required)) {
@@ -224,7 +254,7 @@ try {
     Warnings    = $warnCount
   }
 
-  $resultObj = New-V2ResultObject `
+  $resultObj = Get-V2ResultObject `
     -ScriptName '00-Validate-Profile.ps1' `
     -Mode $Mode `
     -Result $resultToken `
@@ -256,6 +286,8 @@ try {
   if ($resultToken -eq 'WARN') { exit 2 }
   exit 0
 } catch {
-  Write-UiLine -Text ("Validation failed: {0}" -f $_.Exception.Message) -Style Error
+  $message = $_.Exception.Message
+  Write-UiLine -Text ("Validation failed: {0}" -f $message) -Style Error
+  Write-ValidationFailureResult -Code (Get-ValidationExceptionCode -Message $message) -Message $message
   exit 1
 }
