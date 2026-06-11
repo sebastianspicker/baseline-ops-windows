@@ -1,0 +1,7 @@
+homepage: https://github.com/sebastianspicker/win-mdm-security-hardening-kit
+language: javascript
+primary_contact: security@users.noreply.github.com
+fuzzing_engines:
+  - libfuzzer
+sanitizers:
+  - address

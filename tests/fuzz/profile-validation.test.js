@@ -1,13 +1,13 @@
-import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import test from 'node:test';
+const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join, resolve } = require('node:path');
+const test = require('node:test');
 
-import fc from 'fast-check';
+const fc = require('fast-check');
 
-const repoRoot = resolve(new URL('../..', import.meta.url).pathname);
+const repoRoot = resolve(__dirname, '../..');
 const validator = join(repoRoot, 'scripts', '00-Validate-Profile.ps1');
 
 function runValidator(profile) {
