@@ -103,6 +103,16 @@ Describe 'Copy-ToEvidence' {
     Test-Path -LiteralPath $dest | Should -Be $true
   }
 
+  It 'Allows double dots inside source file name segment' {
+    $source = Join-Path $script:SourceDir 'name..with-dots.txt'
+    'evidence content' | Out-File -FilePath $source -Encoding UTF8
+
+    $success, $dest = Copy-ToEvidence -SourcePath $source -EvidenceBaseDir $script:EvidenceDir
+
+    $success | Should -Be $true
+    Test-Path -LiteralPath $dest | Should -Be $true
+  }
+
   It 'Rejects path traversal in source path' {
     $traversalPath = Join-Path $script:SourceDir '../../etc/passwd'
     $success, $reason = Copy-ToEvidence -SourcePath $traversalPath -EvidenceBaseDir $script:EvidenceDir

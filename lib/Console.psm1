@@ -11,7 +11,7 @@ ranking, and summary output functions.
 
 .NOTES
 Consolidated from 15+ duplicate implementations across scripts:
-- Get-SeverityColor / Get-StatusColor / Get-ColorForLevel / Get-ConsoleColor
+- Get-SeverityColor / Get-StatusColor / Get-ConsoleColor
 - Get-SeverityRank
 - Write-ConsoleSummary variants
 #>
@@ -338,7 +338,8 @@ function Write-ConsoleSummary {
   if ($Findings -and $Findings.Count -gt 0) {
     $stats = Get-FindingStats -Findings $Findings
     $parts = [System.Collections.ArrayList]::new()
-    if ($stats.High -gt 0) { [void]$parts.Add("High=$($stats.High)") }
+if ($stats.Critical -gt 0) { [void]$parts.Add("Critical=$($stats.Critical)") }
+if ($stats.High -gt 0) { [void]$parts.Add("High=$($stats.High)") }
     if ($stats.Medium -gt 0) { [void]$parts.Add("Med=$($stats.Medium)") }
     if ($stats.Low -gt 0) { [void]$parts.Add("Low=$($stats.Low)") }
     if ($stats.Info -gt 0) { [void]$parts.Add("Info=$($stats.Info)") }
@@ -383,6 +384,7 @@ function Get-FindingStats {
 
   $stats = @{
     Total   = $findingsList.Count
+    Critical = 0
     High    = 0
     Medium  = 0
     Low     = 0
@@ -396,7 +398,8 @@ function Get-FindingStats {
   foreach ($finding in $findingsList) {
     $sev = if ($finding.PSObject.Properties['Severity']) { $finding.Severity } else { 'Info' }
     switch -Regex ($sev) {
-      '^(Critical|High)$' { $stats.High++; break }
+      '^(Critical|Crit)$' { $stats.Critical++; break }
+      '^(High)$' { $stats.High++; break }
       '^(Medium|Warning|Warn)$' { $stats.Medium++; break }
       '^(Low)$' { $stats.Low++; break }
       '^(Error|Err|Fail)$' { $stats.Error++; break }
@@ -414,14 +417,11 @@ Set-Alias -Name Write-PrettyLine -Value Write-ColoredLine
 $script:ConsoleExportedFunctions = @(
   'Get-SeverityColor'
   'Get-StatusColor'
-  'Get-ColorForLevel'
   'Get-ConsoleColor'
   'Get-SeverityRank'
   'Get-SeverityPrefix'
   'Write-ColoredLine'
   'Write-DecorativeRule'
-  'Write-SectionHeader'
-  'Write-SummaryHeader'
   'Write-FindingLine'
   'Write-ConsoleSummary'
   'Get-FindingStats'

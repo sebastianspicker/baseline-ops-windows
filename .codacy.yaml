@@ -1,4 +1,3 @@
 ---
 exclude_paths:
-  - "AGENTS.md"
-  - "docs/agent/**"
+  - "private/**"

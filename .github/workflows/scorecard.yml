@@ -9,8 +9,7 @@ on:
     branches:
       - main
     paths-ignore:
-      - 'AGENTS.md'
-      - 'docs/agent/**'
+      - 'private/**'
 
 permissions:
   contents: read

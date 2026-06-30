@@ -4,7 +4,6 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pwsh_bin="${PWSH_BIN:-pwsh}"
 psa_version="${PSSCRIPTANALYZER_VERSION:-1.24.0}"
-pester_version="${PESTER_VERSION:-5.7.1}"
 
 if ! command -v "$pwsh_bin" >/dev/null 2>&1; then
   echo "pwsh not found. Install PowerShell 7+ or set PWSH_BIN to the executable path." >&2

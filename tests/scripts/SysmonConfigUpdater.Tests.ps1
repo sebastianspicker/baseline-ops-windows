@@ -51,10 +51,11 @@ Describe '16-Sysmon-Config-Updater channel failure reporting' -Tag 'Sysmon' {
       param([string]$Name)
       [pscustomobject]@{ Name = $Name }
     }
-    Mock -CommandName Invoke-Wevtutil -MockWith {
-      param([string[]]$Arguments, [switch]$ThrowOnError, [switch]$CaptureOutput)
+  Mock -CommandName Invoke-Wevtutil -MockWith {
+    param([string[]]$Arguments, [switch]$ThrowOnError, [switch]$CaptureOutput)
+    $null = $ThrowOnError, $CaptureOutput
 
-      if ($Arguments[0] -eq 'gl') {
+    if ($Arguments[0] -eq 'gl') {
         return [pscustomobject]@{
           Output = @(
             'enabled: false',

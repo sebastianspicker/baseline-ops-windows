@@ -57,7 +57,7 @@ $modeBody = if ($SupportsRemediate) {
 @'
 if ($Mode -eq 'Remediate') {
   if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Apply remediation')) {
-    # TODO: remediation logic
+throw 'Remediation logic must be implemented before Remediate mode is used.'
   }
 }
 '@
@@ -69,10 +69,10 @@ $template = @"
 #requires -version 5.1
 <#
 .SYNOPSIS
-TODO: add synopsis.
+Summarize what this script checks.
 
 .DESCRIPTION
-TODO: add description.
+Describe the audit signal and any remediation behavior.
 
 $modeComment
 .PARAMETER OutputFormat

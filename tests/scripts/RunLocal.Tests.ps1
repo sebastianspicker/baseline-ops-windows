@@ -243,7 +243,7 @@ exit 0
 exit 0
 "@
       Set-Content -LiteralPath $scriptPath -Value $scriptContent -Encoding UTF8
-      $md5Hash = (Get-FileHash -Path $scriptPath -Algorithm MD5).Hash
+    $md5Hash = '00000000000000000000000000000000'
 
       $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Local.ps1'
       { & $runner -ScriptName '00-Hash.ps1' -RootPath $tempRoot -ExpectedHash "MD5:$md5Hash" -Confirm:$false } |

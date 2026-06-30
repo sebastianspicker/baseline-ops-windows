@@ -7,7 +7,7 @@ This script monitors the Sysmon Operational event log and evaluates event-count 
 It compares the current event volume in a time window against an exponentially weighted moving average (EMA) baseline that is persisted to disk.
 Typical use cases:
 - Detect missing Sysmon coverage (e.g., a critical event type stops appearing).
-- Detect reduced telemetry (drift down) caused by misconfiguration, tampering, log disablement, or agent issues.
+- Detect reduced telemetry (drift down) caused by misconfiguration, tampering, log disablement, or collector issues.
 - Optionally detect surges (abnormally high volume) for selected rules.
 - Optionally trigger a remediation script when a critical rule is at HARDZERO.
 How it works:

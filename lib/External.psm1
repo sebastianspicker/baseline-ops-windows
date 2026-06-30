@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Validation.psm1') -Force -Global
 
 <#
 .SYNOPSIS
@@ -461,7 +462,7 @@ function Export-EventLog {
 
   $wevtArgs = @('epl', $LogName, $OutputPath, '/ow:true')
   if ($Query) {
-    $wevtArgs += "/q:`"$Query`""
+    $wevtArgs += "/q:$Query"
   }
 
   $result = Invoke-Wevtutil -Arguments $wevtArgs -ThrowOnError
@@ -564,7 +565,7 @@ function Export-RegistryKey {
     [string]$OutputPath
   )
 
-  if ($OutputPath -match '\.\.') {
+  if (Test-PathTraversal -Path $OutputPath) {
     throw "Path traversal not allowed in OutputPath"
   }
   if ($KeyPath -match '\\(SAM|SECURITY)\\') {

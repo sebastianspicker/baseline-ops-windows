@@ -42,6 +42,23 @@ Describe "Test-IsAdmin" {
   }
 }
 
+Describe "Get-CallerValue" {
+  It "Exposes depth and global fallback controls" {
+    $params = (Get-Command Get-CallerValue).Parameters.Keys
+    $params | Should -Contain 'ScopeDepth'
+    $params | Should -Contain 'IncludeGlobal'
+  }
+
+  It "Can read a global fallback when requested" {
+    Set-Variable -Name CommonCallerGlobalProbe -Scope Global -Value 'global'
+    try {
+      Get-CallerValue -Name 'CommonCallerGlobalProbe' -IncludeGlobal | Should -Be 'global'
+    } finally {
+      Remove-Variable -Name CommonCallerGlobalProbe -Scope Global -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 Describe "Ensure-Directory" {
   BeforeEach {
     # Clean up
@@ -68,6 +85,12 @@ Describe "Ensure-Directory" {
     $nestedPath = Join-Path $script:TestDir 'Level1\Level2\Level3'
     Ensure-Directory -Path $nestedPath | Should -BeTrue
     Test-Path -LiteralPath $nestedPath | Should -Be $true
+  }
+
+  It "Allows double dots inside a path segment" {
+    $path = Join-Path $script:TestDir 'name..with-dots'
+    Ensure-Directory -Path $path | Should -BeTrue
+    Test-Path -LiteralPath $path | Should -Be $true
   }
 
   It "Returns false when directory creation fails" {
@@ -130,6 +153,11 @@ Describe "Sanitize-Path" {
       $env:TEMP = $previousTemp
       $env:SYSTEMROOT = $previousSystemRoot
     }
+  }
+
+  It "Allows double dots inside a sanitized path segment" {
+    $path = Join-Path ([System.IO.Path]::GetTempPath()) 'common-name..with-dots'
+    Sanitize-Path -Path $path | Should -Be $path
   }
 
   It "Returns null for path traversal attempt" {

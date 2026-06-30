@@ -2,25 +2,24 @@
 
 Keep changes small, reviewable, and safe for endpoint operations.
 
-## Baseline rules
+## Baseline Rules
 
-- Never commit secrets, tokens, credentials, or private keys.
+- Never commit secrets, tokens, credentials, private keys, or generated evidence.
 - Prefer behavior-preserving refactors unless the PR explicitly documents a breaking change.
-- For remediation scripts, verify `ShouldProcess` semantics (`-WhatIf`/`-Confirm`) before merge.
-- Use shared `lib/` modules instead of adding new inline helper duplicates.
+- For remediation scripts, verify `ShouldProcess` semantics through `-WhatIf` and `-Confirm`.
+- Use shared `lib/` modules instead of adding inline helper duplicates.
+- Treat profile JSON as untrusted run input.
 
-## Development flow
+## Development Flow
 
 1. Create a branch.
-2. Implement focused changes.
-3. Run local checks.
-4. Open a PR with scope, risks, and validation evidence.
+2. Implement one focused change.
+3. Run the relevant local checks.
+4. Open a PR with scope, risk, and validation evidence.
 
-Keep PRs scoped to one behavior change or documentation cleanup. If a change
-touches orchestration, profile parsing, remediation, or runner integrity, call
-that out explicitly in the PR summary and include a focused regression test.
+If a change touches orchestration, profile parsing, remediation, or runner integrity, call that out in the PR summary and include a focused regression test.
 
-## Required local checks
+## Required Local Checks
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1 -SkipAnalyzer
@@ -35,7 +34,7 @@ Or run:
 ./scripts/ci-local.sh
 ```
 
-## Documentation policy
+## Documentation Policy
 
 Root docs are intentionally minimal:
 
@@ -44,10 +43,8 @@ Root docs are intentionally minimal:
 - `SECURITY.md`
 - `CHANGELOG.md`
 
-Move implementation plans and experiments to PR descriptions.
-Do not commit generated evidence, local audit ledgers, remediation scratch
-plans, deprecated docs, or machine-specific harness state.
+Move implementation plans, experiments, audit ledgers, remediation scratch plans, deprecated docs, and machine-specific harness state to ignored local paths. Do not commit them unless the project scope is explicitly reopened.
 
-## Security reporting
+## Security Reporting
 
-See [SECURITY.md](SECURITY.md).
+Use [SECURITY.md](SECURITY.md) for vulnerability reporting.

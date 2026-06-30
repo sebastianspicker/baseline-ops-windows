@@ -27,6 +27,7 @@ Describe 'Bootstrap Initialize-V2Context' {
     $Strict = $false
     $Quiet = $false
     $NoColor = $true
+    $null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
 
     Initialize-V2Context -ScriptName '99-Test.ps1' -BoundParameters @{
       OutputFormat = 'None'
@@ -44,6 +45,7 @@ Describe 'Bootstrap Initialize-V2Context' {
   It 'sets derived Remediate even when WhatIfPreference is enabled' {
     $Mode = 'Remediate'
     $Remediate = $false
+    $null = $Mode
     $oldWhatIfPreference = $WhatIfPreference
 
     try {

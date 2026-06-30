@@ -66,10 +66,10 @@ function Set-RegTypedValue {
   }
 
   try {
-    Ensure-RegistryKey -Path $Path
     if (-not $PSCmdlet.ShouldProcess("$Path\$Name", "Set $DisplayType registry value")) {
       return $false
     }
+    Ensure-RegistryKey -Path $Path
     $null = New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType $PropertyType -Value $Value -Force -ErrorAction Stop
     return $true
   } catch {

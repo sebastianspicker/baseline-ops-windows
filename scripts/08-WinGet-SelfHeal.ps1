@@ -6,7 +6,7 @@
   This script validates a working WinGet environment and produces both:
   - A human-friendly console summary (colored output).
   - A structured, automation-friendly result object for the pipeline.
-  The script is designed for enterprise automation scenarios (scheduled tasks, MDM, build agents),
+  The script is designed for enterprise automation scenarios (scheduled tasks, MDM, build workers),
   but can also be run interactively by administrators.
   High-level workflow:
   1) Load optional JSON configuration (if available) and merge with parameter overrides.

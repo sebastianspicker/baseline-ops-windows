@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -Force -Global -DisableNameChecking
 
 <#
 .SYNOPSIS
@@ -9,20 +10,6 @@ Provides factory functions to create typed finding objects and manage
 ordered finding lists used by the v2 script result contract.
 #>
 
-function Get-CallerValue {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Name)
-
-  foreach ($scope in 1..5) {
-    try {
-      $value = Get-Variable -Name $Name -Scope $scope -ValueOnly -ErrorAction Stop
-      if ($null -ne $value) { return $value }
-    } catch {
-      continue
-    }
-  }
-  return $null
-}
 
 <#
 .SYNOPSIS
@@ -31,8 +18,7 @@ function Get-CallerValue {
 function Get-FindingsList {
   [CmdletBinding()]
   param()
-  $list = New-Object System.Collections.Generic.List[object]
-  return , $list
+  return , [System.Collections.Generic.List[object]]::new()
 }
 
 <#
@@ -112,8 +98,8 @@ function Add-Finding {
   )
 
   if ($null -eq $FindingList) {
-    $FindingList = Get-CallerValue -Name 'Findings'
-    if ($null -eq $FindingList) { $FindingList = Get-CallerValue -Name 'script:Findings' }
+    $FindingList = Get-CallerValue -Name 'Findings' -ScopeDepth 5
+    if ($null -eq $FindingList) { $FindingList = Get-CallerValue -Name 'script:Findings' -ScopeDepth 5 }
   }
   if ($null -eq $FindingList) {
     throw 'FindingList not provided and no $Findings/$script:Findings found.'

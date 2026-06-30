@@ -183,7 +183,7 @@ while ($pending.Count -gt 0) {
   for ($i = 0; $i -lt $pending.Count; $i++) {
     $step = $pending[$i]
     $scriptName = [string]$step.Script
-    $dependsOn = if (Has-Property -Object $step -Name 'DependsOn' -and $null -ne $step.DependsOn) { @($step.DependsOn) } else { @() }
+    $dependsOn = if ((Has-Property -Object $step -Name 'DependsOn') -and $null -ne $step.DependsOn) { @($step.DependsOn) } else { @() }
 
     $depsReady = $true
     $depFailed = $false
@@ -216,7 +216,7 @@ while ($pending.Count -gt 0) {
     }
 
     $stepArgs = @()
-    if (Has-Property -Object $step -Name 'Args' -and $null -ne $step.Args) {
+    if ((Has-Property -Object $step -Name 'Args') -and $null -ne $step.Args) {
       $stepArgs += @($step.Args)
     }
 
@@ -316,7 +316,7 @@ while ($pending.Count -gt 0) {
               $status = 'Failed'
             }
           }
-          if (Has-Property -Object $childResult -Name 'Findings' -and $null -ne $childResult.Findings) {
+          if ((Has-Property -Object $childResult -Name 'Findings') -and $null -ne $childResult.Findings) {
             foreach ($finding in @($childResult.Findings)) {
               if ($null -ne $finding) {
                 [void]$profileFindings.Add($finding)

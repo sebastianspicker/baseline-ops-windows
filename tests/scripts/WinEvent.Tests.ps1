@@ -19,7 +19,9 @@ Describe '26-Get-WinEvent-FastTriage export failure reporting' -Tag 'WinEvent' {
             [int]$MaxEvents
           )
 
-          [pscustomobject]@{
+      $null = $FilterHashtable, $MaxEvents
+
+      [pscustomobject]@{
             TimeCreated      = Get-Date
             LevelDisplayName = 'Error'
             Id               = 42
@@ -40,7 +42,8 @@ Describe '26-Get-WinEvent-FastTriage export failure reporting' -Tag 'WinEvent' {
             $Encoding
           )
           process {
-            throw 'csv export failed'
+        $null = $InputObject, $Path, $NoTypeInformation, $Encoding
+        throw 'csv export failed'
           }
         }
 
@@ -91,7 +94,9 @@ Describe '26-Get-WinEvent-FastTriage export failure reporting' -Tag 'WinEvent' {
             [int]$MaxEvents
           )
 
-          [pscustomobject]@{
+      $null = $FilterHashtable, $MaxEvents
+
+      [pscustomobject]@{
             TimeCreated      = Get-Date
             LevelDisplayName = 'Error'
             Id               = 42

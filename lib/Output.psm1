@@ -2,16 +2,17 @@ Set-StrictMode -Version Latest
 
 <#
 .SYNOPSIS
-Console UI output functions for human-readable script output.
+Capture-friendly UI output functions for human-readable script output.
 
 .DESCRIPTION
-Provides a unified set of Write-* functions for colored console output, section
-headers, key-value displays, status lines, and bullet lists. All functions
-respect the caller-scope NoColor, Quiet, and NoConsole switches.
+Provides a unified set of Write-* functions for information-stream status
+prefixes, section headers, key-value displays, and bullet lists. Style
+parameters are kept for call compatibility and `-NoNewLine` host coloring; full
+host-colored summaries live in Console.psm1.
 #>
 
 if (-not (Get-Command -Name Get-CallerValue -CommandType Function -ErrorAction SilentlyContinue)) {
-  Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -DisableNameChecking
+  Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -Global -DisableNameChecking
 }
 
 $script:UiDefaults = [ordered]@{
@@ -219,12 +220,11 @@ function Get-StatusPrefix {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Status)
 
-  switch -Regex ($Status) {
-    '^(OK|Pass|Passed|Good)$' { return '[OK]   ' }
-    '^(Warn|Warning|Drift|Changed)$' { return '[WARN] ' }
-    '^(Fail|Failed|Error|Err|Critical)$' { return '[FAIL] ' }
-    '^(Info|Note)$' { return '[INFO] ' }
-    '^(Skip|Skipped)$' { return '[SKIP] ' }
+  switch (Resolve-StatusStyle -Status $Status) {
+    'Success' { return '[OK]   ' }
+    'Warn' { return '[WARN] ' }
+    'Error' { return '[FAIL] ' }
+    'Muted' { return '[SKIP] ' }
     default { return '[INFO] ' }
   }
 }
@@ -594,7 +594,6 @@ $script:OutputExportedFunctions = @(
   'Write-ConsoleBanner'
   'Write-ConsoleInfo'
   'Write-ConsoleList'
-  'Write-UiProgress'
   'Write-UiSummaryTable'
 )
 

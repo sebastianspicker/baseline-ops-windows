@@ -22,7 +22,8 @@ Describe 'explicit config and catalog input reporting' -Tag 'Config' {
         }
         function global:Get-CimInstance {
           [CmdletBinding()]
-          param([string]$ClassName)
+    param([string]$ClassName)
+    $null = $ClassName
 
           [pscustomobject]@{
             Name        = 'TestSvc'

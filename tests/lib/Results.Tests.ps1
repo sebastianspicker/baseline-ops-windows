@@ -24,6 +24,10 @@ Describe 'Get-FindingsList' {
     $list.GetType().Name | Should -Match 'List'
   }
 
+  It 'Returns the empty list as a single object' {
+    @(Get-FindingsList).Count | Should -Be 1
+  }
+
   It 'Returns a list that supports Add method' {
     $list = Get-FindingsList
     { $list.Add('test') } | Should -Not -Throw
@@ -66,7 +70,7 @@ Describe 'Get-FindingObject' {
 Describe 'Add-Finding' {
   It 'Adds a finding to the provided list' {
     $list = Get-FindingsList
-    $result = Add-Finding -FindingList $list -Code 'ADD-001' -Severity 'Warn' -Message 'Added finding'
+    Add-Finding -FindingList $list -Code 'ADD-001' -Severity 'Warn' -Message 'Added finding' | Out-Null
     $list.Count | Should -Be 1
     $list[0].Code | Should -Be 'ADD-001'
   }

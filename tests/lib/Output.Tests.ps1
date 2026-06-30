@@ -34,7 +34,7 @@ BeforeAll {
 
 Describe 'Output module export surface' {
   It 'Does not export removed decorative console wrappers' {
-    $removed = @('Write-Rule', 'Write-ConsoleRule', 'Write-ConsoleSeparator', 'Write-Title', 'Write-Good', 'Write-Bad')
+    $removed = @('Write-Rule', 'Write-ConsoleRule', 'Write-ConsoleSeparator', 'Write-Title', 'Write-Good', 'Write-Bad', 'Write-UiProgress')
     $names = Get-Command -Module Output | Select-Object -ExpandProperty Name
 
     foreach ($name in $removed) {
@@ -197,9 +197,30 @@ Describe 'Write-Success' {
   }
 }
 
+Describe 'Status helper alignment' {
+  It 'Keeps style and prefix classification aligned for aliases and defaults' {
+    InModuleScope Output {
+      $cases = @(
+        [pscustomobject]@{ Status = 'Pass'; Style = 'Success'; Prefix = '[OK]   ' }
+        [pscustomobject]@{ Status = 'Warning'; Style = 'Warn'; Prefix = '[WARN] ' }
+        [pscustomobject]@{ Status = 'Failed'; Style = 'Error'; Prefix = '[FAIL] ' }
+        [pscustomobject]@{ Status = 'Note'; Style = 'Info'; Prefix = '[INFO] ' }
+        [pscustomobject]@{ Status = 'Skipped'; Style = 'Muted'; Prefix = '[SKIP] ' }
+        [pscustomobject]@{ Status = 'Unknown'; Style = 'Info'; Prefix = '[INFO] ' }
+      )
+
+      foreach ($case in $cases) {
+        Resolve-StatusStyle -Status $case.Status | Should -Be $case.Style
+        Get-StatusPrefix -Status $case.Status | Should -Be $case.Prefix
+      }
+    }
+  }
+}
+
 Describe 'Write-UiSummaryTable operator meaning' {
   It 'Renders total findings, severity counts, OK count, and fail result' {
     $findings = @(
+      [pscustomobject]@{ Severity = 'Critical'; Code = 'CRIT-1'; Message = 'critical risk' }
       [pscustomobject]@{ Severity = 'High'; Code = 'HIGH-1'; Message = 'high risk' }
       [pscustomobject]@{ Severity = 'Medium'; Code = 'MED-1'; Message = 'partial risk' }
       [pscustomobject]@{ Severity = 'Low'; Code = 'LOW-1'; Message = 'low risk' }
@@ -209,7 +230,8 @@ Describe 'Write-UiSummaryTable operator meaning' {
 
     $text = Join-TestOutputText -Output (Write-UiSummaryTable -Findings $findings 6>&1)
 
-    $text | Should -Match 'Total findings\s*:\s*5'
+    $text | Should -Match 'Total findings\s*:\s*6'
+    $text | Should -Match 'Critical\s*:\s*1'
     $text | Should -Match 'High\s*:\s*1'
     $text | Should -Match 'Medium\s*:\s*1'
     $text | Should -Match 'Low\s*:\s*1'

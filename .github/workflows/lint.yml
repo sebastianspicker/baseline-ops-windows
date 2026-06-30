@@ -11,8 +11,7 @@ on:
       - 'update-*'
       - 'update/**'
     paths-ignore:
-      - 'AGENTS.md'
-      - 'docs/agent/**'
+      - 'private/**'
   pull_request:
     branches:
       - main
@@ -20,8 +19,7 @@ on:
       - 'fix/**'
       - 'feat/**'
     paths-ignore:
-      - 'AGENTS.md'
-      - 'docs/agent/**'
+      - 'private/**'
 
 permissions: {}
 

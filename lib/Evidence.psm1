@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Validation.psm1') -Force -Global
 
 <#
 .SYNOPSIS
@@ -79,10 +80,10 @@ function Copy-ToEvidence {
   # like %TEMP%\..\..\..\Windows are correctly detected after expansion
   $expandedSource = [System.Environment]::ExpandEnvironmentVariables($SourcePath)
   $expandedBase   = [System.Environment]::ExpandEnvironmentVariables($EvidenceBaseDir)
-  if ($expandedSource -match '\.\.' -or $expandedBase -match '\.\.') {
+  if ((Test-PathTraversal -Path $expandedSource) -or (Test-PathTraversal -Path $expandedBase)) {
     return $false, 'path-traversal-not-allowed'
   }
-  if ($SourcePath -match '\.\.' -or $EvidenceBaseDir -match '\.\.') {
+  if ((Test-PathTraversal -Path $SourcePath) -or (Test-PathTraversal -Path $EvidenceBaseDir)) {
     return $false, 'path-traversal-not-allowed'
   }
   try {

@@ -113,7 +113,7 @@ Describe 'v2 parameter contract' {
       Where-Object {
         $errors = $null
         $tokens = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+      $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
         if ($errors) { return $false }
 
         $content = Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8

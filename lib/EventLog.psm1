@@ -1,25 +1,5 @@
 Set-StrictMode -Version Latest
-
-function Get-CallerValue {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Name)
-
-  foreach ($scope in 1..3) {
-    try {
-      $var = Get-Variable -Name $Name -Scope $scope -ErrorAction Stop
-      return $var.Value
-    } catch {
-      # Continue searching outer scopes.
-    }
-  }
-  try {
-    $var = Get-Variable -Name $Name -Scope Global -ErrorAction Stop
-    return $var.Value
-  } catch {
-    # No caller/global fallback value was found.
-  }
-  return $null
-}
+Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -Force -Global -DisableNameChecking
 
 <#
 .SYNOPSIS
@@ -30,35 +10,15 @@ Provides functions to ensure an event source exists and to write structured
 health events to the Windows Application Event Log.
 #>
 
-function Get-EventLogCallerValue {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$CanonicalName,
-    [Parameter(Mandatory)][string]$DeprecatedName,
-    [Parameter(Mandatory)][string]$WarningMessage
-  )
-
-  $value = Get-CallerValue -Name $CanonicalName
-  if ($value) { return $value }
-
-  $value = Get-CallerValue -Name $DeprecatedName
-  if ($value) {
-    Write-Warning $WarningMessage
-    return $value
-  }
-
-  return $null
-}
-
 <#
 .SYNOPSIS
-  Ensures a Windows Event Log source is registered.
+Ensures a Windows Event Log source is registered.
 .PARAMETER Source
-  Event source name to register (alias: SourceName).
+Event source name to register (alias: SourceName).
 .PARAMETER LogName
-  Event log name (default: Application).
+Event log name (default: Application).
 .PARAMETER OnErrorMessage
-  Warning message string to emit on failure (replaces former scriptblock parameter).
+Warning message string to emit on failure (replaces former scriptblock parameter).
 #>
 function Ensure-EventSource {
   [CmdletBinding()]
@@ -67,11 +27,20 @@ function Ensure-EventSource {
     [Alias('Log')][string]$LogName,
     [string]$OnErrorMessage
   )
+
   if ([string]::IsNullOrWhiteSpace($Source)) {
-    $Source = Get-EventLogCallerValue -CanonicalName 'EventSource' -DeprecatedName 'EventSourceName' -WarningMessage 'Use EventSource, not EventSourceName (deprecated)'
+    $Source = Get-CallerValue -Name 'EventSource' -IncludeGlobal
+    if (-not $Source) {
+      $Source = Get-CallerValue -Name 'EventSourceName' -IncludeGlobal
+      if ($Source) { Write-Warning 'Use EventSource, not EventSourceName (deprecated)' }
+    }
   }
   if ([string]::IsNullOrWhiteSpace($LogName)) {
-    $LogName = Get-EventLogCallerValue -CanonicalName 'EventLogName' -DeprecatedName 'EventLog' -WarningMessage 'Use EventLogName, not EventLog (deprecated)'
+    $LogName = Get-CallerValue -Name 'EventLogName' -IncludeGlobal
+    if (-not $LogName) {
+      $LogName = Get-CallerValue -Name 'EventLog' -IncludeGlobal
+      if ($LogName) { Write-Warning 'Use EventLogName, not EventLog (deprecated)' }
+    }
     if ([string]::IsNullOrWhiteSpace($LogName)) { $LogName = 'Application' }
   }
   if ([string]::IsNullOrWhiteSpace($Source)) {
@@ -92,19 +61,19 @@ function Ensure-EventSource {
 
 <#
 .SYNOPSIS
-  Writes a health event to the Windows Event Log.
+Writes a health event to the Windows Event Log.
 .PARAMETER Id
-  Event ID for the log entry.
+Event ID for the log entry.
 .PARAMETER Message
-  Event message text.
+Event message text.
 .PARAMETER Level
-  Entry type: Information, Warning, or Error.
+Entry type: Information, Warning, or Error.
 .PARAMETER Source
-  Event source name. Falls back to caller-scope EventSource variable.
+Event source name. Falls back to caller-scope EventSource variable.
 .PARAMETER LogName
-  Event log name. Falls back to caller-scope EventLogName variable.
+Event log name. Falls back to caller-scope EventLogName variable.
 .PARAMETER OnErrorMessage
-  Warning message string to emit on failure (replaces former scriptblock parameter).
+Warning message string to emit on failure (replaces former scriptblock parameter).
 #>
 function Write-HealthEvent {
   [CmdletBinding()]
@@ -118,10 +87,18 @@ function Write-HealthEvent {
   )
 
   if (-not $Source) {
-    $Source = Get-EventLogCallerValue -CanonicalName 'EventSource' -DeprecatedName 'EventSourceName' -WarningMessage 'Use EventSource, not EventSourceName (deprecated)'
+    $Source = Get-CallerValue -Name 'EventSource' -IncludeGlobal
+    if (-not $Source) {
+      $Source = Get-CallerValue -Name 'EventSourceName' -IncludeGlobal
+      if ($Source) { Write-Warning 'Use EventSource, not EventSourceName (deprecated)' }
+    }
   }
   if (-not $LogName) {
-    $LogName = Get-EventLogCallerValue -CanonicalName 'EventLogName' -DeprecatedName 'EventLog' -WarningMessage 'Use EventLogName, not EventLog (deprecated)'
+    $LogName = Get-CallerValue -Name 'EventLogName' -IncludeGlobal
+    if (-not $LogName) {
+      $LogName = Get-CallerValue -Name 'EventLog' -IncludeGlobal
+      if ($LogName) { Write-Warning 'Use EventLogName, not EventLog (deprecated)' }
+    }
   }
 
   if ([string]::IsNullOrWhiteSpace($Source) -or [string]::IsNullOrWhiteSpace($LogName)) {

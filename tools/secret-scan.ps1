@@ -11,8 +11,8 @@ matches are found (default).
 .PARAMETER RootPath
 Root path to scan (default: repo root).
 
-.PARAMETER FailOnMatch
-If set (default), exits with code 1 when matches are found.
+.PARAMETER NoFail
+Report matches without exiting with code 1.
 
 .PARAMETER Exclude
 Folder names to exclude from scanning.
@@ -21,7 +21,7 @@ Folder names to exclude from scanning.
 [CmdletBinding()]
 param(
   [string]$RootPath = '',
-  [switch]$FailOnMatch = $true,
+  [switch]$NoFail,
   [string[]]$Exclude = @('.git','node_modules','bin','obj','dist','_extracted')
 )
 
@@ -58,6 +58,23 @@ $allowedExt = @(
   '.md','.txt','.json','.yml','.yaml','.xml','.cfg','.ini','.toml','.csv','.log'
 )
 
+function Test-ExcludedPath {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [string[]]$ExcludedSegments
+  )
+
+  $segments = [regex]::Split($Path, '[\\/]+') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  foreach ($segment in $segments) {
+    if ($ExcludedSegments -contains $segment) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
 $files = @()
 if (Get-Command -Name git -ErrorAction SilentlyContinue) {
   $gitRootCheck = & git -C $RootPath rev-parse --is-inside-work-tree 2>$null
@@ -79,10 +96,7 @@ if (-not $files -or @($files).Count -eq 0) {
 $filtered = @()
 foreach ($f in $files) {
   if (-not (Test-Path -LiteralPath $f)) { continue }
-  $skip = $false
-  foreach ($ex in $Exclude) {
-    if ($f -match ([regex]::Escape("${ex}"))) { $skip = $true; break }
-  }
+  $skip = Test-ExcludedPath -Path $f -ExcludedSegments $Exclude
   if ($skip) { continue }
   $ext = [System.IO.Path]::GetExtension($f)
   if ($ext -and ($allowedExt -notcontains $ext)) { continue }
@@ -108,7 +122,7 @@ if ($findings.Count -gt 0) {
   $findings | Sort-Object File,Line | ForEach-Object {
     Write-Information -MessageData ("- {0}:{1} ({2})" -f $_.File, $_.Line, $_.Pattern) -InformationAction Continue
   }
-  if ($FailOnMatch) { exit 1 }
+  if (-not $NoFail) { exit 1 }
 } else {
   Write-Information -MessageData 'Secret scan: no matches found.' -InformationAction Continue
 }

@@ -26,7 +26,7 @@ function Test-PathTraversal {
     return $false
   }
 
-  $normalized = $Path -replace '/', '\\'
+  $normalized = $Path.Replace('/', '\')
   if ($normalized -match '(^|\\)\.\.(\\|$)') { return $true }
   if ($normalized -match '\\.\\.\\') { return $true }
   return $false

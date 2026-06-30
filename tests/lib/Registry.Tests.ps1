@@ -70,6 +70,26 @@ Describe "Set-Reg* AllowedPrefixes" {
   }
 }
 
+Describe "Set-RegTypedValue ShouldProcess" {
+  It "Does not create a key when WhatIf declines the write" {
+    InModuleScope Registry {
+      Mock Ensure-RegistryKey { throw 'Ensure-RegistryKey should not run under WhatIf.' }
+      Mock New-ItemProperty { throw 'New-ItemProperty should not run under WhatIf.' }
+
+      $result = Set-RegTypedValue -Path 'HKCU:\Software\RegistryModuleTests\WhatIf' `
+        -Name 'Value' `
+        -Value 1 `
+        -PropertyType DWord `
+        -DisplayType 'REG_DWORD' `
+        -WhatIf
+
+      $result | Should -Be $false
+      Should -Invoke Ensure-RegistryKey -Times 0 -Exactly
+      Should -Invoke New-ItemProperty -Times 0 -Exactly
+    }
+  }
+}
+
 Describe "Ensure-RegistryKey" -Skip:$script:SkipRegistryTests {
   BeforeEach {
     # Ensure clean state

@@ -1,9 +1,8 @@
 # Documentation
 
-This directory contains public documentation assets for the Windows MDM Endpoint
-Security Hardening Kit.
+This directory contains the public documentation index and assets for the Windows MDM Endpoint Security Hardening Kit.
 
-## Active docs
+## Active Docs
 
 - [Project overview and quick start](../README.md)
 - [Script catalog and usage](../scripts/README.md)
@@ -13,21 +12,29 @@ Security Hardening Kit.
 - [Contribution guide](../CONTRIBUTING.md)
 - [Changelog](../CHANGELOG.md)
 
-## Documentation policy
+## Public Documentation Policy
 
-Public docs describe the current supported project surface. Internal audit
-notes, remediation plans, ledgers, status logs, deprecated docs, local archives,
-generated evidence, and machine-specific harness artifacts are not part of the
-committed public documentation set.
+Public docs describe the current supported project surface. Keep durable user and maintainer guidance in the active docs listed above.
 
-Store those materials only in ignored local archive paths such as `docs/agent/`
-or another `.gitignore`-covered workspace.
+Do not commit internal review artifacts, including:
 
-## Local-only materials
+- audit notes
+- remediation plans
+- ledgers and status logs
+- deprecated docs
+- generated evidence
+- local archive packets
+- local Codacy Analysis CLI output
+- vendored source snapshots
+- machine-specific harness state
 
-The following paths and filename patterns are intentionally ignored:
+Those files belong in ignored local paths such as `private/`, `docs/archive/`, `archive/`, or another `.gitignore`-covered workspace.
 
-- `docs/agent/`
+## Ignored Local Material
+
+The repository intentionally ignores these local documentation paths and filename patterns:
+
+- `private/`
 - `docs/archive/`
 - `docs/source-audit/`
 - `docs/tmp/`
@@ -39,12 +46,12 @@ The following paths and filename patterns are intentionally ignored:
 - `docs/*status*.md`
 - `docs/*findings*.md`
 - `.codacy/`
+- `.codegraph/`
+- `.serena/`
 - `archive/`
 - `vendor/`
 - `third_party/`
 - `third-party/`
 - `external/`
 
-Keep durable public guidance in the active docs above. Keep one-off reviews,
-work logs, and remediation plans in pull request descriptions or ignored local
-workspace files.
+Keep one-off reviews, work logs, and remediation scratch files out of public documentation.

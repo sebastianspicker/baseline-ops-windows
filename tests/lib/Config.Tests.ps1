@@ -120,7 +120,7 @@ Describe 'Read-ConfigWithDefaults' {
   It 'Invokes OnWarning callback when file is missing' {
     $warningMsg = $null
     $callback = { param($m) $script:warningMsg = $m }
-    $result = Read-ConfigWithDefaults -Path (Join-Path $script:TestDir 'missing.json') -OnWarning $callback
+    $null = Read-ConfigWithDefaults -Path (Join-Path $script:TestDir 'missing.json') -OnWarning $callback
     $script:warningMsg | Should -Not -BeNullOrEmpty
   }
 

@@ -23,6 +23,7 @@ Describe 'tools/new-script.ps1' {
     $content | Should -Not -Match 'SupportsShouldProcess'
     $content | Should -Not -Match 'Remediate not supported'
     $content | Should -Not -Match '\$Mode -eq ''Remediate'''
+    $content | Should -Not -Match 'TODO'
   }
 
   It 'emits remediation support only when requested' {
@@ -38,5 +39,7 @@ Describe 'tools/new-script.ps1' {
     $content | Should -Match "\[ValidateSet\('Audit','Remediate'\)\]"
     $content | Should -Match 'SupportsShouldProcess = \$true'
     $content | Should -Match '\$Mode -eq ''Remediate'''
+    $content | Should -Not -Match 'TODO'
+    $content | Should -Match "throw 'Remediation logic must be implemented before Remediate mode is used\.'"
   }
 }

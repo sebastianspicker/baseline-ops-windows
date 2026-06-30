@@ -5,6 +5,8 @@ Thumbs.db
 .idea/
 .cursor/
 .codex/
+.codegraph/
+.serena/
 
 # PowerShell
 *.ps1~
@@ -65,7 +67,6 @@ DECISIONS.md
 FINDINGS.md
 LOG.md
 REFACTOR_PLAN.md
-PHYSICS_AUDIT.md
 validation.md
 HANDOFF.md
 progress.md
@@ -76,17 +77,14 @@ plans/
 .claude/
 .codacy/
 
-# Local harness and audit workspace state
-.agents/
+# Local-only audit and release-readiness workspace state
+private/
 .github/codex/
 .github/workflows/codex.yml
-AGENTS.md
-AUDIT.md
 HARNESS_PRINCIPLES.md
 code_review.md
 archive/
 docs/archive/
-docs/agent/
 docs/source-audit/
 docs/tmp/
 docs/temp/

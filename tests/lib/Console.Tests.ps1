@@ -204,33 +204,6 @@ Describe "Get-StatusColor" {
   }
 }
 
-Describe "Get-ColorForLevel" {
-  It "Returns Red for Critical" {
-    $result = Get-ColorForLevel -Level 'Critical'
-    $result | Should -Be 'Red'
-  }
-
-  It "Returns Red for High" {
-    $result = Get-ColorForLevel -Level 'High'
-    $result | Should -Be 'Red'
-  }
-
-  It "Returns Yellow for Medium" {
-    $result = Get-ColorForLevel -Level 'Medium'
-    $result | Should -Be 'Yellow'
-  }
-
-  It "Returns Cyan for Low" {
-    $result = Get-ColorForLevel -Level 'Low'
-    $result | Should -Be 'Cyan'
-  }
-
-  It "Returns Gray for Info" {
-    $result = Get-ColorForLevel -Level 'Info'
-    $result | Should -Be 'Gray'
-  }
-}
-
 Describe "Get-ConsoleColor" {
   It "Returns Green for OK" {
     $result = Get-ConsoleColor -Kind 'OK'
@@ -425,24 +398,6 @@ Describe "Write-DecorativeRule" {
   }
 }
 
-Describe "Write-SectionHeader" {
-  It "Does not throw when called with title" {
-    { Write-SectionHeader -Title 'My Section' } | Should -Not -Throw
-  }
-}
-
-Describe "Write-SummaryHeader" {
-  It "Does not throw with all parameters" {
-    $displayName = 'UnitTestHost'
-    { Write-SummaryHeader -Title 'Summary' -ComputerName $displayName -Timestamp '2026-01-01' -FindingsCount 3 } | Should -Not -Throw
-  }
-
-  It "Does not throw with zero findings" {
-    $displayName = 'UnitTestHost'
-    { Write-SummaryHeader -Title 'Clean' -ComputerName $displayName -Timestamp 'now' -FindingsCount 0 } | Should -Not -Throw
-  }
-}
-
 Describe "Write-FindingLine" {
   It "Does not throw for valid severity and code" {
     { Write-FindingLine -Severity 'High' -Code 'TEST001' -Message 'A finding' } | Should -Not -Throw
@@ -518,9 +473,11 @@ Describe "Write-ConsoleSummary" {
 }
 
 Describe "Console module export surface" {
-  It "Does not export removed pretty summary wrapper" {
+  It "Does not export removed wrapper helpers" {
     $names = Get-Command -Module Console | Select-Object -ExpandProperty Name
-    $names | Should -Not -Contain 'Write-PrettySummary'
+    foreach ($name in @('Write-PrettySummary', 'Get-ColorForLevel', 'Write-SectionHeader', 'Write-SummaryHeader')) {
+      $names | Should -Not -Contain $name
+    }
   }
 }
 
@@ -545,6 +502,18 @@ Describe "Get-FindingStats" {
   It "Returns correct High count" {
     $result = Get-FindingStats -Findings $script:MockFindings
     $result.High | Should -Be 2
+  }
+
+  It "Keeps Critical count separate from High" {
+    $findings = @(
+      [pscustomobject]@{ Severity = 'Critical'; Code = 'CRIT-1'; Message = 'critical' }
+      [pscustomobject]@{ Severity = 'High'; Code = 'HIGH-1'; Message = 'high' }
+    )
+
+    $result = Get-FindingStats -Findings $findings
+
+    $result.Critical | Should -Be 1
+    $result.High | Should -Be 1
   }
 
   It "Returns correct Medium count" {

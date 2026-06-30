@@ -48,6 +48,16 @@ Describe 'Save-Json' {
     }
   }
 
+  It 'Allows double dots inside JSON file name segment' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-name..dots-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    try {
+      Save-Json -InputObject @{ test = 1 } -Path $tmp -NoBom
+      Test-Path -LiteralPath $tmp | Should -Be $true
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
   It 'Auto-creates parent directory' {
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-dir-{0}" -f [guid]::NewGuid().ToString('N'))
     $tmp = Join-Path $tmpDir 'output.json'
@@ -113,6 +123,16 @@ Describe 'Save-Csv' {
       $lines[0] | Should -Match 'Score'
       # Should have header + 2 data rows
       $lines.Count | Should -BeGreaterOrEqual 3
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  It 'Allows double dots inside CSV file name segment' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-csv-name..dots-{0}.csv" -f [guid]::NewGuid().ToString('N'))
+    try {
+      Save-Csv -InputObject @([pscustomobject]@{ Name = 'Alice' }) -Path $tmp
+      Test-Path -LiteralPath $tmp | Should -Be $true
     } finally {
       if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     }

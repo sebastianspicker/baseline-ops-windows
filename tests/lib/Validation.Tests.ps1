@@ -23,6 +23,10 @@ Describe 'Test-PathTraversal' {
     Test-PathTraversal -Path '../etc/passwd' | Should -Be $true
   }
 
+  It 'Detects mid-path forward-slash traversal' {
+    Test-PathTraversal -Path 'safe/../evil.txt' | Should -Be $true
+  }
+
   It 'Detects mid-path traversal' {
     Test-PathTraversal -Path 'C:\Temp\..\Windows' | Should -Be $true
   }

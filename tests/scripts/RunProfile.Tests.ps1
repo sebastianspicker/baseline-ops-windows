@@ -45,6 +45,39 @@ exit $ExitCode
   }
   }
 
+  It 'Runs a valid profile step that omits optional Args and DependsOn' {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runprofile-optional-{0}" -f [guid]::NewGuid().ToString('N'))
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $profilePath = Join-Path $tempRoot 'profile.json'
+
+    try {
+      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
+
+      $profileSpec = @{
+        ProfileName = 'test-profile-optional'
+        Version = '2.0'
+        Defaults = @{ Mode = 'Audit'; Strict = $false; OutputFormat = 'Console'; OutputPath = $null }
+        Steps = @(
+          @{ Script = '01-Ok.ps1'; ContinueOnError = $false }
+        )
+        Integrity = @{ RequireSigned = $false; ExpectedHashes = @{} }
+      }
+      $profileSpec | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+
+      $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1'
+      $result = & $runner -ProfilePath $profilePath -RootPath $tempRoot -OutputFormat None -PassThru -Confirm:$false
+
+      $LASTEXITCODE | Should -Be 0
+      $result.Result | Should -Be 'OK'
+      @($result.Metadata.Steps).Count | Should -Be 1
+    } finally {
+      if (Test-Path -LiteralPath $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
   It 'Marks dependent step as skipped when dependency fails' {
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("runprofile-root-{0}" -f [guid]::NewGuid().ToString('N'))
     $scriptsDir = Join-Path $tempRoot 'scripts'
@@ -640,7 +673,7 @@ exit 0
       New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value 'exit 0' -Encoding UTF8
 
-      $profile = @{
+    $profileSpec = @{
         ProfileName = 'test-profile-whatif'
         Version = '2.0'
         Defaults = @{ Mode = 'Audit'; Strict = $false; OutputFormat = 'Console'; OutputPath = $null }
@@ -649,7 +682,7 @@ exit 0
         )
         Integrity = @{ RequireSigned = $false; ExpectedHashes = @{} }
       }
-      $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
+    $profileSpec | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $profilePath -Encoding UTF8
 
       $runner = Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1'
       & $runner -ProfilePath $profilePath -RootPath $tempRoot -OutputFormat None -WhatIf -Confirm:$false

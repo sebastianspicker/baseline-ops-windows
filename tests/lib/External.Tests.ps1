@@ -133,6 +133,42 @@ Describe 'Invoke-Wevtutil' -Skip:$script:SkipWindowsTests {
   }
 }
 
+Describe 'Export-EventLog' {
+  It 'Passes XPath query without embedded quote wrapping' {
+    InModuleScope External {
+      Mock Invoke-Wevtutil {
+        param([string[]]$Arguments, [switch]$ThrowOnError)
+        $null = $ThrowOnError
+        $script:CapturedWevtutilArgs = $Arguments
+        return $true
+      }
+
+      Export-EventLog -LogName 'Application' -OutputPath 'out.evtx' -Query "*[System[(Level=2)]]" | Should -Be $true
+
+      $script:CapturedWevtutilArgs | Should -Be @('epl', 'Application', 'out.evtx', '/ow:true', '/q:*[System[(Level=2)]]')
+      $script:CapturedWevtutilArgs[-1] | Should -Not -Match '^/q:"'
+      $script:CapturedWevtutilArgs[-1] | Should -Not -Match '"$'
+    }
+  }
+}
+
+Describe 'Export-RegistryKey' {
+  It 'Allows double dots inside output file name segment' {
+    InModuleScope External {
+      Mock Invoke-RegExe {
+        param([string[]]$Arguments, [switch]$ThrowOnError)
+        $null = $ThrowOnError
+        $script:CapturedRegArgs = $Arguments
+        return $true
+      }
+
+      Export-RegistryKey -KeyPath 'HKCU\Software\Test' -OutputPath 'out..backup.reg' | Should -Be $true
+
+      $script:CapturedRegArgs | Should -Be @('export', 'HKCU\Software\Test', 'out..backup.reg', '/y')
+    }
+  }
+}
+
 Describe 'Invoke-Git' {
   It 'Executes git with CaptureOutput' {
     $result = Invoke-Git -Arguments @('--version') -CaptureOutput

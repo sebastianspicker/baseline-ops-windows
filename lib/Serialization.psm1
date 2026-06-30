@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'Validation.psm1') -Force -Global
 
 function ConvertTo-ObjectArray {
   [CmdletBinding()]
@@ -52,8 +53,8 @@ function Save-Json {
   if ([string]::IsNullOrWhiteSpace($Path)) {
     throw 'Save-Json: Path cannot be null or empty.'
   }
-  if ($Path -match '\.\.') {
-    throw 'Save-Json: Path must not contain ".." (path traversal not allowed).'
+  if (Test-PathTraversal -Path $Path) {
+    throw 'Save-Json: Path must not contain path traversal segments ("..").'
   }
 
   $dir = Split-Path -Path $Path -Parent
@@ -87,8 +88,8 @@ function Save-Csv {
     [string]$Path
   )
 
-  if ($Path -match '\.\.') {
-    throw 'Save-Csv: Path must not contain ".." (path traversal not allowed).'
+  if (Test-PathTraversal -Path $Path) {
+    throw 'Save-Csv: Path must not contain path traversal segments ("..").'
   }
 
   $dir = Split-Path -Path $Path -Parent
