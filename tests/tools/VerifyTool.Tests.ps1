@@ -31,6 +31,19 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
 
       'param()' | Set-Content -LiteralPath (Join-Path $scriptsDir '01-Smoke.ps1') -Encoding UTF8
     }
+
+    function Add-VerifyFile {
+      [CmdletBinding()]
+      param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$RelativePath
+      )
+
+      $path = Join-Path $Root $RelativePath
+      $parent = Split-Path -Parent $path
+      New-Item -Path $parent -ItemType Directory -Force | Out-Null
+      'placeholder' | Set-Content -LiteralPath $path -Encoding UTF8
+    }
   }
 
   It 'Reports explicit analyzer skip as partial verification instead of full success' {
@@ -59,5 +72,48 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
     $text | Should -Match 'Analyzer.*FAILED'
     $text | Should -Match 'VERDICT: FAILED'
     $text | Should -Not -Match 'completed successfully'
+  }
+
+  It 'Allows the internal helper layer and normal public documentation' {
+    $root = Join-Path $TestDrive 'verify-public-surface-allowed'
+    Get-MinimalVerifyRoot -Path $root
+    Add-VerifyFile -Root $root -RelativePath 'scripts/internal/helper.ps1'
+    Add-VerifyFile -Root $root -RelativePath 'docs/README.md'
+    Add-VerifyFile -Root $root -RelativePath 'SECURITY.md'
+
+    $output = & pwsh -NoProfile -File $script:VerifyTool -RootPath $root -SkipAnalyzer 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = $output | Out-String
+
+    $exitCode | Should -Be 0
+    $text | Should -Match 'PublicSurface.*PASS'
+    $text | Should -Match 'VERDICT: PARTIAL'
+  }
+
+  It 'Fails on prohibited public-surface paths without reading their contents' {
+    $root = Join-Path $TestDrive 'verify-public-surface-forbidden'
+    Get-MinimalVerifyRoot -Path $root
+    Add-VerifyFile -Root $root -RelativePath 'scripts/private/helper.ps1'
+    Add-VerifyFile -Root $root -RelativePath 'docs/agent/remediation-ledger.md'
+    Add-VerifyFile -Root $root -RelativePath '.codex/state.json'
+    Add-VerifyFile -Root $root -RelativePath '.github/prompts/review.md'
+    Add-VerifyFile -Root $root -RelativePath 'REMEDIATION_PLAN.md'
+    Add-VerifyFile -Root $root -RelativePath 'archive/audit.md'
+    Add-VerifyFile -Root $root -RelativePath 'credentials/token.txt'
+    Add-VerifyFile -Root $root -RelativePath 'config/.env.local'
+    Add-VerifyFile -Root $root -RelativePath 'certificates/signing.pem'
+
+    $output = & pwsh -NoProfile -File $script:VerifyTool -RootPath $root -SkipAnalyzer 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = $output | Out-String
+
+    $exitCode | Should -Be 1
+    $text | Should -Match 'PublicSurface.*FAILED'
+    $text | Should -Match 'scripts[\\/]private[\\/]helper\.ps1'
+    $text | Should -Match 'docs[\\/]agent[\\/]remediation-ledger\.md'
+    $text | Should -Match '\.codex[\\/]state\.json'
+    $text | Should -Match '\.github[\\/]prompts[\\/]review\.md'
+    $text | Should -Match 'REMEDIATION_PLAN.md'
+    $text | Should -Match 'VERDICT: FAILED'
   }
 }

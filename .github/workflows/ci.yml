@@ -10,16 +10,12 @@ on:
       - 'feat/**'
       - 'update-*'
       - 'update/**'
-    paths-ignore:
-      - 'private/**'
   pull_request:
     branches:
       - main
       - dev
       - 'fix/**'
       - 'feat/**'
-    paths-ignore:
-      - 'private/**'
 
 permissions: {}
 

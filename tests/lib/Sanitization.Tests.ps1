@@ -9,8 +9,7 @@ Unit tests covering:
 - Read-ConfigWithDefaults (Config.psm1)
 - ConvertTo-Hashtable (Config.psm1)
 
-Converted from tests/Verify-Sanitization.ps1 to be automatically discovered by
-Invoke-Pester.
+These tests are automatically discovered by Invoke-Pester.
 #>
 
 [CmdletBinding()]

@@ -71,6 +71,92 @@ function Complete-Verification {
   exit $ExitCode
 }
 
+function Get-PublicSurfacePaths {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Path)
+
+  $isGitWorkTree = $false
+  $git = Get-Command -Name git -ErrorAction SilentlyContinue
+  if ($git) {
+    $gitResult = & $git.Source -C $Path rev-parse --is-inside-work-tree 2>$null
+    $isGitWorkTree = ($LASTEXITCODE -eq 0 -and $gitResult -contains 'true')
+  }
+
+  if ($isGitWorkTree) {
+    return @(
+      & $git.Source -C $Path ls-files |
+        Where-Object { Test-Path -LiteralPath (Join-Path $Path $_) -PathType Leaf }
+    )
+  }
+
+  return @(
+    Get-ChildItem -LiteralPath $Path -File -Recurse -Force |
+      Where-Object { $_.FullName -notmatch '[/\\]\.git[/\\]' } |
+      ForEach-Object {
+        $trimmedRoot = $Path.TrimEnd([char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar))
+        $_.FullName.Substring($trimmedRoot.Length).TrimStart([char[]]@([char]'/', [char]92))
+      }
+  )
+}
+
+function Test-PublicSurfacePath {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$RelativePath)
+
+  $path = $RelativePath.Replace([char]92, [char]47).ToLowerInvariant()
+  while ($path.StartsWith('./')) {
+    $path = $path.Substring(2)
+  }
+  $path = $path.TrimStart([char]47)
+  $segments = @($path.Split('/', [System.StringSplitOptions]::RemoveEmptyEntries))
+  if ($segments.Count -eq 0) { return $null }
+
+  $fileName = $segments[-1]
+  $blockedDirectorySegments = @(
+    'private', '.agents', '.codex', '.codacy', '.claude', '.continue', '.cursor',
+    '.aider', '.serena', '.codegraph', '.windsurf', 'credentials', 'secrets',
+    'keys', 'certs', 'certificates'
+  )
+  if ($segments | Where-Object { $blockedDirectorySegments -contains $_ }) {
+    return 'private, agent-state, or credential directory'
+  }
+
+  $agentInstructionFiles = @(
+    'agents.md', 'agent.md', 'claude.md', 'codex.md', 'gemini.md', 'audit.md',
+    'harness_principles.md', 'code_review.md'
+  )
+  if ($agentInstructionFiles -contains $fileName) {
+    return 'agent instruction or workspace-state file'
+  }
+
+  if (
+    $path -match '^\.github/(agents|codex|instructions|prompts)(/|$)' -or
+    $path -eq '.github/copilot-instructions.md' -or
+    $path -eq '.github/workflows/codex.yml'
+  ) {
+    return 'agent instruction or workspace-state file'
+  }
+
+  if ($fileName -match '^\.env($|\.)|^\.envrc$|^(id_rsa|id_ed25519)(\.pub)?$|\.(pem|key|pfx|p12|cer|crt|jks|kdbx|ppk)$') {
+    return 'environment, credential, key, or certificate file'
+  }
+
+  $documentationExtensions = @('.md', '.txt', '.json', '.jsonl', '.yaml', '.yml')
+  $isWorkspaceDocument = (
+    $documentationExtensions -contains [System.IO.Path]::GetExtension($fileName) -and
+    $fileName -match '(ledger|remediation)'
+  )
+  if (
+    $isWorkspaceDocument -or
+    $segments[0] -eq 'archive' -or
+    ($segments[0] -eq 'docs' -and $path -match '(^|/)(agent|internal|archive|source-audit|tmp|temp)(/|$)')
+  ) {
+    return 'local ledger, remediation, or workspace documentation'
+  }
+
+  return $null
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $RootPath 'scripts'))) {
   Write-ErrorLine -Message "scripts/ folder not found under $RootPath"
   exit 1
@@ -83,6 +169,24 @@ if (-not (Test-Path -LiteralPath $bootstrapPath)) {
   Write-ErrorLine -Message "scripts/_lib/Bootstrap.ps1 not found under $RootPath"
   exit 1
 }
+
+$publicSurfaceViolations = @()
+foreach ($relativePath in Get-PublicSurfacePaths -Path $RootPath) {
+  $reason = Test-PublicSurfacePath -RelativePath $relativePath
+  if ($reason) {
+    $publicSurfaceViolations += [pscustomobject]@{ Path = $relativePath; Reason = $reason }
+  }
+}
+if ($publicSurfaceViolations.Count -gt 0) {
+  Write-ErrorLine -Message ("Public surface violations: {0}" -f $publicSurfaceViolations.Count)
+  $publicSurfaceViolations | Sort-Object Path | ForEach-Object {
+    Write-UiLine ("- {0} ({1})" -f $_.Path, $_.Reason) -ForegroundColor Yellow
+  }
+  Add-GateResult -Name 'PublicSurface' -Status 'FAILED' -Detail ("{0} prohibited tracked path(s)" -f $publicSurfaceViolations.Count)
+  Complete-Verification -Verdict 'FAILED' -ExitCode 1
+}
+Write-Success -Message 'Public surface checks: OK'
+Add-GateResult -Name 'PublicSurface' -Status 'PASS' -Detail 'No prohibited tracked paths'
 
 $targets = @()
 $targets += Get-ChildItem -Path (Join-Path $RootPath 'scripts') -Filter '*.ps1' -File -Recurse

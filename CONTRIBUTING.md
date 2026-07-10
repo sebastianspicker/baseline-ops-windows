@@ -43,7 +43,7 @@ Root docs are intentionally minimal:
 - `SECURITY.md`
 - `CHANGELOG.md`
 
-Move implementation plans, experiments, audit ledgers, remediation scratch plans, deprecated docs, and machine-specific harness state to ignored local paths. Do not commit them unless the project scope is explicitly reopened.
+Keep implementation plans, experiments, audit ledgers, remediation scratch plans, deprecated docs, agent instructions, and machine-specific workspace state out of commits.
 
 ## Security Reporting
 

@@ -1,7 +1,7 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-  Pester tests for scripts/private/ helper files.
+  Pester tests for scripts/internal/ helper files.
 
 .DESCRIPTION
   Dot-sources each helper file and validates that all exported functions are
@@ -17,7 +17,7 @@ param()
 # ---------------------------------------------------------------------------
 Describe '04 OfficeBrowser helpers' {
   BeforeAll {
-    $helperPath = Join-Path $PSScriptRoot '../../scripts/private/04-OfficeBrowser-Hardening-Proof.helpers.ps1'
+    $helperPath = Join-Path $PSScriptRoot '../../scripts/internal/04-OfficeBrowser-Hardening-Proof.helpers.ps1'
     . $helperPath
   }
 
@@ -132,7 +132,7 @@ Describe '09 SupportBundle helpers' {
   BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot '../../lib/Output.psm1') -Force
-    $helperPath = Join-Path $PSScriptRoot '../../scripts/private/09-SupportBundle.helpers.ps1'
+    $helperPath = Join-Path $PSScriptRoot '../../scripts/internal/09-SupportBundle.helpers.ps1'
     . $helperPath
   }
 
@@ -183,7 +183,7 @@ Describe '09 SupportBundle helpers' {
 # ---------------------------------------------------------------------------
 Describe '12 SuspiciousArtifactGrabber helpers' {
   BeforeAll {
-    $helperPath = Join-Path $PSScriptRoot '../../scripts/private/12-Suspicious-Artifact-Grabber.helpers.ps1'
+    $helperPath = Join-Path $PSScriptRoot '../../scripts/internal/12-Suspicious-Artifact-Grabber.helpers.ps1'
     . $helperPath
   }
 
@@ -294,7 +294,7 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
   BeforeAll {
     $script:ArtifactGrabberScript = Join-Path $PSScriptRoot '../../scripts/12-Suspicious-Artifact-Grabber.ps1'
     Import-Module (Join-Path $PSScriptRoot '../../lib/EventLog.psm1') -Force
-    $helperPath = Join-Path $PSScriptRoot '../../scripts/private/12-Suspicious-Artifact-Grabber.helpers.ps1'
+    $helperPath = Join-Path $PSScriptRoot '../../scripts/internal/12-Suspicious-Artifact-Grabber.helpers.ps1'
     . $helperPath
 
     function Invoke-ArtifactGrabberParentCase {

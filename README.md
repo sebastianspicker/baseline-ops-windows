@@ -160,7 +160,7 @@ Public docs describe the current supported project surface. Keep durable guidanc
 - `lib/README.md`
 - `examples/README.md`
 
-Do not commit internal audit notes, remediation plans, ledgers, status logs, generated evidence, local archive packets, local Codacy Analysis CLI artifacts, vendored source snapshots, or machine-specific harness state.
+Do not commit internal audit notes, remediation plans, ledgers, status logs, agent instructions, generated evidence, local archive packets, local analysis artifacts, vendored source snapshots, or machine-specific workspace state.
 
 ## Related Docs
 

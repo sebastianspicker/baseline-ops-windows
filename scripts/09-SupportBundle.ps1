@@ -191,7 +191,7 @@ $FlagKey     = 'HKLM:\SOFTWARE\Company\Product\SupportBundle'
 $EventSource = 'SupportBundle'
 
 # -------------------- Console UI (no pipeline output) --------------------
-. (Join-Path $PSScriptRoot 'private/09-SupportBundle.helpers.ps1')
+. (Join-Path $PSScriptRoot 'internal/09-SupportBundle.helpers.ps1')
 
 # -------------------- Event log (best effort) --------------------
 function SB_IsWindowsPlatform {

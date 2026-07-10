@@ -208,7 +208,7 @@ $ScriptVersion = '2025.12.22-ps51'
 
 # Read-Json replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
 
-. (Join-Path $PSScriptRoot 'private/12-Suspicious-Artifact-Grabber.helpers.ps1')
+. (Join-Path $PSScriptRoot 'internal/12-Suspicious-Artifact-Grabber.helpers.ps1')
 
 function Reset-Trigger {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

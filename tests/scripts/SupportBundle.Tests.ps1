@@ -3,7 +3,7 @@
 Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' {
   BeforeAll {
     $script:SupportBundleScript = Join-Path $PSScriptRoot '../../scripts/09-SupportBundle.ps1'
-    . (Join-Path $PSScriptRoot '../../scripts/private/09-SupportBundle.helpers.ps1')
+    . (Join-Path $PSScriptRoot '../../scripts/internal/09-SupportBundle.helpers.ps1')
 
     function Invoke-SupportBundleCase {
       param(

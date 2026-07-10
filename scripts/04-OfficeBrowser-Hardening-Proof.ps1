@@ -235,7 +235,7 @@ $DefaultCatalogJson = @"
 
 # Ensure-Key replaced by Ensure-RegistryKey from lib/Registry.psm1
 
-. (Join-Path $PSScriptRoot 'private/04-OfficeBrowser-Hardening-Proof.helpers.ps1')
+. (Join-Path $PSScriptRoot 'internal/04-OfficeBrowser-Hardening-Proof.helpers.ps1')
 
 function Set-RegValueProof {
   [CmdletBinding(SupportsShouldProcess = $true)]

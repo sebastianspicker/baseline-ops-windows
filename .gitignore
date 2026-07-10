@@ -1,12 +1,16 @@
 # OS and editor
 .DS_Store
 Thumbs.db
-.vscode/
-.idea/
-.cursor/
-.codex/
-.codegraph/
-.serena/
+/.vscode/
+/.idea/
+/.cursor/
+/.agents/
+/.continue/
+/.codex/
+/.codegraph/
+/.serena/
+/.windsurf/
+/.aider*
 
 # PowerShell
 *.ps1~
@@ -53,52 +57,69 @@ temp/
 # Environment files and credentials
 .env
 .env.*
+/.envrc
+/.direnv/
 *.pem
 *.key
 *.pfx
 *.p12
 *.cer
+*.jks
+*.kdbx
+*.ppk
 id_rsa
 id_ed25519
 *.keystore
+/credentials/
+/secrets/
 
 # Local docs (findings/logs/decisions)
-DECISIONS.md
-FINDINGS.md
-LOG.md
-REFACTOR_PLAN.md
-validation.md
-HANDOFF.md
-progress.md
+/DECISIONS.md
+/FINDINGS.md
+/LOG.md
+/REFACTOR_PLAN.md
+/PHYSICS_AUDIT.md
+/validation.md
+/HANDOFF.md
+/progress.md
 
 # Development artifacts
-ralph-loop/
-plans/
-.claude/
-.codacy/
+/ralph-loop/
+/plans/
+/.claude/
+/.codacy/
 
-# Local-only audit and release-readiness workspace state
-private/
-.github/codex/
-.github/workflows/codex.yml
-HARNESS_PRINCIPLES.md
-code_review.md
-archive/
-docs/archive/
-docs/source-audit/
-docs/tmp/
-docs/temp/
-docs/*audit*.md
-docs/*remediation*.md
-docs/*plan*.md
-docs/*ledger*.md
-docs/*status*.md
-docs/*findings*.md
-docs/*index*.md
+# Local-only agent, audit, and release-readiness workspace state
+/AGENTS.md
+/AGENT.md
+/CLAUDE.md
+/CODEX.md
+/GEMINI.md
+/AUDIT.md
+/private/
+/.github/agents/
+/.github/codex/
+/.github/copilot-instructions.md
+/.github/instructions/
+/.github/prompts/
+/.github/workflows/codex.yml
+/HARNESS_PRINCIPLES.md
+/code_review.md
+/archive/
+/docs/agent/
+/docs/internal/
+/docs/archive/
+/docs/source-audit/
+/docs/tmp/
+/docs/temp/
+/docs/dry-run.md
+/docs/*ledger*.md
+/docs/*remediation-plan*.md
+/docs/*remediation-status*.md
 !docs/README.md
 !docs/assets/
 !docs/assets/**
-scripts/topology_inventory.sh
+/scripts/topology_inventory.sh
 
 # Vendored, copied, or external source trees
 vendor/
