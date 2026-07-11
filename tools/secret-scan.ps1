@@ -4,9 +4,9 @@
 Basic secret scan for common patterns.
 
 .DESCRIPTION
-Scans tracked files for common secret patterns without printing secret values.
-Outputs file path, line number, and pattern label. Fails with exit code 1 if any
-matches are found (default).
+Scans tracked and untracked non-ignored files for common secret patterns without
+printing secret values. Outputs file path, line number, and pattern label. Fails
+with exit code 1 if any matches are found (default).
 
 .PARAMETER RootPath
 Root path to scan (default: repo root).
@@ -79,7 +79,7 @@ $files = @()
 if (Get-Command -Name git -ErrorAction SilentlyContinue) {
   $gitRootCheck = & git -C $RootPath rev-parse --is-inside-work-tree 2>$null
   if ($LASTEXITCODE -eq 0 -and [string]$gitRootCheck -eq 'true') {
-    $files = & git -C $RootPath ls-files
+    $files = & git -C $RootPath ls-files --cached --others --exclude-standard
     $files = $files | ForEach-Object { Join-Path $RootPath $_ }
   }
 

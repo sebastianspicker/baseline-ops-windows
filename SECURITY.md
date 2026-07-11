@@ -39,6 +39,7 @@ Please include:
 - Impact assessment
 - Potential mitigations, if known
 
-We will acknowledge receipt within 7 days and work on a fix as appropriate.
+We aim to acknowledge reports as soon as maintainer availability permits and
+will communicate the next review or mitigation step when triage begins.
 
 [security-advisory]: https://github.com/sebastianspicker/win-mdm-security-hardening-kit/security/advisories/new

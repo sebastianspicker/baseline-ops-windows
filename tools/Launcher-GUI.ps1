@@ -1,14 +1,12 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
 .SYNOPSIS
-GUI launcher for MDM Security Hardening scripts and profiles.
+Alpha Windows Forms operator console for scripts and profiles.
 
 .DESCRIPTION
-Windows Forms launcher to:
-- run a single script via 00-Run-Local.ps1
-- run a profile via 00-Run-Profile.ps1
-- stream output live
-- save output logs
+Runs the existing local and profile runners through a versioned JSON manifest
+and a child PowerShell process. The runner and profile contracts remain the
+authority for paths, execution mode, integrity policy, and exit status.
 #>
 
 Set-StrictMode -Version Latest
@@ -21,437 +19,751 @@ if ($env:OS -ne 'Windows_NT') {
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Import-Module (Join-Path $PSScriptRoot 'Launcher.Core.psm1') -Force
 
-$script:DefaultRoot = 'C:\install\mdm\ps1'
-$guiDir = $PSScriptRoot
-$parent = Split-Path -Parent $guiDir
-if ((Split-Path -Leaf $guiDir) -eq 'tools' -and (Test-Path -LiteralPath (Join-Path $parent 'scripts') -PathType Container)) {
-  $script:DefaultRoot = $parent
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$script:DefaultRoot = if (Test-Path -LiteralPath (Join-Path $repoRoot 'scripts') -PathType Container) { $repoRoot } else { 'C:\install\mdm\ps1' }
+$script:IsElevated = $false
+try {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+  $script:IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch {
+  Write-Verbose ("Elevation detection failed: {0}" -f $_.Exception.Message)
 }
 
-$executionModulePath = Join-Path $parent 'lib\Execution.psm1'
-if (Test-Path -LiteralPath $executionModulePath -PathType Leaf) {
-  Import-Module $executionModulePath -Force
+$script:CurrentProcess = $null
+$script:CurrentOperation = $null
+$script:RunStarted = $null
+$script:StopRequested = $false
+$script:CloseAfterStop = $false
+$script:ManifestPath = $null
+$script:FullLogPath = $null
+$script:OutputCollector = $null
+$script:OutputQueue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
+$script:VisibleLines = New-Object System.Collections.ArrayList
+$script:ScriptCatalog = @()
+$script:DiscoveryTask = $null
+$script:DiscoveryRoot = $null
+$script:ProfileSummary = $null
+$script:State = 'Ready'
+$script:MaxPendingLines = 5000
+$script:MaxVisibleLines = 10000
+$script:MaxLogBytes = 25MB
+
+function Get-LabelControl {
+  param([string]$Text, [string]$AccessibleName)
+  $control = New-Object System.Windows.Forms.Label
+  $control.Text = $Text
+  $control.AutoSize = $true
+  if ($AccessibleName) { $control.AccessibleName = $AccessibleName }
+  return $control
 }
 
-function Parse-ArgumentString {
-  param([string]$ArgString)
-  if ([string]::IsNullOrWhiteSpace($ArgString)) { return @() }
+function Get-ButtonControl {
+  param([string]$Text, [string]$AccessibleName)
+  $control = New-Object System.Windows.Forms.Button
+  $control.Text = $Text
+  $control.AutoSize = $true
+  $control.MinimumSize = New-Object System.Drawing.Size(0, 32)
+  $control.Padding = New-Object System.Windows.Forms.Padding(8, 2, 8, 2)
+  if ($AccessibleName) { $control.AccessibleName = $AccessibleName }
+  return $control
+}
 
-  $tokens = [System.Collections.ArrayList]::new()
-  $current = [System.Text.StringBuilder]::new()
-  $inQuotes = $false
-  $chars = $ArgString.ToCharArray()
+function Add-TableControl {
+  param($Table, $Control, [int]$Column, [int]$Row, [int]$ColumnSpan = 1)
+  $Table.Controls.Add($Control, $Column, $Row)
+  if ($ColumnSpan -gt 1) { $Table.SetColumnSpan($Control, $ColumnSpan) }
+}
 
-  for ($i = 0; $i -lt $chars.Length; $i++) {
-    $c = $chars[$i]
-    if ($c -eq '"') {
-      if ($inQuotes) {
-        [void]$tokens.Add($current.ToString())
-        $current = [System.Text.StringBuilder]::new()
-        $inQuotes = $false
-      } else {
-        $inQuotes = $true
+function Write-LauncherState {
+  param([ValidateSet('Ready', 'Validating', 'Running', 'Stopping', 'Completed', 'Warning', 'Failed', 'Stopped')][string]$State, [string]$Detail)
+  $script:State = $State
+  $statusLabel.Text = if ([string]::IsNullOrWhiteSpace($Detail)) { $State } else { "$State — $Detail" }
+  $statusLabel.AccessibleName = "Launcher status: $($statusLabel.Text)"
+  $active = $State -in @('Validating', 'Running', 'Stopping')
+  foreach ($control in @($txtRoot, $btnBrowseRoot, $btnRefresh, $tabs, $txtFilter, $gridScripts, $txtArgs, $txtProfile, $btnBrowseProfile, $btnValidateProfile, $rbAudit, $rbRemediate, $chkStrict, $chkRequireSigned, $txtExpectedHash, $cmbHashAlgorithm)) {
+    $control.Enabled = -not $active
+  }
+  $txtExpectedHash.Enabled = (-not $active) -and ($tabs.SelectedTab -eq $tabScript)
+  if (-not $script:IsElevated) { $rbRemediate.Enabled = $false }
+  $btnRun.Enabled = -not $active
+  $btnStop.Enabled = $State -in @('Running', 'Stopping')
+  if ($State -eq 'Stopping') { $btnStop.Enabled = $false }
+}
+
+function Add-LauncherLine {
+  param([AllowEmptyString()][string]$Line)
+  if ($null -eq $Line) { return }
+  if ($null -ne $script:OutputCollector) { $script:OutputCollector.AddLine($Line) } else { Add-LauncherPendingLine -Queue $script:OutputQueue -Line $Line -Maximum $script:MaxPendingLines }
+}
+
+function Close-RunArtifact {
+  if ($null -ne $script:OutputCollector) {
+    try { $script:OutputCollector.Dispose() } catch { Write-Verbose ("Full log disposal failed: {0}" -f $_.Exception.Message) }
+    $script:OutputCollector = $null
+  }
+  if ($script:ManifestPath -and (Test-Path -LiteralPath $script:ManifestPath)) {
+    Remove-Item -LiteralPath $script:ManifestPath -Force -ErrorAction SilentlyContinue
+  }
+  $script:ManifestPath = $null
+}
+
+function Initialize-RunArtifact {
+  $previousLogPath = $script:FullLogPath
+  Close-RunArtifact
+  if ($previousLogPath -and (Test-Path -LiteralPath $previousLogPath)) {
+    Remove-Item -LiteralPath $previousLogPath -Force -ErrorAction SilentlyContinue
+  }
+  $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'win-mdm-launcher'
+  New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
+  $id = [guid]::NewGuid().ToString('N')
+  $script:ManifestPath = Join-Path $tempRoot "$id.json"
+  $script:FullLogPath = Join-Path $tempRoot "$id.log"
+  $script:OutputCollector = New-Object LauncherOutputCollector($script:FullLogPath, $script:MaxLogBytes, $script:MaxPendingLines)
+  $script:OutputQueue = $script:OutputCollector.Pending
+}
+
+function Get-EffectiveMode {
+  if ($rbRemediate.Checked) { return 'Remediate' }
+  return 'Audit'
+}
+
+function Get-SelectedTarget {
+  if ($tabs.SelectedTab -eq $tabScript) {
+    if ($gridScripts.SelectedRows.Count -eq 0) { return $null }
+    return [string]$gridScripts.SelectedRows[0].Cells['Name'].Value
+  }
+  return $txtProfile.Text.Trim()
+}
+
+function Write-RunHeader {
+  param([string]$Operation, [string]$Target, [string]$Mode, [string[]]$Arguments)
+  Add-LauncherLine ('=' * 72)
+  Add-LauncherLine ("Timestamp: {0}" -f (Get-Date).ToString('o'))
+  Add-LauncherLine ("Computer: {0}" -f $env:COMPUTERNAME)
+  Add-LauncherLine ("Elevated: {0}" -f $script:IsElevated)
+  Add-LauncherLine ("Operation: {0}" -f $Operation)
+  Add-LauncherLine ("Target: {0}" -f $Target)
+  Add-LauncherLine ("Mode: {0}" -f $Mode)
+  Add-LauncherLine ("Arguments: {0}" -f ($(if ($Arguments.Count -eq 0) { '(none)' } else { $Arguments -join ' ' })))
+  Add-LauncherLine ("Strict: {0}; Require valid signature: {1}; Expected hash supplied: {2}; Hash algorithm: {3}" -f $chkStrict.Checked, $chkRequireSigned.Checked, (-not [string]::IsNullOrWhiteSpace($txtExpectedHash.Text)), $cmbHashAlgorithm.SelectedItem)
+  Add-LauncherLine 'Exported logs may contain sensitive endpoint evidence.'
+  Add-LauncherLine ('=' * 72)
+}
+
+function Invoke-LauncherProcess {
+  param($Manifest, [ValidateSet('validation', 'run')][string]$Purpose)
+
+  $Manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:ManifestPath -Encoding UTF8
+  $workerPath = Join-Path $PSScriptRoot 'Launcher-Worker.ps1'
+  $executable = (Get-Process -Id $PID).Path
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $executable
+  $quotedWorker = '"' + $workerPath.Replace('"', '""') + '"'
+  $startInfo.Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $quotedWorker"
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.EnvironmentVariables['WIN_MDM_LAUNCHER_MANIFEST'] = $script:ManifestPath
+
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $startInfo
+  $process.EnableRaisingEvents = $true
+  $process.add_OutputDataReceived($script:OutputCollector.OutputHandler)
+  $process.add_ErrorDataReceived($script:OutputCollector.ErrorHandler)
+
+  if (-not $process.Start()) { throw 'PowerShell worker process did not start.' }
+  $script:CurrentProcess = $process
+  $script:CurrentOperation = $Purpose
+  $script:RunStarted = Get-Date
+  $script:StopRequested = $false
+  $process.BeginOutputReadLine()
+  $process.BeginErrorReadLine()
+  if ($Purpose -eq 'validation') { Write-LauncherState -State Validating -Detail 'Validating profile…' } else { Write-LauncherState -State Running -Detail 'Worker started' }
+}
+
+function Complete-LauncherProcess {
+  if ($null -eq $script:CurrentProcess) { return }
+  $process = $script:CurrentProcess
+  $purpose = $script:CurrentOperation
+  try {
+    $process.WaitForExit()
+    $exitCode = $process.ExitCode
+  } catch {
+    $exitCode = 1
+    Add-LauncherLine "ERROR: Could not read worker exit status: $($_.Exception.Message)"
+  }
+
+  $elapsed = if ($null -ne $script:RunStarted) { (Get-Date) - $script:RunStarted } else { [timespan]::Zero }
+  $elapsedText = $elapsed.ToString('hh\:mm\:ss')
+  if ($purpose -eq 'validation') {
+    if ($exitCode -in @(0, 2) -and -not $script:StopRequested) {
+      try {
+        $script:ProfileSummary = Get-LauncherProfileSummary -ProfilePath $txtProfile.Text.Trim()
+        Write-ProfileSummary
+        $validationText = if ($exitCode -eq 2) { 'Profile valid with warnings' } else { 'Profile valid' }
+        Write-LauncherState -State Ready -Detail $validationText
+      } catch {
+        $errorProvider.SetError($txtProfile, $_.Exception.Message)
+        Write-LauncherState -State Failed -Detail 'Profile summary could not be loaded'
       }
-      continue
+    } else {
+      $errorProvider.SetError($txtProfile, 'Profile validation failed. Review the output pane.')
+      Write-LauncherState -State Failed -Detail 'Profile validation failed'
     }
-
-    if (-not $inQuotes -and ($c -eq ' ' -or $c -eq "`t")) {
-      $s = $current.ToString().Trim()
-      if ($s) { [void]$tokens.Add($s) }
-      $current = [System.Text.StringBuilder]::new()
-      continue
-    }
-
-    [void]$current.Append($c)
-  }
-
-  $tail = $current.ToString().Trim()
-  if ($tail) { [void]$tokens.Add($tail) }
-  return @($tokens)
-}
-
-function Get-ScriptListItems {
-  param([string]$RootPath)
-
-  if ([string]::IsNullOrWhiteSpace($RootPath) -or $RootPath -match '\.\.') { return @() }
-  $scriptsDir = Join-Path $RootPath 'scripts'
-  if (-not (Test-Path -LiteralPath $scriptsDir -PathType Container)) { return @() }
-
-  $files = Get-ChildItem -LiteralPath $scriptsDir -Filter '*.ps1' -File |
-    Where-Object { $_.Name -match '^\d{2}-' }
-
-  $list = [System.Collections.ArrayList]::new()
-  foreach ($f in ($files | Sort-Object Name)) {
-    if ($f.BaseName -match '^(\d+)-') {
-      $num = $Matches[1]
-      [void]$list.Add([pscustomobject]@{
-          Number = $num
-          Name = $f.Name
-          Display = $f.Name
-        })
+  } else {
+    $terminal = Get-LauncherTerminalState -ExitCode $exitCode -Stopped:$script:StopRequested
+    switch ($terminal) {
+      'Completed' { Add-LauncherLine "[OK] Completed in $elapsedText"; Write-LauncherState -State Completed -Detail "Exit 0; $elapsedText" }
+      'Warning' { Add-LauncherLine "[WARN] Completed with warnings in $elapsedText"; Write-LauncherState -State Warning -Detail "Exit 2; review findings" }
+      'Stopped' { Add-LauncherLine '[STOPPED] Changes may be partial; rerun Audit to establish final state.'; Write-LauncherState -State Stopped -Detail 'Changes may be partial; rerun Audit' }
+      default { Add-LauncherLine "[FAIL] Worker exited $exitCode after $elapsedText"; Write-LauncherState -State Failed -Detail "Exit $exitCode; review output and retry" }
     }
   }
-  return @($list)
+
+  Close-RunArtifact
+  try { $process.Dispose() } catch { Write-Verbose ("Worker process disposal failed: {0}" -f $_.Exception.Message) }
+  $script:CurrentProcess = $null
+  $script:CurrentOperation = $null
+  if ($script:CloseAfterStop) { $form.Close() }
 }
 
+function Get-ScriptCatalogView {
+  $errorProvider.SetError($txtRoot, '')
+  $gridScripts.Rows.Clear()
+  $rootPath = $txtRoot.Text.Trim()
+  if (-not (Test-LauncherKitRoot -RootPath $rootPath)) {
+    $script:ScriptCatalog = @()
+    $lblEnvironment.Text = 'Kit invalid — expected scripts\00-Run-Local.ps1 and 00-Run-Profile.ps1.'
+    $errorProvider.SetError($txtRoot, 'Select a kit root containing the required runner scripts.')
+    return
+  }
+  if ($null -ne $script:DiscoveryTask -and -not $script:DiscoveryTask.IsCompleted) {
+    $lblEnvironment.Text = 'Script discovery is already in progress…'
+    return
+  }
+
+  $lblEnvironment.Text = 'Discovering numbered scripts…'
+  $lblScriptState.Text = 'Loading script catalog…'
+  $btnRefresh.Enabled = $false
+  $script:DiscoveryRoot = $rootPath
+  $script:DiscoveryTask = [LauncherCatalogDiscovery]::BeginDiscover($rootPath)
+}
+
+function Complete-ScriptCatalogDiscovery {
+  $task = $script:DiscoveryTask
+  $requestedRoot = $script:DiscoveryRoot
+  $script:DiscoveryTask = $null
+  $script:DiscoveryRoot = $null
+  if ($script:State -notin @('Validating', 'Running', 'Stopping')) { $btnRefresh.Enabled = $true }
+
+  if (-not [string]::Equals($requestedRoot, $txtRoot.Text.Trim(), [StringComparison]::OrdinalIgnoreCase)) {
+    Get-ScriptCatalogView
+    return
+  }
+  if ($task.IsFaulted) {
+    $message = $task.Exception.GetBaseException().Message
+    $script:ScriptCatalog = @()
+    $errorProvider.SetError($txtRoot, $message)
+    $lblEnvironment.Text = 'Script discovery failed.'
+    $lblScriptState.Text = 'The script catalog could not be loaded.'
+    return
+  }
+
+  $script:ScriptCatalog = @($task.Result)
+  Show-FilteredScript
+  $elevationText = if ($script:IsElevated) { 'Administrator' } else { 'Standard user — remediation unavailable' }
+  $lblEnvironment.Text = "$($script:ScriptCatalog.Count) scripts available · $elevationText · $env:COMPUTERNAME"
+}
+
+function Show-FilteredScript {
+  $selectedName = if ($gridScripts.SelectedRows.Count -gt 0) { [string]$gridScripts.SelectedRows[0].Cells['Name'].Value } else { '' }
+  $filter = $txtFilter.Text.Trim()
+  $gridScripts.Rows.Clear()
+  foreach ($item in $script:ScriptCatalog) {
+    $searchText = "$($item.Number) $($item.Name) $($item.Task) $($item.Synopsis)"
+    if ($filter -and $searchText.IndexOf($filter, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+    $index = $gridScripts.Rows.Add($item.Number, $item.Task, $item.SupportedModes, $item.Name, $item.Synopsis)
+    if ($item.Name -eq $selectedName) { $gridScripts.Rows[$index].Selected = $true }
+  }
+  $lblScriptState.Text = if ($script:ScriptCatalog.Count -eq 0) { 'No numbered operational scripts found.' } elseif ($gridScripts.Rows.Count -eq 0) { 'No scripts match the filter.' } else { "$($gridScripts.Rows.Count) matching script(s)." }
+}
+
+function Write-ScriptDetail {
+  if ($gridScripts.SelectedRows.Count -eq 0) { $lblScriptDetails.Text = 'Select a script to review its purpose and supported modes.'; return }
+  $row = $gridScripts.SelectedRows[0]
+  $lblScriptDetails.Text = "Task: $($row.Cells['Name'].Value)`r`n$($row.Cells['Synopsis'].Value)`r`nSupported modes: $($row.Cells['Modes'].Value)"
+}
+
+function Write-ProfileSummary {
+  $gridProfileSteps.Rows.Clear()
+  if ($null -eq $script:ProfileSummary) {
+    $lblProfileSummary.Text = 'Choose a profile, then validate it before running.'
+    return
+  }
+  $s = $script:ProfileSummary
+  $integrity = "Strict: $($s.Strict); Require signature: $($s.RequireSigned)"
+  $lblProfileSummary.Text = "$($s.ProfileName) · version $($s.Version) · default $($s.DefaultMode) · $($s.StepCount) step(s)`r`n$integrity"
+  foreach ($step in $s.Steps) { [void]$gridProfileSteps.Rows.Add($step.Script, $step.DependsOn) }
+}
+
+function Test-LauncherInput {
+  $errorProvider.Clear()
+  if (-not (Test-LauncherKitRoot -RootPath $txtRoot.Text.Trim())) {
+    $errorProvider.SetError($txtRoot, 'Select a valid kit root.')
+    $txtRoot.Focus()
+    return $false
+  }
+  if ($tabs.SelectedTab -eq $tabScript -and $gridScripts.SelectedRows.Count -eq 0) {
+    $errorProvider.SetError($gridScripts, 'Select a script.')
+    $gridScripts.Focus()
+    return $false
+  }
+  if ($tabs.SelectedTab -eq $tabScript -and $rbRemediate.Checked -and [string]$gridScripts.SelectedRows[0].Cells['Modes'].Value -notmatch 'Remediate') {
+    $errorProvider.SetError($gridScripts, 'The selected script does not advertise remediation support.')
+    $gridScripts.Focus()
+    return $false
+  }
+  if ($tabs.SelectedTab -eq $tabProfile) {
+    if (-not (Test-Path -LiteralPath $txtProfile.Text.Trim() -PathType Leaf)) {
+      $errorProvider.SetError($txtProfile, 'Select an existing profile JSON file.')
+      $txtProfile.Focus()
+      return $false
+    }
+    if ($null -eq $script:ProfileSummary) {
+      $errorProvider.SetError($txtProfile, 'Validate the selected profile before running.')
+      $btnValidateProfile.Focus()
+      return $false
+    }
+  }
+  if ($rbRemediate.Checked -and -not $script:IsElevated) {
+    $errorProvider.SetError($rbRemediate, 'Remediation requires an elevated launcher.')
+    $rbAudit.Checked = $true
+    return $false
+  }
+  try {
+    $tokens = @(ConvertFrom-LauncherArgumentString -Text $txtArgs.Text)
+    Assert-LauncherArgumentsAllowed -ArgumentTokens $tokens | Out-Null
+  } catch {
+    $errorProvider.SetError($txtArgs, $_.Exception.Message)
+    $txtArgs.Focus()
+    return $false
+  }
+  if (-not [string]::IsNullOrWhiteSpace($txtExpectedHash.Text) -and $tabs.SelectedTab -eq $tabProfile) {
+    $errorProvider.SetError($txtExpectedHash, 'Expected hash applies to single-script runs. Profile hashes remain profile-owned.')
+    $txtExpectedHash.Focus()
+    return $false
+  }
+  return $true
+}
+
+function Invoke-SelectedRun {
+  if (-not (Test-LauncherInput)) { return }
+  $mode = Get-EffectiveMode
+  $operation = if ($tabs.SelectedTab -eq $tabScript) { 'run-script' } else { 'run-profile' }
+  $target = Get-SelectedTarget
+  $arguments = if ($operation -eq 'run-script') { @(ConvertFrom-LauncherArgumentString -Text $txtArgs.Text) } else { @() }
+  $approved = $false
+
+  if ($mode -eq 'Remediate') {
+    $message = @"
+Review remediation
+
+Target: $target
+Computer: $env:COMPUTERNAME
+Mode: Remediate
+Arguments: $(if ($arguments.Count) { $arguments -join ' ' } else { '(none)' })
+Strict: $($chkStrict.Checked)
+Require valid signature: $($chkRequireSigned.Checked)
+
+Remediation may make irreversible endpoint changes. Completed changes are not rolled back if you stop the run. Run Audit first when possible.
+
+Run remediation now?
+"@
+    $choice = [System.Windows.Forms.MessageBox]::Show($form, $message, 'Review and run remediation', 'YesNo', 'Warning', 'Button2')
+    if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) { $btnRun.Focus(); return }
+    $approved = $true
+  }
+
+  try {
+    $manifest = ConvertTo-LauncherManifest -Operation $operation -Root $txtRoot.Text.Trim() -Target $target -Mode $mode -ArgumentTokens $arguments -Strict:$chkStrict.Checked -RequireSigned:$chkRequireSigned.Checked -ExpectedHash $txtExpectedHash.Text.Trim() -HashAlgorithm ([string]$cmbHashAlgorithm.SelectedItem) -RemediationApproved:$approved
+    Initialize-RunArtifact
+    Write-RunHeader -Operation $operation -Target $target -Mode $mode -Arguments $arguments
+    Invoke-LauncherProcess -Manifest $manifest -Purpose run
+  } catch {
+    Add-LauncherLine "ERROR: Could not start run: $($_.Exception.Message)"
+    Write-LauncherState -State Failed -Detail 'Could not start worker'
+    Close-RunArtifact
+  }
+}
+
+# Window and root layout
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'MDM Security Hardening - Launcher v2'
-$form.Size = New-Object System.Drawing.Size(900, 740)
+$form.Text = 'Win-MDM Security Hardening — Operator Console (Alpha)'
 $form.StartPosition = 'CenterScreen'
-$form.MinimumSize = New-Object System.Drawing.Size(780, 600)
+$form.Size = New-Object System.Drawing.Size(1080, 760)
+$form.MinimumSize = New-Object System.Drawing.Size(900, 600)
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Font
+$form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+$form.BackColor = [System.Drawing.SystemColors]::Control
+$form.AccessibleName = 'Win-MDM Security Hardening operator console'
 
-# --- Root path ---
-$lblRoot = New-Object System.Windows.Forms.Label
-$lblRoot.Text = 'Root path:'
-$lblRoot.Location = New-Object System.Drawing.Point(12, 12)
-$lblRoot.AutoSize = $true
-$form.Controls.Add($lblRoot)
+$errorProvider = New-Object System.Windows.Forms.ErrorProvider
+$errorProvider.ContainerControl = $form
+$errorProvider.BlinkStyle = [System.Windows.Forms.ErrorBlinkStyle]::NeverBlink
 
+$rootLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$rootLayout.Dock = 'Fill'
+$rootLayout.Padding = New-Object System.Windows.Forms.Padding(12)
+$rootLayout.ColumnCount = 1
+$rootLayout.RowCount = 3
+[void]$rootLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+[void]$rootLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent', 100)))
+[void]$rootLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+$form.Controls.Add($rootLayout)
+
+# Environment row
+$environmentGroup = New-Object System.Windows.Forms.GroupBox
+$environmentGroup.Text = 'Environment'
+$environmentGroup.AutoSize = $true
+$environmentGroup.Dock = 'Fill'
+$environmentLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$environmentLayout.Dock = 'Fill'
+$environmentLayout.AutoSize = $true
+$environmentLayout.ColumnCount = 4
+$environmentLayout.Padding = New-Object System.Windows.Forms.Padding(8)
+[void]$environmentLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('AutoSize')))
+[void]$environmentLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 100)))
+[void]$environmentLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('AutoSize')))
+[void]$environmentLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('AutoSize')))
+$environmentGroup.Controls.Add($environmentLayout)
+$lblRoot = Get-LabelControl -Text '&Kit location:' -AccessibleName 'Kit location label'
 $txtRoot = New-Object System.Windows.Forms.TextBox
 $txtRoot.Text = $script:DefaultRoot
-$txtRoot.Location = New-Object System.Drawing.Point(12, 30)
-$txtRoot.Size = New-Object System.Drawing.Size(700, 23)
-$txtRoot.Anchor = 'Top,Left,Right'
-$form.Controls.Add($txtRoot)
+$txtRoot.Dock = 'Fill'
+$txtRoot.AccessibleName = 'Kit location'
+$txtRoot.AccessibleDescription = 'Folder containing the scripts directory and launcher runners.'
+$lblRoot.Add_Click({ $txtRoot.Focus() })
+$btnBrowseRoot = Get-ButtonControl -Text '&Browse kit…' -AccessibleName 'Browse for kit location'
+$btnRefresh = Get-ButtonControl -Text '&Refresh' -AccessibleName 'Refresh kit and script catalog'
+$lblEnvironment = Get-LabelControl -Text 'Not validated.' -AccessibleName 'Environment validation status'
+$lblEnvironment.Dock = 'Fill'
+Add-TableControl $environmentLayout $lblRoot 0 0
+Add-TableControl $environmentLayout $txtRoot 1 0
+Add-TableControl $environmentLayout $btnBrowseRoot 2 0
+Add-TableControl $environmentLayout $btnRefresh 3 0
+Add-TableControl $environmentLayout $lblEnvironment 1 1 3
+$rootLayout.Controls.Add($environmentGroup, 0, 0)
 
-$btnBrowseRoot = New-Object System.Windows.Forms.Button
-$btnBrowseRoot.Text = 'Browse...'
-$btnBrowseRoot.Location = New-Object System.Drawing.Point(720, 28)
-$btnBrowseRoot.Size = New-Object System.Drawing.Size(80, 26)
-$btnBrowseRoot.Anchor = 'Top,Right'
-$form.Controls.Add($btnBrowseRoot)
+# Main split: task configuration above, output below
+$split = New-Object System.Windows.Forms.SplitContainer
+$split.Dock = 'Fill'
+$split.Orientation = 'Horizontal'
+$split.SplitterDistance = 360
+$split.Panel1MinSize = 220
+$split.Panel2MinSize = 150
+$rootLayout.Controls.Add($split, 0, 1)
 
-# --- Script selection ---
-$lblScripts = New-Object System.Windows.Forms.Label
-$lblScripts.Text = 'Select script:'
-$lblScripts.Location = New-Object System.Drawing.Point(12, 62)
-$lblScripts.AutoSize = $true
-$form.Controls.Add($lblScripts)
+$configurationLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$configurationLayout.Dock = 'Fill'
+$configurationLayout.RowCount = 2
+$configurationLayout.ColumnCount = 1
+[void]$configurationLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent', 100)))
+[void]$configurationLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+$split.Panel1.Controls.Add($configurationLayout)
 
-$listScripts = New-Object System.Windows.Forms.ListBox
-$listScripts.Location = New-Object System.Drawing.Point(12, 80)
-$listScripts.Size = New-Object System.Drawing.Size(788, 170)
-$listScripts.Anchor = 'Top,Left,Right'
-$listScripts.DisplayMember = 'Display'
-$form.Controls.Add($listScripts)
+$tabs = New-Object System.Windows.Forms.TabControl
+$tabs.Dock = 'Fill'
+$tabs.AccessibleName = 'Task type'
+$tabScript = New-Object System.Windows.Forms.TabPage
+$tabScript.Text = 'Run script'
+$tabProfile = New-Object System.Windows.Forms.TabPage
+$tabProfile.Text = 'Run profile'
+[void]$tabs.TabPages.Add($tabScript)
+[void]$tabs.TabPages.Add($tabProfile)
+$configurationLayout.Controls.Add($tabs, 0, 0)
 
-# --- Execution controls GroupBox ---
-$grpExecution = New-Object System.Windows.Forms.GroupBox
-$grpExecution.Text = 'Execution'
-$grpExecution.Location = New-Object System.Drawing.Point(8, 254)
-$grpExecution.Size = New-Object System.Drawing.Size(868, 100)
-$grpExecution.Anchor = 'Top,Left,Right'
-$form.Controls.Add($grpExecution)
-
-$lblMode = New-Object System.Windows.Forms.Label
-$lblMode.Text = 'MODE:'
-$lblMode.Location = New-Object System.Drawing.Point(8, 20)
-$lblMode.AutoSize = $true
-$lblMode.Font = New-Object System.Drawing.Font($form.Font.FontFamily, $form.Font.Size, [System.Drawing.FontStyle]::Bold)
-$grpExecution.Controls.Add($lblMode)
-
-$cmbMode = New-Object System.Windows.Forms.ComboBox
-$cmbMode.Location = New-Object System.Drawing.Point(8, 38)
-$cmbMode.Size = New-Object System.Drawing.Size(160, 23)
-$cmbMode.DropDownStyle = 'DropDownList'
-[void]$cmbMode.Items.Add('Audit')
-[void]$cmbMode.Items.Add('Remediate')
-$cmbMode.SelectedIndex = 0
-$grpExecution.Controls.Add($cmbMode)
-
-$lblModeHint = New-Object System.Windows.Forms.Label
-$lblModeHint.Text = 'Audit = read-only   |   Remediate = applies changes (use with care)'
-$lblModeHint.Location = New-Object System.Drawing.Point(8, 66)
-$lblModeHint.AutoSize = $true
-$lblModeHint.ForeColor = [System.Drawing.Color]::Gray
-$grpExecution.Controls.Add($lblModeHint)
-
-$lblArgs = New-Object System.Windows.Forms.Label
-$lblArgs.Text = 'Extra arguments:'
-$lblArgs.Location = New-Object System.Drawing.Point(190, 20)
-$lblArgs.AutoSize = $true
-$grpExecution.Controls.Add($lblArgs)
-
+# Script tab
+$scriptLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$scriptLayout.Dock = 'Fill'
+$scriptLayout.Padding = New-Object System.Windows.Forms.Padding(8)
+$scriptLayout.ColumnCount = 2
+$scriptLayout.RowCount = 5
+[void]$scriptLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('AutoSize')))
+[void]$scriptLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 100)))
+[void]$scriptLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+[void]$scriptLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent', 100)))
+[void]$scriptLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+[void]$scriptLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+[void]$scriptLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+$tabScript.Controls.Add($scriptLayout)
+$lblFilter = Get-LabelControl -Text '&Filter:' -AccessibleName 'Script filter label'
+$txtFilter = New-Object System.Windows.Forms.TextBox
+$txtFilter.Dock = 'Fill'
+$txtFilter.AccessibleName = 'Script filter'
+$txtFilter.AccessibleDescription = 'Filter by script number, name, task, or synopsis.'
+Add-TableControl $scriptLayout $lblFilter 0 0
+Add-TableControl $scriptLayout $txtFilter 1 0
+$gridScripts = New-Object System.Windows.Forms.DataGridView
+$gridScripts.Dock = 'Fill'
+$gridScripts.ReadOnly = $true
+$gridScripts.AllowUserToAddRows = $false
+$gridScripts.AllowUserToDeleteRows = $false
+$gridScripts.AllowUserToResizeRows = $false
+$gridScripts.AutoGenerateColumns = $false
+$gridScripts.AutoSizeColumnsMode = 'Fill'
+$gridScripts.SelectionMode = 'FullRowSelect'
+$gridScripts.MultiSelect = $false
+$gridScripts.RowHeadersVisible = $false
+$gridScripts.AccessibleName = 'Operational scripts'
+[void]$gridScripts.Columns.Add('Number', 'No.')
+[void]$gridScripts.Columns.Add('Task', 'Task')
+[void]$gridScripts.Columns.Add('Modes', 'Supported modes')
+$nameColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$nameColumn.Name = 'Name'; $nameColumn.HeaderText = 'File'; $nameColumn.Visible = $false
+[void]$gridScripts.Columns.Add($nameColumn)
+$synopsisColumn = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$synopsisColumn.Name = 'Synopsis'; $synopsisColumn.HeaderText = 'Synopsis'; $synopsisColumn.Visible = $false
+[void]$gridScripts.Columns.Add($synopsisColumn)
+Add-TableControl $scriptLayout $gridScripts 0 1 2
+$lblScriptState = Get-LabelControl -Text 'Refresh the kit to discover scripts.' -AccessibleName 'Script list status'
+Add-TableControl $scriptLayout $lblScriptState 0 2 2
+$lblScriptDetails = Get-LabelControl -Text 'Select a script to review its purpose and supported modes.' -AccessibleName 'Selected script details'
+$lblScriptDetails.MaximumSize = New-Object System.Drawing.Size(900, 0)
+Add-TableControl $scriptLayout $lblScriptDetails 0 3 2
+$lblArgs = Get-LabelControl -Text '&Advanced arguments:' -AccessibleName 'Advanced arguments label'
 $txtArgs = New-Object System.Windows.Forms.TextBox
-$txtArgs.Location = New-Object System.Drawing.Point(190, 38)
-$txtArgs.Size = New-Object System.Drawing.Size(446, 23)
-$txtArgs.Anchor = 'Top,Left,Right'
-$grpExecution.Controls.Add($txtArgs)
+$txtArgs.Dock = 'Fill'
+$txtArgs.AccessibleName = 'Advanced script arguments'
+$txtArgs.AccessibleDescription = 'Script-specific tokens only. Launcher-owned mode, paths, output, confirmation, and integrity arguments are rejected.'
+Add-TableControl $scriptLayout $lblArgs 0 4
+Add-TableControl $scriptLayout $txtArgs 1 4
 
-$lblProfile = New-Object System.Windows.Forms.Label
-$lblProfile.Text = 'Profile JSON:'
-$lblProfile.Location = New-Object System.Drawing.Point(650, 20)
-$lblProfile.AutoSize = $true
-$lblProfile.Anchor = 'Top,Right'
-$grpExecution.Controls.Add($lblProfile)
-
+# Profile tab
+$profileLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$profileLayout.Dock = 'Fill'
+$profileLayout.Padding = New-Object System.Windows.Forms.Padding(8)
+$profileLayout.ColumnCount = 3
+$profileLayout.RowCount = 4
+[void]$profileLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('AutoSize')))
+[void]$profileLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 100)))
+[void]$profileLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('AutoSize')))
+[void]$profileLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+[void]$profileLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+[void]$profileLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent', 100)))
+[void]$profileLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+$tabProfile.Controls.Add($profileLayout)
+$lblProfile = Get-LabelControl -Text '&Profile JSON:' -AccessibleName 'Profile path label'
 $txtProfile = New-Object System.Windows.Forms.TextBox
-$txtProfile.Location = New-Object System.Drawing.Point(650, 38)
-$txtProfile.Size = New-Object System.Drawing.Size(126, 23)
-$txtProfile.Anchor = 'Top,Right'
-$grpExecution.Controls.Add($txtProfile)
+$txtProfile.Dock = 'Fill'
+$txtProfile.AccessibleName = 'Profile JSON path'
+$btnBrowseProfile = Get-ButtonControl -Text 'Browse &profile…' -AccessibleName 'Browse for profile JSON'
+$btnValidateProfile = Get-ButtonControl -Text '&Validate profile' -AccessibleName 'Validate selected profile'
+Add-TableControl $profileLayout $lblProfile 0 0
+Add-TableControl $profileLayout $txtProfile 1 0
+Add-TableControl $profileLayout $btnBrowseProfile 2 0
+$lblProfileSummary = Get-LabelControl -Text 'Choose a profile, then validate it before running.' -AccessibleName 'Profile validation summary'
+Add-TableControl $profileLayout $lblProfileSummary 0 1 3
+$gridProfileSteps = New-Object System.Windows.Forms.DataGridView
+$gridProfileSteps.Dock = 'Fill'
+$gridProfileSteps.ReadOnly = $true
+$gridProfileSteps.AllowUserToAddRows = $false
+$gridProfileSteps.AllowUserToDeleteRows = $false
+$gridProfileSteps.RowHeadersVisible = $false
+$gridProfileSteps.AutoSizeColumnsMode = 'Fill'
+$gridProfileSteps.SelectionMode = 'FullRowSelect'
+$gridProfileSteps.AccessibleName = 'Profile steps and dependencies'
+[void]$gridProfileSteps.Columns.Add('Script', 'Step script')
+[void]$gridProfileSteps.Columns.Add('DependsOn', 'Depends on')
+Add-TableControl $profileLayout $gridProfileSteps 0 2 3
+Add-TableControl $profileLayout $btnValidateProfile 2 3
 
-$btnBrowseProfile = New-Object System.Windows.Forms.Button
-$btnBrowseProfile.Text = '...'
-$btnBrowseProfile.Location = New-Object System.Drawing.Point(780, 36)
-$btnBrowseProfile.Size = New-Object System.Drawing.Size(32, 26)
-$btnBrowseProfile.Anchor = 'Top,Right'
-$grpExecution.Controls.Add($btnBrowseProfile)
+# Execution policy and actions
+$executionGroup = New-Object System.Windows.Forms.GroupBox
+$executionGroup.Text = 'Execution policy'
+$executionGroup.AutoSize = $true
+$executionGroup.Dock = 'Fill'
+$executionLayout = New-Object System.Windows.Forms.FlowLayoutPanel
+$executionLayout.Dock = 'Fill'
+$executionLayout.AutoSize = $true
+$executionLayout.WrapContents = $true
+$executionLayout.Padding = New-Object System.Windows.Forms.Padding(8)
+$executionGroup.Controls.Add($executionLayout)
+$rbAudit = New-Object System.Windows.Forms.RadioButton
+$rbAudit.Text = '&Audit'; $rbAudit.Checked = $true; $rbAudit.AutoSize = $true; $rbAudit.AccessibleDescription = 'Read-only execution mode.'
+$rbRemediate = New-Object System.Windows.Forms.RadioButton
+$rbRemediate.Text = '&Remediate'; $rbRemediate.AutoSize = $true; $rbRemediate.Enabled = $script:IsElevated; $rbRemediate.AccessibleDescription = 'Applies endpoint changes after explicit review.'
+$chkStrict = New-Object System.Windows.Forms.CheckBox
+$chkStrict.Text = '&Strict'; $chkStrict.AutoSize = $true
+$chkRequireSigned = New-Object System.Windows.Forms.CheckBox
+$chkRequireSigned.Text = 'Require valid &signature'; $chkRequireSigned.AutoSize = $true
+$lblHash = Get-LabelControl -Text 'Expected &hash:' -AccessibleName 'Expected hash label'
+$txtExpectedHash = New-Object System.Windows.Forms.TextBox
+$txtExpectedHash.Width = 190; $txtExpectedHash.AccessibleName = 'Expected script hash'
+$cmbHashAlgorithm = New-Object System.Windows.Forms.ComboBox
+$cmbHashAlgorithm.DropDownStyle = 'DropDownList'; $cmbHashAlgorithm.Width = 80; $cmbHashAlgorithm.AccessibleName = 'Hash algorithm'
+[void]$cmbHashAlgorithm.Items.AddRange(@('SHA256', 'SHA384', 'SHA512')); $cmbHashAlgorithm.SelectedIndex = 0
+$btnRun = Get-ButtonControl -Text '&Run audit' -AccessibleName 'Run audit'
+$btnStop = Get-ButtonControl -Text 'S&top run' -AccessibleName 'Stop active run'; $btnStop.Enabled = $false
+foreach ($control in @($rbAudit, $rbRemediate, $chkStrict, $chkRequireSigned, $lblHash, $txtExpectedHash, $cmbHashAlgorithm, $btnRun, $btnStop)) { [void]$executionLayout.Controls.Add($control) }
+$configurationLayout.Controls.Add($executionGroup, 0, 1)
 
-# --- Action buttons row ---
-$btnRunScript = New-Object System.Windows.Forms.Button
-$btnRunScript.Text = 'Run Script'
-$btnRunScript.Location = New-Object System.Drawing.Point(12, 362)
-$btnRunScript.Size = New-Object System.Drawing.Size(110, 32)
-$btnRunScript.Font = New-Object System.Drawing.Font($form.Font.FontFamily, $form.Font.Size, [System.Drawing.FontStyle]::Bold)
-$btnRunScript.BackColor = [System.Drawing.Color]::FromArgb(230, 245, 230)
-$form.Controls.Add($btnRunScript)
-
-$btnRunProfile = New-Object System.Windows.Forms.Button
-$btnRunProfile.Text = 'Run Profile'
-$btnRunProfile.Location = New-Object System.Drawing.Point(128, 362)
-$btnRunProfile.Size = New-Object System.Drawing.Size(110, 32)
-$form.Controls.Add($btnRunProfile)
-
-$btnClear = New-Object System.Windows.Forms.Button
-$btnClear.Text = 'Clear'
-$btnClear.Location = New-Object System.Drawing.Point(244, 362)
-$btnClear.Size = New-Object System.Drawing.Size(80, 32)
-$form.Controls.Add($btnClear)
-
-$btnSave = New-Object System.Windows.Forms.Button
-$btnSave.Text = 'Save Output'
-$btnSave.Location = New-Object System.Drawing.Point(330, 362)
-$btnSave.Size = New-Object System.Drawing.Size(110, 32)
-$form.Controls.Add($btnSave)
-
-# --- Output area ---
-$lblOutput = New-Object System.Windows.Forms.Label
-$lblOutput.Text = 'Output:'
-$lblOutput.Location = New-Object System.Drawing.Point(12, 402)
-$lblOutput.AutoSize = $true
-$form.Controls.Add($lblOutput)
-
+# Results pane
+$resultsLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$resultsLayout.Dock = 'Fill'
+$resultsLayout.ColumnCount = 1
+$resultsLayout.RowCount = 2
+[void]$resultsLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('AutoSize')))
+[void]$resultsLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent', 100)))
+$split.Panel2.Controls.Add($resultsLayout)
+$resultsActions = New-Object System.Windows.Forms.FlowLayoutPanel
+$resultsActions.Dock = 'Fill'; $resultsActions.AutoSize = $true
+$lblOutput = Get-LabelControl -Text '&Results' -AccessibleName 'Results pane label'
+$btnClear = Get-ButtonControl -Text '&Clear view' -AccessibleName 'Clear visible output'
+$btnSave = Get-ButtonControl -Text '&Save captured output' -AccessibleName 'Save captured temporary output log'
+foreach ($control in @($lblOutput, $btnClear, $btnSave)) { [void]$resultsActions.Controls.Add($control) }
 $txtOutput = New-Object System.Windows.Forms.TextBox
-$txtOutput.Multiline = $true
-$txtOutput.ReadOnly = $true
-$txtOutput.ScrollBars = 'Both'
-$txtOutput.WordWrap = $false
-$txtOutput.Location = New-Object System.Drawing.Point(12, 420)
-$txtOutput.Size = New-Object System.Drawing.Size(860, 250)
-$txtOutput.Anchor = 'Top,Bottom,Left,Right'
+$txtOutput.Dock = 'Fill'; $txtOutput.Multiline = $true; $txtOutput.ReadOnly = $true
+$txtOutput.ScrollBars = 'Both'; $txtOutput.WordWrap = $false
 $txtOutput.Font = New-Object System.Drawing.Font('Consolas', 9)
-$txtOutput.BackColor = [System.Drawing.Color]::FromArgb(20, 20, 30)
-$txtOutput.ForeColor = [System.Drawing.Color]::FromArgb(220, 220, 220)
-$form.Controls.Add($txtOutput)
+$txtOutput.BackColor = [System.Drawing.SystemColors]::Window
+$txtOutput.ForeColor = [System.Drawing.SystemColors]::WindowText
+$txtOutput.AccessibleName = 'Execution results'
+$txtOutput.AccessibleDescription = 'Live bounded view of launcher and runner output.'
+$resultsLayout.Controls.Add($resultsActions, 0, 0)
+$resultsLayout.Controls.Add($txtOutput, 0, 1)
 
-# --- Status bar ---
-$statusBar = New-Object System.Windows.Forms.StatusStrip
+$statusStrip = New-Object System.Windows.Forms.StatusStrip
 $statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
-$statusLabel.Text = 'Ready'
-$statusLabel.Spring = $true
-$statusLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-[void]$statusBar.Items.Add($statusLabel)
-$form.Controls.Add($statusBar)
+$statusLabel.Text = 'Ready'; $statusLabel.Spring = $true; $statusLabel.TextAlign = 'MiddleLeft'
+[void]$statusStrip.Items.Add($statusLabel)
+$rootLayout.Controls.Add($statusStrip, 0, 2)
+$form.AcceptButton = $btnRun
 
-# Mode change highlights Remediate in red as a safety cue
-$cmbMode.Add_SelectedIndexChanged({
-  if ($cmbMode.SelectedItem -eq 'Remediate') {
-    $cmbMode.BackColor = [System.Drawing.Color]::FromArgb(255, 230, 230)
-  } else {
-    $cmbMode.BackColor = [System.Drawing.SystemColors]::Window
-  }
-})
-
-function Refresh-ScriptList {
-  $root = $txtRoot.Text.Trim()
-  $listScripts.Items.Clear()
-  foreach ($item in (Get-ScriptListItems -RootPath $root)) {
-    [void]$listScripts.Items.Add($item)
-  }
-}
-
-function Invoke-BackgroundRun {
-  param(
-    [scriptblock]$ScriptBlock,
-    [object[]]$ScriptArguments
-  )
-
-  $btnRunScript.Enabled = $false
-  $btnRunProfile.Enabled = $false
-
-  $runspace = [runspacefactory]::CreateRunspace()
-  $runspace.Open()
-  $pwsh = [powershell]::Create().AddScript($ScriptBlock)
-  foreach ($arg in $ScriptArguments) { [void]$pwsh.AddArgument($arg) }
-  $pwsh.Runspace = $runspace
-  $asyncResult = $pwsh.BeginInvoke()
-  $cleanupState = [pscustomobject]@{
-    PowerShell = $pwsh
-    Runspace = $runspace
-    AsyncResult = $asyncResult
-  }
-  [void][System.Threading.ThreadPool]::QueueUserWorkItem([System.Threading.WaitCallback]{
-      param($state)
-      try {
-        [void]$state.PowerShell.EndInvoke($state.AsyncResult)
-      } catch {
-        Write-Verbose ("Background run failed: {0}" -f $_.Exception.Message)
-      } finally {
-        try { $state.PowerShell.Dispose() } catch {
-          Write-Verbose ("PowerShell instance disposal failed: {0}" -f $_.Exception.Message)
-        }
-        try { $state.Runspace.Dispose() } catch {
-          Write-Verbose ("Runspace disposal failed: {0}" -f $_.Exception.Message)
-        }
+# Timers and events
+$outputTimer = New-Object System.Windows.Forms.Timer
+$outputTimer.Interval = 100
+$outputTimer.Add_Tick({
+    $batch = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt 250; $i++) {
+      $line = $null
+      $hasLine = if ($null -ne $script:OutputCollector) {
+        $script:OutputCollector.TryDequeue([ref]$line)
+      } else {
+        $script:OutputQueue.TryDequeue([ref]$line)
       }
-    }, $cleanupState)
-}
+      if (-not $hasLine) { break }
+      [void]$batch.Add($line)
+      [void]$script:VisibleLines.Add($line)
+    }
+    if ($batch.Count -gt 0) {
+      while ($script:VisibleLines.Count -gt $script:MaxVisibleLines) { $script:VisibleLines.RemoveAt(0) }
+      $txtOutput.Lines = @($script:VisibleLines)
+      $txtOutput.SelectionStart = $txtOutput.TextLength
+      $txtOutput.ScrollToCaret()
+    }
+    if ($script:State -in @('Running', 'Stopping', 'Validating') -and $null -ne $script:RunStarted) {
+      $statusLabel.Text = "$($script:State) — $(((Get-Date) - $script:RunStarted).ToString('hh\:mm\:ss')) elapsed"
+    }
+    if ($null -ne $script:CurrentProcess -and $script:CurrentProcess.HasExited) {
+      Complete-LauncherProcess
+    }
+    if ($null -ne $script:DiscoveryTask -and $script:DiscoveryTask.IsCompleted) {
+      Complete-ScriptCatalogDiscovery
+    }
+  })
+$outputTimer.Start()
 
 $btnBrowseRoot.Add_Click({
-  $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-  $dlg.Description = 'Select kit root (contains scripts\\)'
-  $dlg.SelectedPath = $txtRoot.Text.Trim()
-  if ($dlg.ShowDialog() -eq 'OK') {
-    $txtRoot.Text = $dlg.SelectedPath
-    Refresh-ScriptList
-  }
-})
-
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = 'Select the kit folder containing scripts'
+    $dialog.SelectedPath = $txtRoot.Text.Trim()
+    if ($dialog.ShowDialog($form) -eq 'OK') { $txtRoot.Text = $dialog.SelectedPath; Get-ScriptCatalogView }
+    $dialog.Dispose()
+  })
+$btnRefresh.Add_Click({ Get-ScriptCatalogView })
+$txtRoot.Add_Validated({ Get-ScriptCatalogView })
+$txtFilter.Add_TextChanged({ Show-FilteredScript })
+$gridScripts.Add_SelectionChanged({ Write-ScriptDetail })
 $btnBrowseProfile.Add_Click({
-  $dlg = New-Object System.Windows.Forms.OpenFileDialog
-  $dlg.Filter = 'JSON files (*.json)|*.json|All files (*.*)|*.*'
-  if ($dlg.ShowDialog() -eq 'OK') {
-    $txtProfile.Text = $dlg.FileName
-  }
-})
-
-$btnClear.Add_Click({ $txtOutput.Clear() })
-
+    $dialog = New-Object System.Windows.Forms.OpenFileDialog
+    $dialog.Filter = 'JSON profiles (*.json)|*.json|All files (*.*)|*.*'
+    $dialog.Title = 'Select execution profile'
+    if ($dialog.ShowDialog($form) -eq 'OK') { $txtProfile.Text = $dialog.FileName; $script:ProfileSummary = $null; Write-ProfileSummary }
+    $dialog.Dispose()
+  })
+$txtProfile.Add_TextChanged({ $script:ProfileSummary = $null; Write-ProfileSummary; $errorProvider.SetError($txtProfile, '') })
+$btnValidateProfile.Add_Click({
+    $errorProvider.SetError($txtProfile, '')
+    if (-not (Test-LauncherKitRoot -RootPath $txtRoot.Text.Trim())) { $errorProvider.SetError($txtRoot, 'Select a valid kit root before validating a profile.'); $txtRoot.Focus(); return }
+    if (-not (Test-Path -LiteralPath $txtProfile.Text.Trim() -PathType Leaf)) { $errorProvider.SetError($txtProfile, 'Select an existing profile JSON file.'); $txtProfile.Focus(); return }
+    try {
+      $manifest = ConvertTo-LauncherManifest -Operation validate-profile -Root $txtRoot.Text.Trim() -Target $txtProfile.Text.Trim()
+      Initialize-RunArtifact
+      Add-LauncherLine "[VALIDATE] $($txtProfile.Text.Trim())"
+      Invoke-LauncherProcess -Manifest $manifest -Purpose validation
+    } catch { $errorProvider.SetError($txtProfile, $_.Exception.Message); Write-LauncherState Failed 'Could not start validation' }
+  })
+$tabs.Add_SelectedIndexChanged({
+    $btnRun.Text = if ($rbRemediate.Checked) { 'Review and run remediation…' } else { '&Run audit' }
+    $txtExpectedHash.Enabled = ($tabs.SelectedTab -eq $tabScript) -and ($script:State -notin @('Running', 'Stopping', 'Validating'))
+  })
+$rbAudit.Add_CheckedChanged({ if ($rbAudit.Checked) { $btnRun.Text = '&Run audit'; $btnRun.AccessibleName = 'Run audit' } })
+$rbRemediate.Add_CheckedChanged({ if ($rbRemediate.Checked) { $btnRun.Text = 'Review and run remediation…'; $btnRun.AccessibleName = 'Review and run remediation' } })
+$btnRun.Add_Click({ Invoke-SelectedRun })
+$btnStop.Add_Click({
+    if ($null -eq $script:CurrentProcess) { return }
+    $message = if ((Get-EffectiveMode) -eq 'Remediate') { 'Stop this remediation run? Completed changes are not rolled back. Rerun Audit afterward to establish final state.' } else { 'Stop this audit run?' }
+    if ([System.Windows.Forms.MessageBox]::Show($form, $message, 'Stop active run', 'YesNo', 'Warning', 'Button2') -ne 'Yes') { return }
+    $script:StopRequested = $true
+    Write-LauncherState -State Stopping -Detail 'Waiting for worker termination…'
+    try { $script:CurrentProcess.Kill() } catch { Add-LauncherLine "ERROR: Stop request failed: $($_.Exception.Message)" }
+  })
+$btnClear.Add_Click({ $script:VisibleLines.Clear(); $txtOutput.Clear() })
 $btnSave.Add_Click({
-  $dlg = New-Object System.Windows.Forms.SaveFileDialog
-  $dlg.Filter = 'Log files (*.log)|*.log|Text files (*.txt)|*.txt|All files (*.*)|*.*'
-  $dlg.FileName = "launcher-output-$(Get-Date -Format yyyyMMdd-HHmmss).log"
-  if ($dlg.ShowDialog() -eq 'OK') {
-    Set-Content -LiteralPath $dlg.FileName -Value $txtOutput.Text -Encoding UTF8
-    [System.Windows.Forms.MessageBox]::Show("Saved: $($dlg.FileName)", 'Launcher', 'OK', 'Information') | Out-Null
-  }
-})
-
-$btnRunScript.Add_Click({
-  $root = $txtRoot.Text.Trim()
-  if ([string]::IsNullOrWhiteSpace($root) -or $root -match '\.\.') {
-    [System.Windows.Forms.MessageBox]::Show('Root path is invalid.', 'Launcher', 'OK', 'Warning') | Out-Null
-    return
-  }
-
-  $selected = $listScripts.SelectedItem
-  if (-not $selected) {
-    [System.Windows.Forms.MessageBox]::Show('Select a script first.', 'Launcher', 'OK', 'Warning') | Out-Null
-    return
-  }
-
-  $runLocal = Join-Path (Join-Path $root 'scripts') '00-Run-Local.ps1'
-  if (-not (Test-Path -LiteralPath $runLocal -PathType Leaf)) {
-    [System.Windows.Forms.MessageBox]::Show("Missing 00-Run-Local.ps1 in $root\\scripts", 'Launcher', 'OK', 'Warning') | Out-Null
-    return
-  }
-
-  $mode = [string]$cmbMode.SelectedItem
-  $scriptArgs = Parse-ArgumentString -ArgString $txtArgs.Text
-  if ($mode -eq 'Remediate' -and -not ($scriptArgs | Where-Object { $_ -ieq '-Mode' -or $_ -imatch '^-Mode:' })) {
-    $scriptArgs += @('-Mode', 'Remediate')
-  }
-
-  $statusLabel.Text = "Running: $($selected.Name) [$mode]..."
-  $txtOutput.AppendText("[RUN] Script: $($selected.Name)  Mode: $mode  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`r`n")
-  $sb = {
-    param($RunLocalPath, $ScriptName, $RootPath, $ScriptArgs, $OutputControl, $RunScriptButton, $RunProfileButton, $StatusLbl)
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    try {
-      & $RunLocalPath -ScriptName $ScriptName -RootPath $RootPath -ScriptArgs $ScriptArgs 2>&1 | ForEach-Object {
-        $line = [string]$_
-        [void]$OutputControl.Invoke([Action]{ $OutputControl.AppendText("$line`r`n") })
-      }
-      $elapsed = $sw.Elapsed.ToString('hh\:mm\:ss')
-      [void]$OutputControl.Invoke([Action]{ $OutputControl.AppendText("[DONE] Completed in $elapsed`r`n`r`n") })
-      [void]$StatusLbl.GetCurrentParent().Invoke([Action]{ $StatusLbl.Text = "Completed: $ScriptName ($elapsed)" })
-    } catch {
-      $line = "ERROR: $($_.Exception.Message)"
-      [void]$OutputControl.Invoke([Action]{ $OutputControl.AppendText("$line`r`n") })
-      [void]$StatusLbl.GetCurrentParent().Invoke([Action]{ $StatusLbl.Text = "Error: $ScriptName" })
-    } finally {
-      [void]$RunScriptButton.Invoke([Action]{ $RunScriptButton.Enabled = $true })
-      [void]$RunProfileButton.Invoke([Action]{ $RunProfileButton.Enabled = $true })
+    if ([string]::IsNullOrWhiteSpace($script:FullLogPath) -or -not (Test-Path -LiteralPath $script:FullLogPath -PathType Leaf)) {
+      [System.Windows.Forms.MessageBox]::Show($form, 'No captured output log is available yet.', 'Save captured output', 'OK', 'Information') | Out-Null
+      return
     }
-  }
-
-  Invoke-BackgroundRun -ScriptBlock $sb -ScriptArguments @($runLocal, $selected.Name, $root, $scriptArgs, $txtOutput, $btnRunScript, $btnRunProfile, $statusLabel)
-})
-
-$btnRunProfile.Add_Click({
-  $root = $txtRoot.Text.Trim()
-  $profilePathText = $txtProfile.Text.Trim()
-
-  if ([string]::IsNullOrWhiteSpace($root) -or $root -match '\.\.') {
-    [System.Windows.Forms.MessageBox]::Show('Root path is invalid.', 'Launcher', 'OK', 'Warning') | Out-Null
-    return
-  }
-  if ([string]::IsNullOrWhiteSpace($profilePathText) -or -not (Test-Path -LiteralPath $profilePathText -PathType Leaf)) {
-    [System.Windows.Forms.MessageBox]::Show('Select a valid profile JSON file.', 'Launcher', 'OK', 'Warning') | Out-Null
-    return
-  }
-
-  $runProfile = Join-Path (Join-Path $root 'scripts') '00-Run-Profile.ps1'
-  if (-not (Test-Path -LiteralPath $runProfile -PathType Leaf)) {
-    [System.Windows.Forms.MessageBox]::Show("Missing 00-Run-Profile.ps1 in $root\\scripts", 'Launcher', 'OK', 'Warning') | Out-Null
-    return
-  }
-
-  $mode = [string]$cmbMode.SelectedItem
-  $extra = Parse-ArgumentString -ArgString $txtArgs.Text
-  $parsedExtra = if (Get-Command -Name Convert-ArgumentTokens -ErrorAction SilentlyContinue) {
-    Convert-ArgumentTokens -Arguments $extra
-  } else {
-    [pscustomobject]@{ Named = @{}; Positional = @($extra) }
-  }
-
-  $profileBaseName = [System.IO.Path]::GetFileName($profilePathText)
-  $statusLabel.Text = "Running profile: $profileBaseName [$mode]..."
-  $txtOutput.AppendText("[RUN] Profile: $profilePathText  Mode: $mode  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`r`n")
-  $sb = {
-    param($RunProfilePath, $ProfilePath, $RootPath, $Mode, $NamedExtraArgs, $PositionalExtraArgs, $OutputControl, $RunScriptButton, $RunProfileButton, $StatusLbl)
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    try {
-      $params = @{
-        ProfilePath = $ProfilePath
-        RootPath    = $RootPath
-        Mode        = $Mode
+    $dialog = New-Object System.Windows.Forms.SaveFileDialog
+    $dialog.Filter = 'Log files (*.log)|*.log|Text files (*.txt)|*.txt|All files (*.*)|*.*'
+    $dialog.FileName = "win-mdm-launcher-$(Get-Date -Format yyyyMMdd-HHmmss).log"
+    if ($dialog.ShowDialog($form) -eq 'OK') {
+      try {
+        if ($null -ne $script:OutputCollector) { $script:OutputCollector.Flush() }
+        Copy-Item -LiteralPath $script:FullLogPath -Destination $dialog.FileName -Force
+        [System.Windows.Forms.MessageBox]::Show($form, "Captured output saved to:`r`n$($dialog.FileName)`r`n`r`nThe log is capped at 25 MiB and may contain sensitive endpoint evidence. Review it before sharing.", 'Save captured output', 'OK', 'Information') | Out-Null
+      } catch {
+        $errorProvider.SetError($btnSave, "Could not save output: $($_.Exception.Message)")
+        $btnSave.Focus()
       }
-
-      & $RunProfilePath @params @NamedExtraArgs @PositionalExtraArgs 2>&1 | ForEach-Object {
-        $line = [string]$_
-        [void]$OutputControl.Invoke([Action]{ $OutputControl.AppendText("$line`r`n") })
-      }
-      $elapsed = $sw.Elapsed.ToString('hh\:mm\:ss')
-      $pName = [System.IO.Path]::GetFileName($ProfilePath)
-      [void]$OutputControl.Invoke([Action]{ $OutputControl.AppendText("[DONE] Profile completed in $elapsed`r`n`r`n") })
-      [void]$StatusLbl.GetCurrentParent().Invoke([Action]{ $StatusLbl.Text = "Completed: $pName ($elapsed)" })
-    } catch {
-      $line = "ERROR: $($_.Exception.Message)"
-      [void]$OutputControl.Invoke([Action]{ $OutputControl.AppendText("$line`r`n") })
-      [void]$StatusLbl.GetCurrentParent().Invoke([Action]{ $StatusLbl.Text = "Error: profile run failed" })
-    } finally {
-      [void]$RunScriptButton.Invoke([Action]{ $RunScriptButton.Enabled = $true })
-      [void]$RunProfileButton.Invoke([Action]{ $RunProfileButton.Enabled = $true })
     }
-  }
-
-  Invoke-BackgroundRun -ScriptBlock $sb -ScriptArguments @($runProfile, $profilePathText, $root, $mode, $parsedExtra.Named, @($parsedExtra.Positional), $txtOutput, $btnRunScript, $btnRunProfile, $statusLabel)
-})
-
-$txtRoot.Add_TextChanged({ Refresh-ScriptList })
-$form.Add_Load({ Refresh-ScriptList })
+    $dialog.Dispose()
+  })
+$form.Add_FormClosing({
+    param($closingForm, $closingEvent)
+    [void]$closingForm
+    if ($null -ne $script:CurrentProcess -and -not $script:CloseAfterStop) {
+      $choice = [System.Windows.Forms.MessageBox]::Show($form, 'Stop the active run and close after the worker reaches a terminal state? Select No to keep the launcher open.', 'Active run', 'YesNo', 'Warning', 'Button2')
+      $closingEvent.Cancel = $true
+      if ($choice -eq 'Yes') {
+        $script:CloseAfterStop = $true
+        $script:StopRequested = $true
+        Write-LauncherState -State Stopping -Detail 'Stopping before close…'
+        try { $script:CurrentProcess.Kill() } catch { Add-LauncherLine "ERROR: Stop request failed: $($_.Exception.Message)"; $script:CloseAfterStop = $false }
+      }
+    }
+  })
+$form.Add_FormClosed({
+    $outputTimer.Stop(); $outputTimer.Dispose()
+    Close-RunArtifact
+    if ($script:FullLogPath -and (Test-Path -LiteralPath $script:FullLogPath)) { Remove-Item -LiteralPath $script:FullLogPath -Force -ErrorAction SilentlyContinue }
+  })
+$form.Add_Load({ Get-ScriptCatalogView; Write-LauncherState -State Ready -Detail 'Audit is selected' })
 
 [void]$form.ShowDialog()

@@ -36,7 +36,7 @@ Windows runtime behavior should be validated on a lab host before production rol
 - `scripts/` - operational scripts and v2 orchestration entry points
 - `lib/` - shared PowerShell modules
 - `examples/` - sample config and profile JSON
-- `docs/` - public documentation index and assets
+- `docs/` - public documentation
 - `tests/` - Pester and fuzz tests
 - `tools/` - developer and operator utilities
 - `.github/` - workflows, templates, and repository policy metadata
@@ -68,18 +68,18 @@ Profiles in `examples/profiles/*.json` use these main fields:
 - `ProfileName`
 - `Version`
 - `Defaults`
-- `Mode` (`Audit` or `Remediate`)
-- `Strict`
-- `OutputFormat` (`Console`, `Json`, `Csv`, or `None`)
-- `OutputPath`
+  - `Mode` (`Audit` or `Remediate`)
+  - `Strict`
+  - `OutputFormat` (`Console`, `Json`, `Csv`, or `None`)
+  - `OutputPath`
 - `Steps[]`
-- `Script`
-- `Args`
-- `ContinueOnError`
-- `DependsOn`
+  - `Script`
+  - `Args`
+  - `ContinueOnError`
+  - `DependsOn`
 - `Integrity`
-- `RequireSigned`
-- `ExpectedHashes`
+  - `RequireSigned`
+  - `ExpectedHashes`
 
 Profile input is untrusted run input. Profile steps must not override runner-owned path, integrity, or confirmation controls.
 
@@ -103,11 +103,15 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1
 # Secret scan
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\secret-scan.ps1
 
-# Pester tests
-pwsh -NoProfile -Command "Invoke-Pester -Path .\tests -Output Detailed"
+# Pester tests with a failing process exit on test failure
+pwsh -NoProfile -Command "Invoke-Pester -Path .\tests -CI -Output Detailed"
+
+# Node property/fuzz tests used by CI
+npm ci
+npm test
 ```
 
-Cross-platform wrapper:
+PowerShell gate wrapper (secret scan, static analysis, and Pester):
 
 ```bash
 ./scripts/ci-local.sh
@@ -115,17 +119,24 @@ Cross-platform wrapper:
 
 On non-Windows developer hosts, orchestration-level verification is supported with PowerShell 7. Windows-only numbered scripts should return a structured unsupported-host result instead of aborting profile startup.
 
-## Launcher GUI
+## Launcher GUI (Alpha)
 
-Run the launcher from the repository root:
+The native Windows Forms launcher is an **alpha / partially validated** operator
+console for single-script and profile runs. It keeps Audit as the default,
+requires explicit review for remediation, rejects runner-owned advanced
+arguments, captures runner streams through a child process, exposes stop and
+captured-output save actions, and reports exit 0, 1, and 2 as distinct outcomes.
+
+Run it from an elevated Windows PowerShell 5.1 prompt with .NET Framework 4.8:
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File .\tools\Launcher-GUI.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\tools\Launcher-GUI.ps1
 ```
 
-The launcher supports single-script runs, profile runs, argument presets, live output, and saving an output log.
-
-![Launcher GUI Preview](./docs/assets/launcher-gui-preview.png)
+PowerShell 7 remains an intended launcher runtime, but neither runtime has been
+smoke-tested on Windows in the current validation environment. Keyboard, UIA,
+Narrator, High Contrast, and 100–200% DPI release gates remain open. See the
+[launcher guide](docs/launcher-gui.md) before operational use.
 
 ## Console Output
 
@@ -149,18 +160,10 @@ Runner integrity checks may accept only `SHA256`, `SHA384`, or `SHA512`; keep re
 
 ## Documentation Policy
 
-Public docs describe the current supported project surface. Keep durable guidance in:
-
-- `README.md`
-- `CONTRIBUTING.md`
-- `SECURITY.md`
-- `CHANGELOG.md`
-- `docs/README.md`
-- `scripts/README.md`
-- `lib/README.md`
-- `examples/README.md`
-
-Do not commit internal audit notes, remediation plans, ledgers, status logs, agent instructions, generated evidence, local archive packets, local analysis artifacts, vendored source snapshots, or machine-specific workspace state.
+Public documentation is deliberately allowlisted and routed through this README
+and [the documentation index](docs/README.md). See
+[CONTRIBUTING.md](CONTRIBUTING.md#documentation-policy) for the public/private
+boundary.
 
 ## Related Docs
 

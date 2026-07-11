@@ -32,4 +32,23 @@ Describe 'tools/secret-scan.ps1' {
     $output | Should -Match 'cabinet\.md'
     $output | Should -Not -Match 'ignored\.md'
   }
+
+  It 'scans untracked non-ignored files in a git worktree' {
+    if (-not (Get-Command -Name git -ErrorAction SilentlyContinue)) {
+      Set-ItResult -Skipped -Because 'git is not available.'
+      return
+    }
+    $scanRoot = Join-Path $TestDrive 'git-untracked'
+    New-Item -Path $scanRoot -ItemType Directory -Force | Out-Null
+    'tracked' | Set-Content -LiteralPath (Join-Path $scanRoot 'tracked.md') -Encoding UTF8
+    & git -C $scanRoot init --quiet
+    & git -C $scanRoot add tracked.md
+    $key = 'to' + 'ken'
+    Set-Content -LiteralPath (Join-Path $scanRoot 'untracked.md') -Value ($key + ' = "' + '1234567890abcdef' + '"') -Encoding UTF8
+
+    $output = & $script:ToolPath -RootPath $scanRoot -NoFail 6>&1 | Out-String
+
+    $LASTEXITCODE | Should -Be 0
+    $output | Should -Match 'untracked\.md'
+  }
 }

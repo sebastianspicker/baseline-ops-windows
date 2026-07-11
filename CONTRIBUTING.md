@@ -25,10 +25,12 @@ If a change touches orchestration, profile parsing, remediation, or runner integ
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1 -SkipAnalyzer
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\secret-scan.ps1
-pwsh -NoProfile -Command "Invoke-Pester -Path .\tests -Output Detailed"
+pwsh -NoProfile -Command "Invoke-Pester -Path .\tests -CI -Output Detailed"
+npm ci
+npm test
 ```
 
-Or run:
+Run the PowerShell gates together with:
 
 ```bash
 ./scripts/ci-local.sh
@@ -44,6 +46,11 @@ Root docs are intentionally minimal:
 - `CHANGELOG.md`
 
 Keep implementation plans, experiments, audit ledgers, remediation scratch plans, deprecated docs, agent instructions, and machine-specific workspace state out of commits.
+
+Only `docs/README.md` and `docs/launcher-gui.md` are currently allowlisted under
+`docs/`. Add any new durable public document to the index, `.gitignore` allowlist,
+and public-surface verifier in the same change. Keep private or generated
+material in ignored local lanes; never force-add it.
 
 ## Security Reporting
 

@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Alpha Windows Forms operator console with separate script/profile workflows,
+  asynchronous script discovery, explicit remediation review, integrity
+  controls, stoppable child-process execution, bounded live output, and
+  full-log export.
+- Versioned JSON launcher worker protocol and pure launcher policy tests for
+  argument safety, manifest validation, stream capture, and terminal states.
+- Launcher guide documenting current capabilities and the outstanding Windows
+  accessibility, DPI, and runtime validation gate.
+
+### Changed
+
+- PowerShell verification now parses tool modules (`tools/*.psm1`) as well as
+  tool scripts.
+- Public-surface and secret checks now include untracked non-ignored files;
+  public `docs/` content is restricted to the reviewed index and launcher guide.
+- Local validation instructions now use Pester's `-CI` failure semantics and
+  include the Node property/fuzz suite. Script mode and profile-schema docs now
+  match the current runner contracts.
+- Removed the stale synthetic launcher preview; a replacement is intentionally
+  deferred until a real Windows capture passes the UI checklist.
+- Removed the obsolete dry-run snapshot that contained machine-specific paths
+  and temporary execution identifiers.
+
 ## [2.2.0] - 2026-04-18
 
 ### Added in 2.2.0

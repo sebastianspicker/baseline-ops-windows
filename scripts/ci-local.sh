@@ -88,7 +88,7 @@ fi
 
 if [[ -z "$skip_tests" ]]; then
   tests_status="RUN"
-  if "$pwsh_bin" -NoProfile -Command "Invoke-Pester -Path '$root_dir/tests' -Output Detailed"; then
+  if "$pwsh_bin" -NoProfile -Command "Invoke-Pester -Path '$root_dir/tests' -CI -Output Detailed"; then
     tests_status="PASS"
   else
     tests_status="FAILED"

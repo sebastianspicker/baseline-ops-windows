@@ -79,6 +79,7 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
     Get-MinimalVerifyRoot -Path $root
     Add-VerifyFile -Root $root -RelativePath 'scripts/internal/helper.ps1'
     Add-VerifyFile -Root $root -RelativePath 'docs/README.md'
+    Add-VerifyFile -Root $root -RelativePath 'docs/launcher-gui.md'
     Add-VerifyFile -Root $root -RelativePath 'SECURITY.md'
 
     $output = & pwsh -NoProfile -File $script:VerifyTool -RootPath $root -SkipAnalyzer 2>&1
@@ -88,6 +89,39 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
     $exitCode | Should -Be 0
     $text | Should -Match 'PublicSurface.*PASS'
     $text | Should -Match 'VERDICT: PARTIAL'
+  }
+
+  It 'rejects unreviewed documentation outside the public allowlist' {
+    $root = Join-Path $TestDrive 'verify-doc-allowlist'
+    Get-MinimalVerifyRoot -Path $root
+    Add-VerifyFile -Root $root -RelativePath 'docs/unreviewed-notes.md'
+
+    $output = & pwsh -NoProfile -File $script:VerifyTool -RootPath $root -SkipAnalyzer 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = $output | Out-String
+
+    $exitCode | Should -Be 1
+    $text | Should -Match 'docs[\\/]unreviewed-notes\.md'
+    $text | Should -Match 'public allowlist'
+  }
+
+  It 'checks untracked non-ignored files inside a git worktree' {
+    if (-not (Get-Command -Name git -ErrorAction SilentlyContinue)) {
+      Set-ItResult -Skipped -Because 'git is not available.'
+      return
+    }
+    $root = Join-Path $TestDrive 'verify-untracked-git'
+    Get-MinimalVerifyRoot -Path $root
+    & git -C $root init --quiet
+    & git -C $root add scripts lib
+    Add-VerifyFile -Root $root -RelativePath 'private/untracked-note.md'
+
+    $output = & pwsh -NoProfile -File $script:VerifyTool -RootPath $root -SkipAnalyzer 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = $output | Out-String
+
+    $exitCode | Should -Be 1
+    $text | Should -Match 'private[\\/]untracked-note\.md'
   }
 
   It 'Fails on prohibited public-surface paths without reading their contents' {
@@ -115,5 +149,21 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
     $text | Should -Match '\.github[\\/]prompts[\\/]review\.md'
     $text | Should -Match 'REMEDIATION_PLAN.md'
     $text | Should -Match 'VERDICT: FAILED'
+  }
+
+  It 'Parses PowerShell modules under tools' {
+    $root = Join-Path $TestDrive 'verify-tool-module'
+    Get-MinimalVerifyRoot -Path $root
+    $toolsDir = Join-Path $root 'tools'
+    New-Item -Path $toolsDir -ItemType Directory -Force | Out-Null
+    'function Broken-ToolModule {' | Set-Content -LiteralPath (Join-Path $toolsDir 'Broken.psm1') -Encoding UTF8
+
+    $output = & pwsh -NoProfile -File $script:VerifyTool -RootPath $root -SkipAnalyzer 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = $output | Out-String
+
+    $exitCode | Should -Be 1
+    $text | Should -Match 'Parse.*FAILED'
+    $text | Should -Match 'Broken\.psm1'
   }
 }

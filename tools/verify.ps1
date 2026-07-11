@@ -84,7 +84,8 @@ function Get-PublicSurfacePaths {
 
   if ($isGitWorkTree) {
     return @(
-      & $git.Source -C $Path ls-files |
+      & $git.Source -C $Path ls-files --cached --others --exclude-standard |
+        Sort-Object -Unique |
         Where-Object { Test-Path -LiteralPath (Join-Path $Path $_) -PathType Leaf }
     )
   }
@@ -154,6 +155,10 @@ function Test-PublicSurfacePath {
     return 'local ledger, remediation, or workspace documentation'
   }
 
+  if ($segments[0] -eq 'docs' -and $path -notin @('docs/readme.md', 'docs/launcher-gui.md')) {
+    return 'documentation path is not in the reviewed public allowlist'
+  }
+
   return $null
 }
 
@@ -182,17 +187,18 @@ if ($publicSurfaceViolations.Count -gt 0) {
   $publicSurfaceViolations | Sort-Object Path | ForEach-Object {
     Write-UiLine ("- {0} ({1})" -f $_.Path, $_.Reason) -ForegroundColor Yellow
   }
-  Add-GateResult -Name 'PublicSurface' -Status 'FAILED' -Detail ("{0} prohibited tracked path(s)" -f $publicSurfaceViolations.Count)
+  Add-GateResult -Name 'PublicSurface' -Status 'FAILED' -Detail ("{0} prohibited public path(s)" -f $publicSurfaceViolations.Count)
   Complete-Verification -Verdict 'FAILED' -ExitCode 1
 }
 Write-Success -Message 'Public surface checks: OK'
-Add-GateResult -Name 'PublicSurface' -Status 'PASS' -Detail 'No prohibited tracked paths'
+Add-GateResult -Name 'PublicSurface' -Status 'PASS' -Detail 'No prohibited tracked or untracked non-ignored paths'
 
 $targets = @()
 $targets += Get-ChildItem -Path (Join-Path $RootPath 'scripts') -Filter '*.ps1' -File -Recurse
 $targets += Get-ChildItem -Path (Join-Path $RootPath 'lib') -Filter '*.psm1' -File -Recurse
 if (Test-Path -LiteralPath (Join-Path $RootPath 'tools')) {
   $targets += Get-ChildItem -Path (Join-Path $RootPath 'tools') -Filter '*.ps1' -File -Recurse
+  $targets += Get-ChildItem -Path (Join-Path $RootPath 'tools') -Filter '*.psm1' -File -Recurse
 }
 
 Write-Info -Message ("Parsing {0} PowerShell files..." -f $targets.Count)

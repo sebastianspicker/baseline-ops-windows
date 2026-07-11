@@ -1,16 +1,16 @@
 # OS and editor
 .DS_Store
 Thumbs.db
-/.vscode/
-/.idea/
-/.cursor/
-/.agents/
-/.continue/
-/.codex/
-/.codegraph/
-/.serena/
-/.windsurf/
-/.aider*
+.vscode/
+.idea/
+.cursor/
+.agents/
+.continue/
+.codex/
+.codegraph/
+.serena/
+.windsurf/
+.aider*
 
 # PowerShell
 *.ps1~
@@ -57,8 +57,8 @@ temp/
 # Environment files and credentials
 .env
 .env.*
-/.envrc
-/.direnv/
+.envrc
+.direnv/
 *.pem
 *.key
 *.pfx
@@ -70,8 +70,8 @@ temp/
 id_rsa
 id_ed25519
 *.keystore
-/credentials/
-/secrets/
+credentials/
+secrets/
 
 # Local docs (findings/logs/decisions)
 /DECISIONS.md
@@ -84,10 +84,10 @@ id_ed25519
 /progress.md
 
 # Development artifacts
-/ralph-loop/
-/plans/
-/.claude/
-/.codacy/
+ralph-loop/
+plans/
+.claude/
+.codacy/
 
 # Local-only agent, audit, and release-readiness workspace state
 /AGENTS.md
@@ -96,7 +96,7 @@ id_ed25519
 /CODEX.md
 /GEMINI.md
 /AUDIT.md
-/private/
+private/
 /.github/agents/
 /.github/codex/
 /.github/copilot-instructions.md
@@ -105,20 +105,10 @@ id_ed25519
 /.github/workflows/codex.yml
 /HARNESS_PRINCIPLES.md
 /code_review.md
-/archive/
-/docs/agent/
-/docs/internal/
-/docs/archive/
-/docs/source-audit/
-/docs/tmp/
-/docs/temp/
-/docs/dry-run.md
-/docs/*ledger*.md
-/docs/*remediation-plan*.md
-/docs/*remediation-status*.md
-!docs/README.md
-!docs/assets/
-!docs/assets/**
+archive/
+/docs/*
+!/docs/README.md
+!/docs/launcher-gui.md
 /scripts/topology_inventory.sh
 
 # Vendored, copied, or external source trees
