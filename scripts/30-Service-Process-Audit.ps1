@@ -6,7 +6,7 @@ Audits running processes and services (Top CPU/RAM, service->process mapping, st
 .DESCRIPTION
 Best-practice output model (Windows PowerShell 5.1):
 - Pipeline: one structured object only (easy for ConvertTo-Json, Export-Csv, Where-Object).
-- Console: all human-friendly formatting via Write-UiLine / Write-Information (no pipeline pollution).
+- Console: all formatting uses Write-UiLine / Write-Information and does not write to the pipeline.
 - Optional JSON config with safe defaults when missing/invalid.
 
 .PARAMETER TopN
@@ -85,7 +85,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '30-Service-Process-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '30-Service-Process-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -97,10 +101,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # -----------------------------
@@ -150,7 +155,7 @@ function Import-OptionalJsonConfig {
 $Config = [ordered]@{
   TopN                  = $TopN
   ExportEnabled         = [bool](-not [string]::IsNullOrWhiteSpace($ExportPath))
-  ExportEncoding        = 'utf8'  # PS 5.1: UTF-8 with BOM (commonly Excel-friendly). [web:16]
+  ExportEncoding        = 'utf8'  # PS 5.1: UTF-8 with BOM (commonly Excel-friendly).
   ShowListsInConsole    = $true
   ShowServicesInConsole = $true
   ShowTopCpuInConsole   = $true
@@ -225,7 +230,7 @@ function Get-SafeProcessSnapshot {
   [pscustomobject]@{
     Name         = $Process.Name
     Id           = $Process.Id
-    CPU          = $Process.CPU          # CPU is cumulative seconds, not %. [web:29]
+    CPU          = $Process.CPU          # CPU is cumulative seconds, not %.
     WorkingSet64 = $Process.WorkingSet64
     StartTime    = $startTime
     Path         = $path
@@ -256,7 +261,7 @@ function Resolve-ExportTarget {
 
 # Processes (single pass; property access is defensive)
 $procsRaw = @(Get-Process -ErrorAction SilentlyContinue)
-$procs = foreach ($p in $procsRaw) { Get-SafeProcessSnapshot -Process $p }
+$procs = @(foreach ($p in $procsRaw) { Get-SafeProcessSnapshot -Process $p })
 
 $topCpu = $procs | Sort-Object CPU -Descending | Select-Object -First $effectiveTopN
 $topRam = $procs | Sort-Object WorkingSet64 -Descending | Select-Object -First $effectiveTopN
@@ -267,11 +272,11 @@ foreach ($p in $procs) {
   if (-not $procPathById.ContainsKey($p.Id)) { $procPathById[$p.Id] = $p.Path }
 }
 
-# Services via CIM (Win32_Service provides StartMode/StartName/PathName/ProcessId). [web:47]
-$svc = Get-CimInstance -ClassName Win32_Service |
-  Select-Object Name, DisplayName, State, StartMode, StartName, ProcessId, PathName
+# Services via CIM (Win32_Service provides StartMode/StartName/PathName/ProcessId).
+$svc = @(Get-CimInstance -ClassName Win32_Service |
+  Select-Object Name, DisplayName, State, StartMode, StartName, ProcessId, PathName)
 
-$svcEnriched = foreach ($s in $svc) {
+$svcEnriched = @(foreach ($s in $svc) {
   [pscustomobject]@{
     Name        = $s.Name
     DisplayName = $s.DisplayName
@@ -282,7 +287,7 @@ $svcEnriched = foreach ($s in $svc) {
     PathName    = $s.PathName
     ProcessPath = if ($s.ProcessId -gt 0 -and $procPathById.ContainsKey($s.ProcessId)) { $procPathById[$s.ProcessId] } else { $null }
   }
-}
+})
 
 $runningServicesCount = ($svcEnriched | Where-Object { $_.State -eq 'Running' } | Measure-Object).Count
 
@@ -317,7 +322,7 @@ if ($summary.ExportEnabled) {
 }
 
 # -----------------------------
-# Pretty console output
+# Formatted console output
 # -----------------------------
 if (-not $NoConsole) {
   Write-UiLine ""
@@ -400,8 +405,8 @@ if (-not $NoConsole) {
 
 # V2 output contract
 $resultToken = if ($configLoadIssue) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($findings) -Summary $summary -Metadata @{ TopCpu = $topCpu; TopRam = $topRam; Services = $svcEnriched; Config = [pscustomobject]$Config }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-if ($resultToken -eq 'WARN') { exit 2 }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

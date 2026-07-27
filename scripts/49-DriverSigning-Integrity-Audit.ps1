@@ -5,7 +5,7 @@ Audit driver signing enforcement and kernel code integrity.
 
 .DESCRIPTION
 Checks driver signing and code integrity settings:
-- TESTSIGNING flag via bcdedit (should be OFF for production systems).
+- TESTSIGNING flag via bcdedit (expected to be off on hardened systems).
 - NOINTEGRITYCHECKS flag via bcdedit (should be OFF).
 - Memory integrity (Core Isolation / HVCI) via registry
   HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity.
@@ -82,10 +82,15 @@ Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -97,10 +102,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # ----------------------------
@@ -117,7 +123,9 @@ $bcdeditRaw        = $null
 
 # 1. Check bcdedit flags (TESTSIGNING, NOINTEGRITYCHECKS)
 try {
-  $bcdeditOutput = (& bcdedit.exe /enum '{current}' 2>&1 | Out-String).Trim()
+  $bcdedit = Invoke-NativeCommand -Command 'bcdedit.exe' -Arguments @('/enum','{current}') -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 262144
+  if ($null -eq $bcdedit -or -not $bcdedit.Success -or $bcdedit.TimedOut -or $bcdedit.OutputTruncated -or $bcdedit.StderrTruncated) { throw 'bcdedit query timed out, failed, or produced truncated output.' }
+  $bcdeditOutput = $bcdedit.Output.Trim()
   $bcdeditRaw = $bcdeditOutput
 
   # Parse testsigning
@@ -125,10 +133,10 @@ try {
     $testSigning = $Matches[1]
     if ($testSigning -eq 'Yes') {
       Add-Finding -FindingList $script:Findings -Code 'DS-TestSigningEnabled' -Severity 'High' `
-        -Message 'TESTSIGNING is enabled. Unsigned/test-signed drivers can load. This is a critical security risk in production.'
+        -Message 'TESTSIGNING is enabled. Unsigned or test-signed drivers can load, which conflicts with a hardened driver-signing baseline.'
     } else {
       Add-Finding -FindingList $script:Findings -Code 'DS-TestSigningOff' -Severity 'Low' `
-        -Message 'TESTSIGNING is disabled (expected for production systems).'
+        -Message 'TESTSIGNING is disabled (expected baseline).'
     }
   } else {
     # If testsigning is not listed, it defaults to No
@@ -240,4 +248,4 @@ $v2Result = Get-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1
 
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

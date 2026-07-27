@@ -10,7 +10,7 @@ This script inspects the local system for:
 - Servicing Stack (SSU) version evidence (best-effort detection).
 - Core Windows Update related services (state and startup type evidence).
 The script produces:
-- A human-friendly, colorized console summary (written only via host output).
+- A readable, colorized console summary (written only via host output).
 - A JSON proof file with full evidence, notes, findings, and actions.
 - A best-effort entry in the Windows Application Event Log (falls back to a text log file if Event Log write fails).
 The pipeline output remains clean: the script emits exactly one structured object at the end, suitable for piping to Export-Csv, ConvertTo-Json, or Where-Object.
@@ -68,10 +68,10 @@ PS C:\> .\06-UpdateHealth-SSU-Proof.ps1
 Runs in audit mode using default catalog behavior.
 Writes a console summary, attempts to write the JSON proof, attempts Event Log write, and returns one object to the pipeline.
 .EXAMPLE
-PS C:\> .\06-UpdateHealth-SSU-Proof.ps1 -CatalogPath "PATH/TO/JSON/catalog.json"
+PS C:\> .\06-UpdateHealth-SSU-Proof.ps1 -CatalogPath $CatalogPath
 Runs in audit mode using the specified catalog file.
 .EXAMPLE
-PS C:\> .\06-UpdateHealth-SSU-Proof.ps1 -ConfigPath "PATH/TO/JSON/config.json"
+PS C:\> .\06-UpdateHealth-SSU-Proof.ps1 -ConfigPath $ConfigPath
 Runs in audit mode and tries to load the catalog path from UpdateHealth.CatalogPath inside the config file.
 Falls back to the built-in catalog if the config or referenced catalog is unavailable.
 .EXAMPLE
@@ -101,10 +101,16 @@ Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameCheck
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '06-UpdateHealth-SSU-Proof.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '06-UpdateHealth-SSU-Proof.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -116,10 +122,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '06-UpdateHealth-SSU-Proof.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '06-UpdateHealth-SSU-Proof.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # ------------------------------------ Globals --------------------------------------
@@ -214,8 +221,8 @@ function Set-ServiceStartType {
   try {
     if ($StartType -eq 'AutomaticDelayedStart') {
       if ($PSCmdlet.ShouldProcess($Name, 'Set startup type to AutomaticDelayedStart')) {
-        $p = Start-Process -FilePath "$env:windir\System32\sc.exe" -ArgumentList @("config",$Name,"start=","delayed-auto") -NoNewWindow -Wait -PassThru -ErrorAction Stop
-        if ($p.ExitCode -ne 0) { throw ("sc.exe exit code {0}" -f $p.ExitCode) }
+        $native = Invoke-NativeCommand -Command 'sc.exe' -Arguments @('config',$Name,'start=','delayed-auto') -ThrowOnError -CaptureOutput -TimeoutSeconds 30 -MaxOutputBytes 65536
+        if ($native.TimedOut -or $native.OutputTruncated -or $native.StderrTruncated) { throw 'sc.exe output was incomplete or timed out.' }
         Add-ArrayList $actions (Get-LegacyAction -Target $Name -Operation 'SetStartupType' -Result 'Success' -Message 'AutomaticDelayedStart (sc.exe delayed-auto)')
       } else {
         Add-ArrayList $actions (Get-LegacyAction -Target $Name -Operation 'SetStartupType' -Result 'Skipped' -Message 'ShouldProcess declined')
@@ -327,6 +334,7 @@ function Ensure-TasksEnabled {
   [pscustomobject]@{ Ok=$ok; Drift=$drift; Actions=$actions }
 }
 # ------------------------------------ Catalog defaults -----------------------------
+$DefaultProofPath = Join-Path ([System.IO.Path]::GetTempPath()) 'UpdateHealth-SSU-Proof.json'
 $DefaultCatalog = @"
 {
   "UpdateHealthTools": {
@@ -341,7 +349,7 @@ $DefaultCatalog = @"
     "MinVersion": "10.0.22621.3800"
   },
   "Proof": {
-    "OutFile": "PATH/TO/JSON/proof/UpdateHealth-SSU-Proof.json"
+    "OutFile": null
   }
 }
 "@ | ConvertFrom-Json
@@ -355,7 +363,7 @@ function Load-Catalog {
   if ($CatalogPath) {
     if (Test-Path -LiteralPath $CatalogPath) {
       try {
-        $cat = Get-Content -Raw -LiteralPath $CatalogPath -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $cat = Get-BoundedUtf8FileContent -Path $CatalogPath -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop
         $meta.CatalogLoaded = $true
         $meta.CatalogSource = 'CatalogPath'
         return [pscustomobject]@{ Catalog=$cat; Meta=$meta }
@@ -369,12 +377,12 @@ function Load-Catalog {
   if ($ConfigPath) {
     if (Test-Path -LiteralPath $ConfigPath) {
       try {
-        $cfg = Get-Content -Raw -LiteralPath $ConfigPath -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $cfg = Get-BoundedUtf8FileContent -Path $ConfigPath -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop
         $p = $null
         if ($cfg -and $cfg.UpdateHealth -and $cfg.UpdateHealth.CatalogPath) { $p = [string]$cfg.UpdateHealth.CatalogPath }
         if ($p) {
           if (Test-Path -LiteralPath $p) {
-            $cat = Get-Content -Raw -LiteralPath $p -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            $cat = Get-BoundedUtf8FileContent -Path $p -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop
             $meta.CatalogLoaded = $true
             $meta.CatalogSource = 'ConfigPath->CatalogPath'
             return [pscustomobject]@{ Catalog=$cat; Meta=$meta }
@@ -429,9 +437,9 @@ function Get-UHT-Info {
     $ret.InstallLocation = $hit.InstallLocation
   }
   $baseDirs = @(
-    "$env:ProgramFiles\Microsoft Update Health Tools",
-    "$env:ProgramFiles(x86)\Microsoft Update Health Tools"
-  )
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles),
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { Join-Path $_ 'Microsoft Update Health Tools' }
   foreach($d in $baseDirs){
     if ($ret.FileVersion) { break }
     try {
@@ -478,7 +486,9 @@ function Get-SSU-Info {
     Write-Verbose ("SSU registry version probe failed: {0}" -f $_.Exception.Message)
   }
   try {
-    $out = (& dism.exe /online /get-packages /format:table 2>&1) | Out-String
+    $dism = Invoke-NativeCommand -Command 'dism.exe' -Arguments @('/online','/get-packages','/format:table') -CaptureOutput -TimeoutSeconds 180 -MaxOutputBytes 1048576
+    if ($null -eq $dism -or -not $dism.Success -or $dism.TimedOut -or $dism.OutputTruncated -or $dism.StderrTruncated) { throw 'DISM SSU detection did not complete with complete output.' }
+    $out = $dism.Output
     $lines = $out -split "`r?`n"
     $line = $lines | Where-Object { $_ -match 'Package_for_ServicingStack' } | Select-Object -First 1
     if ($line) {
@@ -520,7 +530,7 @@ if (-not (Ensure-EventSource)) {
 $findings = New-Object System.Collections.ArrayList
 $actions  = New-Object System.Collections.ArrayList
 $notes    = New-Object System.Collections.ArrayList
-$outFile = "PATH/TO/JSON/proof/UpdateHealth-SSU-Proof.json"
+$outFile = $DefaultProofPath
 $catalogInfo = $null
 $evidence = [ordered]@{}
 try {
@@ -682,7 +692,7 @@ if ($eventSourceOk) {
   [void](Write-HealthEvent -Id $evtId -Msg $evtMsg -Level $evtLevel)
 }
 $sw.Stop()
-# ----------------------------- Pretty console summary -------------------------------
+# ----------------------------- Formatted console summary -------------------------------
 $catalogSource2 = 'Default'
 if ($catalogInfo -and $catalogInfo.CatalogSource) { $catalogSource2 = [string]$catalogInfo.CatalogSource }
 $summaryStatus = if ($effectiveFindings.Count -gt 0) { 'WARNING' } else { 'OK' }
@@ -738,4 +748,4 @@ $resultToken = if ($summaryStatus -eq 'FAIL') { 'FAIL' } elseif ($summaryStatus 
 $v2Result = Get-V2ResultObject -ScriptName '06-UpdateHealth-SSU-Proof.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $v2Summary -Metadata @{ Actions = @($actions); Notes = @($notes); CatalogSource = $catalogSource2 }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

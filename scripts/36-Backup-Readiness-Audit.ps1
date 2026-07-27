@@ -6,7 +6,7 @@ Backup/Restore readiness baseline audit (no third-party tools).
 .DESCRIPTION
 Best-practice split:
 - Pipeline output: only one structured object (Summary, Findings, Indicators, VssRaw).
-- Console output: pretty, colorized human output using Write-UiLine / Write-Information only.
+- Console output: formatted, colorized output using Write-UiLine / Write-Information only.
 
 Checks:
 - OS disk free space (rough signal).
@@ -22,7 +22,7 @@ Optional path prefix for export files. Example: C:\Temp\36-Backup-Readiness-Audi
 Creates: *_summary.csv, *_findings.csv, *_indicators.csv, *_vss_writers.txt
 
 .PARAMETER ConfigJsonPath
-Optional JSON configuration path (e.g. "PATH/TO/JSON\backup-audit.json").
+Optional JSON configuration path supplied with $ConfigJsonPath.
 If missing or invalid JSON, defaults are used.
 
 
@@ -79,11 +79,16 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '36-Backup-Readiness-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '36-Backup-Readiness-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -95,10 +100,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '36-Backup-Readiness-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '36-Backup-Readiness-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 $script:Findings = Get-FindingsList
@@ -153,8 +159,8 @@ function Get-Config {
   }
 
   try {
-    # PowerShell 5.1 ConvertFrom-Json errors on JSON comments; keep JSON strictly compliant. [web:64]
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    # PowerShell 5.1 ConvertFrom-Json errors on JSON comments; keep JSON strictly compliant.
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { throw "Config JSON is empty." }
 
     $user = $raw | ConvertFrom-Json -ErrorAction Stop
@@ -224,7 +230,9 @@ function Get-VssWriters {
   $writers = @()
 
   try {
-    $raw = (& vssadmin.exe list writers 2>&1 | Out-String).Trim()
+    $vss = Invoke-NativeCommand -Command 'vssadmin.exe' -Arguments @('list','writers') -CaptureOutput -Quiet -TimeoutSeconds 60 -MaxOutputBytes 1048576
+    if ($null -eq $vss -or -not $vss.Success -or $vss.TimedOut -or $vss.OutputTruncated -or $vss.StderrTruncated) { throw 'vssadmin writer query timed out, failed, or produced truncated output.' }
+    $raw = $vss.Output.Trim()
   }
   catch {
     $raw = $_.Exception.Message
@@ -402,7 +410,7 @@ $indicators = [pscustomobject]@{
   FileHistoryKeyPath = $fileHistoryKey
   FileHistoryKey     = $fileHistoryPresent
 
-  # Keep path as provided; documentation/examples should use placeholders.
+  # Keep the caller-provided path as configured.
   ConfigJsonPath     = if ([string]::IsNullOrWhiteSpace($ConfigJsonPath)) { $null } else { $ConfigJsonPath }
 
   MinOsFreeGB        = $cfg.MinOsFreeGB
@@ -442,4 +450,4 @@ $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif 
 $v2Result = Get-V2ResultObject -ScriptName '36-Backup-Readiness-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ Indicators = $indicators }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

@@ -1,45 +1,67 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
-Only the current `main` branch is actively maintained unless the maintainer explicitly confirms support for another branch or tag.
+Security fixes target the current `main` branch. Reports against the latest published prerelease are also accepted. Backports to older tags are not guaranteed.
 
-Scripts are intended for controlled, lab-tested environments. For production use, validate remediation scripts in your own environment and open a maintainer discussion before proceeding.
+This repository contains privileged endpoint code. Validate selected audit and remediation behavior on disposable Windows devices before deployment.
 
-## Scope
+## In scope
 
-In scope:
+- Incorrect audit results that could lead to unsafe operational decisions
+- Remediation behavior that makes unintended system changes
+- Path traversal, command injection, argument injection, or unsafe native process execution
+- Privilege escalation, admin-to-SYSTEM escalation, or bypass of the protected execution boundary
+- Signature, hash, ownership, ACL, reparse-point, or profile-integrity bypasses
+- Credential, secret, private key, PII, or endpoint-evidence exposure
+- CI or release-pipeline weaknesses that could alter published source or artifacts
 
-- Logic errors in audit or remediation scripts that produce incorrect results or unsafe system changes
-- Secrets, credentials, or PII inadvertently committed to the repository
-- Path traversal, command injection, or privilege-escalation risks in script logic or shared modules
-- CI pipeline issues that could introduce malicious code
+## Out of scope
 
-Out of scope:
+- Vulnerabilities in Windows, Sysmon, WinGet, Defender, or another third-party component
+- General hardening-policy disagreements without a security defect in the implementation
+- Actions already fully available to the same administrator or SYSTEM token, unless the issue bypasses a defined trust boundary, exposes credentials, establishes persistence, or causes unintended execution
 
-- Issues in third-party tools such as Sysmon, WinGet, or Defender
-- Findings that require attacker-controlled local admin or SYSTEM access
-- General Windows hardening advice or baseline preference disagreements
+## Execution trust boundary
 
-## Reporting A Vulnerability
+Do not run elevated repository code from a user-owned checkout, Downloads extraction, writable ancestor, or reparse-point path. Elevated runners and the launcher check the toolkit root and relevant ancestors before importing repository modules or executing endpoint scripts. Use the protected installation procedure in the [release guide](docs/alpha-release.md#install-a-protected-windows-copy).
 
-Please report security issues privately. Do not open a public issue with exploit details.
+On Windows, `tools/verify.ps1` and `tools/secret-scan.ps1` accept a bare Git executable only from standard Program Files locations. If trusted Git is unavailable, they fall back to recursive package discovery. That fallback is intended for extracted packages and can include ignored local files in a checkout. Do not substitute a per-user Git shim to bypass this policy.
 
-Use one of these channels:
+`tools/Test-Documentation.ps1` uses the Git executable found on `PATH` for repository file discovery. It does not execute endpoint scripts.
+
+## Sensitive artifacts
+
+Treat these files as sensitive endpoint data:
+
+- JSON and CSV results
+- Support bundles and collected evidence
+- Script-specific exports and proof files
+- Saved launcher output and temporary launcher logs
+- Pester XML, which can include host name, user name, and working directory
+
+Keep them outside the repository, restrict access, redact before sharing, and delete them according to the applicable retention policy. Launcher crash residue can remain under `%TEMP%\baselineops-windows-launcher`.
+
+## Reporting a vulnerability
+
+Do not open a public issue containing exploit details, secrets, logs, screenshots, or environment identifiers.
+
+Use one of these private channels:
 
 - Open a [GitHub security advisory][security-advisory].
-- Contact the maintainer via the email listed on the GitHub profile.
+- Contact the maintainer through the email listed on the GitHub profile.
 
-If both private channels are unavailable, open a public issue that contains no exploit details, secrets, logs, screenshots, or environment-specific identifiers, and ask for a private maintainer contact.
+If neither channel is available, open a public issue without technical details and request private contact.
 
-Please include:
+Include:
 
-- Clear description of the issue
-- Steps to reproduce
-- Impact assessment
-- Potential mitigations, if known
-
-We aim to acknowledge reports as soon as maintainer availability permits and
-will communicate the next review or mitigation step when triage begins.
+- A concise description and security impact
+- Reproduction steps or a minimal proof of concept
+- Affected script, module, workflow, or release artifact
+- PowerShell version and edition
+- Windows version and relevant installed features
+- Whether the process ran as standard user, administrator, or LocalSystem
+- Redacted path, owner, ACL, and reparse-point context for trust-boundary reports
+- Suggested mitigation, if known
 
 [security-advisory]: https://github.com/sebastianspicker/win-mdm-security-hardening-kit/security/advisories/new

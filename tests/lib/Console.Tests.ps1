@@ -16,8 +16,9 @@ param()
 
 BeforeAll {
   # Import the module
-  $modulePath = Join-Path $PSScriptRoot '../../lib/Console.psm1'
-  Import-Module $modulePath -Force
+  $script:ConsoleModulePath = Join-Path $PSScriptRoot '../../lib/Console.psm1'
+  $script:ConsoleModuleSource = Get-Content -LiteralPath $script:ConsoleModulePath -Raw
+  Import-Module $script:ConsoleModulePath -Force
 
   function Join-TestOutputText {
     param([object[]]$Output)
@@ -33,6 +34,27 @@ BeforeAll {
         [string]$_
       }
     }) -join "`n"
+  }
+}
+
+Describe "Resolve-Severity" {
+  It "Uses one canonical mapping for aliases" {
+    $cases = @{
+      Crit     = 'Critical'
+      Err      = 'Error'
+      Failed   = 'Fail'
+      Warn     = 'Warning'
+      Drift    = 'Warning'
+      Passed   = 'OK'
+      Skipped  = 'Skip'
+      Muted    = 'Debug'
+      Note     = 'Info'
+      Unknown  = 'Info'
+    }
+
+    foreach ($case in $cases.GetEnumerator()) {
+      Resolve-Severity -Severity $case.Key | Should -Be $case.Value
+    }
   }
 }
 
@@ -348,6 +370,20 @@ Describe "Get-SeverityPrefix" {
     $result = Get-SeverityPrefix -Severity 'Debug'
     $result | Should -Be '[DEBUG]'
   }
+
+  It "Uses status-specific prefixes after normalization" {
+    Get-SeverityPrefix -Severity 'Warning' | Should -Be '[WARN] '
+    Get-SeverityPrefix -Severity 'Error' | Should -Be '[ERR]  '
+    Get-SeverityPrefix -Severity 'Failed' | Should -Be '[FAIL] '
+  }
+}
+
+Describe "Resolve-Severity" {
+  It "treats null, empty, and whitespace severities as informational" {
+    Resolve-Severity -Severity $null | Should -Be 'Info'
+    Resolve-Severity -Severity '' | Should -Be 'Info'
+    Resolve-Severity -Severity '   ' | Should -Be 'Info'
+  }
 }
 
 Describe "Write-ColoredLine" {
@@ -398,6 +434,24 @@ Describe "Write-DecorativeRule" {
   }
 }
 
+Describe "Write-SummaryHeader" {
+  It "Remains an exported compatibility helper" {
+    $command = Get-Command -Name Write-SummaryHeader -Module Console
+    $command.CommandType | Should -Be 'Function'
+  }
+
+  It "Does not throw with its established parameters" {
+    $displayName = 'UnitTestHost'
+    {
+      Write-SummaryHeader `
+        -Title 'Summary' `
+        -ComputerName $displayName `
+        -Timestamp '2026-01-01' `
+        -FindingsCount 3
+    } | Should -Not -Throw
+  }
+}
+
 Describe "Write-FindingLine" {
   It "Does not throw for valid severity and code" {
     { Write-FindingLine -Severity 'High' -Code 'TEST001' -Message 'A finding' } | Should -Not -Throw
@@ -409,6 +463,10 @@ Describe "Write-FindingLine" {
 }
 
 Describe "Write-ConsoleSummary" {
+  BeforeEach {
+    Mock -CommandName Write-ColoredLine -ModuleName Console -MockWith { $Text }
+  }
+
   It "Does not throw with empty findings array syntax" {
     $summary = [pscustomobject]@{ ComputerName = 'PC'; Timestamp = 'now' }
     $output = Write-ConsoleSummary -Summary $summary -Findings @() 6>&1
@@ -473,11 +531,16 @@ Describe "Write-ConsoleSummary" {
 }
 
 Describe "Console module export surface" {
-  It "Does not export removed wrapper helpers" {
+  It "Removes only the proven dead wrapper helpers" {
     $names = Get-Command -Module Console | Select-Object -ExpandProperty Name
-    foreach ($name in @('Write-PrettySummary', 'Get-ColorForLevel', 'Write-SectionHeader', 'Write-SummaryHeader')) {
+    foreach ($name in @('Write-PrettySummary', 'Get-ColorForLevel', 'Write-SectionHeader')) {
       $names | Should -Not -Contain $name
     }
+    $names | Should -Contain 'Write-SummaryHeader'
+  }
+
+  It "contains no production Write-Host calls" {
+    $script:ConsoleModuleSource | Should -Not -Match '(?m)^\s*Write-Host\b'
   }
 }
 
@@ -536,16 +599,32 @@ Describe "Get-FindingStats" {
     $result = Get-FindingStats -Findings $empty
     $result.Total | Should -Be 0
   }
+
+  It "Classifies status aliases through the canonical mapping" {
+    $result = Get-FindingStats -Findings @(
+      [pscustomobject]@{ Severity = 'Failed' }
+      [pscustomobject]@{ Severity = 'Passed' }
+      [pscustomobject]@{ Severity = 'Note' }
+    )
+
+    $result.Error | Should -Be 1
+    $result.OK | Should -Be 1
+    $result.Info | Should -Be 1
+  }
 }
 
 Describe "Get-StatusColor - Note keyword" {
-  It "Normalizes Note to DarkGray" {
+  It "Normalizes Note to informational Gray" {
     $result = Get-StatusColor -Status 'Note'
-    $result | Should -Be 'DarkGray'
+    $result | Should -Be 'Gray'
   }
 }
 
 Describe "Write-ConsoleSummary - CustomFields parameter" {
+  BeforeEach {
+    Mock -CommandName Write-ColoredLine -ModuleName Console -MockWith { $Text }
+  }
+
   It "Renders custom fields without throwing" {
     $summary = [pscustomobject]@{ ComputerName = 'PC'; Timestamp = 'now' }
     $findings = [System.Collections.ArrayList]@(
@@ -561,7 +640,6 @@ Describe "Write-ConsoleSummary - CustomFields parameter" {
       [pscustomobject]@{ Severity = 'Info'; Code = 'T001'; Message = 'Test' }
     )
     $custom = [ordered]@{ 'Mode' = 'Audit'; 'Source' = 'GPO' }
-    # Capture Write-Host output via 6>&1 (InformationAction)
     $output = Write-ConsoleSummary -Summary $summary -Findings $findings -CustomFields $custom 6>&1
     $text = ($output | Out-String)
     $text | Should -Match 'Mode'

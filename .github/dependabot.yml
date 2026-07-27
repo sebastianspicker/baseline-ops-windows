@@ -1,3 +1,5 @@
+# Schedules bounded weekly updates for the two dependency surfaces used by the
+# repository: pinned GitHub Actions and the Node-based fuzz harness.
 version: 2
 updates:
   - package-ecosystem: github-actions

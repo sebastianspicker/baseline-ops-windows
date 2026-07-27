@@ -7,7 +7,7 @@ optionally compares against a desired-state JSON and can remediate.
 
 .DESCRIPTION
 - Pipeline output: single structured object (Summary, Findings, ParsedPolicies).
-- Console output: pretty, human-friendly blocks via Write-UiLine only.
+- Console output: formatted blocks via Write-UiLine only.
 - Desired policy:
   - If JSON is missing/unreadable/invalid => built-in defaults are used for drift checks only.
   - Remediate requires a valid JSON file.
@@ -17,7 +17,7 @@ optionally compares against a desired-state JSON and can remediate.
 Audit | Remediate
 
 .PARAMETER DesiredPolicyJson
-Path to JSON with desired subcategory settings (example: PATH/TO/JSON/auditpolicy.json).
+Path to JSON with desired subcategory settings supplied with $DesiredPolicyJson.
 
 .PARAMETER ExportPath
 Optional base path for CSV export. Creates: *_summary.csv, *_findings.csv, *_policies.csv
@@ -84,7 +84,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -96,10 +100,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # C10: use canonical Get-FindingsList from Results.psm1
@@ -113,8 +118,12 @@ $script:Findings = Get-FindingsList
 function Get-AuditPolText {
   # Use /r flag for CSV output (locale-independent)
   $r = Invoke-Auditpol -Arguments @('/get', '/category:*', '/r') -CaptureOutput
-  if ($r -and $r.Output) { return ($r.Output | Out-String) }
-  return ''
+  if ($null -eq $r) { throw 'auditpol did not return a process result.' }
+  if ($r.TimedOut) { throw 'auditpol evidence query timed out.' }
+  if ($r.OutputTruncated -or $r.StderrTruncated) { throw 'auditpol evidence query produced truncated output.' }
+  if (-not $r.Success) { throw "auditpol exited with code $($r.ExitCode)." }
+  if ([string]::IsNullOrWhiteSpace([string]$r.Stdout)) { throw 'auditpol evidence query returned no CSV output.' }
+  return [string]$r.Stdout
 }
 
 function Parse-AuditPolText {
@@ -123,37 +132,44 @@ function Parse-AuditPolText {
   # Return policies as object[] (arrays behave best in PS pipeline and serializers).
   $policies = @()
 
-  if ([string]::IsNullOrWhiteSpace($Text)) { return ,$policies }
+  if ([string]::IsNullOrWhiteSpace($Text)) { throw 'auditpol CSV is empty.' }
 
   # Parse CSV output from auditpol /get /category:* /r (locale-independent)
-  $lines = $Text -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-  if ($lines.Count -lt 2) { return ,$policies }
+  $lines = @($Text -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($lines.Count -lt 2) { throw 'auditpol CSV has no data rows.' }
 
-  $csvRows = $lines | ConvertFrom-Csv
+  $csvRows = @($lines | ConvertFrom-Csv -ErrorAction Stop)
+  $seenGuids = @{}
+  $seenSubcategories = @{}
   foreach ($row in $csvRows) {
-    $sub = $null
-    $cat = $null
-    $set = $null
-
-    # CSV columns from auditpol /r: Machine Name, Policy Target, Subcategory, Subcategory GUID, Inclusion Setting, Exclusion Setting
-    foreach ($p in $row.PSObject.Properties) {
-      $name = $p.Name
-      if ($name -match '(?i)^Subcategory$' -and $null -eq $sub) { $sub = [string]$p.Value }
-      if ($name -match '(?i)Category') { $cat = [string]$p.Value }
-      if ($name -match '(?i)Inclusion Setting') { $set = [string]$p.Value }
+    # /r has a stable six-column order even when display headers are localized:
+    # machine, target, subcategory, subcategory GUID, inclusion, exclusion.
+    $properties = @($row.PSObject.Properties)
+    if ($properties.Count -lt 6) { throw 'auditpol CSV row has fewer than six columns.' }
+    $sub = [string]$properties[2].Value
+    $guidText = [string]$properties[3].Value
+    $set = [string]$properties[4].Value
+    $guid = [guid]::Empty
+    if ([string]::IsNullOrWhiteSpace($sub) -or [string]::IsNullOrWhiteSpace($set) -or -not [guid]::TryParse($guidText, [ref]$guid)) {
+      throw 'auditpol CSV contains an invalid subcategory, GUID, or inclusion setting.'
     }
-
-    if (-not [string]::IsNullOrWhiteSpace($sub) -and -not [string]::IsNullOrWhiteSpace($set)) {
-      if ([string]::IsNullOrWhiteSpace($cat)) { $cat = '(Unknown)' }
-      $policies += [pscustomobject]@{
-        Category    = $cat
-        Subcategory = $sub
-        Setting     = $set
-      }
+    $guidKey = $guid.ToString('D')
+    if ($seenGuids.ContainsKey($guidKey) -or $seenSubcategories.ContainsKey($sub)) {
+      throw 'auditpol CSV contains duplicate subcategory evidence.'
+    }
+    $seenGuids[$guidKey] = $true
+    $seenSubcategories[$sub] = $true
+    $policies += [pscustomobject]@{
+      Category        = '(NotReported)'
+      Subcategory     = $sub
+      SubcategoryGuid = $guidKey
+      Setting         = $set
     }
   }
 
-  ,$policies
+  if ($policies.Count -lt 10) { throw 'auditpol CSV contains too few policy rows to be complete.' }
+
+  $policies
 }
 
 function Convert-DesiredSettingToFlags {
@@ -202,7 +218,7 @@ function Try-ReadDesiredPolicyJson {
   }
 
   try {
-    $desired = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8 | ConvertFrom-Json
+    $desired = Get-BoundedUtf8FileContent -Path $sanitized -MaximumBytes 1048576 | ConvertFrom-Json
     if ($null -eq $desired -or $desired -isnot [psobject]) { throw "Invalid JSON root object." }
 
     # Validate values up-front (prevents remediation surprises).
@@ -259,14 +275,21 @@ function Write-FindingsConsole {
 Require-Admin
 Ensure-Exe -Name 'auditpol.exe'
 
-$txt = Get-AuditPolText
-$policies = Parse-AuditPolText -Text $txt
+$auditEvidenceComplete = $true
+$policies = @()
+try {
+  $txt = Get-AuditPolText
+  $policies = Parse-AuditPolText -Text $txt
+} catch {
+  $auditEvidenceComplete = $false
+  Add-Finding -FindingList $script:Findings -Code 'AUD-EvidenceIncomplete' -Severity 'High' -Message ("Audit policy evidence is incomplete: {0}" -f $_.Exception.Message)
+}
 
 if ($policies.Count -eq 0) {
   Add-Finding -FindingList $script:Findings -Code 'AUD-ParserEmpty' -Severity 'High' -Message 'Parsed 0 audit policies. Check parser/locale/Windows version.'
 }
 
-# Basic checks (kept from your version).
+# Basic audit checks.
 $mustHave = @(
   @{ CategoryLike='Logon*';         SubLike='Logon';               Severity='High';   Code='AUD-LogonOff';         Message='Logon auditing is disabled (No Auditing).' },
   @{ CategoryLike='Account Logon*'; SubLike='Kerberos*';           Severity='Medium'; Code='AUD-KerberosOff';      Message='Kerberos auditing is disabled (No Auditing).' },
@@ -274,13 +297,13 @@ $mustHave = @(
 )
 
 foreach ($m in $mustHave) {
-  $hit = $policies | Where-Object { ($_.Category -like $m.CategoryLike) -and ($_.Subcategory -like $m.SubLike) } | Select-Object -First 1
+  $hit = $policies | Where-Object { $_.Subcategory -like $m.SubLike } | Select-Object -First 1
   if ($hit) {
     if ([string]$hit.Setting -match 'No Auditing') {
       Add-Finding -FindingList $script:Findings -Code $m.Code -Severity $m.Severity -Message ("{0} Category='{1}', Subcategory='{2}', Setting='{3}'." -f $m.Message, $hit.Category, $hit.Subcategory, $hit.Setting)
     }
   } else {
-    Add-Finding -FindingList $script:Findings -Code 'AUD-ParserMiss' -Severity 'Info' -Message ("Could not find subcategory (parser/locale): {0}/{1}" -f $m.CategoryLike, $m.SubLike)
+    Add-Finding -FindingList $script:Findings -Code 'AUD-ParserMiss' -Severity 'High' -Message ("Required audit subcategory is missing from complete evidence: {0}" -f $m.SubLike)
   }
 }
 
@@ -310,9 +333,9 @@ foreach ($catProp in $desired.PSObject.Properties) {
     $subName = $subProp.Name
     $wanted  = [string]$subProp.Value
 
-    $current = $policies | Where-Object { ($_.Category -eq $catName) -and ($_.Subcategory -eq $subName) } | Select-Object -First 1
+    $current = $policies | Where-Object { $_.Subcategory -eq $subName } | Select-Object -First 1
     if (-not $current) {
-      Add-Finding -FindingList $script:Findings -Code 'AUD-DesiredNotFound' -Severity 'Info' -Message ("Desired policy has '{0} -> {1}', but it was not found in auditpol output." -f $catName, $subName)
+      Add-Finding -FindingList $script:Findings -Code 'AUD-DesiredNotFound' -Severity 'High' -Message ("Desired policy has '{0} -> {1}', but it was not found in auditpol output." -f $catName, $subName)
       continue
     }
 
@@ -324,14 +347,22 @@ foreach ($catProp in $desired.PSObject.Properties) {
 
 # Remediation: only with valid JSON (never with defaults).
 if ($Mode -eq 'Remediate') {
+  if (-not $auditEvidenceComplete) {
+    $msg = 'Mode=Remediate requires complete pre-remediation audit policy evidence.'
+    Add-Finding -FindingList $script:Findings -Code 'AuditPol-IncompletePrecondition' -Severity 'Critical' -Message $msg
+    $v2Result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
+    Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+    if ($PassThru) { $v2Result }
+    exit (Get-V2ExitCode -Result 'FAIL')
+  }
   if ($desiredInfo.Source -ne 'Json') {
-    $msg = "Mode=Remediate requires a valid -DesiredPolicyJson (not defaults). Example: PATH/TO/JSON/auditpolicy.json"
+    $msg = 'Mode=Remediate requires a readable file passed with -DesiredPolicyJson; built-in defaults cannot be remediated.'
     Write-Warning $msg
     Add-Finding -FindingList $script:Findings -Code 'AuditPol-NoDesiredPolicy' -Severity 'Critical' -Message $msg
     $v2Result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
     Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
     if ($PassThru) { $v2Result }
-    exit 1
+    exit (Get-V2ExitCode -Result 'FAIL')
   }
 
   foreach ($catProp in $desired.PSObject.Properties) {
@@ -363,8 +394,21 @@ if ($Mode -eq 'Remediate') {
     }
   }
 
-  $txt = Get-AuditPolText
-  $policies = Parse-AuditPolText -Text $txt
+  try {
+    $txt = Get-AuditPolText
+    $policies = Parse-AuditPolText -Text $txt
+    foreach ($catProp in $desired.PSObject.Properties) {
+      foreach ($subProp in $catProp.Value.PSObject.Properties) {
+        $verified = $policies | Where-Object { $_.Subcategory -eq $subProp.Name } | Select-Object -First 1
+        if (-not $verified -or [string]$verified.Setting -ne [string]$subProp.Value) {
+          Add-Finding -FindingList $script:Findings -Code 'AuditPol-PostconditionFailed' -Severity 'High' -Message ("Post-remediation policy mismatch: {0} -> {1}." -f $catProp.Name,$subProp.Name)
+        }
+      }
+    }
+  } catch {
+    $auditEvidenceComplete = $false
+    Add-Finding -FindingList $script:Findings -Code 'AUD-PostRemediationEvidenceIncomplete' -Severity 'High' -Message ("Post-remediation audit evidence is incomplete: {0}" -f $_.Exception.Message)
+  }
 }
 
 # Summary object (materialized primitives to keep StrictMode and serialization safe).
@@ -393,7 +437,7 @@ if ($ExportPath) {
   $policies              | Export-Csv -Path (Join-Path $folder ($base + "_policies.csv"))  -NoTypeInformation -Encoding UTF8
 }
 
-# Pretty console output (does not touch pipeline).
+# Formatted console output (does not write to the pipeline).
 $customFields = [ordered]@{
   'Mode'          = $summary.Mode
   'Parsed'        = [string]$summary.PoliciesParsed
@@ -406,8 +450,8 @@ Write-ConsoleSummary -Summary $summary -Findings $script:Findings `
 Write-FindingsConsole -Findings $script:Findings
 
 # V2 output contract
-$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$resultToken = if (-not $auditEvidenceComplete) { 'FAIL' } elseif ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
 $v2Result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ ParsedPolicies = $policies }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

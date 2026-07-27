@@ -18,7 +18,7 @@ Recommended file encoding: UTF-8 with BOM or UTF-16LE.
 
 .CONFIGURATION
 Optional JSON config:
-  ... Config PATH/TO/JSON
+  ... Config $ConfigPath
 
 Example JSON:
 {
@@ -30,14 +30,14 @@ Example JSON:
   "VerifyLookbackHours": 24,
   "CollectCodeIntegrity": false,
   "CILookbackHours": 24,
-  "ExportPath": "PATH/TO/JSON",
+  "ExportPath": "[configured path]",
   "Quiet": false
 }
 
 .USAGE (positional args)
   .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1
-  .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 Remediate 2 Boot Verify 168 CI 168 SetZero Export PATH/TO/JSON
-  .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 Audit 1 x x 24 x 24 SetZero x x Config PATH/TO/JSON Quiet
+  .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 Remediate 2 Boot Verify 168 CI 168 SetZero Export $ExportPath
+  .\40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 Audit 1 x x 24 x 24 SetZero x x Config $ConfigPath Quiet
 
 ARGS (positional)
   0: Mode                 Audit | Remediate
@@ -49,9 +49,9 @@ ARGS (positional)
   6: CILookbackHours      integer (default 24)
   7: DisableMethod        SetZero | DeleteValue (default SetZero; only relevant if TargetRunAsPPL=0)
   8: Export               literal "Export"
-  9: ExportPath           PATH/TO/JSON
+  9: ExportPath           $ExportPath
  10: Config               literal "Config"
- 11: ConfigPath           PATH/TO/JSON
+ 11: ConfigPath           $ConfigPath
  12: Quiet                literal "Quiet"
 
 .PARAMETER Mode
@@ -115,7 +115,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -127,10 +131,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # ----------------------------
@@ -435,7 +440,7 @@ function Export-ResultJson {
 }
 
 # ----------------------------
-# Pretty console output (no pipeline output)
+# Formatted console output (no pipeline output)
 # ----------------------------
 function Write-PrettySummary {
   param([Parameter(Mandatory)][object]$Result)
@@ -666,8 +671,8 @@ $result = [pscustomobject]@{
     FindingsCount       = [int]$Findings.Count
     Changes             = @($Changes.ToArray())
     Timestamp           = (Get-Date)
-    ConfigPathUsed      = if ($configPath) { 'PATH/TO/JSON' } else { $null }
-    ExportPathUsed      = if ($ExportPath) { 'PATH/TO/JSON' } else { $null }
+    ConfigPathUsed      = if ($configPath) { '[configured path]' } else { $null }
+    ExportPathUsed      = if ($ExportPath) { '[configured path]' } else { $null }
     VerifyLookbackHours = $VerifyLookbackHours
     CILookbackHours     = $CILookbackHours
   }
@@ -689,4 +694,4 @@ $resultToken = if ($registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findin
 $v2Result = Get-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

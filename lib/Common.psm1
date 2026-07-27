@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-Import-Module (Join-Path $PSScriptRoot 'Validation.psm1') -Force -Global
-
 <#
 .SYNOPSIS
 Common utility functions shared across all scripts.
@@ -9,6 +6,9 @@ Common utility functions shared across all scripts.
 Provides general-purpose helpers for caller variable lookup, admin detection,
 directory creation, path sanitization, and property existence checks.
 #>
+
+Set-StrictMode -Version Latest
+Microsoft.PowerShell.Core\Import-Module ([System.IO.Path]::Combine($PSScriptRoot, 'Validation.psm1'))
 
 <#
 .SYNOPSIS
@@ -32,13 +32,14 @@ function Get-CallerValue {
   # - Results.psm1: Add-Finding can fall back to caller $Findings.
   # - EventLog.psm1: Ensure-EventSource and Write-HealthEvent read
   #   EventSource/EventLogName, with deprecated global aliases only when asked.
-  # TODO: Replace hidden caller-scope contracts with explicit parameters.
+  # Compatibility limitation: these modules still depend on caller-scope state
+  # instead of explicit parameters.
   foreach ($scope in 1..$ScopeDepth) {
     try {
       $var = Get-Variable -Name $Name -Scope $scope -ErrorAction Stop
       return $var.Value
     } catch {
-      # continue
+      continue
     }
   }
 
@@ -47,7 +48,7 @@ function Get-CallerValue {
       $var = Get-Variable -Name $Name -Scope Global -ErrorAction Stop
       return $var.Value
     } catch {
-      # no global fallback value
+      return $null
     }
   }
 
@@ -130,14 +131,13 @@ function Ensure-Directory {
   param([Parameter(Mandatory)][AllowEmptyString()][string]$Path)
 
   if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-  if (Test-PathTraversal -Path $Path) {
+  if (Validation\Test-PathTraversal -Path $Path) {
     Write-Warning "Ensure-Directory: Path must not contain path traversal segments ('..')."
     return $false
   }
   try {
     if (-not (Test-Path -LiteralPath $Path)) {
-      $literalSafePath = [System.Management.Automation.WildcardPattern]::Escape($Path)
-      New-Item -Path $literalSafePath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+      [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($Path))
     }
     return $true
   } catch {
@@ -184,7 +184,7 @@ function Sanitize-Path {
     $expanded = [Environment]::ExpandEnvironmentVariables($Path)
     if ([string]::IsNullOrWhiteSpace($expanded)) { return $null }
 
-    if (Test-PathTraversal -Path $expanded) {
+    if (Validation\Test-PathTraversal -Path $expanded) {
       Write-Warning "Path traversal not allowed: path rejected."
       return $null
     }
@@ -192,7 +192,7 @@ function Sanitize-Path {
     if ($MustExist) {
       if (Test-Path -LiteralPath $expanded) {
         $resolved = [System.IO.Path]::GetFullPath($expanded)
-        if (Test-PathTraversal -Path $resolved) { return $null }
+        if (Validation\Test-PathTraversal -Path $resolved) { return $null }
         return $resolved
       }
       return $null
@@ -216,7 +216,11 @@ function Sanitize-Path {
 #>
 function Has-Property {
   param([object]$Object, [string]$Name)
-  return $null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name
+  if ($null -eq $Object) { return $false }
+  if ($Object -is [System.Collections.IDictionary]) {
+    return $Object.Contains($Name)
+  }
+  return $Object.PSObject.Properties.Name -contains $Name
 }
 
 <#

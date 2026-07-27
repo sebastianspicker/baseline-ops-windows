@@ -78,7 +78,7 @@
   Checks compliance and triggers Windows LAPS password rotation if rotation is due.
   If Windows LAPS is not active, the script will not attempt remediation.
 .EXAMPLE
-  .\02-LAPS-Hygiene.ps1 -ConfigPath 'PATH/TO/JSON/config.json'
+  .\02-LAPS-Hygiene.ps1 -ConfigPath $ConfigPath
   Uses the specified JSON file to override selected defaults (for example event log, console, remediation options).
 .EXAMPLE
   # Automation-friendly usage (export pipeline object)
@@ -88,10 +88,10 @@
   # CI/MDM-style check (exit code indicates health)
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\02-LAPS-Hygiene.ps1
   if ($LASTEXITCODE -ne 0) { 'NOT OK' } else { 'OK' }
-  Uses the script exit code (0 = OK, 1 = NOT OK) for simple integration checks.
+  Uses the script exit code (0 = OK, 2 = WARN, 1 = FAIL) for simple integration checks.
 .NOTES
   Behavior and design decisions:
-  - The pipeline output is always exactly one object; all “pretty” console formatting is printed separately.
+  - The pipeline output is always exactly one object; console formatting is written separately.
   - Event log writing is best-effort: if permissions or source registration prevent writing, the script continues.
   - Remediation is intentionally limited to Windows LAPS; Legacy LAPS remediation is not implemented.
   - Device join detection and some account properties are best-effort and may vary by OS and available modules.
@@ -117,7 +117,12 @@ Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '02-LAPS-Hygiene.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '02-LAPS-Hygiene.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -129,10 +134,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # --------------------------- Defaults / Config -------------------------------------
@@ -209,7 +215,7 @@ function Get-ConfigFromJson {
   try {
     $sanitized = Sanitize-Path -Path $Path -MustExist
     if (-not $sanitized) { return $cfg }
-    $raw = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $sanitized -MaximumBytes 1048576
     if (-not $raw -or -not $raw.Trim()) { return $cfg }
     $j = $raw | ConvertFrom-Json -ErrorAction Stop
     return (Merge-ConfigObject -Base $cfg -Override $j)
@@ -223,7 +229,7 @@ if ($MinDaysBeforeRotate -lt 0) { $MinDaysBeforeRotate = 0 }
 if ([int]$Config.PolicyDefaults.PasswordAgeDays -lt 1) { $Config.PolicyDefaults.PasswordAgeDays = 30 }
 if ([int]$Config.Remediation.SleepAfterRotateSec -lt 0) { $Config.Remediation.SleepAfterRotateSec = 0 }
 if ([int]$Config.Console.Width -lt 40) { $Config.Console.Width = 60 }
-# --------------------------- Pretty Console Helpers --------------------------------
+# --------------------------- Formatted Console Helpers --------------------------------
 # Never type UI parameters as [bool]; accept anything and normalize internally.
 function ConvertTo-BoolSafe {
   [CmdletBinding()]
@@ -266,12 +272,7 @@ function Try-WriteHealthEvent {
     [Parameter(Mandatory)][string]$LogName
   )
   if (-not $Enabled) { return $false }
-  try {
-    Write-EventLog -LogName $LogName -Source $Source -EntryType $Level -EventId $Id -Message $Msg -ErrorAction Stop
-    return $true
-  } catch {
-    return $false
-  }
+  return [bool](Write-HealthEvent -LogName $LogName -Source $Source -Level $Level -Id $Id -Message $Msg)
 }
 # --------------------------- Core Helpers ------------------------------------------
 function To-Iso {
@@ -666,7 +667,7 @@ if ($Config.EventLog.Enabled) {
   if ($result.OkOverall) { $eventId = $Config.EventLog.OkEventId; $eventLevel = 'Information' }
   $null = Try-WriteHealthEvent -Enabled $Config.EventLog.Enabled -Id $eventId -Msg $eventMessage -Level $eventLevel -Source $Config.EventLog.Source -LogName $Config.EventLog.LogName
 }
-# Pretty console (never via pipeline)
+# Formatted console output (never via pipeline)
 Write-UiLine -Text "" -Style 'Default'
 Write-UiSeparator -Char '=' -Width $Config.Console.Width -Style 'Dim'
 Write-UiLine -Text "LAPS Hygiene (Windows PowerShell 5.1)" -Style 'Title'
@@ -713,8 +714,8 @@ if ($result.DiagnosticsCollected) {
 }
 # V2 output contract
 $resultToken = if (-not $result.OkOverall) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '02-LAPS-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-# Exit code for CI/MDM
-if ($result.OkOverall) { exit 0 } else { exit 1 }
+exit (Get-V2ExitCode -Result $resultToken)

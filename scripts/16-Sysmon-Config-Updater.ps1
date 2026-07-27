@@ -89,25 +89,25 @@
   - Actions (string[]), Warnings (string[])
 .EXAMPLE
   # Audit a specific config file (no changes)
-  .\16-Sysmon-Config-Updater.ps1 -ConfigPath "PATH/TO/sysmon.xml"
+  .\16-Sysmon-Config-Updater.ps1 -ConfigPath $ConfigPath
 .EXAMPLE
   # Remediate: apply the config if drift is detected (or install if missing)
-  .\16-Sysmon-Config-Updater.ps1 -ConfigPath "PATH/TO/sysmon.xml" -Mode Remediate
+  .\16-Sysmon-Config-Updater.ps1 -ConfigPath $ConfigPath -Mode Remediate
 .EXAMPLE
   # Select config from a directory using a name hint, audit-only
-  .\16-Sysmon-Config-Updater.ps1 -SourceDir "PATH/TO/configs" -ConfigNameHint "prod"
+  .\16-Sysmon-Config-Updater.ps1 -SourceDir $SourceDir -ConfigNameHint "prod"
 .EXAMPLE
   # Use a manifest and a directory (manifest may specify Config.File, AllowedHashes, MinEngine)
-  .\16-Sysmon-Config-Updater.ps1 -ManifestPath "PATH/TO/manifest.json" -SourceDir "PATH/TO/payload" -Mode Remediate
+  .\16-Sysmon-Config-Updater.ps1 -ManifestPath $ManifestPath -SourceDir $SourceDir -Mode Remediate
 .EXAMPLE
   # Enforce Sysmon Operational channel settings during remediation
-  .\16-Sysmon-Config-Updater.ps1 -ConfigPath "PATH/TO/sysmon.xml" -EnsureChannel -ChannelSizeMiB 256 -Mode Remediate
+  .\16-Sysmon-Config-Updater.ps1 -ConfigPath $ConfigPath -EnsureChannel -ChannelSizeMiB 256 -Mode Remediate
 .EXAMPLE
   # Export the structured result (pipeline-safe)
-  .\16-Sysmon-Config-Updater.ps1 -ConfigPath "PATH/TO/sysmon.xml" | Export-Csv -NoTypeInformation -Path "PATH/TO/result.csv"
+  .\16-Sysmon-Config-Updater.ps1 -ConfigPath $ConfigPath | Export-Csv -NoTypeInformation -Path $OutputPath
 .NOTES
   Behavior on missing/invalid JSON:
-  - Manifest: if missing/invalid, the script continues with empty defaults (no allowlist enforcement, no MinEngine enforcement, no preferred file name).
+  - An explicitly supplied manifest must exist and conform to the expected shape. Missing, invalid, or unsafe manifests block Sysmon installation and config application.
   - State: if missing/invalid, the script continues with empty defaults (drift detection may rely on runtime dump hash and current desired hash).
   Idempotency and drift:
   - In audit mode (-Mode Audit), the script reports non-OK when it detects drift or required settings are not compliant.
@@ -125,7 +125,7 @@ param(
   [switch]$EnsureChannel,
   [ValidateRange(1, 4096)]
   [int]$ChannelSizeMiB = 256,
-  # Anonymized default (override in production)
+  # Optional caller input; runtime resolves a protected default state path.
   [string]$StatePath,
   [string]$ConfigPathFallback,
   [string]$MinEngine,
@@ -152,9 +152,16 @@ Import-Module (Join-Path $script:LibPath 'Evidence.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'internal/16-Sysmon-Config-Updater.helpers.ps1')
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '16-Sysmon-Config-Updater.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '16-Sysmon-Config-Updater.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -166,312 +173,17 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '16-Sysmon-Config-Updater.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $resultToken = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '16-Sysmon-Config-Updater.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $resultToken)
 }
+
+$StatePath = Get-SysmonStatePath -RequestedPath $StatePath -FileName 'config-updater-state.json'
 
 # C10: canonical findings list
 $script:Findings = Get-FindingsList
-# -----------------------------
-# Helper functions (EN comments for GitHub)
-# -----------------------------
-function Parse-Version([string]$s){
-  if ([string]::IsNullOrWhiteSpace($s)) { return $null }
-  $m = [regex]::Match($s, '(\d+)\.(\d+)(?:\.(\d+))?')
-  if (-not $m.Success) { return $null }
-  return [pscustomobject]@{
-    A   = [int]$m.Groups[1].Value
-    B   = [int]$m.Groups[2].Value
-    C   = if($m.Groups[3].Success){[int]$m.Groups[3].Value}else{0}
-    Raw = $s
-  }
-}
-function Cmp-Ver($x,$y){
-  if (-not $x -and -not $y) { return 0 }
-  if (-not $x) { return -1 }
-  if (-not $y) { return 1 }
-  foreach($k in 'A','B','C'){
-    if ($x.$k -gt $y.$k){ return 1 }
-    if ($x.$k -lt $y.$k){ return -1 }
-  }
-  return 0
-}
-function Resolve-SysmonExe {
-  param([string]$Hint)
-  foreach($svc in 'Sysmon64','Sysmon'){
-    try {
-      $s = Get-ItemProperty -Path ("HKLM:\SYSTEM\CurrentControlSet\Services\" + $svc) -ErrorAction Stop
-      if ($s -and $s.ImagePath) {
-        $img = [Environment]::ExpandEnvironmentVariables([string]$s.ImagePath)
-        # Tokenize the ImagePath to robustly get the executable path.
-        $nullRef = $null
-        $tok = [System.Management.Automation.PSParser]::Tokenize($img, [ref]$nullRef) |
-               Where-Object { $_.Type -in @('Command','CommandArgument') } |
-               Select-Object -First 1
-        if ($tok) {
-          $exePath = $tok.Content.Trim('"')
-          if (Test-Path -LiteralPath $exePath) { return $exePath }
-        }
-        # Fallback: best-effort extraction of "<drive>:\...\.exe".
-        $m = [regex]::Match($img, '(?i)([a-z]:\\[^"]+?\.exe)')
-        if ($m.Success) {
-          $cand = $m.Groups[1].Value
-          if (Test-Path -LiteralPath $cand) { return $cand }
-        }
-      }
-      } catch {
-        Write-Verbose ("Sysmon service image path probe failed for '{0}': {1}" -f $svc,$_.Exception.Message)
-      }
-  }
-  if ($Hint -and (Test-Path -LiteralPath $Hint)) { return $Hint }
-  foreach($c in @(
-    "$env:SystemRoot\Sysmon64.exe",
-    "$env:SystemRoot\Sysmon.exe",
-    "$env:ProgramFiles\Sysmon\Sysmon64.exe",
-    "$env:ProgramFiles\Sysmon\Sysmon.exe"
-  )){
-    if (Test-Path -LiteralPath $c) { return $c }
-  }
-  return $null
-}
-function Get-SysmonServiceName(){
-  foreach($n in 'Sysmon64','Sysmon'){
-    try { $null = Get-Service -Name $n -ErrorAction Stop; return $n } catch {
-      Write-Verbose ("Sysmon service name probe failed for '{0}': {1}" -f $n,$_.Exception.Message)
-    }
-  }
-  return $null
-}
-function Get-SysmonEngineVersion([string]$Exe,[switch]$SkipProcessLaunch){
-  if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $null }
-  # Primary: file version metadata.
-  try {
-    $pv = (Get-Item -LiteralPath $Exe -ErrorAction Stop).VersionInfo.ProductVersion
-    $v  = Parse-Version $pv
-    if ($v) { return $v }
-  } catch {
-    Write-Verbose ("Sysmon file version metadata read failed for '{0}': {1}" -f $Exe,$_.Exception.Message)
-  }
-  # Fallback: parse help text (sysmon -?). This launches the Sysmon binary, so
-  # WhatIf runs can suppress it and stay side-effect free.
-  if ($SkipProcessLaunch) { return $null }
-  try {
-    $tempOut = [IO.Path]::GetTempFileName()
-    $tempErr = [IO.Path]::GetTempFileName()
-    $p = Start-Process -FilePath $Exe -ArgumentList '-?' -PassThru -WindowStyle Hidden `
-         -RedirectStandardOutput $tempOut -RedirectStandardError $tempErr
-    $p.WaitForExit() | Out-Null
-    $txt = (Get-Content -Raw -LiteralPath $tempOut -ErrorAction SilentlyContinue) + "`n" +
-           (Get-Content -Raw -LiteralPath $tempErr -ErrorAction SilentlyContinue)
-    Remove-Item $tempOut,$tempErr -Force -ErrorAction SilentlyContinue
-    $m = [regex]::Match($txt, '(?i)\bsysmon v(?<v>\d+\.\d+(?:\.\d+)?)\b')
-    if ($m.Success) { return Parse-Version $m.Groups['v'].Value }
-  } catch {
-    Write-Verbose ("Sysmon help text version extraction failed for '{0}': {1}" -f $Exe,$_.Exception.Message)
-  }
-  return $null
-}
-function Load-JsonOrDefault {
-  param(
-    [string]$Path,
-    [hashtable]$DefaultObject
-  )
-  if (-not $DefaultObject) { $DefaultObject = @{} }
-  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $DefaultObject }
-  try {
-    $raw = Get-Content -Raw -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultObject }
-    $obj = $raw | ConvertFrom-Json -ErrorAction Stop
-    if ($null -eq $obj) { return $DefaultObject }
-    return $obj
-  } catch {
-    return $DefaultObject
-  }
-}
-function Select-ConfigFile([string]$Path,[string]$Dir,[string]$NameHint,[object]$Manifest){
-  if ($Path -and (Test-Path -LiteralPath $Path)) { return (Get-Item -LiteralPath $Path) }
-  if ($Manifest -and $Manifest.Config -and $Manifest.Config.File) {
-    $m = [string]$Manifest.Config.File
-    if ($Dir) {
-      $cand = Join-Path $Dir $m
-      if (Test-Path -LiteralPath $cand) { return (Get-Item -LiteralPath $cand) }
-    }
-    if ($Path) {
-      $cand2 = Join-Path (Split-Path -Parent $Path) $m
-      if (Test-Path -LiteralPath $cand2) { return (Get-Item -LiteralPath $cand2) }
-    }
-  }
-  if ($Dir -and (Test-Path -LiteralPath $Dir)) {
-    $all = Get-ChildItem -LiteralPath $Dir -Filter '*.xml' -File -ErrorAction SilentlyContinue
-    if ($NameHint) { $all = $all | Where-Object { $_.Name -match $NameHint } }
-    if (-not $all -or $all.Count -eq 0) { return $null }
-    $ranked = $all | ForEach-Object {
-      $mm = [regex]::Match($_.Name,'v(\d+\.\d+(\.\d+)?)')
-      [pscustomobject]@{
-        File  = $_
-        Score = if($mm.Success){ [double]($mm.Groups[1].Value -replace '\.','') } else { 0 }
-        Time  = $_.LastWriteTimeUtc
-      }
-    }
-    return ($ranked |
-      Sort-Object -Property @{Expression='Score';Descending=$true}, @{Expression='Time';Descending=$true} |
-      Select-Object -First 1).File
-  }
-  return $null
-}
-function Validate-ConfigXml([string]$file){
-  try {
-    [xml]$x = Get-Content -Raw -LiteralPath $file -Encoding UTF8 -ErrorAction Stop
-    if (-not $x) { return $false,"empty xml" }
-    $root = $x.DocumentElement
-    if (-not $root) { return $false,"no root element" }
-    if ($root.Name -notin @('Sysmon','sysmon')) { return $false,("unexpected root: " + $root.Name) }
-    $sv = $root.GetAttribute('schemaversion')
-    if ($sv) { return $true, ("schema=" + $sv) }
-    return $true, "schema=n/a"
-  } catch {
-    return $false, $_.Exception.Message
-  }
-}
-function Ensure-SysmonChannel {
-  [CmdletBinding(SupportsShouldProcess = $true)]
-  param([switch]$DoIt,[int]$MiB,[System.Management.Automation.PSCmdlet]$Cmdlet)
-  $name = 'Microsoft-Windows-Sysmon/Operational'
-  $ok=$true; $msgs=@()
-  try {
-    # S9 fix: use Invoke-Wevtutil wrapper with array-based args instead of direct wevtutil calls
-    $glResult = Invoke-Wevtutil -Arguments @('gl', $name) -CaptureOutput
-    $q = if ($glResult -and $glResult.Output) { $glResult.Output } else { '' }
-    $enabled = ($q -match 'enabled:\s*true')
-    if (-not $enabled) {
-      # Event-channel enable/resize operations mutate host logging state, so
-      # they use the parent script's ShouldProcess decision.
-      if ($DoIt) {
-        if ($Cmdlet.ShouldProcess($name, 'Enable Sysmon Operational event channel')) {
-          $wevtOk = Invoke-Wevtutil -Arguments @('sl', $name, '/e:true')
-          if ($wevtOk) {
-            $msgs += "enabled"
-          } else {
-            $ok=$false
-            $msgs += "enable failed"
-          }
-        } else {
-          $ok=$false
-          $msgs += "enable skipped by ShouldProcess"
-        }
-      } else { $ok=$false }
-    }
-    if ($MiB -gt 0) {
-      $m = [regex]::Match($q,'maximum size:\s*(\d+)')
-      $cur = if ($m.Success){ [int64]$m.Groups[1].Value } else { 0 }
-      $want = [int64]$MiB * 1024 * 1024
-      if ($cur -lt $want -and $DoIt) {
-        if ($Cmdlet.ShouldProcess($name, "Resize Sysmon Operational event channel to $MiB MiB")) {
-          $wevtOk = Invoke-Wevtutil -Arguments @('sl', $name, "/ms:$want")
-          if ($wevtOk) {
-            $msgs += ("size=" + $MiB + "MiB")
-          } else {
-            $ok=$false
-            $msgs += "resize failed"
-          }
-        } else {
-          $ok=$false
-          $msgs += "resize skipped by ShouldProcess"
-        }
-      }
-      elseif ($cur -lt $want) { $ok=$false }
-    }
-  } catch { $ok=$false; $msgs += $_.Exception.Message }
-  return $ok, ($msgs -join '; ')
-}
-function Write-State([string]$p,[hashtable]$obj){
-  try {
-    [void](Ensure-Directory (Split-Path -Parent $p))
-    ($obj | ConvertTo-Json -Depth 8) | Out-File -LiteralPath $p -Encoding UTF8 -Force
-    return $true
-    } catch {
-      Write-Verbose ("Sysmon state write failed for '{0}': {1}" -f $p,$_.Exception.Message)
-      return $false
-    }
-}
-function Get-SysmonCurrentConfigSha256 {
-  param([string]$Exe)
-  # Sysmon: "-c" without file dumps current configuration.
-  if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $null }
-  try {
-    $tempOut = [IO.Path]::GetTempFileName()
-    $tempErr = [IO.Path]::GetTempFileName()
-    $p = Start-Process -FilePath $Exe -ArgumentList '-c' -PassThru -WindowStyle Hidden `
-         -RedirectStandardOutput $tempOut -RedirectStandardError $tempErr
-    $p.WaitForExit() | Out-Null
-    $txt = (Get-Content -Raw -LiteralPath $tempOut -ErrorAction SilentlyContinue) + "`n" +
-           (Get-Content -Raw -LiteralPath $tempErr -ErrorAction SilentlyContinue)
-    Remove-Item $tempOut,$tempErr -Force -ErrorAction SilentlyContinue
-    if ([string]::IsNullOrWhiteSpace($txt)) { return $null }
-    $norm  = ($txt -replace "`r`n","`n").Trim()
-    $bytes = [Text.Encoding]::UTF8.GetBytes($norm)
-    $sha   = [Security.Cryptography.SHA256]::Create()
-    return ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-','').ToLowerInvariant()
-  } catch {
-    return $null
-  }
-}
-function Sanitize-Text {
-  param([string]$Text)
-  if (-not $Text) { return $Text }
-  $t = $Text
-  $t = [regex]::Replace($t, '(?i)\b[a-z]:\\[^\s''"]+', 'PATH/TO/FILE')
-  $t = [regex]::Replace($t, '(?i)\\\\[a-z0-9\.\-]+\\[^\s''"]+', 'PATH/TO/UNC')
-  return $t
-}
-function Write-PrettySummary {
-  param(
-    [hashtable]$Summary,
-    [int]$ChannelSizeMiB,
-    [switch]$Sanitize,
-    [switch]$NoColor
-  )
-  $useColor = -not $NoColor
-  function _Color([string]$Text, [ConsoleColor]$Color) {
-    if (-not $useColor) { Write-UiLine $Text; return }
-    Write-UiLine $Text -ForegroundColor $Color
-  }
-  $ok = [bool]$Summary.Ok
-  $drift = [bool]$Summary.DriftDetected
-  $line = "============================================================"
-  if ($Sanitize) { $line = Sanitize-Text $line }
-  Write-UiLine $line
-  _Color "Sysmon Config Updater" ([ConsoleColor]::Cyan)
-  Write-UiLine ("Timestamp      : " + (Get-Date).ToString("s"))
-  Write-UiLine $line
-  if ($ok) { _Color ("Status         : OK") ([ConsoleColor]::Green) }
-  else { _Color ("Status         : NOT OK") ([ConsoleColor]::Red) }
-  if ($drift) { _Color ("DriftDetected  : True") ([ConsoleColor]::Yellow) }
-  else { Write-UiLine ("DriftDetected  : False") }
-  Write-UiLine ("Remediate      : " + $Summary.Remediate + " (IsAdmin=" + $Summary.IsAdmin + ")")
-  Write-UiLine ("EnsureChannel  : " + $Summary.EnsureChannel + " (SizeMiB=" + $ChannelSizeMiB + ")")
-  Write-UiLine ("ConfigFile     : " + ($(if($Summary.ConfigFile){$Summary.ConfigFile}else{'n/a'})))
-  Write-UiLine ("DesiredSha256  : " + ($(if($Summary.DesiredSha256){$Summary.DesiredSha256}else{'n/a'})))
-  Write-UiLine ("PrevSha256     : " + ($(if($Summary.PrevDesiredSha256){$Summary.PrevDesiredSha256}else{'n/a'})))
-  Write-UiLine ("Service        : " + ($(if($Summary.SysmonService){$Summary.SysmonService}else{'n/a'})))
-  Write-UiLine ("Exe            : " + ($(if($Summary.SysmonExe){$Summary.SysmonExe}else{'n/a'})))
-  Write-UiLine ("EngineVersion  : " + ($(if($Summary.EngineVersion){$Summary.EngineVersion}else{'n/a'})))
-  Write-UiLine ("DumpSha256     : " + ($(if($Summary.CurrentDumpSha256){$Summary.CurrentDumpSha256}else{'n/a'})))
-  Write-UiLine ("StateWritten   : " + $Summary.StateWritten)
-  if ($Summary.Actions -and $Summary.Actions.Count -gt 0) {
-    Write-UiLine ""
-    _Color "Actions:" ([ConsoleColor]::Green)
-    foreach ($a in $Summary.Actions) { Write-UiLine ("  - " + $a) }
-  }
-  if ($Summary.Warnings -and $Summary.Warnings.Count -gt 0) {
-    Write-UiLine ""
-    _Color "Warnings:" ([ConsoleColor]::Yellow)
-    foreach ($w in $Summary.Warnings) { Write-UiLine ("  - " + $w) }
-  }
-  Write-UiLine $line
-}
 # -----------------------------
 # Main
 # -----------------------------
@@ -484,6 +196,9 @@ $installed = $false
 $lines   = @()
 $actions = @()
 $warns   = @()
+$policyBlocked = $false
+$fatalError = $null
+$explicitExeHint = -not [string]::IsNullOrWhiteSpace($SysmonExePath)
 # Structured summary object for pipeline and console
 $summary = [ordered]@{
   Ok                = $false
@@ -504,6 +219,9 @@ $summary = [ordered]@{
   Warnings          = @()
   StateWritten      = $false
   StatePath         = $StatePath
+  PolicyBlocked     = $false
+  ObservedDesiredSha256 = $null
+  LastAppliedSha256 = $null
 }
 try {
   $isAdmin = Test-IsAdmin
@@ -515,7 +233,8 @@ try {
     $ok = $false
     $warns += "Remediate requested but not elevated."
   }
-  # Manifest defaults if missing or invalid JSON
+  # An explicit manifest is policy input: malformed input fails closed rather
+  # than silently turning off its allowlist/minimum-engine requirements.
   $manifestDefault = @{
     MinEngine     = $null
     AllowedHashes = @()
@@ -523,14 +242,26 @@ try {
   }
   $manifest = $manifestDefault
   if ($ManifestPath) {
-    $manifest = Load-JsonOrDefault -Path $ManifestPath -DefaultObject $manifestDefault
+    $manifestCheck = Test-ManifestPolicy -Path $ManifestPath -SourceDirectory $SourceDir
+    if ($manifestCheck.Valid) {
+      $manifest = $manifestCheck.Manifest
+    } else {
+      $policyBlocked = $true
+      $ok = $false
+      $warns += ('Manifest validation failed: ' + $manifestCheck.Reason)
+    }
   }
-  if ((-not $MinEngine) -and $manifest -and $manifest.MinEngine) { $MinEngine = [string]$manifest.MinEngine }
+  if ((-not $MinEngine) -and $manifest -and $manifest.PSObject.Properties['MinEngine'] -and $manifest.MinEngine) { $MinEngine = [string]$manifest.MinEngine }
   $summary.MinEngineRequired = $MinEngine
   $minEngVer = $null
   if ($MinEngine) { $minEngVer = Parse-Version $MinEngine }
+  if ($MinEngine -and -not $minEngVer) {
+    $policyBlocked = $true
+    $ok = $false
+    $warns += 'MinEngine must be a version string.'
+  }
   $allowHashes = @()
-  if ($manifest -and $manifest.AllowedHashes) {
+  if ($manifest -and $manifest.PSObject.Properties['AllowedHashes'] -and $manifest.AllowedHashes) {
     $allowHashes = @($manifest.AllowedHashes | ForEach-Object { $_.ToString().ToLowerInvariant() })
   }
   # Select config file from explicit path, dir or manifest mapping
@@ -543,53 +274,80 @@ try {
   }
   $cfgPath = $cfgFile.FullName
   $summary.ConfigFile = $cfgFile.Name
-  $cfgHash = (Get-FileSha256 -Path $cfgPath)
-  if (-not $cfgHash) { throw "Could not compute SHA256 for config file." }
-  $cfgHash = $cfgHash.ToLowerInvariant()
+  $cfgSnapshot = Get-ConfigSnapshot -Path $cfgPath
+  $cfgHash = $cfgSnapshot.Sha256
   $summary.DesiredSha256 = $cfgHash
-  $tmp = Validate-ConfigXml $cfgPath
+  $summary.ObservedDesiredSha256 = $cfgHash
+  $tmp = Validate-ConfigXml $cfgSnapshot.Bytes
   $valid = [bool]$tmp[0]
   $valMsg = [string]$tmp[1]
   if (-not $valid) { throw ("Config XML invalid: " + $valMsg) }
   $lines += ("Config: " + $cfgFile.Name + " (SHA256=" + $cfgHash + "; " + $valMsg + ")")
   if ($allowHashes.Count -gt 0 -and ($allowHashes -notcontains $cfgHash)) {
     $ok = $false
+    $policyBlocked = $true
     $warns += "Config SHA256 not in allowlist."
   }
-  # Detect Sysmon
-  $exe = Resolve-SysmonExe -Hint $SysmonExePath
-  $svcName = Get-SysmonServiceName
-  $eng = Get-SysmonEngineVersion -Exe $exe -SkipProcessLaunch:$previewOnly
-  $summary.SysmonExe = $exe
-  $summary.SysmonService = $svcName
-  if ($eng) { $summary.EngineVersion = $eng.Raw }
-  if ($svcName) {
-    $lines += ("Sysmon: Service=" + $svcName + ", Exe='" + ($(if($exe){$exe}else{'n/a'})) + "', Engine=" + ($(if($eng){$eng.Raw}else{'n/a'})))
-  } else {
-    $lines += ("Sysmon: Service not installed (Exe=" + ($(if($exe){$exe}else{'n/a'})) + ")")
-  }
-  if ($minEngVer -and $eng) {
-    if ((Cmp-Ver $eng $minEngVer) -lt 0) {
-      $ok = $false
-      $warns += ("Engine below minimum: Installed=" + $eng.Raw + " Required=" + $minEngVer.Raw)
+  # Do not probe or launch Sysmon after policy input has already blocked apply.
+  $exe = $null; $svcName = $null; $eng = $null
+  if (-not $policyBlocked) {
+    # Detect Sysmon
+    $exe = Resolve-SysmonExe -Hint $SysmonExePath
+    $svcName = Get-SysmonServiceName
+    # A configured minimum must be decided without executing Sysmon. If the
+    # file metadata cannot establish the version, the requirement fails closed.
+    $eng = Get-SysmonEngineVersion -Exe $exe
+    $summary.SysmonExe = $exe
+    $summary.SysmonService = $svcName
+    if ($eng) { $summary.EngineVersion = $eng.Raw }
+    if ($svcName) {
+      $lines += ("Sysmon: Service=" + $svcName + ", Exe='" + ($(if($exe){$exe}else{'n/a'})) + "', Engine=" + ($(if($eng){$eng.Raw}else{'n/a'})))
+    } else {
+      $lines += ("Sysmon: Service not installed (Exe=" + ($(if($exe){$exe}else{'n/a'})) + ")")
     }
-  } elseif ($minEngVer -and (-not $eng)) {
-    $ok = $false
-    $warns += ("Cannot determine engine version; minimum required=" + $minEngVer.Raw)
+    if ($explicitExeHint -and -not $exe) {
+      $ok = $false
+      $policyBlocked = $true
+      $warns += 'Explicit SysmonExePath did not pass trusted executable validation; service discovery fallback was refused.'
+    }
+    if ($exe -and -not (Test-TrustedSysmonExecutable -Path $exe)) {
+      $ok = $false
+      $policyBlocked = $true
+      $warns += 'Sysmon executable did not pass trusted executable validation; process execution was blocked.'
+    }
+    if ($minEngVer -and $eng) {
+      if ((Cmp-Ver $eng $minEngVer) -lt 0) {
+        $ok = $false
+        $policyBlocked = $true
+        $warns += ("Engine below minimum: Installed=" + $eng.Raw + " Required=" + $minEngVer.Raw)
+      }
+    } elseif ($minEngVer -and (-not $eng)) {
+      $ok = $false
+      $policyBlocked = $true
+      $warns += ("Cannot determine engine version; minimum required=" + $minEngVer.Raw)
+    }
   }
+  $summary.PolicyBlocked = [bool]$policyBlocked
   # State defaults if missing or invalid JSON
   $stateDefault = @{
-    Config  = @{ Sha256 = $null }
+    Version = 2
+    Observed = @{ DesiredSha256 = $null }
+    Applied = @{ Sha256 = $null }
     Runtime = @{ CurrentDumpSha256 = $null }
   }
   $state = Load-JsonOrDefault -Path $StatePath -DefaultObject $stateDefault
-  $prevDesiredHash = $null
-  if ($state -and $state.Config -and $state.Config.Sha256) { $prevDesiredHash = [string]$state.Config.Sha256 }
-  $summary.PrevDesiredSha256 = $prevDesiredHash
-  if ($prevDesiredHash -ne $cfgHash) { $needUpdate = $true }
+  $lastAppliedHash = $null
+  if ($state -and $state.PSObject.Properties['Applied'] -and $state.Applied -and $state.Applied.PSObject.Properties['Sha256'] -and $state.Applied.Sha256) {
+    $lastAppliedHash = [string]$state.Applied.Sha256
+  } elseif ($state -and $state.PSObject.Properties['Config'] -and $state.Config -and $state.Config.PSObject.Properties['Sha256'] -and $state.Config.Sha256) {
+    $warns += 'Legacy state did not distinguish observed from successfully applied configuration; forcing one safe reapply.'
+  }
+  $summary.PrevDesiredSha256 = $lastAppliedHash
+  $summary.LastAppliedSha256 = $lastAppliedHash
+  if ($lastAppliedHash -ne $cfgHash) { $needUpdate = $true }
   # Runtime dump hash (best effort)
   $currentCfgDumpSha = $null
-  if ($svcName -and $exe) {
+  if ($svcName -and $exe -and -not $explicitExeHint -and -not $policyBlocked) {
     if ($previewOnly) {
       # sysmon -c can touch external process behavior; skip it in preview mode
       # so -WhatIf stays a pure planning path.
@@ -608,9 +366,11 @@ try {
         }
       }
     }
+  } elseif ($svcName -and $exe -and $explicitExeHint -and -not $policyBlocked) {
+    $warns += 'Runtime config dump skipped for explicitly supplied SysmonExePath.'
   }
   # Optional channel compliance
-  if ($EnsureChannel) {
+  if ($EnsureChannel -and -not $policyBlocked) {
     $doIt = $false
     if ($Remediate -and $isAdmin) { $doIt = $true }
     $res = Ensure-SysmonChannel -DoIt:$doIt -MiB $ChannelSizeMiB -Cmdlet $PSCmdlet
@@ -620,20 +380,35 @@ try {
     else { if ($cMsg) { $actions += ("Channel: " + $cMsg) } }
   }
   # Remediation
-  if ($Remediate -and $isAdmin) {
+  if ($Remediate -and $isAdmin -and -not $policyBlocked) {
+    if (-not $exe -or -not (Test-TrustedSysmonExecutable -Path $exe)) {
+      $ok = $false
+      $policyBlocked = $true
+      $summary.PolicyBlocked = $true
+      $warns += 'Sysmon executable did not pass trusted executable validation.'
+    }
+  }
+  if ($Remediate -and $isAdmin -and -not $policyBlocked) {
     if (-not $svcName) {
       if (-not $exe) { $ok=$false; throw "Sysmon not installed and SysmonExePath not provided/found." }
       try {
         # Install with config (-i) and accept EULA.
-        if ($PSCmdlet.ShouldProcess($exe, "Install Sysmon with config '$cfgPath'")) {
-          $p = Start-Process -FilePath $exe -ArgumentList @('-accepteula', '-i', $cfgPath) -Wait -PassThru -WindowStyle Hidden
-          if ($p.ExitCode -eq 0) {
+        if ($PSCmdlet.ShouldProcess($exe, "Install Sysmon with staged configuration")) {
+          $stage = $null
+          try {
+            $stage = New-StagedConfigFile -Bytes $cfgSnapshot.Bytes
+            if ((Get-BytesSha256 -Bytes $cfgSnapshot.Bytes) -ne $cfgHash) { throw 'Config snapshot hash changed before apply.' }
+            $p = Invoke-StagedSysmonCommand -Exe $exe -Arguments @('-accepteula', '-i', $stage.Path)
+          } finally { if ($stage) { $stage.Stream.Dispose(); Remove-Item -LiteralPath $stage.Path -Force -ErrorAction SilentlyContinue } }
+          if ($p -and $p.Success -and -not $p.TimedOut -and -not $p.OutputTruncated -and -not $p.StderrTruncated) {
             $installed = $true
             $actions += "Installed Sysmon"
             $needUpdate = $false
+            $lastAppliedHash = $cfgHash
+            $summary.LastAppliedSha256 = $lastAppliedHash
           } else {
             $ok = $false
-            $warns += ("Install exitcode=" + $p.ExitCode)
+            $warns += ("Install failed: " + ($(if ($p -and $p.TimedOut) { 'timed out' } elseif ($p -and ($p.OutputTruncated -or $p.StderrTruncated)) { 'output was truncated' } elseif ($p) { 'exitcode=' + $p.ExitCode } else { 'native command did not return a result' })))
           }
         } else {
           $ok = $false
@@ -648,14 +423,21 @@ try {
     elseif ($needUpdate) {
       try {
         # Update config (-c) and accept EULA.
-        if ($PSCmdlet.ShouldProcess($exe, "Update Sysmon config to '$cfgPath'")) {
-          $p = Start-Process -FilePath $exe -ArgumentList @('-accepteula', '-c', $cfgPath) -Wait -PassThru -WindowStyle Hidden
-          if ($p.ExitCode -eq 0) {
+        if ($PSCmdlet.ShouldProcess($exe, "Update Sysmon with staged configuration")) {
+          $stage = $null
+          try {
+            $stage = New-StagedConfigFile -Bytes $cfgSnapshot.Bytes
+            if ((Get-BytesSha256 -Bytes $cfgSnapshot.Bytes) -ne $cfgHash) { throw 'Config snapshot hash changed before apply.' }
+            $p = Invoke-StagedSysmonCommand -Exe $exe -Arguments @('-accepteula', '-c', $stage.Path)
+          } finally { if ($stage) { $stage.Stream.Dispose(); Remove-Item -LiteralPath $stage.Path -Force -ErrorAction SilentlyContinue } }
+          if ($p -and $p.Success -and -not $p.TimedOut -and -not $p.OutputTruncated -and -not $p.StderrTruncated) {
             $actions += "Applied config update"
             $needUpdate = $false
+            $lastAppliedHash = $cfgHash
+            $summary.LastAppliedSha256 = $lastAppliedHash
           } else {
             $ok = $false
-            $warns += ("Update exitcode=" + $p.ExitCode)
+            $warns += ("Update failed: " + ($(if ($p -and $p.TimedOut) { 'timed out' } elseif ($p -and ($p.OutputTruncated -or $p.StderrTruncated)) { 'output was truncated' } elseif ($p) { 'exitcode=' + $p.ExitCode } else { 'native command did not return a result' })))
           }
         } else {
           $ok = $false
@@ -669,24 +451,25 @@ try {
     # Re-detect after changes
     $exe = Resolve-SysmonExe -Hint $SysmonExePath
     $svcName = Get-SysmonServiceName
-    $eng = Get-SysmonEngineVersion -Exe $exe -SkipProcessLaunch:$previewOnly
-    if ($svcName -and $exe -and (-not $previewOnly)) { $currentCfgDumpSha = Get-SysmonCurrentConfigSha256 -Exe $exe }
+    $eng = Get-SysmonEngineVersion -Exe $exe
+    if ($svcName -and $exe -and (-not $previewOnly) -and (-not $explicitExeHint)) { $currentCfgDumpSha = Get-SysmonCurrentConfigSha256 -Exe $exe }
     $summary.SysmonExe = $exe
     $summary.SysmonService = $svcName
     $summary.CurrentDumpSha256 = $currentCfgDumpSha
     if ($eng) { $summary.EngineVersion = $eng.Raw }
   }
   $summary.InstalledNow = $installed
-  # Build anonymized source string (do not leak internal paths)
+  # Build a redacted source label without leaking internal paths.
   $sourceStr = $null
-  if ($ManifestPath) { $sourceStr = "manifest:PATH/TO/JSON" }
-  elseif ($SourceDir)  { $sourceStr = "dir:PATH/TO/DIR" }
-  elseif ($ConfigPath) { $sourceStr = "file:PATH/TO/XML" }
-  else { $sourceStr = "file:PATH/TO/XML" }
-  # Persist state (best effort; skip if placeholder is still used)
+  if ($ManifestPath) { $sourceStr = 'manifest:[configured path]' }
+  elseif ($SourceDir)  { $sourceStr = 'dir:[configured path]' }
+  elseif ($ConfigPath) { $sourceStr = 'file:[configured path]' }
+  else { $sourceStr = 'file:[configured path]' }
+  # Persist state on a best-effort basis.
   $engineRaw = $null
   if ($eng) { $engineRaw = $eng.Raw }
   $newState = @{
+    Version = 2
     Time = (Get-Date).ToString('s')
     Host = $env:COMPUTERNAME
     Engine = @{
@@ -694,18 +477,21 @@ try {
       ExePath = $exe
       Service = $svcName
     }
-    Config = @{
+    Observed = @{
       Path   = $cfgPath
-      Sha256 = $cfgHash
+      DesiredSha256 = $cfgHash
       Source = $sourceStr
       Valid  = $valid
+    }
+    Applied = @{
+      Sha256 = $lastAppliedHash
     }
     Runtime = @{
       CurrentDumpSha256 = $currentCfgDumpSha
     }
   }
   $stateWritten = $false
-  if ($StatePath -and $StatePath -notmatch '^PATH/TO/') {
+  if (-not $policyBlocked -and $StatePath) {
     $stateWritten = Write-State -p $StatePath -obj $newState
   }
   $summary.StateWritten = [bool]$stateWritten
@@ -717,7 +503,7 @@ try {
   # Final drift evaluation
   if ($needUpdate -and (-not $Remediate)) {
     $ok = $false
-    $warns += ("Drift detected: desired SHA256=" + $cfgHash + ", last applied=" + ($(if($prevDesiredHash){$prevDesiredHash}else{'n/a'})))
+    $warns += ("Drift detected: desired SHA256=" + $cfgHash + ", last applied=" + ($(if($lastAppliedHash){$lastAppliedHash}else{'n/a'})))
   }
   $summary.DriftDetected = [bool]$needUpdate
   if ($warns.Count -gt 0) { $lines += ("Warnings: " + ($warns -join ' | ')) }
@@ -730,16 +516,14 @@ try {
   $summary.Ok       = [bool]$ok
   $summary.Actions  = @($actions)
   $summary.Warnings = @($warns)
-  # Structured pipeline output (safe for Export-Csv / ConvertTo-Json).
-  [pscustomobject]$summary
 }
 catch {
+  $fatalError = $_.Exception.Message
   $ok = $false
   $summary.Ok = $false
-  $summary.Warnings = @($summary.Warnings + ("Fatal: " + $_.Exception.Message))
-  Write-HealthEvent 4710 ("Sysmon Config Updater: error " + $_.Exception.Message) 'Error'
-  # Structured pipeline output even on failure.
-  [pscustomobject]$summary
+  $warns += ("Fatal: " + $fatalError)
+  $summary.Warnings = @($warns)
+  Write-HealthEvent 4710 ("Sysmon Config Updater: error " + $fatalError) 'Error'
 }
 finally {
   if (-not $NoConsoleSummary) {
@@ -768,17 +552,20 @@ foreach ($w in @($warns)) {
   $sev = 'Medium'
   if ($w -match 'allowlist')     { $code = 'SYSMON-AllowlistFail'; $sev = 'High' }
   if ($w -match 'Engine below')  { $code = 'SYSMON-EngineOld'; $sev = 'High' }
+  if ($w -match '^Fatal:')       { $code = 'SYSMON-Fatal'; $sev = 'High' }
+  if ($w -match 'Manifest validation failed|MinEngine must') { $code = 'SYSMON-PolicyInvalid'; $sev = 'High' }
   if ($w -match 'drift')         { $code = 'SYSMON-Drift'; $sev = 'Medium' }
   if ($w -match 'Install|Update'){ $code = 'SYSMON-ApplyFail'; $sev = 'High' }
   if ($w -match 'Channel not compliant: .*enable failed') { $code = 'Sysmon-ChannelEnableFailed'; $sev = 'Medium' }
   elseif ($w -match 'Channel not compliant: .*resize failed') { $code = 'Sysmon-ChannelResizeFailed'; $sev = 'Medium' }
   elseif ($w -match 'Channel')   { $code = 'SYSMON-Channel'; $sev = 'Low' }
   if ($w -match 'not elevated')  { $code = 'SYSMON-NoAdmin'; $sev = 'Medium' }
-  Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $w
+  $null = Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $w
 }
 # V2 output contract
-$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '16-Sysmon-Config-Updater.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
+$summary.PolicyBlocked = [bool]$policyBlocked
+$resultToken = if ($fatalError -or $policyBlocked -or ($Strict -and ($script:Findings.Count -gt 0 -or -not $ok))) { 'FAIL' } elseif ($script:Findings.Count -gt 0 -or -not $ok) { 'WARN' } else { 'OK' }
+$v2Result = Get-V2ResultObject -ScriptName '16-Sysmon-Config-Updater.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary ([pscustomobject]$summary) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

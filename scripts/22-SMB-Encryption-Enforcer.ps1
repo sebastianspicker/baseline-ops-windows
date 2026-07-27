@@ -62,7 +62,7 @@ Suppresses additional prompts on SMB configuration changes (in addition to the s
 Use this for unattended execution, but prefer testing with -WhatIf first.
 
 .PARAMETER JsonPath
-Path to an optional JSON configuration file (example placeholder: PATH/TO/JSON/config.json).
+Path to an optional JSON configuration file supplied with $JsonPath.
 
 Supported JSON keys:
 - Mode (string): Audit | Remediate
@@ -145,7 +145,7 @@ Requirements and assumptions:
 
 .EXAMPLE
 # Use a JSON config as defaults (script parameters override JSON when specified)
-.\22-SMB-Encryption-Enforcer.ps1 -JsonPath 'PATH/TO/JSON/config.json' -Mode Audit
+.\22-SMB-Encryption-Enforcer.ps1 -JsonPath $JsonPath -Mode Audit
 #>
 
 
@@ -187,7 +187,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '22-SMB-Encryption-Enforcer.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '22-SMB-Encryption-Enforcer.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -199,10 +203,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # -------------------------
@@ -252,7 +257,7 @@ function Load-JsonConfigOrDefault {
   }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) {
       Write-Verbose -Message ('Config JSON is empty at {0}. Using defaults.' -f $Path)
       return $defaults
@@ -328,7 +333,7 @@ function Invoke-SetSmbShare {
   if ($Force) { $Params['Force'] = $true }
   Set-SmbShare @Params
 }
-# Encryption per share uses Set-SmbShare -EncryptData. [web:6]
+# Encryption per share uses Set-SmbShare -EncryptData.
 
 function Invoke-SetSmbClientConfiguration {
   param([hashtable]$Params)
@@ -439,7 +444,7 @@ if ($EnableRejectUnencryptedAccess -and -not $hasRejectUnencryptedAccess) {
   $v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
-  exit 1
+  exit (Get-V2ExitCode -Result 'FAIL')
 }
 if ($ApplyClientRequireEncryption -and -not $hasClientRequireEncryption) {
   $msg = 'Client RequireEncryption is not available on this OS/build. Cannot enable it.'
@@ -448,7 +453,7 @@ if ($ApplyClientRequireEncryption -and -not $hasClientRequireEncryption) {
   $v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
-  exit 1
+  exit (Get-V2ExitCode -Result 'FAIL')
 }
 
 $start = Get-Date
@@ -499,7 +504,7 @@ try {
                 -Target $env:COMPUTERNAME `
                 -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
                 -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } }
-            # Microsoft documents RejectUnencryptedAccess behavior/parameter. [web:24]
+            # Microsoft documents RejectUnencryptedAccess behavior/parameter.
           }
 
           foreach ($s in $sharesBefore) {
@@ -630,4 +635,4 @@ $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif 
 $v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

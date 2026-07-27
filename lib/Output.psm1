@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-
 <#
 .SYNOPSIS
 Capture-friendly UI output functions for human-readable script output.
@@ -11,9 +9,10 @@ parameters are kept for call compatibility and `-NoNewLine` host coloring; full
 host-colored summaries live in Console.psm1.
 #>
 
-if (-not (Get-Command -Name Get-CallerValue -CommandType Function -ErrorAction SilentlyContinue)) {
-  Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -Global -DisableNameChecking
-}
+Set-StrictMode -Version Latest
+
+Microsoft.PowerShell.Core\Import-Module ([System.IO.Path]::Combine($PSScriptRoot, 'Common.psm1')) -DisableNameChecking
+Microsoft.PowerShell.Core\Import-Module ([System.IO.Path]::Combine($PSScriptRoot, 'Console.psm1')) -DisableNameChecking
 
 $script:UiDefaults = [ordered]@{
   SectionWidth = 70
@@ -21,6 +20,12 @@ $script:UiDefaults = [ordered]@{
   PrefixWidth  = 7
 }
 
+<#
+.SYNOPSIS
+  Resolves a UI style to a console color.
+.DESCRIPTION
+  Maps supported presentation names to the color used for console output.
+#>
 function Resolve-UiColor {
   [CmdletBinding()]
   param([object]$Style)
@@ -32,37 +37,27 @@ function Resolve-UiColor {
   if ([string]::IsNullOrWhiteSpace($s)) { return $null }
 
   $name = $s.Trim()
-  switch -Regex ($name) {
-    '^Default$' { return $null }
-    '^(Info|Note|Key)$' { return [ConsoleColor]::Gray }
-    '^(Value|Accent)$' { return [ConsoleColor]::White }
-    '^(Ok|Good|Success|Pass)$' { return [ConsoleColor]::Green }
-    '^(Warn|Warning|Drift|Changed)$' { return [ConsoleColor]::Yellow }
-    '^(Err|Error|Bad|Fail|Failure|Danger)$' { return [ConsoleColor]::Red }
-    '^(Dim|Muted)$' { return [ConsoleColor]::DarkGray }
-    '^(Debug|DEBUG)$' { return [ConsoleColor]::DarkGray }
-    '^(Header|Title|Section)$' { return [ConsoleColor]::Cyan }
-    default {
-      $lower = $name.ToLowerInvariant()
-      switch ($lower) {
-        'cyan' { return [ConsoleColor]::Cyan }
-        'darkcyan' { return [ConsoleColor]::Cyan }
-        'darkyellow' { return [ConsoleColor]::Yellow }
-        'yellow' { return [ConsoleColor]::Yellow }
-        'darkgreen' { return [ConsoleColor]::Green }
-        'green' { return [ConsoleColor]::Green }
-        'darkred' { return [ConsoleColor]::Red }
-        'red' { return [ConsoleColor]::Red }
-        'darkgray' { return [ConsoleColor]::DarkGray }
-        'darkgrey' { return [ConsoleColor]::DarkGray }
-        'gray' { return [ConsoleColor]::Gray }
-        'grey' { return [ConsoleColor]::Gray }
-        'white' { return [ConsoleColor]::White }
-        default {
-          try { return [ConsoleColor]::$name } catch { return $null }
-        }
-      }
-    }
+  switch ($name.ToLowerInvariant()) {
+    'default' { return $null }
+    'key' { return [ConsoleColor]::Gray }
+    'value' { return [ConsoleColor]::White }
+    'accent' { return [ConsoleColor]::White }
+    'header' { return [ConsoleColor]::Cyan }
+    'title' { return [ConsoleColor]::Cyan }
+    'section' { return [ConsoleColor]::Cyan }
+    'darkcyan' { return [ConsoleColor]::Cyan }
+    'darkyellow' { return [ConsoleColor]::Yellow }
+    'darkgreen' { return [ConsoleColor]::Green }
+    'darkred' { return [ConsoleColor]::Red }
+    'darkgrey' { return [ConsoleColor]::DarkGray }
+    'grey' { return [ConsoleColor]::Gray }
+  }
+
+  try {
+    return [ConsoleColor]$name
+  } catch {
+    $severityColor = Console\Get-StatusColor -Status $name
+    return [ConsoleColor]$severityColor
   }
 }
 
@@ -88,18 +83,18 @@ function Write-UiLine {
   )
 
   if (-not $PSBoundParameters.ContainsKey('NoConsole')) {
-    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    # Compatibility behavior: omitted values are inherited from caller scope.
     $NoConsole = [bool](Get-CallerValue -Name 'NoConsole')
   }
   if (-not $PSBoundParameters.ContainsKey('Quiet')) {
-    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    # Compatibility behavior: omitted values are inherited from caller scope.
     $Quiet = [bool](Get-CallerValue -Name 'Quiet')
   }
   if ($NoConsole -or $Quiet) { return }
 
   $useInfo = $UseWriteInformation -or $UseInformationStream
   if (-not $PSBoundParameters.ContainsKey('UseWriteInformation') -and -not $PSBoundParameters.ContainsKey('UseInformationStream')) {
-    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    # Compatibility behavior: omitted values are inherited from caller scope.
     $useInfo = [bool](Get-CallerValue -Name 'UseWriteInformation')
     if (-not $useInfo) { $useInfo = [bool](Get-CallerValue -Name 'UseInformationStream') }
   }
@@ -114,11 +109,11 @@ function Write-UiLine {
   }
 
   if (-not $PSBoundParameters.ContainsKey('NoColor')) {
-    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    # Compatibility behavior: omitted color controls are inherited from caller scope.
     $NoColor = [bool](Get-CallerValue -Name 'NoColor')
   }
   if (-not $NoColor) {
-    # TODO: Replace caller-scope probing with explicit parameter plumbing.
+    # Compatibility behavior: omitted color controls are inherited from caller scope.
     $callerUseColor = Get-CallerValue -Name 'UseColor'
     if ($null -eq $callerUseColor) { $callerUseColor = $true }
     if (-not $callerUseColor) { $NoColor = $true }
@@ -136,6 +131,12 @@ function Write-UiLine {
   Write-Information -MessageData $Message -InformationAction Continue
 }
 
+<#
+.SYNOPSIS
+  Writes one legacy console line.
+.DESCRIPTION
+  Preserves the compatibility output surface through the shared UI writer.
+#>
 function Write-ConsoleLine {
   [CmdletBinding()]
   param(
@@ -161,6 +162,12 @@ function Write-ConsoleLine {
   Write-UiLine @lineParams
 }
 
+<#
+.SYNOPSIS
+  Writes a legacy console section header.
+.DESCRIPTION
+  Preserves existing callers while using the shared UI header formatting.
+#>
 function Write-ConsoleHeader {
   [CmdletBinding()]
   param(
@@ -202,39 +209,55 @@ function Write-Section {
   Write-UiLine -Message $line -Style 'Dim'
 }
 
+<#
+.SYNOPSIS
+  Resolves a status token to a UI style.
+.DESCRIPTION
+  Normalizes status aliases for consistent colored console output.
+#>
 function Resolve-StatusStyle {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Status)
 
-  switch -Regex ($Status) {
-    '^(OK|Pass|Passed|Good)$' { return 'Success' }
-    '^(Warn|Warning|Drift|Changed)$' { return 'Warn' }
-    '^(Fail|Failed|Error|Err|Critical)$' { return 'Error' }
-    '^(Info|Note)$' { return 'Info' }
-    '^(Skip|Skipped)$' { return 'Muted' }
-    default { return 'Info' }
-  }
+  $rank = Console\Get-SeverityRank -Severity $Status
+  if ($rank -ge 3) { return 'Error' }
+  if ($rank -eq 2) { return 'Warn' }
+  if ($rank -eq -1) { return 'Success' }
+  if ($rank -le -2) { return 'Muted' }
+  return 'Info'
 }
 
+<#
+.SYNOPSIS
+  Gets the display prefix for a status token.
+.DESCRIPTION
+  Uses the normalized UI status vocabulary for consistent report labels.
+#>
 function Get-StatusPrefix {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Status)
 
-  switch (Resolve-StatusStyle -Status $Status) {
-    'Success' { return '[OK]   ' }
-    'Warn' { return '[WARN] ' }
-    'Error' { return '[FAIL] ' }
-    'Muted' { return '[SKIP] ' }
-    default { return '[INFO] ' }
-  }
+  return Console\Get-SeverityPrefix -Severity $Status
 }
 
+<#
+.SYNOPSIS
+  Writes a blank console line.
+.DESCRIPTION
+  Provides a common spacing primitive for report output.
+#>
 function Write-BlankLine {
   [CmdletBinding()]
   param()
   Write-UiLine -Message ''
 }
 
+<#
+.SYNOPSIS
+  Writes an informational console message.
+.DESCRIPTION
+  Applies the standard informational UI style.
+#>
 function Write-Info {
   [CmdletBinding()]
   param(
@@ -245,6 +268,12 @@ function Write-Info {
   Write-UiLine -Message $text -Style 'Info'
 }
 
+<#
+.SYNOPSIS
+  Writes a warning console message.
+.DESCRIPTION
+  Applies the standard warning UI style.
+#>
 function Write-Warn {
   [CmdletBinding()]
   param(
@@ -255,6 +284,12 @@ function Write-Warn {
   Write-UiLine -Message $text -Style 'Warn'
 }
 
+<#
+.SYNOPSIS
+  Writes an error console message.
+.DESCRIPTION
+  Applies the standard error UI style.
+#>
 function Write-ErrorLine {
   [CmdletBinding()]
   param(
@@ -265,6 +300,12 @@ function Write-ErrorLine {
   Write-UiLine -Message $text -Style 'Error'
 }
 
+<#
+.SYNOPSIS
+  Writes a success console message.
+.DESCRIPTION
+  Applies the standard success UI style.
+#>
 function Write-Success {
   [CmdletBinding()]
   param(
@@ -298,6 +339,12 @@ function Write-StatusLine {
   Write-UiLine -Message $text -Style $style
 }
 
+<#
+.SYNOPSIS
+  Writes a UI rule with an optional title.
+.DESCRIPTION
+  Creates a consistent visual separator for console sections.
+#>
 function Write-UiRule {
   [CmdletBinding()]
   param(
@@ -312,6 +359,12 @@ function Write-UiRule {
   Write-UiLine -Message $line -Style $Style
 }
 
+<#
+.SYNOPSIS
+  Writes a UI header and optional subtitle.
+.DESCRIPTION
+  Formats the common heading surface for interactive console output.
+#>
 function Write-UiHeader {
   [CmdletBinding()]
   param(
@@ -324,6 +377,12 @@ function Write-UiHeader {
   if ($Subtitle) { Write-UiLine -Message ("  " + $Subtitle) -Style 'Muted' }
 }
 
+<#
+.SYNOPSIS
+  Writes a compact UI separator.
+.DESCRIPTION
+  Provides a reusable visual boundary between console output groups.
+#>
 function Write-UiSeparator {
   [CmdletBinding()]
   param(
@@ -368,7 +427,7 @@ function Write-KeyValue {
   $valueText = if ([string]::IsNullOrWhiteSpace($Value)) { $EmptyValueText } else { $Value }
   [void]$KeyStyle
 
-  # TODO: Replace caller-scope probing with explicit parameter plumbing.
+  # Compatibility behavior: stream selection is inherited from caller scope.
   $useInfo = [bool](Get-CallerValue -Name 'UseWriteInformation')
   if (-not $useInfo) { $useInfo = [bool](Get-CallerValue -Name 'UseInformationStream') }
 
@@ -376,6 +435,12 @@ function Write-KeyValue {
   Write-UiLine -Message $line -Style $ValueStyle -UseWriteInformation:$useInfo
 }
 
+<#
+.SYNOPSIS
+  Writes a labeled UI status message.
+.DESCRIPTION
+  Formats status, label, and detail through the common status writer.
+#>
 function Write-UiStatus {
   [CmdletBinding()]
   param(
@@ -390,6 +455,12 @@ function Write-UiStatus {
   Write-StatusLine -Status $State -Message $Label -Detail $Detail
 }
 
+<#
+.SYNOPSIS
+  Writes one UI bullet item.
+.DESCRIPTION
+  Indents the supplied text using the shared console output style.
+#>
 function Write-UiBullet {
   [CmdletBinding()]
   param(
@@ -399,6 +470,12 @@ function Write-UiBullet {
   Write-UiLine -Message ("  - " + $Text) -Style $Style
 }
 
+<#
+.SYNOPSIS
+  Writes a collection as UI bullet items.
+.DESCRIPTION
+  Handles empty collections and emits each item with consistent indentation.
+#>
 function Write-UiList {
   [CmdletBinding()]
   param(
@@ -416,6 +493,12 @@ function Write-UiList {
   }
 }
 
+<#
+.SYNOPSIS
+  Writes a blank line through the UI output surface.
+.DESCRIPTION
+  Supports direct information-stream output when requested by callers.
+#>
 function Write-UiBlankLine {
   [CmdletBinding()]
   param(
@@ -429,6 +512,12 @@ function Write-UiBlankLine {
   Write-BlankLine
 }
 
+<#
+.SYNOPSIS
+  Writes a Boolean value as a styled key-value pair.
+.DESCRIPTION
+  Uses success or muted styling to make the value easy to scan.
+#>
 function Write-UiBool {
   [CmdletBinding()]
   param(
@@ -439,6 +528,12 @@ function Write-UiBool {
   Write-KeyValue -Key $Key -Value $Value -ValueStyle $style
 }
 
+<#
+.SYNOPSIS
+  Writes a legacy console banner.
+.DESCRIPTION
+  Retains the established banner surface for existing script callers.
+#>
 function Write-ConsoleBanner {
   [CmdletBinding()]
   param(
@@ -453,12 +548,24 @@ function Write-ConsoleBanner {
   Write-UiLine -Message $line -Style 'Dim'
 }
 
+<#
+.SYNOPSIS
+  Writes a legacy informational console message.
+.DESCRIPTION
+  Retains the compatibility surface using information-stream output.
+#>
 function Write-ConsoleInfo {
   [CmdletBinding()]
   param([Parameter(Mandatory)][AllowEmptyString()][string]$Message)
   Write-UiLine -Message $Message -Style 'Info' -UseWriteInformation
 }
 
+<#
+.SYNOPSIS
+  Writes a legacy console list.
+.DESCRIPTION
+  Preserves existing list callers through the shared UI list formatter.
+#>
 function Write-ConsoleList {
   [CmdletBinding()]
   param(
@@ -526,23 +633,22 @@ function Write-UiSummaryTable {
   $findingsList = @()
   if ($null -ne $Findings) { $findingsList = @($Findings) }
 
-  $counts = [ordered]@{ Critical = 0; High = 0; Medium = 0; Low = 0; Info = 0; Skipped = 0; OK = 0 }
-  foreach ($f in $findingsList) {
-    $sev = if ($f.PSObject.Properties['Severity']) { $f.Severity } else { 'Info' }
-    switch -Regex ($sev) {
-      '^(Critical|Crit)$' { $counts.Critical++; break }
-      '^(High|Error|Err|Fail|Failed)$' { $counts.High++; break }
-      '^(Medium|Warn|Warning|Drift)$' { $counts.Medium++; break }
-      '^(Low)$' { $counts.Low++; break }
-      '^(Skip|Skipped)$' { $counts.Skipped++; break }
-      '^(OK|Pass|Passed|Good|Success)$' { $counts.OK++; break }
-      default { $counts.Info++ }
-    }
+  $stats = Console\Get-FindingStats -Findings $findingsList
+  $counts = [ordered]@{
+    Critical = $stats.Critical
+    High     = $stats.High
+    Error    = $stats.Error
+    Medium   = $stats.Medium
+    Low      = $stats.Low
+    Info     = $stats.Info
+    Skipped  = $stats.Skip
+    Debug    = $stats.Debug
+    OK       = $stats.OK
   }
 
   Write-Section -Title $Title -Width $Width
   $total = $findingsList.Count
-  $totalStyle = if ($counts.Critical -gt 0 -or $counts.High -gt 0) { 'Error' }
+  $totalStyle = if ($counts.Critical -gt 0 -or $counts.High -gt 0 -or $counts.Error -gt 0) { 'Error' }
                 elseif ($counts.Medium -gt 0) { 'Warn' }
                 elseif ($total -eq 0 -or $counts.OK -gt 0) { 'Success' }
                 else { 'Info' }
@@ -550,13 +656,15 @@ function Write-UiSummaryTable {
   Write-KeyValue -Key 'Total findings' -Value ([string]$total) -ValueStyle $totalStyle
   if ($counts.Critical -gt 0) { Write-KeyValue -Key '  Critical' -Value ([string]$counts.Critical) -ValueStyle 'Error' }
   if ($counts.High -gt 0)     { Write-KeyValue -Key '  High'     -Value ([string]$counts.High)     -ValueStyle 'Error' }
+  if ($counts.Error -gt 0)    { Write-KeyValue -Key '  Error'    -Value ([string]$counts.Error)    -ValueStyle 'Error' }
   if ($counts.Medium -gt 0)   { Write-KeyValue -Key '  Medium'   -Value ([string]$counts.Medium)   -ValueStyle 'Warn' }
   if ($counts.Low -gt 0)      { Write-KeyValue -Key '  Low'      -Value ([string]$counts.Low)      -ValueStyle 'Info' }
   if ($counts.Info -gt 0)     { Write-KeyValue -Key '  Info'     -Value ([string]$counts.Info)     -ValueStyle 'Muted' }
   if ($counts.Skipped -gt 0)  { Write-KeyValue -Key '  Skipped'  -Value ([string]$counts.Skipped)  -ValueStyle 'Muted' }
+  if ($counts.Debug -gt 0)    { Write-KeyValue -Key '  Debug'    -Value ([string]$counts.Debug)    -ValueStyle 'Muted' }
   if ($counts.OK -gt 0)       { Write-KeyValue -Key '  OK'       -Value ([string]$counts.OK)       -ValueStyle 'Success' }
 
-  $overallResult = if ($counts.Critical -gt 0 -or $counts.High -gt 0) { 'FAIL' }
+  $overallResult = if ($counts.Critical -gt 0 -or $counts.High -gt 0 -or $counts.Error -gt 0) { 'FAIL' }
                    elseif ($counts.Medium -gt 0) { 'WARN' }
                    else { 'PASS' }
   $resultStyle = if ($overallResult -eq 'FAIL') { 'Error' }
@@ -566,10 +674,10 @@ function Write-UiSummaryTable {
   Write-UiLine -Message ('=' * $Width) -Style 'Dim'
 }
 
-Set-Alias -Name Write-UiSection -Value Write-Section
-Set-Alias -Name Write-ColorLine -Value Write-UiLine
-Set-Alias -Name Write-InfoLine -Value Write-Info
-Set-Alias -Name Write-WarnLine -Value Write-Warn
+Set-Alias -Name Write-UiSection -Value Write-Section -WhatIf:$false
+Set-Alias -Name Write-ColorLine -Value Write-UiLine -WhatIf:$false
+Set-Alias -Name Write-InfoLine -Value Write-Info -WhatIf:$false
+Set-Alias -Name Write-WarnLine -Value Write-Warn -WhatIf:$false
 
 $script:OutputExportedFunctions = @(
   'Write-UiLine'

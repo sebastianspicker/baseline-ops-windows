@@ -1,28 +1,29 @@
-# Resolve lib path relative to script directory only (not CWD) so Import-Module works regardless of current location
-$script:LibPath = Join-Path $PSScriptRoot '..\..\lib'
-if (-not (Test-Path -LiteralPath $script:LibPath)) {
-  $script:LibPath = Join-Path $PSScriptRoot '..\lib'
-}
-if (-not (Test-Path -LiteralPath $script:LibPath)) {
-  $script:LibPath = Join-Path $PSScriptRoot 'lib'
-}
+<#
+.SYNOPSIS
+Resolves shared modules and initializes the repository v2 script contract.
 
-$scriptDir = $PSScriptRoot
-if (-not [string]::IsNullOrWhiteSpace($scriptDir) -and (Test-Path -LiteralPath $scriptDir -PathType Container)) {
-  Push-Location -LiteralPath $scriptDir
-  try {
-    $resolved = Resolve-Path -LiteralPath $script:LibPath -ErrorAction Stop
-    $script:LibPath = $resolved.Path
-  } catch {
-    $abs = [System.IO.Path]::GetFullPath((Join-Path $scriptDir $script:LibPath))
-    if (Test-Path -LiteralPath $abs) { $script:LibPath = $abs }
-  } finally {
-    Pop-Location
-  }
-} else {
-  # PSScriptRoot is null/empty - this means Bootstrap.ps1 was invoked interactively
-  # (e.g. dot-sourced from the console), which is not a supported execution path.
+.DESCRIPTION
+Locates the fixed lib directory relative to the calling script and provides the
+common context builder used by entry scripts. Centralizing this bootstrap keeps
+mode, output, strictness, and quiet-state handling consistent across the kit.
+#>
+
+# Resolve only fixed locations relative to this file, without command lookup or
+# the caller's working directory. This file executes before most module imports.
+if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) {
   throw "Bootstrap must be invoked from a script file, not interactively. `$PSScriptRoot is empty."
+}
+$script:LibPath = $null
+foreach ($candidatePath in @(
+  [System.IO.Path]::Combine($PSScriptRoot, '..', '..', 'lib')
+  [System.IO.Path]::Combine($PSScriptRoot, '..', 'lib')
+  [System.IO.Path]::Combine($PSScriptRoot, 'lib')
+)) {
+  $candidate = [System.IO.Path]::GetFullPath($candidatePath)
+  if ([System.IO.Directory]::Exists($candidate)) { $script:LibPath = $candidate; break }
+}
+if ([string]::IsNullOrWhiteSpace($script:LibPath)) {
+  throw 'Bootstrap could not resolve the repository lib directory.'
 }
 
 <#
@@ -31,19 +32,22 @@ if (-not [string]::IsNullOrWhiteSpace($scriptDir) -and (Test-Path -LiteralPath $
 
 .DESCRIPTION
   Call this function immediately after importing modules and setting StrictMode
-  to replace the inline "# v2-init" block. It builds $script:__V2Context,
-  wires up $Quiet / $NoColor preferences, and optionally derives $Remediate
-  from $Mode.
+  to replace the inline "# v2-init" block. It returns a context built only from
+  explicitly supplied values. The caller owns assigning the returned context
+  and applying any requested preference or remediation state.
 
   Migration path (per-script):
     1. Keep the existing param() block and Bootstrap dot-source unchanged.
     2. Replace the inline "# v2-init" block (from '$null = $Mode,...' through
        the NoColor / Quiet preference lines) with a single call:
-         Initialize-V2Context -ScriptName 'NN-Script.ps1' -BoundParameters $PSBoundParameters
-    3. If the script uses a $Remediate variable, add -DeriveRemediate after
-       the call or set it yourself from $Mode.
-    4. Set $ErrorActionPreference = 'Stop' after the call (not included in
-       the function to keep caller control explicit).
+         $script:__V2Context = Initialize-V2Context `
+           -ScriptName 'NN-Script.ps1' `
+           -BoundParameters $PSBoundParameters `
+           -Mode $Mode -ConfigPath $ConfigPath `
+           -OutputFormat $OutputFormat -OutputPath $OutputPath `
+           -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+    3. Apply caller-owned state from the returned context.
+    4. Set $ErrorActionPreference = 'Stop' after the call.
 
 .PARAMETER BoundParameters
   Pass $PSBoundParameters from the calling script so the function can detect
@@ -53,8 +57,8 @@ if (-not [string]::IsNullOrWhiteSpace($scriptDir) -and (Test-Path -LiteralPath $
   Required script file name to store in the v2 context.
 
 .PARAMETER DeriveRemediate
-  When set, creates/updates a script-scope $Remediate variable derived from
-  the caller-scope $Mode variable ($Mode -eq 'Remediate').
+  When set, includes a Remediate value derived from Mode in the returned
+  context.
 #>
 function Initialize-V2Context {
   [CmdletBinding()]
@@ -65,53 +69,72 @@ function Initialize-V2Context {
     [string]$ScriptVersion = '1.0',
     [Parameter(Mandatory)]
     [System.Collections.IDictionary]$BoundParameters,
+    [ValidateSet('Audit', 'Remediate')]
+    [string]$Mode = 'Audit',
+    [AllowNull()][string]$ConfigPath,
+    [ValidateSet('Console', 'Json', 'Csv', 'None')]
+    [string]$OutputFormat = 'Console',
+    [AllowNull()][string]$OutputPath,
+    [switch]$PassThru,
+    [switch]$Strict,
+    [switch]$Quiet,
+    [switch]$NoColor,
     [switch]$DeriveRemediate
   )
 
-  # Read variables from the caller scope (set via param() block)
-  $callerMode         = Get-Variable -Name Mode         -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-  $callerConfigPath   = Get-Variable -Name ConfigPath   -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-  $callerOutputFormat = Get-Variable -Name OutputFormat -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-  $callerOutputPath   = Get-Variable -Name OutputPath   -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-  $callerPassThru     = Get-Variable -Name PassThru     -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-  $callerStrict       = Get-Variable -Name Strict       -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-  $callerQuiet        = Get-Variable -Name Quiet        -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-  $callerNoColor      = Get-Variable -Name NoColor      -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-
-  # Suppress PSUseDeclaredVarsMoreThanAssignments for the null-touch
-  $null = $callerMode, $callerConfigPath, $callerOutputFormat, $callerOutputPath,
-          $callerPassThru, $callerStrict, $callerQuiet, $callerNoColor
-
-  $script:__V2Context = @{
-    ScriptName   = $ScriptName
-    ScriptVersion= $ScriptVersion
-    Mode         = $callerMode
-    ConfigPath   = $callerConfigPath
-    OutputFormat = $callerOutputFormat
-    OutputPath   = $callerOutputPath
-    PassThru     = [bool]$callerPassThru
-    Strict       = [bool]$callerStrict
-    Quiet        = [bool]$callerQuiet
-    NoColor      = [bool]$callerNoColor
+  $context = [ordered]@{
+    ScriptName       = $ScriptName
+    ScriptVersion    = $ScriptVersion
+    Mode             = $Mode
+    ConfigPath       = $ConfigPath
+    OutputFormat     = $OutputFormat
+    OutputPath       = $OutputPath
+    PassThru         = [bool]$PassThru
+    Strict           = [bool]$Strict
+    Quiet            = [bool]$Quiet
+    NoColor          = [bool]$NoColor
+    ExplicitParameters = @($BoundParameters.Keys)
+    DeriveRemediate  = [bool]$DeriveRemediate
+    Remediate        = [bool]($DeriveRemediate -and $Mode -eq 'Remediate')
   }
 
-  if ($BoundParameters.ContainsKey('Mode')) {
-    $existingRemediate = Get-Variable -Name Remediate -Scope 1 -ErrorAction SilentlyContinue
-    if ($existingRemediate) {
-      Set-Variable -Name Remediate -Scope 1 -Value ($callerMode -eq 'Remediate') -WhatIf:$false
-    }
+  # File output is a run-level contract. Reject deterministic configuration
+  # errors before a script can inspect or mutate host state, and still return a
+  # terminal V2 object instead of letting the final serializer throw.
+  $effectiveOutputFormat = if ([string]::IsNullOrWhiteSpace([string]$OutputFormat)) {
+    'Console'
+  } else {
+    [string]$OutputFormat
+  }
+  $outputValidator = Get-Command -Name Get-V2OutputConfigurationError -ErrorAction SilentlyContinue
+  $outputConfigurationError = if ($outputValidator) {
+    Get-V2OutputConfigurationError -OutputFormat $effectiveOutputFormat -OutputPath $OutputPath
+  } elseif ($effectiveOutputFormat -in @('Json', 'Csv') -and [string]::IsNullOrWhiteSpace([string]$OutputPath)) {
+    "OutputPath is required when OutputFormat is $effectiveOutputFormat."
+  } else {
+    $null
+  }
+  if ($outputConfigurationError) {
+    $effectiveMode = if ($Mode -eq 'Remediate') { 'Remediate' } else { 'Audit' }
+    $failureResult = Get-V2ResultObject `
+      -ScriptName $ScriptName `
+      -Mode $effectiveMode `
+      -Result 'FAIL' `
+      -Findings @([pscustomobject]@{
+          Code     = 'V2-OutputConfigurationInvalid'
+          Severity = 'High'
+          Message  = $outputConfigurationError
+        }) `
+      -Summary ([pscustomobject]@{
+          OutputFormat = $effectiveOutputFormat
+          OutputPath   = $OutputPath
+          Error        = $outputConfigurationError
+        }) `
+      -Metadata @{}
+
+    $failureResult
+    exit (Get-V2ExitCode -Result 'FAIL')
   }
 
-  if ($DeriveRemediate) {
-    Set-Variable -Name Remediate -Scope 1 -Value ($callerMode -eq 'Remediate') -WhatIf:$false
-  }
-
-  if ($callerQuiet) {
-    Set-Variable -Name InformationPreference -Scope 1 -Value 'SilentlyContinue' -WhatIf:$false
-    Set-Variable -Name VerbosePreference     -Scope 1 -Value 'SilentlyContinue' -WhatIf:$false
-  }
-
-  if ($callerNoColor) {
-    $script:NoColor = $true
-  }
+  return $context
 }

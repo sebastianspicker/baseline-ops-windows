@@ -16,7 +16,8 @@ Unit tests for the Registry module functions including:
 [CmdletBinding()]
 param()
 
-$script:SkipRegistryTests = (-not $IsWindows) -or (-not (Get-PSDrive -Name HKCU -ErrorAction SilentlyContinue))
+$script:IsWindowsHost = ($env:OS -eq 'Windows_NT')
+$script:SkipRegistryTests = (-not $script:IsWindowsHost) -or (-not (Get-PSDrive -Name HKCU -ErrorAction SilentlyContinue))
 
 $allowedPrefixSetters = @(
   [pscustomobject]@{ Name = 'Set-RegDword'; Args = @{ Value = 1 } }

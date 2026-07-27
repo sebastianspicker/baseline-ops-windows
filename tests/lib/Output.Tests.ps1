@@ -13,6 +13,10 @@ Uses Mock Write-Information to capture output for assertions.
 param()
 
 BeforeAll {
+  # Scripts exercised earlier in the full suite import Output into transient
+  # script scopes. Remove every stale module instance so Pester's ModuleName
+  # target is deterministic instead of failing on an ambiguous module name.
+  Get-Module -Name Output -All | Remove-Module -Force -ErrorAction SilentlyContinue
   Import-Module (Join-Path $PSScriptRoot '../../lib/Output.psm1') -Force
 
   function Join-TestOutputText {
@@ -40,6 +44,7 @@ Describe 'Output module export surface' {
     foreach ($name in $removed) {
       $names | Should -Not -Contain $name
     }
+    $names | Should -Contain 'Write-UiProgress'
   }
 
   It 'Exports pass-through compatibility names as aliases' {
@@ -198,12 +203,14 @@ Describe 'Write-Success' {
 }
 
 Describe 'Status helper alignment' {
-  It 'Keeps style and prefix classification aligned for aliases and defaults' {
+  It 'Delegates canonical prefix and rank decisions to Console' {
     InModuleScope Output {
       $cases = @(
         [pscustomobject]@{ Status = 'Pass'; Style = 'Success'; Prefix = '[OK]   ' }
         [pscustomobject]@{ Status = 'Warning'; Style = 'Warn'; Prefix = '[WARN] ' }
         [pscustomobject]@{ Status = 'Failed'; Style = 'Error'; Prefix = '[FAIL] ' }
+        [pscustomobject]@{ Status = 'Error'; Style = 'Error'; Prefix = '[ERR]  ' }
+        [pscustomobject]@{ Status = 'Critical'; Style = 'Error'; Prefix = '[CRIT] ' }
         [pscustomobject]@{ Status = 'Note'; Style = 'Info'; Prefix = '[INFO] ' }
         [pscustomobject]@{ Status = 'Skipped'; Style = 'Muted'; Prefix = '[SKIP] ' }
         [pscustomobject]@{ Status = 'Unknown'; Style = 'Info'; Prefix = '[INFO] ' }
@@ -212,7 +219,21 @@ Describe 'Status helper alignment' {
       foreach ($case in $cases) {
         Resolve-StatusStyle -Status $case.Status | Should -Be $case.Style
         Get-StatusPrefix -Status $case.Status | Should -Be $case.Prefix
+        Get-StatusPrefix -Status $case.Status |
+          Should -Be (Console\Get-SeverityPrefix -Severity $case.Status)
       }
+    }
+  }
+
+  It 'Delegates severity colors while retaining non-severity UI roles' {
+    InModuleScope Output {
+      foreach ($status in @('Passed', 'Warning', 'Failed', 'Note', 'Skipped')) {
+        Resolve-UiColor -Style $status |
+          Should -Be ([ConsoleColor](Console\Get-StatusColor -Status $status))
+      }
+
+      Resolve-UiColor -Style 'Header' | Should -Be ([ConsoleColor]::Cyan)
+      Resolve-UiColor -Style 'Accent' | Should -Be ([ConsoleColor]::White)
     }
   }
 }
@@ -222,6 +243,7 @@ Describe 'Write-UiSummaryTable operator meaning' {
     $findings = @(
       [pscustomobject]@{ Severity = 'Critical'; Code = 'CRIT-1'; Message = 'critical risk' }
       [pscustomobject]@{ Severity = 'High'; Code = 'HIGH-1'; Message = 'high risk' }
+      [pscustomobject]@{ Severity = 'Failed'; Code = 'ERR-1'; Message = 'runtime failure' }
       [pscustomobject]@{ Severity = 'Medium'; Code = 'MED-1'; Message = 'partial risk' }
       [pscustomobject]@{ Severity = 'Low'; Code = 'LOW-1'; Message = 'low risk' }
       [pscustomobject]@{ Severity = 'Info'; Code = 'INFO-1'; Message = 'info' }
@@ -230,9 +252,10 @@ Describe 'Write-UiSummaryTable operator meaning' {
 
     $text = Join-TestOutputText -Output (Write-UiSummaryTable -Findings $findings 6>&1)
 
-    $text | Should -Match 'Total findings\s*:\s*6'
+    $text | Should -Match 'Total findings\s*:\s*7'
     $text | Should -Match 'Critical\s*:\s*1'
     $text | Should -Match 'High\s*:\s*1'
+    $text | Should -Match 'Error\s*:\s*1'
     $text | Should -Match 'Medium\s*:\s*1'
     $text | Should -Match 'Low\s*:\s*1'
     $text | Should -Match 'Info\s*:\s*1'

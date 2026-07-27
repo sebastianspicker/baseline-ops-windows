@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for security-script contracts.
+
+.DESCRIPTION
+Verifies safe, repeatable operator behavior and evidence.
+#>
 
 Describe '15-HardwareTPM-Audit fatal failure reporting' -Tag 'HardwareTPM' {
   BeforeAll {

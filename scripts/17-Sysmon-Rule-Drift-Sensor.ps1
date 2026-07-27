@@ -13,7 +13,7 @@ Typical use cases:
 How it works:
 1) Load a rule catalog from JSON (or fall back to safe defaults).
 2) Load the persisted baseline state from JSON (or initialize an empty baseline).
-3) Count Sysmon events per rule within the last WindowHours.
+3) Query the configured Sysmon event IDs once, within global event-count and wall-clock budgets, then count each rule from that bounded evidence.
 4) Determine a rule status:
    - OK: Within expected range.
    - HARDZERO: A critical rule has Count = 0.
@@ -24,7 +24,7 @@ How it works:
 6) Persist the updated baseline state to StatePath.
 7) Optionally execute remediation if at least one rule is HARDZERO and -TriggerReapply is set.
 8) Write an audit summary to the Windows Application event log (custom source).
-9) Print a human-friendly console summary (unless -PassThru is used).
+9) Print a console summary (unless -PassThru is used).
 Catalog JSON model (conceptual):
 - Rules: array of rule objects with:
   - Id (int): Sysmon Event ID
@@ -67,8 +67,10 @@ Useful after known environment changes or after deploying a new Sysmon configura
 If set, triggers remediation when at least one rule is HARDZERO.
 Remediation is only attempted if the remediation script passes policy checks (existence and optional signature requirement).
 .PARAMETER RemediationScriptPath
-Path to the remediation script that is called when remediation is triggered.
-The script is started in a new PowerShell process with additional parameters: -Mode Remediate.
+  Optional identity path for the remediation script. Only the canonical
+  16-Sysmon-Config-Updater.ps1 beside this sensor is accepted; any other value
+  is rejected. When omitted, that canonical updater is selected automatically.
+  The updater is started in a new PowerShell process with -Mode Remediate.
 .PARAMETER RequireSignedRemediationScript
 If set, remediation will only be executed if RemediationScriptPath has a valid Authenticode signature.
 If the signature is missing or invalid, remediation is blocked and reported.
@@ -81,6 +83,10 @@ If not set (default), catalog fallback uses an empty rule list to avoid false po
 .PARAMETER AttemptEnableChannel
 If the Sysmon channel exists but is disabled, optionally attempt to enable it.
 This requires elevated permissions. If the channel cannot be enabled, the script continues with CHANNEL_UNAVAILABLE.
+.PARAMETER MaxEvents
+Maximum number of event records retained for the entire run. If more records match, evidence is marked truncated and the result is FAIL.
+.PARAMETER MaxQuerySeconds
+Global wall-clock budget in seconds for querying and processing event evidence. Exceeding it marks evidence incomplete and the result is FAIL.
 .PARAMETER PassThru
 Pipeline mode:
 - If set, the script outputs a single structured result object to the pipeline.
@@ -110,7 +116,7 @@ A single PSCustomObject with these top-level properties (subject to minor extens
 - CatalogSource (string): Path or DEFAULT
 - StatePath (string)
 - StateWriteOk (bool)
-- ConfigChanged (bool): Whether Sysmon configuration change events were detected in the window
+- ConfigChanged (bool or null): Whether Sysmon configuration change events were detected; null when evidence is incomplete
 - Channel (object): Sysmon channel status details
 - Remediation (object or null): remediation attempt details (Attempted, Success, ExitCode, Error, ScriptPath)
 - Summary (object): TotalRules, Anomalies, HardZero
@@ -138,10 +144,8 @@ Force a full baseline reset (rebaseline):
 Run with remediation enabled (and require signed remediation script):
 .\17-Sysmon-Rule-Drift-Sensor.ps1 -TriggerReapply -RequireSignedRemediationScript
 .EXAMPLE
-Run with custom catalog and state paths:
-.\17-Sysmon-Rule-Drift-Sensor.ps1 `
-  -CatalogPath "PATH/TO/JSON/drift-catalog.json" `
-  -StatePath "PATH/TO/JSON/drift_state.json"
+Run with a custom catalog. The state path remains fixed under CommonApplicationData:
+.\17-Sysmon-Rule-Drift-Sensor.ps1 -CatalogPath $CatalogPath
 .NOTES
 Behavioral details and gotchas:
 - Regex filtering (MessageRegex) requires reading the event message and can be slower; use sparingly and only when needed.
@@ -172,6 +176,10 @@ param(
   [switch]$AllowExecutionPolicyBypass,
   [switch]$UseBuiltInDefaultRules,
   [switch]$AttemptEnableChannel,
+  [ValidateRange(1,200000)]
+  [int]$MaxEvents = 50000,
+  [ValidateRange(1,300)]
+  [int]$MaxQuerySeconds = 30,
   [switch]$PassThru
 ,
   [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
@@ -192,23 +200,16 @@ Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'internal/17-Sysmon-Rule-Drift-Sensor.helpers.ps1')
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
-
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
-  $summary = [pscustomobject]@{
-    ComputerName = $env:COMPUTERNAME
-    Timestamp    = Get-Date
-    Mode         = $Mode
-    Supported    = $false
-    Notes        = @('Skipped: this script is only supported on Windows hosts.')
-  }
-  $result = Get-V2ResultObject -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
-  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
-  exit 0
+if ([string]::IsNullOrWhiteSpace($RemediationScriptPath)) {
+  $RemediationScriptPath = Join-Path $PSScriptRoot '16-Sysmon-Config-Updater.ps1'
 }
 
 # -----------------------------
@@ -221,528 +222,115 @@ $script:EventIdOk              = 4720
 $script:EventIdWarn            = 4730
 $script:MaxEventMessageLength  = 30000
 # -----------------------------
-# Console helpers (no pipeline output)
-# -----------------------------
-function Get-StatusColor {
-  param([string]$Status)
-  switch ($Status) {
-    'OK'                 { 'Green'; break }
-    'ANOMALIES_DETECTED' { 'Yellow'; break }
-    'CHANNEL_UNAVAILABLE'{ 'Red'; break }
-    'ERROR'              { 'Red'; break }
-    default              { 'Yellow'; break }
-  }
-}
-function Get-RuleStatusColor {
-  param([string]$Status)
-  switch ($Status) {
-    'OK'         { 'Green'; break }
-    'HARDZERO'   { 'Red'; break }
-    'LOW'        { 'Yellow'; break }
-    'DRIFT_DOWN' { 'Yellow'; break }
-    'SURGE'      { 'Yellow'; break }
-    default      { 'Yellow'; break }
-  }
-}
-# -----------------------------
-# Utility: File IO (safe)
-# -----------------------------
-# Read-JsonFile replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
-# Write-JsonFile: replaced by canonical Save-Json from lib/Serialization.psm1
-# -----------------------------
-# Catalog defaults
-# -----------------------------
-function Get-DefaultCatalog {
-  param(
-    [int]$DefaultWindowHours,
-    [double]$DefaultAlpha,
-    [double]$DefaultRatioFloor,
-    [double]$DefaultRatioUpper,
-    [int]$DefaultMinBaselineToCompare,
-    [switch]$WithBuiltInRules
-  )
-  $rules = @()
-  if ($WithBuiltInRules) {
-    $rules = @(
-      [pscustomobject]@{ Id = 1;  Name = 'Process Create';  Critical = $true;  MinPerWindow = 1;    MessageRegex = $null; Disabled = $false },
-      [pscustomobject]@{ Id = 3;  Name = 'Network Connect'; Critical = $false; MinPerWindow = $null; MessageRegex = $null; Disabled = $false },
-      [pscustomobject]@{ Id = 11; Name = 'File Create';     Critical = $false; MinPerWindow = $null; MessageRegex = $null; Disabled = $false },
-      [pscustomobject]@{ Id = 16; Name = 'Config Change';   Critical = $false; MinPerWindow = $null; MessageRegex = $null; Disabled = $false },
-      [pscustomobject]@{ Id = 22; Name = 'DNS Query';       Critical = $false; MinPerWindow = $null; MessageRegex = $null; Disabled = $false }
-    )
-  }
-  [pscustomobject]@{
-    WindowHours = $DefaultWindowHours
-    Alpha = $DefaultAlpha
-    RatioFloor = $DefaultRatioFloor
-    RatioUpper = $DefaultRatioUpper
-    MinBaselineToCompare = $DefaultMinBaselineToCompare
-    Rules = $rules
-  }
-}
-function Load-CatalogOrDefault {
-  param(
-    [string]$Path,
-    [pscustomobject]$DefaultCatalog
-  )
-  $cat = Read-JsonFileSafe -Path $Path
-  if ($null -eq $cat) { return $DefaultCatalog }
-  if ($null -eq $cat.Rules) {
-    $cat | Add-Member -NotePropertyName Rules -NotePropertyValue @() -Force
-  }
-  return $cat
-}
-# -----------------------------
-# Event Log (audit)
-# -----------------------------
-function Limit-EventMessage {
-  param([Parameter(Mandatory)][string]$Message)
-  if ($Message.Length -le $script:MaxEventMessageLength) { return $Message }
-  return ($Message.Substring(0, $script:MaxEventMessageLength) + "`r`n[TRUNCATED]")
-}
-function Write-AuditEvent {
-  param(
-    [int]$EventId,
-    [string]$Message,
-    [ValidateSet('Information','Warning','Error')]
-    [string]$Level
-  )
-  $msg = Limit-EventMessage -Message $Message
-  try {
-    Write-EventLog -LogName $script:EventLogName -Source $script:EventSourceName -EventId $EventId -EntryType $Level -Message $msg -ErrorAction Stop
-  } catch {
-    # Console fallback, do not emit pipeline output.
-    Write-UiLine ("[{0}][{1}] {2}" -f $Level,$EventId,$msg)
-  }
-}
-# -----------------------------
-# Sysmon channel probe
-# -----------------------------
-function Get-SysmonChannelStatus {
-  $info = [pscustomobject]@{
-    LogName = $script:SysmonLogName
-    Exists  = $false
-    Enabled = $false
-    MaxSize = 0
-    OldestRecord = $null
-    Error = $null
-  }
-  try {
-    # S9 fix: use Invoke-Wevtutil wrapper with array-based args instead of direct wevtutil call
-    $wevtResult = Invoke-Wevtutil -Arguments @('gl', $script:SysmonLogName, '/f:xml') -CaptureOutput
-    if ($wevtResult -and -not $wevtResult.Success) {
-      $info.Error = (@($wevtResult.Output) -join [Environment]::NewLine).Trim()
-      return $info
-    }
-    $xml = if ($wevtResult -and $wevtResult.Output) { (@($wevtResult.Output) -join [Environment]::NewLine) } else { $null }
-    if (-not $xml) { return $info }
-    $x = [xml]$xml
-    $info.Exists = $true
-    $enabledText = $null
-    try { $enabledText = $x.channel.enabled.'#text' } catch { $enabledText = $null }
-    if ($null -ne $enabledText -and $enabledText -ne '') {
-      $info.Enabled = [bool]::Parse([string]$enabledText)
-    }
-    $maxText = $null
-    try { $maxText = $x.channel.logging.maxSize.'#text' } catch { $maxText = $null }
-    if ($maxText) { $info.MaxSize = [int64]$maxText }
-    try {
-      $oldest = Get-WinEvent -LogName $script:SysmonLogName -MaxEvents 1 -Oldest -ErrorAction SilentlyContinue
-      if ($oldest) { $info.OldestRecord = $oldest.TimeCreated }
-    } catch {
-      Write-Verbose ("Sysmon oldest event record read failed: {0}" -f $_.Exception.Message)
-    }
-  } catch {
-    $info.Error = $_.Exception.Message
-  }
-  return $info
-}
-function Enable-SysmonChannelIfRequested {
-  param([pscustomobject]$ChannelStatus)
-  if (-not $AttemptEnableChannel) { return $ChannelStatus }
-  if (-not $ChannelStatus.Exists) { return $ChannelStatus }
-  if ($ChannelStatus.Enabled) { return $ChannelStatus }
-  if (-not (Test-IsAdmin)) { return $ChannelStatus }
-  try {
-    # S9 fix: use Invoke-Wevtutil wrapper with array-based args instead of direct wevtutil call
-    Invoke-Wevtutil -Arguments @('sl', $script:SysmonLogName, '/e:true') | Out-Null
-  } catch {
-    Write-Verbose ("Sysmon channel enable failed: {0}" -f $_.Exception.Message)
-  }
-  return (Get-SysmonChannelStatus)
-}
-# -----------------------------
-# Counting
-# -----------------------------
-function Get-EventCount {
-  param(
-    [Parameter(Mandatory)][int]$EventId,
-    [Parameter(Mandatory)][datetime]$StartTime,
-    [string]$MessageRegex
-  )
-  $filter = @{
-    LogName = $script:SysmonLogName
-    ID = $EventId
-    StartTime = $StartTime
-  }
-  try {
-    if ([string]::IsNullOrWhiteSpace($MessageRegex)) {
-      return (Get-WinEvent -FilterHashtable $filter -ErrorAction Stop | Measure-Object).Count
-    }
-    $rx = [regex]::new($MessageRegex)
-    return (Get-WinEvent -FilterHashtable $filter -ErrorAction Stop |
-      Where-Object { $_.Message -match $rx } |
-      Measure-Object
-    ).Count
-  } catch {
-    return 0
-  }
-}
-# -----------------------------
-# Remediation
-# -----------------------------
-# HARDZERO remediation launches another PowerShell script, so normalize the path
-# to a real file inside this repo's scripts directory before any signature check
-# or process launch. This prevents catalog/profile input from selecting an
-# arbitrary local script through traversal or reparse points.
-function Resolve-RemediationScriptPath {
-  param([Parameter(Mandatory)][string]$ScriptPath)
-  $scriptRoot = Split-Path -Parent $PSScriptRoot  # repo root
-  $scriptsDir = Join-Path $scriptRoot 'scripts'
-  try {
-    $resolvedScriptsDir = Resolve-Path -LiteralPath $scriptsDir -ErrorAction Stop
-    $resolvedScriptPath = Resolve-Path -LiteralPath $ScriptPath -ErrorAction Stop
-  } catch {
-    throw "Resolve-RemediationScriptPath: ScriptPath '$ScriptPath' is missing or cannot be resolved."
-  }
-  $canonicalScriptsDir = $resolvedScriptsDir.ProviderPath
-  $canonicalScriptPath = $resolvedScriptPath.ProviderPath
-  if (-not (Test-PathUnderRoot -Path $canonicalScriptPath -Root $canonicalScriptsDir)) {
-    throw "Resolve-RemediationScriptPath: ScriptPath '$ScriptPath' is not under the expected scripts directory."
-  }
-  $scriptFileName = Split-Path -Leaf $canonicalScriptPath
-  if (-not (Test-SafeScriptName -Name $scriptFileName)) {
-    throw "Resolve-RemediationScriptPath: ScriptPath file name '$scriptFileName' failed safety validation."
-  }
-  try {
-    $scriptItem = Get-Item -LiteralPath $canonicalScriptPath -Force -ErrorAction Stop
-  } catch {
-    throw "Resolve-RemediationScriptPath: ScriptPath '$ScriptPath' is missing or cannot be inspected."
-  }
-  if ($scriptItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-    throw "Resolve-RemediationScriptPath: ScriptPath '$ScriptPath' is a reparse point."
-  }
-  return $canonicalScriptPath
-}
-function Test-RemediationScriptAllowed {
-  param(
-    [Parameter(Mandatory)][string]$ScriptPath,
-    [switch]$RequireSignature
-  )
-  try {
-    $canonicalScriptPath = Resolve-RemediationScriptPath -ScriptPath $ScriptPath
-  } catch {
-    return $false
-  }
-  if (-not $RequireSignature) { return $true }
-  $sig = Get-AuthenticodeSignature -FilePath $canonicalScriptPath
-  return ($sig.Status -eq 'Valid')
-}
-function Invoke-RemediationScript {
-  [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  param([Parameter(Mandatory)][string]$ScriptPath)
-  $ScriptPath = Resolve-RemediationScriptPath -ScriptPath $ScriptPath
-  $result = [pscustomobject]@{
-    Attempted = $true
-    Success = $false
-    ExitCode = $null
-    Error = $null
-    ScriptPath = $ScriptPath
-  }
-  try {
-    $argList = @('-NoProfile')
-    if ($AllowExecutionPolicyBypass) {
-      $argList += @('-ExecutionPolicy', 'Bypass')
-    }
-    $argList += @('-File', $ScriptPath, '-Mode', 'Remediate')
-    if ($PSCmdlet.ShouldProcess($ScriptPath, 'Launch remediation PowerShell process')) {
-      $p = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
-      $result.ExitCode = $p.ExitCode
-      $result.Success = ($p.ExitCode -eq 0)
-    } else {
-      $result.Attempted = $false
-    }
-  } catch {
-    $result.Error = $_.Exception.Message
-  }
-  return $result
-}
-# -----------------------------
-# Result objects (pipeline)
-# -----------------------------
-function Get-RuleResult {
-  param(
-    [int]$Id,
-    [string]$Name,
-    [int]$Count,
-    [Nullable[double]]$PriorBaseline,
-    [double]$NewBaseline,
-    [Nullable[double]]$Ratio,
-    [Nullable[int]]$MinPerWindow,
-    [bool]$IsCritical,
-    [string]$Status,
-    [string]$MessageRegex
-  )
-  [pscustomobject]@{
-    Id = $Id
-    Name = $Name
-    Count = $Count
-    PriorBaseline = $PriorBaseline
-    Baseline = $NewBaseline
-    Ratio = $Ratio
-    MinPerWindow = $MinPerWindow
-    IsCritical = $IsCritical
-    Status = $Status
-    MessageRegex = $MessageRegex
-  }
-}
-function Get-FinalResult {
-  param(
-    [string]$OverallStatus,
-    [datetime]$StartTime,
-    [pscustomobject]$ChannelStatus,
-    [bool]$ConfigChanged,
-    [pscustomobject]$Remediation,
-    [object[]]$Rules,
-    [string]$CatalogSource,
-    [string]$StatePathUsed,
-    [bool]$StateWriteOk
-  )
-  $anoms = ($Rules | Where-Object { $_.Status -ne 'OK' } | Measure-Object).Count
-  $hardZeros = ($Rules | Where-Object { $_.Status -eq 'HARDZERO' } | Measure-Object).Count
-  [pscustomobject]@{
-    Timestamp = (Get-Date).ToString('s')
-    HostName = $env:COMPUTERNAME
-    WindowHours = $WindowHours
-    StartTime = $StartTime.ToString('s')
-    Status = $OverallStatus
-    CatalogSource = $CatalogSource
-    StatePath = $StatePathUsed
-    StateWriteOk = $StateWriteOk
-    ConfigChanged = $ConfigChanged
-    Channel = $ChannelStatus
-    Remediation = $Remediation
-    Summary = [pscustomobject]@{
-      TotalRules = $Rules.Count
-      Anomalies = $anoms
-      HardZero = $hardZeros
-    }
-    Rules = $Rules
-  }
-}
-# -----------------------------
-# Console summary (no pipeline pollution)
-# -----------------------------
-function Show-ConsoleSummary {
-  param([Parameter(Mandatory)][pscustomobject]$Result)
-  $statusColor = Get-StatusColor -Status $Result.Status
-  Write-UiSeparator -Char '=' -Width 78 -Style 'Cyan'
-  Write-ConsoleLine -Text ("Sysmon Drift Sensor  |  Host: {0}  |  Time: {1}" -f $Result.HostName, $Result.Timestamp) -Color 'Cyan'
-  Write-UiSeparator -Char '=' -Width 78 -Style 'Cyan'
-  Write-ConsoleLine -Text ("Status: {0}" -f $Result.Status) -Color $statusColor
-  Write-ConsoleLine -Text ("WindowHours: {0} | Rules: {1} | Anomalies: {2} | HardZero: {3}" -f $Result.WindowHours, $Result.Summary.TotalRules, $Result.Summary.Anomalies, $Result.Summary.HardZero) -Color 'White'
-  $oldestTxt = 'n/a'
-  if ($Result.Channel.OldestRecord) { $oldestTxt = $Result.Channel.OldestRecord.ToString('s') }
-  Write-ConsoleLine -Text ("Channel: Exists={0} Enabled={1} Oldest={2}" -f $Result.Channel.Exists, $Result.Channel.Enabled, $oldestTxt) -Color 'White'
-  if ($Result.Channel.Error) {
-    Write-ConsoleLine -Text ("ChannelError: {0}" -f $Result.Channel.Error) -Color 'Yellow'
-  }
-  Write-ConsoleLine -Text ("ConfigChangedInWindow: {0}" -f $Result.ConfigChanged) -Color 'White'
-  Write-ConsoleLine -Text ("Catalog: {0}" -f $Result.CatalogSource) -Color 'White'
-  Write-ConsoleLine -Text ("State: {0} | WriteOk: {1}" -f $Result.StatePath, $Result.StateWriteOk) -Color 'White'
-  if ($Result.Remediation -and $Result.Remediation.Attempted) {
-    $rc = 'Yellow'
-    if ($Result.Remediation.Success) { $rc = 'Green' }
-    if (-not $Result.Remediation.Success) { $rc = 'Red' }
-    Write-ConsoleLine -Text ("Remediation: Success={0} ExitCode={1}" -f $Result.Remediation.Success, $Result.Remediation.ExitCode) -Color $rc
-    if ($Result.Remediation.Error) {
-      Write-ConsoleLine -Text ("RemediationError: {0}" -f $Result.Remediation.Error) -Color 'Yellow'
-    }
-  }
-  # Print top anomalies (human-friendly)
-  if ($Result.Rules -and $Result.Rules.Count -gt 0) {
-    $bad = $Result.Rules | Where-Object { $_.Status -ne 'OK' } | Sort-Object Status, Id
-    if ($bad.Count -gt 0) {
-      Write-UiLine ""
-      Write-ConsoleLine -Text "Top anomalies:" -Color 'Cyan'
-      $bad | Select-Object -First 20 | ForEach-Object {
-        $c = Get-RuleStatusColor -Status $_.Status
-        $baseTxt = 'n/a'
-        if ($null -ne $_.PriorBaseline) { $baseTxt = ([math]::Round([double]$_.PriorBaseline, 1)).ToString() }
-        $ratioTxt = 'n/a'
-        if ($null -ne $_.Ratio) { $ratioTxt = $_.Ratio.ToString() }
-        Write-ConsoleLine -Text ("  ID {0,-4} | {1,-26} | Cnt {2,-6} | Base {3,-8} | Ratio {4,-6} | {5}" -f $_.Id, $_.Name, $_.Count, $baseTxt, $ratioTxt, $_.Status) -Color $c
-      }
-      if ($bad.Count -gt 20) {
-        Write-ConsoleLine -Text ("  ... and {0} more" -f ($bad.Count - 20)) -Color 'Gray'
-      }
-    }
-  }
-  # Next steps hints (only for humans)
-  if ($Result.Status -eq 'CHANNEL_UNAVAILABLE') {
-    Write-UiLine ""
-    Write-ConsoleLine -Text "Next steps:" -Color 'Cyan'
-    Write-ConsoleLine -Text "  - Check if Sysmon is installed and running (Sysmon/Sysmon64 service)." -Color 'Gray'
-    Write-ConsoleLine -Text "  - List logs: wevtutil el | findstr /i sysmon" -Color 'Gray'
-    Write-ConsoleLine -Text "  - If log exists but disabled: run as admin and enable it: wevtutil sl Microsoft-Windows-Sysmon/Operational /e:true" -Color 'Gray'
-  }
-  Write-UiSeparator -Char '=' -Width 78 -Style 'Cyan'
-  Write-UiLine ""
-}
-# -----------------------------
 # MAIN
 # -----------------------------
+if ($PSBoundParameters.ContainsKey('CatalogPath')) {
+  try {
+    $catalog = Get-ExplicitCatalog -Path $CatalogPath
+    $catalogSource = $CatalogPath
+  } catch {
+    Write-CatalogFailureResult -Message $_.Exception.Message
+  }
+} else {
+  $catalog = $null
+  $catalogSource = 'DEFAULT'
+}
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $result }
+  exit (Get-V2ExitCode -Result $unsupportedResult)
+}
+$StatePath = Get-SysmonStatePath -RequestedPath $StatePath -FileName 'rule-drift-sensor-state.json'
 if (-not (Ensure-EventSource -SourceName $script:EventSourceName -LogName $script:EventLogName)) {
   Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
 }
 $channel = Get-SysmonChannelStatus
 $channel = Enable-SysmonChannelIfRequested -ChannelStatus $channel
 $defaultCatalog = Get-DefaultCatalog -DefaultWindowHours $WindowHours -DefaultAlpha $Alpha -DefaultRatioFloor $RatioFloor -DefaultRatioUpper $RatioUpper -DefaultMinBaselineToCompare $MinBaselineToCompare -WithBuiltInRules:$UseBuiltInDefaultRules
-$catalogSource = 'DEFAULT'
-$catalog = Load-CatalogOrDefault -Path $CatalogPath -DefaultCatalog $defaultCatalog
-if ($catalog -ne $defaultCatalog) { $catalogSource = $CatalogPath }
+if ($null -eq $catalog) { $catalog = $defaultCatalog }
 # Apply catalog settings only if caller did not override
-if ($catalog.WindowHours -and -not $PSBoundParameters.ContainsKey('WindowHours')) { $WindowHours = [int]$catalog.WindowHours }
-if ($catalog.Alpha -and -not $PSBoundParameters.ContainsKey('Alpha')) { $Alpha = [double]$catalog.Alpha }
-if ($catalog.RatioFloor -and -not $PSBoundParameters.ContainsKey('RatioFloor')) { $RatioFloor = [double]$catalog.RatioFloor }
-if ($catalog.RatioUpper -and -not $PSBoundParameters.ContainsKey('RatioUpper')) { $RatioUpper = [double]$catalog.RatioUpper }
-if ($catalog.MinBaselineToCompare -and -not $PSBoundParameters.ContainsKey('MinBaselineToCompare')) { $MinBaselineToCompare = [int]$catalog.MinBaselineToCompare }
+if ($catalog.PSObject.Properties.Name -contains 'WindowHours' -and -not $PSBoundParameters.ContainsKey('WindowHours')) { $WindowHours = [int]$catalog.WindowHours }
+if ($catalog.PSObject.Properties.Name -contains 'Alpha' -and -not $PSBoundParameters.ContainsKey('Alpha')) { $Alpha = [double]$catalog.Alpha }
+if ($catalog.PSObject.Properties.Name -contains 'RatioFloor' -and -not $PSBoundParameters.ContainsKey('RatioFloor')) { $RatioFloor = [double]$catalog.RatioFloor }
+if ($catalog.PSObject.Properties.Name -contains 'RatioUpper' -and -not $PSBoundParameters.ContainsKey('RatioUpper')) { $RatioUpper = [double]$catalog.RatioUpper }
+if ($catalog.PSObject.Properties.Name -contains 'MinBaselineToCompare' -and -not $PSBoundParameters.ContainsKey('MinBaselineToCompare')) { $MinBaselineToCompare = [int]$catalog.MinBaselineToCompare }
 $startTime = (Get-Date).AddHours(-$WindowHours)
 if (-not $channel.Exists -or -not $channel.Enabled) {
-  $final = Get-FinalResult -OverallStatus 'CHANNEL_UNAVAILABLE' -StartTime $startTime -ChannelStatus $channel -ConfigChanged $false -Remediation $null -Rules @() -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $false
+  $final = Get-FinalResult -OverallStatus 'CHANNEL_UNAVAILABLE' -StartTime $startTime -ChannelStatus $channel -ConfigChanged $null -Remediation $null -Rules @() -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $false
   Write-AuditEvent -EventId $script:EventIdWarn -Message ("Sysmon channel unavailable: Exists={0} Enabled={1} Error={2}" -f $channel.Exists,$channel.Enabled,$channel.Error) -Level 'Warning'
-  if ($PassThru) { $final } else { Show-ConsoleSummary -Result $final }
-  exit 1
-}
-# Load baseline state (tolerant)
-$baseline = @{}
-$state = Read-JsonFileSafe -Path $StatePath
-if ($state -and $state.Baseline) {
-  $baseline = ConvertTo-Hashtable -Object $state.Baseline
-}
-# Config change detection in window (Sysmon ID 16)
-$configChanged = $false
-try {
-  $cfg = Get-WinEvent -FilterHashtable @{ LogName=$script:SysmonLogName; ID=16; StartTime=$startTime } -MaxEvents 1 -ErrorAction SilentlyContinue
-  if ($cfg -and $cfg.Count -gt 0) { $configChanged = $true }
-} catch {
-  Write-Verbose ("Sysmon config change event lookup failed: {0}" -f $_.Exception.Message)
-}
-$ruleResults = @()
-$remediationResult = $null
-$overallStatus = 'OK'
-$stateWriteOk = $false
-try {
-  foreach ($r in @($catalog.Rules)) {
-    if (-not $r) { continue }
-    if (-not $r.Id) { continue }
-    if ($r.Disabled -eq $true) { continue }
-    $id = [int]$r.Id
-    $name = if ($r.Name) { [string]$r.Name } else { "EventID $id" }
-    $isCritical = [bool]$r.Critical
-    $minWin = $null
-    if ($null -ne $r.MinPerWindow) { $minWin = [int]$r.MinPerWindow }
-    $msgRegex = $null
-    if ($r.MessageRegex) { $msgRegex = [string]$r.MessageRegex }
-    # Validate regex; if invalid, ignore regex for counting.
-    if ($msgRegex) {
-      try { [void][regex]::new($msgRegex) } catch { $msgRegex = $null }
-    }
-    $count = Get-EventCount -EventId $id -StartTime $startTime -MessageRegex $msgRegex
-    $priorBase = $null
-    if ($baseline.ContainsKey("$id")) {
-      try { $priorBase = [double]$baseline["$id"] } catch { $priorBase = $null }
-    }
-    $ratio = $null
-    if ($null -ne $priorBase -and $priorBase -ge [double]$MinBaselineToCompare -and $priorBase -gt 0) {
-      $ratio = [math]::Round($count / $priorBase, 2)
-    }
-    $status = 'OK'
-    if ($isCritical -and $count -eq 0) { $status = 'HARDZERO' }
-    elseif ($null -ne $minWin -and $count -lt $minWin) { $status = 'LOW' }
-    elseif ($null -ne $ratio -and $ratio -lt $RatioFloor) { $status = 'DRIFT_DOWN' }
-    elseif ($IncludeSurge -and $null -ne $ratio -and $ratio -gt $RatioUpper) { $status = 'SURGE' }
-    if ($status -ne 'OK') { $overallStatus = 'ANOMALIES_DETECTED' }
-    # EMA baseline update
-    $newBase = [double]$count
-    if (-not $Rebaseline -and $null -ne $priorBase) {
-      $newBase = [double]::Round(($Alpha * $count) + ((1 - $Alpha) * $priorBase), 2)
-    }
-    $baseline["$id"] = $newBase
-    $ruleResults += (Get-RuleResult -Id $id -Name $name -Count $count -PriorBaseline $priorBase -NewBaseline $newBase -Ratio $ratio -MinPerWindow $minWin -IsCritical $isCritical -Status $status -MessageRegex $msgRegex)
-  }
-  # Persist state (best effort)
-  $stateObj = [pscustomobject]@{
-    HostName = $env:COMPUTERNAME
-    Timestamp = (Get-Date).ToString('s')
-    WindowHours = $WindowHours
-    Alpha = $Alpha
-    Baseline = $baseline
-    Channel = $channel
-    ConfigChanged = $configChanged
-    CatalogSource = $catalogSource
-  }
-  $stateWriteOk = $false
+  if (-not $PassThru) { Show-ConsoleSummary -Result $final }
+} else {
+  $baseline = @{}
+  $state = Read-ValidatedSysmonState -Path $StatePath
+  if ($state -and $state.Baseline) { $baseline = ConvertTo-Hashtable -Object $state.Baseline }
+  $ruleResults = @(); $remediationResult = $null; $stateWriteOk = $false; $eventQueryFailed = $false; $configChanged = $null; $evidenceSummary = $null
   try {
-    Save-Json -InputObject $stateObj -Path $StatePath -Depth 10
-    $stateWriteOk = $true
-  } catch {
-    Write-Verbose ("Sysmon drift state write failed: {0}" -f $_.Exception.Message)
-  }
-  if (-not $stateWriteOk) { $overallStatus = 'ANOMALIES_DETECTED' }
-  # Optional remediation (trigger on any HARDZERO)
-  if ($TriggerReapply) {
-    $hasHardZero = (($ruleResults | Where-Object { $_.Status -eq 'HARDZERO' } | Measure-Object).Count -gt 0)
-    if ($hasHardZero) {
-      if (Test-RemediationScriptAllowed -ScriptPath $RemediationScriptPath -RequireSignature:$RequireSignedRemediationScript) {
-        $remediationResult = Invoke-RemediationScript -ScriptPath $RemediationScriptPath
-      } else {
-        $remediationResult = [pscustomobject]@{
-          Attempted = $true
-          Success   = $false
-          ExitCode  = $null
-          Error     = 'Remediation blocked (missing script or invalid signature)'
-          ScriptPath= $RemediationScriptPath
+    $activeRules = @($catalog.Rules | Where-Object { $_ -and $_.PSObject.Properties.Name -contains 'Id' -and -not ($_.PSObject.Properties.Name -contains 'Disabled' -and $_.Disabled -eq $true) })
+    $queryIds = @(@($activeRules | ForEach-Object { [int]$_.Id }) + 16 | Sort-Object -Unique)
+    $workStopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $eventEvidence = Get-BoundedSysmonEventEvidence -EventIds $queryIds -StartTime $startTime -MaximumEvents $MaxEvents -MaximumSeconds $MaxQuerySeconds
+    $configCount = Get-EventCountFromEvidence -Evidence $eventEvidence -EventId 16 -WorkStopwatch $workStopwatch -MaximumSeconds $MaxQuerySeconds
+    if ($configCount.Success) { $configChanged = [bool]($configCount.Count -gt 0) } else { $eventQueryFailed = $true }
+    foreach ($r in $activeRules) {
+      $id = [int]$r.Id
+      $name = if ($r.PSObject.Properties.Name -contains 'Name' -and $r.Name) { [string]$r.Name } else { "EventID $id" }
+      $isCritical = [bool]($r.PSObject.Properties.Name -contains 'Critical' -and $r.Critical)
+      $minWin = if ($r.PSObject.Properties.Name -contains 'MinPerWindow' -and $null -ne $r.MinPerWindow) { [Nullable[int]][int]$r.MinPerWindow } else { $null }
+      $msgRegex = if ($r.PSObject.Properties.Name -contains 'MessageRegex' -and $r.MessageRegex) { [string]$r.MessageRegex } else { $null }
+      $countResult = Get-EventCountFromEvidence -Evidence $eventEvidence -EventId $id -MessageRegex $msgRegex -WorkStopwatch $workStopwatch -MaximumSeconds $MaxQuerySeconds
+      if (-not $countResult.Success) { $eventQueryFailed = $true; $ruleResults += Get-RuleResult -Id $id -Name $name -Count $null -PriorBaseline $null -NewBaseline $null -Ratio $null -MinPerWindow $minWin -IsCritical $isCritical -Status 'QUERY_ERROR' -MessageRegex $msgRegex -QueryError $countResult.Error; continue }
+      $count = [int]$countResult.Count; $priorBase = $null
+      if ($baseline.ContainsKey("$id")) { try { $priorBase = [double]$baseline["$id"] } catch { $priorBase = $null } }
+      $ratio = $null
+      if ($null -ne $priorBase -and $priorBase -ge [double]$MinBaselineToCompare -and $priorBase -gt 0) { $ratio = [math]::Round($count / $priorBase,2) }
+      $status = 'OK'
+      if ($isCritical -and $count -eq 0) { $status = 'HARDZERO' } elseif ($null -ne $minWin -and $count -lt $minWin) { $status = 'LOW' } elseif ($null -ne $ratio -and $ratio -lt $RatioFloor) { $status = 'DRIFT_DOWN' } elseif ($IncludeSurge -and $null -ne $ratio -and $ratio -gt $RatioUpper) { $status = 'SURGE' }
+      $newBase = [double]$count
+      if (-not $Rebaseline -and $null -ne $priorBase) { $newBase = [double]::Round(($Alpha * $count) + ((1 - $Alpha) * $priorBase),2) }
+      $baseline["$id"] = $newBase
+      $ruleResults += Get-RuleResult -Id $id -Name $name -Count $count -PriorBaseline $priorBase -NewBaseline $newBase -Ratio $ratio -MinPerWindow $minWin -IsCritical $isCritical -Status $status -MessageRegex $msgRegex -QueryError $null
+    }
+    $workStopwatch.Stop()
+    $evidenceComplete = [bool]($eventEvidence.Complete -and -not $eventQueryFailed -and $workStopwatch.Elapsed.TotalSeconds -lt $MaxQuerySeconds)
+    $evidenceSummary = [pscustomobject]@{ Complete = $evidenceComplete; Truncated = [bool]$eventEvidence.Truncated; TimedOut = [bool]($eventEvidence.TimedOut -or $workStopwatch.Elapsed.TotalSeconds -ge $MaxQuerySeconds); Error = $eventEvidence.Error; EventIds = @($eventEvidence.EventIds); EventsRead = $eventEvidence.EventsRead; MaximumEvents = $eventEvidence.MaximumEvents; MaximumSeconds = $eventEvidence.MaximumSeconds; ElapsedMilliseconds = $workStopwatch.ElapsedMilliseconds }
+    if ($evidenceComplete) {
+      $stateObj = [pscustomobject]@{ Version = 1; HostName = [string]$env:COMPUTERNAME; Timestamp = (Get-Date).ToString('s'); WindowHours = [int]$WindowHours; Alpha = [double]$Alpha; Baseline = [pscustomobject]$baseline; ConfigChanged = [bool]$configChanged; CatalogSource = [string]$catalogSource }
+      try { Write-SysmonState -InputObject $stateObj -Path $StatePath; $stateWriteOk = $true } catch { Write-Verbose ("Sysmon drift state write failed: {0}" -f $_.Exception.Message) }
+    }
+    $overallStatus = Resolve-SysmonOverallStatus -Rules $ruleResults -StateWriteOk $stateWriteOk -EvidenceComplete $evidenceComplete
+    if ($Mode -eq 'Remediate' -and $TriggerReapply -and $evidenceComplete -and $overallStatus -ne 'ERROR') {
+      $hasHardZero = @($ruleResults | Where-Object { $_.Status -eq 'HARDZERO' }).Count -gt 0
+      if ($hasHardZero) {
+        $remediationResult = Invoke-RemediationScript -ScriptPath $RemediationScriptPath -RequireSignature:$RequireSignedRemediationScript
+        if ($remediationResult.Attempted -and -not $remediationResult.Success) {
+          $overallStatus = 'ERROR'
         }
       }
     }
-  }
-  $final = Get-FinalResult -OverallStatus $overallStatus -StartTime $startTime -ChannelStatus $channel -ConfigChanged $configChanged -Remediation $remediationResult -Rules $ruleResults -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $stateWriteOk
-  # Audit event (short)
-  $auditMsg = "Rules={0} Anomalies={1} HardZero={2} ConfigChanged={3} RemAttempted={4} RemSuccess={5} Catalog={6}" -f `
-    $final.Summary.TotalRules, $final.Summary.Anomalies, $final.Summary.HardZero, $final.ConfigChanged, `
-    ($(if ($final.Remediation) { $final.Remediation.Attempted } else { $false })), `
-    ($(if ($final.Remediation) { $final.Remediation.Success } else { $false })), `
-    $final.CatalogSource
-  if ($final.Status -eq 'OK') {
-    Write-AuditEvent -EventId $script:EventIdOk -Message $auditMsg -Level 'Information'
-  } else {
-    Write-AuditEvent -EventId $script:EventIdWarn -Message $auditMsg -Level 'Warning'
-  }
-} catch {
-  $err = $_.Exception.Message
-  $final = Get-FinalResult -OverallStatus 'ERROR' -StartTime $startTime -ChannelStatus $channel -ConfigChanged $configChanged -Remediation $remediationResult -Rules $ruleResults -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $stateWriteOk
-  $final | Add-Member -NotePropertyName Error -NotePropertyValue $err -Force
-  Write-AuditEvent -EventId $script:EventIdWarn -Message ("Sysmon Drift Sensor ERROR: {0}" -f $err) -Level 'Error'
-} finally {
-  if (-not $PassThru) {
-    Show-ConsoleSummary -Result $final
-  }
-  if ($final.Status -ne 'OK') { exit 1 }
+    $final = Get-FinalResult -OverallStatus $overallStatus -StartTime $startTime -ChannelStatus $channel -ConfigChanged $configChanged -Remediation $remediationResult -Rules $ruleResults -Evidence $evidenceSummary -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $stateWriteOk
+    $auditMsg = "Rules={0} Anomalies={1} HardZero={2} EvidenceComplete={3} Truncated={4} ConfigChanged={5} Catalog={6}" -f $final.Summary.TotalRules,$final.Summary.Anomalies,$final.Summary.HardZero,$final.Evidence.Complete,$final.Evidence.Truncated,$final.ConfigChanged,$final.CatalogSource
+    if ($final.Status -eq 'OK') { Write-AuditEvent -EventId $script:EventIdOk -Message $auditMsg -Level 'Information' } else { Write-AuditEvent -EventId $script:EventIdWarn -Message $auditMsg -Level 'Warning' }
+  } catch {
+    $err = $_.Exception.Message
+    $final = Get-FinalResult -OverallStatus 'ERROR' -StartTime $startTime -ChannelStatus $channel -ConfigChanged $configChanged -Remediation $remediationResult -Rules $ruleResults -Evidence $evidenceSummary -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $stateWriteOk
+    $final | Add-Member -NotePropertyName Error -NotePropertyValue $err -Force
+    Write-AuditEvent -EventId $script:EventIdWarn -Message ("Sysmon Drift Sensor ERROR: {0}" -f $err) -Level 'Error'
+  } finally { if (-not $PassThru) { Show-ConsoleSummary -Result $final } }
 }
 # V2 output contract
-$resultToken = if ($final.Status -eq 'FAIL') { 'FAIL' } elseif ($final.Status -ne 'OK') { 'WARN' } else { 'OK' }
+$resultToken = if ($final.Status -in @('FAIL', 'ERROR')) { 'FAIL' } elseif ($final.Status -ne 'OK') { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $final -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

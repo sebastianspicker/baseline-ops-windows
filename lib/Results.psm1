@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -Force -Global -DisableNameChecking
-
 <#
 .SYNOPSIS
 Findings list creation and management for v2 result objects.
@@ -10,6 +7,8 @@ Provides factory functions to create typed finding objects and manage
 ordered finding lists used by the v2 script result contract.
 #>
 
+Set-StrictMode -Version Latest
+Microsoft.PowerShell.Core\Import-Module ([System.IO.Path]::Combine($PSScriptRoot, 'Common.psm1')) -DisableNameChecking
 
 <#
 .SYNOPSIS
@@ -66,6 +65,10 @@ function Get-FindingObject {
 <#
 .SYNOPSIS
   Creates a finding and appends it to a findings list.
+.DESCRIPTION
+  Mutates the supplied list without writing to the success stream unless
+  PassThru is requested. This keeps script result pipelines reserved for their
+  documented result objects.
 .PARAMETER FindingList
   Target list. Falls back to caller-scope $Findings variable if not provided.
 .PARAMETER Code
@@ -80,6 +83,9 @@ function Get-FindingObject {
   Optional profile name added as a Profile property.
 .PARAMETER Extra
   Additional properties to attach to the finding object.
+.PARAMETER PassThru
+  Returns the target findings list after appending. The default is no
+  success-stream output.
 #>
 function Add-Finding {
   [CmdletBinding()]
@@ -94,12 +100,13 @@ function Add-Finding {
     [string]$ProfileName,
     [hashtable]$Extra,
     [switch]$TimeUtc,
-    [switch]$TimestampLocal
+    [switch]$TimestampLocal,
+    [switch]$PassThru
   )
 
   if ($null -eq $FindingList) {
-    $FindingList = Get-CallerValue -Name 'Findings' -ScopeDepth 5
-    if ($null -eq $FindingList) { $FindingList = Get-CallerValue -Name 'script:Findings' -ScopeDepth 5 }
+    $FindingList = Common\Get-CallerValue -Name 'Findings' -ScopeDepth 5
+    if ($null -eq $FindingList) { $FindingList = Common\Get-CallerValue -Name 'script:Findings' -ScopeDepth 5 }
   }
   if ($null -eq $FindingList) {
     throw 'FindingList not provided and no $Findings/$script:Findings found.'
@@ -116,7 +123,7 @@ function Add-Finding {
 
   $obj = Get-FindingObject -Code $Code -Severity $Severity -Message $Message -TypeName $TypeName -Extra $extraFields
   $FindingList.Add($obj) | Out-Null
-  return , $FindingList
+  if ($PassThru) { return , $FindingList }
 }
 
 Export-ModuleMember -Function Get-FindingsList,Get-FindingObject,Add-Finding

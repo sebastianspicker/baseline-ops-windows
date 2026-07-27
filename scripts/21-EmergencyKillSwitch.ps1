@@ -11,12 +11,12 @@
   1) Writes an audit/quarantine flag to the registry (timestamp + reason + optional user).
   2) Optionally schedules an automatic rollback after a specified number of minutes.
   3) Enforces Windows Firewall "block all" behavior by setting profile defaults to Block for inbound and outbound traffic.
-  4) Creates explicit, idempotent firewall rules for traceability (stable rule names, safe to run multiple times).
+  4) Creates explicit, run-scoped firewall rules for traceability and refuses overlapping activations while prior identities remain.
   5) Optionally creates a break-glass inbound allow rule for specified remote IPs/subnets.
   6) Optionally disables active network adapters (very aggressive; may cut off remote access immediately).
 
   Output behavior:
-  - The script prints a human-friendly, colored status and a final summary to the console.
+  - The script prints colored status and a final summary to the console.
   - The script emits exactly one structured object to the success pipeline, suitable for Export-Csv / ConvertTo-Json / filtering.
 
   Safety behavior:
@@ -33,7 +33,11 @@
 .PARAMETER BreakGlassRemoteAddress
   One or more remote IP addresses or CIDR subnets that should be allowed inbound (break-glass).
   Use this to preserve a controlled recovery path (for example, an admin jump host subnet).
-  If not provided, any existing break-glass rule created by this script is removed.
+  If not provided, no break-glass allow is created. Prior activations are never
+  removed by prefix; their exact rollback remains authoritative.
+
+.PARAMETER BreakGlassLocalPort
+  The TCP destination port exposed to BreakGlassRemoteAddress. Defaults to 3389.
 
 .PARAMETER AutoRollbackMinutes
   If greater than 0, schedules a one-time rollback that:
@@ -43,7 +47,7 @@
   Use this to reduce the risk of permanent lockout when executing remotely.
 
 .PARAMETER ConfigJsonPath
-  Optional path to a JSON configuration file (example: "PATH/TO/JSON/kill-switch.json").
+  Optional path to a JSON configuration file supplied with $ConfigJsonPath.
   If the file is missing or invalid, the script continues with safe defaults and/or explicit parameters.
 
 .PARAMETER ConfigJsonRaw
@@ -88,13 +92,13 @@
   Operational considerations:
   - Running with -DisableAdapters can immediately drop the current remote session.
   - Break-glass should be planned in advance (known management subnet/IPs).
-  - AutoRollback is a safety net; ensure it aligns with your incident response policy.
+  - AutoRollback is a safety control; ensure it aligns with the incident-response policy.
 
 .EXAMPLE
   PS> .\21-EmergencyKillSwitch.ps1
 
   Runs with built-in defaults (no break-glass, no adapter disable, no auto-rollback).
-  Confirmation prompts may appear depending on your preference settings.
+  Confirmation prompts may appear depending on PowerShell preference settings.
 
 .EXAMPLE
   PS> .\21-EmergencyKillSwitch.ps1 -Reason "Suspected malware beaconing"
@@ -113,7 +117,7 @@
   -Confirm:$false suppresses confirmation prompts.
 
 .EXAMPLE
-  PS> $r = .\21-EmergencyKillSwitch.ps1 -ConfigJsonPath "PATH/TO/JSON/kill-switch.json" -Confirm:$false
+  PS> $r = .\21-EmergencyKillSwitch.ps1 -ConfigJsonPath $ConfigJsonPath -Confirm:$false
   PS> $r | ConvertTo-Json -Depth 6
   PS> $r.Errors | Out-String
 
@@ -127,6 +131,8 @@ param(
   [string]$Reason = "Incident/Compromise/Manual KillSwitch",
   [switch]$DisableAdapters,
   [string[]]$BreakGlassRemoteAddress = @(),
+  [ValidateRange(1, 65535)]
+  [int]$BreakGlassLocalPort = 3389,
   [ValidateRange(0, 1440)]
   [int]$AutoRollbackMinutes = 0,
 
@@ -154,7 +160,12 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '21-EmergencyKillSwitch.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '21-EmergencyKillSwitch.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 $Findings = Get-FindingsList
 
@@ -167,10 +178,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result 'WARN' -Findings @($Findings.ToArray()) -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $resultToken = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 2
+  exit (Get-V2ExitCode -Result $resultToken)
 }
 
 # -------------------- Safe defaults
@@ -230,6 +242,7 @@ $Run = [ordered]@{
     BreakGlassCleanupChecked = $false
     BreakGlassRemoved   = $false
     AdaptersDisabled    = $false
+    RollbackStateCaptured = $false
     RollbackScheduled   = $false
 
     # Tracks if user declined confirmations
@@ -249,50 +262,7 @@ function Add-RunError {
   [void]$Run.Errors.Add($Message)
 }
 
-# ---------- Console helpers (never write to pipeline)
-
-
-
-
-
-function Try-LoadConfigJson {
-  param([string]$Path,[string]$Raw)
-
-  try {
-    if ($Raw -and $Raw.Trim()) {
-      return ($Raw | ConvertFrom-Json)
-    }
-
-    if ($Path -and (Test-Path -LiteralPath $Path)) {
-      $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
-      if ($text -and $text.Trim()) {
-        return ($text | ConvertFrom-Json)
-      }
-    }
-
-    return $null
-  } catch {
-    $Run.JsonError = $_.Exception.Message
-    return $null
-  }
-}
-
-function Get-ConfigValue {
-  param(
-    [object]$Config,
-    [Parameter(Mandatory=$true)][string]$Name,
-    [Parameter(Mandatory=$true)][object]$Default
-  )
-
-  if ($null -eq $Config) { return $Default }
-
-  $p = $Config.PSObject.Properties[$Name]
-  if ($null -eq $p) { return $Default }
-
-  if ($p.Value -is [string] -and -not $p.Value.Trim()) { return $Default }
-
-  return $p.Value
-}
+. (Join-Path $PSScriptRoot 'internal/21-EmergencyKillSwitch.helpers.ps1')
 
 
 function Set-QuarantineFlag {
@@ -305,11 +275,11 @@ function Set-QuarantineFlag {
 
   try {
     New-Item -Path $RegKey -Force | Out-Null
-    Set-ItemProperty -Path $RegKey -Name 'Isolated' -Value 1 -Force
-    Set-ItemProperty -Path $RegKey -Name 'Time'     -Value ((Get-Date).ToString('s')) -Force
-    Set-ItemProperty -Path $RegKey -Name 'Reason'   -Value $ReasonText -Force
+    Set-ItemProperty -LiteralPath $RegKey -Name 'Isolated' -Value 1 -Force
+    Set-ItemProperty -LiteralPath $RegKey -Name 'Time'     -Value ((Get-Date).ToString('s')) -Force
+    Set-ItemProperty -LiteralPath $RegKey -Name 'Reason'   -Value $ReasonText -Force
     if ($IncludeUser) {
-      Set-ItemProperty -Path $RegKey -Name 'User' -Value $Run.User -Force
+      Set-ItemProperty -LiteralPath $RegKey -Name 'User' -Value $Run.User -Force
     }
     $Run.Actions.RegistryWritten = $true
   } catch {
@@ -317,141 +287,82 @@ function Set-QuarantineFlag {
   }
 }
 
-function New-OrReplaceRule {
-  [CmdletBinding(SupportsShouldProcess = $true)]
-  param(
-    [string]$Name,
-    [string]$DisplayName,
-    [ValidateSet('Inbound','Outbound')]
-    [string]$Direction,
-    [ValidateSet('Block','Allow')]
-    [string]$Action,
-    [string[]]$RemoteAddress = @(),
-    [string]$Description = ''
-  )
-
-  # Remove existing rule if present (ignore if not found)
-  try {
-    $existingRule = Get-NetFirewallRule -Name $Name -ErrorAction Stop
-    if ($existingRule -and $PSCmdlet.ShouldProcess($Name, 'Remove existing firewall rule before replacement')) {
-      Remove-NetFirewallRule -Name $Name -ErrorAction Stop
-    }
-  } catch {
-    Write-Verbose ("Existing firewall rule removal skipped for '{0}': {1}" -f $Name,$_.Exception.Message)
-  }
-
-  $params = @{
-    Name        = $Name
-    DisplayName = $DisplayName
-    Direction   = $Direction
-    Action      = $Action
-    Profile     = 'Any'
-    Enabled     = 'True'
-    Description = $Description
-  }
-
-  if ($RemoteAddress -and $RemoteAddress.Count -gt 0) {
-    $params.RemoteAddress = $RemoteAddress
-  }
-
-  try {
-    if (-not $PSCmdlet.ShouldProcess($Name, 'Create replacement firewall rule')) {
-      Add-RunError "Firewall rule '$Name' creation skipped by ShouldProcess."
-      return $false
-    }
-    New-NetFirewallRule @params | Out-Null
-  } catch {
-    $message = "Firewall rule '$Name' creation failed: $($_.Exception.Message)"
-    Add-RunError $message
-    $null = Add-Finding -FindingList $Findings -Code 'Firewall-RuleCreateFailed' -Severity 'High' `
-      -Message $message -Extra @{ RuleName = $Name; Direction = $Direction; Action = $Action }
-    return $false
-  }
-
-  try {
-    $createdRules = @(Get-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue | Where-Object { $null -ne $_ })
-  } catch {
-    $message = "Firewall rule '$Name' verification failed after creation: $($_.Exception.Message)"
-    Add-RunError $message
-    $null = Add-Finding -FindingList $Findings -Code 'Firewall-RuleCreateFailed' -Severity 'High' `
-      -Message $message -Extra @{ RuleName = $Name; Direction = $Direction; Action = $Action }
-    return $false
-  }
-
-  $verifiedRules = @($createdRules | Where-Object {
-      [string]$_.Enabled -eq 'True' -and
-      [string]$_.Direction -eq $Direction -and
-      [string]$_.Action -eq $Action
-    })
-  if ($verifiedRules.Count -eq 0) {
-    $message = "Firewall rule '$Name' was not found, was not enabled, or did not match requested settings after creation."
-    Add-RunError $message
-    $null = Add-Finding -FindingList $Findings -Code 'Firewall-RuleCreateFailed' -Severity 'High' `
-      -Message $message -Extra @{ RuleName = $Name; Direction = $Direction; Action = $Action }
-    return $false
-  }
-
-  return $true
-}
-
 function Schedule-AutoRollback {
   param(
     [int]$Minutes,
     [string]$TaskName,
-    [string[]]$RuleNames
+    [object[]]$ManagedRules,
+    [Parameter(Mandatory=$true)][string]$SnapshotJson
   )
 
   if ($Minutes -le 0) { return $false }
 
   # Validate inputs before embedding in heredoc (prevents PS code injection into
   # the base64-encoded rollback script that runs elevated via scheduled task).
-  if ($TaskName -notmatch '^[a-zA-Z0-9\-_\\]+$') {
-    Add-RunError "Schedule-AutoRollback: TaskName '$TaskName' contains invalid characters (allowed: a-z A-Z 0-9 - _ \)"
+  if ($TaskName -notmatch '^[a-zA-Z0-9\-_]+$') {
+    Add-RunError "Schedule-AutoRollback: TaskName '$TaskName' contains invalid characters (allowed: a-z A-Z 0-9 - _)"
     return $false
   }
-  foreach ($rn in $RuleNames) {
-    if ($rn -match "'") {
-      Add-RunError "Schedule-AutoRollback: RuleNames entry '$rn' contains a single quote, which is not allowed"
-      return $false
-    }
-    if ($rn -match '[`$;{}]') {
-      Add-RunError "Schedule-AutoRollback: RuleNames entry '$rn' contains invalid characters (backtick, dollar, semicolon, or braces)"
-      return $false
-    }
-  }
+  try { Assert-ManagedFirewallRules -Rules $ManagedRules } catch { Add-RunError "Schedule-AutoRollback: invalid managed rule identities: $($_.Exception.Message)"; return $false }
 
   $runAt = (Get-Date).AddMinutes($Minutes)
-  $logPath = Join-Path $env:TEMP "KillSwitch-Rollback-$($TaskName -replace '[^a-zA-Z0-9]', '').log"
+  $logFileName = "KillSwitch-Rollback-$($TaskName -replace '[^a-zA-Z0-9]', '').log"
+  $snapshotEncoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($SnapshotJson))
 
   # Improved rollback script with proper error handling and logging (fixes #21)
   $rollbackPs = @"
 `$ErrorActionPreference = 'Stop'
-`$logPath = '$logPath'
+`$logPath = Join-Path ([System.IO.Path]::GetTempPath()) '$logFileName'
 function Write-RollbackLog { param([string]`$Message) try { Add-Content -Path `$logPath -Value "`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') `$Message" } catch { <# best-effort: log file may not be writable #> } }
 try {
   Write-RollbackLog 'Starting rollback...'
-  `$fwStatePath = Join-Path `$env:TEMP 'KillSwitch-PreFirewallState.json'
-  if (Test-Path -LiteralPath `$fwStatePath) {
-    `$saved = Get-Content -LiteralPath `$fwStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
-    foreach (`$profileName in `$saved.PSObject.Properties.Name) {
-      `$s = `$saved.`$profileName
-      Set-NetFirewallProfile -Name `$profileName -Enabled `$s.Enabled -DefaultInboundAction `$s.DefaultInboundAction -DefaultOutboundAction `$s.DefaultOutboundAction
+  `$snapshotJson = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$snapshotEncoded'))
+  `$saved = `$snapshotJson | ConvertFrom-Json -ErrorAction Stop
+  `$requiredNames = @('Domain', 'Private', 'Public'); `$requiredFields = @('Name', 'Enabled', 'DefaultInboundAction', 'DefaultOutboundAction'); `$validActions = @('Allow', 'Block', 'NotConfigured')
+  if (@(`$saved.PSObject.Properties.Name).Count -ne 4 -or @(`$saved.PSObject.Properties.Name | Where-Object { @('Version', 'Profiles', 'Adapters', 'ManagedRules') -notcontains `$_ }).Count -ne 0 -or [int]`$saved.Version -ne 3 -or @(`$saved.Profiles).Count -ne 3 -or @(`$saved.Adapters).Count -gt 128) { throw 'Embedded firewall snapshot has an invalid schema.' }
+  `$seen = @{}
+  foreach (`$s in @(`$saved.Profiles)) {
+    if (`$null -eq `$s -or @(`$s.PSObject.Properties.Name).Count -ne `$requiredFields.Count -or @(`$s.PSObject.Properties.Name | Where-Object { `$requiredFields -notcontains `$_ }).Count -ne 0) { throw 'Embedded firewall snapshot profile has missing or unexpected fields.' }
+    if (`$requiredNames -notcontains [string]`$s.Name -or `$seen.ContainsKey([string]`$s.Name)) { throw 'Embedded firewall snapshot has unknown or duplicate profile names.' }
+    if (`$s.Enabled -isnot [bool] -or `$validActions -notcontains [string]`$s.DefaultInboundAction -or `$validActions -notcontains [string]`$s.DefaultOutboundAction) { throw 'Embedded firewall snapshot contains invalid profile values.' }
+    `$seen[[string]`$s.Name] = `$true
+  }
+  if (@(`$seen.Keys | Where-Object { `$requiredNames -contains `$_ }).Count -ne 3) { throw 'Embedded firewall snapshot is missing required profiles.' }
+  `$seenAdapters = @{}
+  foreach (`$adapterName in @(`$saved.Adapters)) {
+    if (`$adapterName -isnot [string] -or [string]::IsNullOrWhiteSpace(`$adapterName) -or `$adapterName.Length -gt 256 -or `$adapterName -match '[\x00-\x1f]' -or `$seenAdapters.ContainsKey(`$adapterName)) { throw 'Embedded firewall snapshot contains an invalid or duplicate adapter name.' }
+    `$seenAdapters[`$adapterName] = `$true
+  }
+  `$seenRules = @{}
+  foreach (`$managedRule in @(`$saved.ManagedRules)) {
+    if (`$null -eq `$managedRule -or @(`$managedRule.PSObject.Properties.Name).Count -ne 3 -or @(`$managedRule.PSObject.Properties.Name | Where-Object { @('Name', 'Direction', 'Action') -notcontains `$_ }).Count -ne 0 -or `$managedRule.Name -isnot [string] -or `$managedRule.Name -notmatch '^[A-Za-z0-9_-]+$' -or `$seenRules.ContainsKey(`$managedRule.Name) -or @('Inbound','Outbound') -notcontains [string]`$managedRule.Direction -or @('Allow','Block') -notcontains [string]`$managedRule.Action) { throw 'Embedded firewall snapshot contains invalid managed rule identities.' }
+    `$seenRules[`$managedRule.Name] = `$true
+  }
+  `$rollbackErrors = New-Object System.Collections.Generic.List[string]
+  foreach (`$s in @(`$saved.Profiles)) {
+    try { Set-NetFirewallProfile -Name `$s.Name -Enabled `$s.Enabled -DefaultInboundAction `$s.DefaultInboundAction -DefaultOutboundAction `$s.DefaultOutboundAction -ErrorAction Stop }
+    catch { [void]`$rollbackErrors.Add("Firewall profile `$(`$s.Name): `$(`$_.Exception.Message)") }
+  }
+  Write-RollbackLog 'Firewall profiles restored from embedded pre-kill-switch snapshot'
+  foreach (`$adapterName in @(`$saved.Adapters)) {
+    try { Enable-NetAdapter -Name `$adapterName -Confirm:`$false -ErrorAction Stop }
+    catch { [void]`$rollbackErrors.Add("Network adapter `$adapterName: `$(`$_.Exception.Message)") }
+  }
+  if (@(`$saved.Adapters).Count -gt 0) { Write-RollbackLog 'Network adapters disabled by the kill switch were re-enabled' }
+  foreach (`$managedRule in @(`$saved.ManagedRules)) {
+    try {
+      `$existingRules = @(Get-NetFirewallRule -Name `$managedRule.Name -ErrorAction SilentlyContinue | Where-Object { `$null -ne `$_ })
+      `$ownedRules = @(`$existingRules | Where-Object { [string]`$_.Name -eq [string]`$managedRule.Name -and [string]`$_.Direction -eq [string]`$managedRule.Direction -and [string]`$_.Action -eq [string]`$managedRule.Action })
+      if (`$ownedRules.Count -ne `$existingRules.Count) { throw "Rule identity mismatch; refusing removal of `$(`$managedRule.Name)." }
+      if (`$ownedRules.Count -gt 0) { `$ownedRules | Remove-NetFirewallRule -ErrorAction Stop }
+    } catch {
+      [void]`$rollbackErrors.Add("Rule `$(`$managedRule.Name) removal: `$(`$_.Exception.Message)")
     }
-    Write-RollbackLog 'Firewall profiles restored from saved pre-kill-switch state'
-    Remove-Item -LiteralPath `$fwStatePath -Force -ErrorAction SilentlyContinue
-  } else {
-    Write-RollbackLog 'No saved firewall state found; refusing unsafe Allow/Allow fallback'
-    throw 'No saved firewall state found; refusing to apply unsafe firewall profile fallback.'
   }
-  try {
-    Get-NetFirewallRule -Name '$($RuleNames -join "','")' | Remove-NetFirewallRule -ErrorAction Stop
-    Write-RollbackLog 'Kill switch rules removed'
-  } catch {
-    Write-RollbackLog "Rule removal warning: `$(`$_.Exception.Message)"
-  }
-  `$delOutput = schtasks.exe /Delete /TN '$TaskName' /F 2>&1
-  if (`$LASTEXITCODE -eq 0) { Write-RollbackLog 'Rollback task removed' }
-  else { Write-RollbackLog "Task removal exit code: `$LASTEXITCODE - `$delOutput" }
+  Write-RollbackLog 'Kill switch rules removed or already absent'
+  if (`$rollbackErrors.Count -gt 0) { throw (`$rollbackErrors -join '; ') }
+  Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false -ErrorAction Stop
+  Write-RollbackLog 'Rollback task removed'
   Write-RollbackLog 'Rollback completed successfully'
 } catch {
   Write-RollbackLog "ERROR: `$(`$_.Exception.Message)"
@@ -461,70 +372,43 @@ try {
 
   $bytes = [System.Text.Encoding]::Unicode.GetBytes($rollbackPs)
   $enc   = [Convert]::ToBase64String($bytes)
-  $tr    = "PowerShell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $enc"
-
-  # Use array-based invocation to avoid argument-splitting edge cases (S4)
-  $schtasksArgs = @('/Create', '/TN', $TaskName, '/SC', 'ONCE',
-                    '/ST', $runAt.ToString('HH:mm'), '/TR', $tr, '/RL', 'HIGHEST', '/F')
-  $output = schtasks.exe @schtasksArgs 2>&1
-  if ($LASTEXITCODE -ne 0) {
-    Add-RunError "Auto-rollback schedule failed (exit code $LASTEXITCODE): $output"
+  $actionArguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc"
+  if ($actionArguments.Length -gt 30000) {
+    Add-RunError "Auto-rollback scheduled-task command exceeds the 30000-character safety limit ($($actionArguments.Length))."
     return $false
   }
 
-  Write-UiLine "Auto-rollback scheduled for $runAt (log: $logPath)" -Style Info
+  try {
+    $powerShellPath = Resolve-CanonicalWindowsPowerShellPath
+    $action = New-ScheduledTaskAction -Execute $powerShellPath -Argument $actionArguments
+    $trigger = New-ScheduledTaskTrigger -Once -At $runAt
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force -ErrorAction Stop | Out-Null
+    $Run.Effective.RollbackRunAt = $runAt
+  } catch {
+    Add-RunError "Auto-rollback schedule failed: $($_.Exception.Message)"
+    return $false
+  }
+
+  Write-UiLine "Auto-rollback scheduled for $runAt (log file in scheduled-task temp: $logFileName)" -Style Info
   return $true
 }
 
-function Resolve-Outcome {
-  # Consider isolation "active" only if at least the firewall default policy was set OR rules were created.
-  $Run.Outcome.IsolationActive = [bool]($Run.Actions.FirewallProfileSet -or $Run.Actions.RulesCreated -or $Run.Actions.AdaptersDisabled)
-}
-
-function Invoke-KillSwitchConsoleSummary {
-  $Run.EndTime = Get-Date
-  $Run.Duration = New-TimeSpan -Start $Run.StartTime -End $Run.EndTime
-  Resolve-Outcome
-
-  $summaryObj = [pscustomobject]@{ ComputerName = $Run.ComputerName; Timestamp = $Run.EndTime }
-  Write-ConsoleSummary -Summary $summaryObj -Findings ([System.Collections.ArrayList]::new()) `
-    -CustomFields ([ordered]@{
-      User                = $Run.User
-      IsAdmin             = $Run.IsAdmin
-      Duration            = $Run.Duration
-      'JSON used'         = $Run.JsonUsed
-      Reason              = $Run.Effective.Reason
-      IsolationActive     = [string]$Run.Outcome.IsolationActive
-      DisableAdapters     = [string][bool]$Run.Effective.DisableAdapters
-      AutoRollbackMinutes = $Run.Effective.AutoRollbackMinutes
-    })
-  # Action booleans
-  Write-UiLine ""
-  Write-UiBool -Key 'RegistryWritten'    -Value $Run.Actions.RegistryWritten
-  Write-UiBool -Key 'EventLogWritten'    -Value $Run.Actions.EventLogWritten
-  Write-UiBool -Key 'FirewallProfileSet' -Value $Run.Actions.FirewallProfileSet
-  Write-UiBool -Key 'RulesCreated'       -Value $Run.Actions.RulesCreated
-  Write-UiBool -Key 'BreakGlassApplied'  -Value $Run.Actions.BreakGlassApplied
-  Write-UiBool -Key 'BreakGlassCleanupChecked' -Value $Run.Actions.BreakGlassCleanupChecked
-  Write-UiBool -Key 'BreakGlassRemoved'  -Value $Run.Actions.BreakGlassRemoved
-  Write-UiBool -Key 'AdaptersDisabled'   -Value $Run.Actions.AdaptersDisabled
-  Write-UiBool -Key 'RollbackScheduled'  -Value $Run.Actions.RollbackScheduled
-  # ConfirmDeclined warning
-  if ($Run.Actions.ConfirmDeclined) {
-    Write-UiLine ""
-    Write-UiLine -Text "NOTE: One or more operations were declined in a Confirm prompt (No / No to All)." -Color Yellow
-  }
-  # Errors list
-  if ($Run.Errors.Count -gt 0) {
-    Write-UiLine ""
-    Write-UiLine -Text "Warnings/Errors:" -Color Yellow
-    foreach ($e in $Run.Errors) { Write-UiLine -Text ("- {0}" -f $e) -Color Yellow }
-  }
-}
-
 # -------------------- Load JSON (optional) and merge with defaults/parameters
-$config = Try-LoadConfigJson -Path $ConfigJsonPath -Raw $ConfigJsonRaw
+$config = Try-LoadConfigJson -Path $ConfigJsonPath -Raw $ConfigJsonRaw `
+  -PathSupplied:$PSBoundParameters.ContainsKey('ConfigJsonPath') `
+  -RawSupplied:$PSBoundParameters.ContainsKey('ConfigJsonRaw')
 if ($null -ne $config) { $Run.JsonUsed = $true }
+if (-not [string]::IsNullOrWhiteSpace($Run.JsonError)) {
+  $message = "Kill-switch configuration is invalid: $($Run.JsonError)"
+  Add-RunError $message
+  [void](Add-Finding -FindingList $Findings -Code 'KS-InvalidConfig' -Severity 'High' -Message $message -TimeUtc)
+  $resultToken = 'FAIL'
+  $v2Result = Get-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary ([pscustomobject]$Run) -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit (Get-V2ExitCode -Result $resultToken)
+}
 
 $Run.Effective.EventSource = Get-ConfigValue -Config $config -Name 'EventSource' -Default $Defaults.EventSource
 $Run.Effective.EventLog    = Get-ConfigValue -Config $config -Name 'EventLog'    -Default $Defaults.EventLog
@@ -538,21 +422,33 @@ $regKeyValid = $false
 foreach ($prefix in $regKeyAllowedPrefixes) {
   if ($Run.Effective.RegKey -like "$prefix*") { $regKeyValid = $true; break }
 }
+if ($Run.Effective.RegKey -match '[*?\[\]]') { $regKeyValid = $false }
 if (-not $regKeyValid) {
-  throw "RegKey '$($Run.Effective.RegKey)' is not under an allowed registry prefix ($($regKeyAllowedPrefixes -join ', ')). Aborting."
+  $message = "RegKey '$($Run.Effective.RegKey)' must be a literal path under an allowed registry prefix ($($regKeyAllowedPrefixes -join ', ')) and contain no wildcard characters. Aborting."
+  Add-RunError $message
+  [void](Add-Finding -FindingList $Findings -Code 'KS-InvalidRegKey' -Severity 'High' -Message $message -TimeUtc)
 }
 
 $Run.Effective.RulePrefix  = Get-ConfigValue -Config $config -Name 'RulePrefix' -Default $Defaults.RulePrefix
 
 # S8 fix: validate RulePrefix contains only safe characters (alphanumeric, hyphens, underscores) and reasonable length
 if ($Run.Effective.RulePrefix -notmatch '^[a-zA-Z0-9_-]+$') {
-  throw "RulePrefix '$($Run.Effective.RulePrefix)' contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed."
+  $message = "RulePrefix '$($Run.Effective.RulePrefix)' contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed."
+  Add-RunError $message
+  [void](Add-Finding -FindingList $Findings -Code 'KS-InvalidRulePrefix' -Severity 'High' -Message $message -TimeUtc)
 }
 if ($Run.Effective.RulePrefix.Length -gt 64) {
-  throw "RulePrefix '$($Run.Effective.RulePrefix)' exceeds 64 characters."
+  $message = "RulePrefix '$($Run.Effective.RulePrefix)' exceeds 64 characters."
+  Add-RunError $message
+  [void](Add-Finding -FindingList $Findings -Code 'KS-InvalidRulePrefix' -Severity 'High' -Message $message -TimeUtc)
 }
 $Run.Effective.TaskName    = Get-ConfigValue -Config $config -Name 'TaskName'   -Default $Defaults.TaskName
 $Run.Effective.IncludeUserInRegistry = [bool](Get-ConfigValue -Config $config -Name 'IncludeUserInRegistry' -Default $Defaults.IncludeUserInRegistry)
+if ($Run.Effective.TaskName -notmatch '^[a-zA-Z0-9_-]+$' -or $Run.Effective.TaskName.Length -gt 128) {
+  $message = "TaskName '$($Run.Effective.TaskName)' must contain only letters, digits, hyphens, and underscores and be at most 128 characters."
+  Add-RunError $message
+  [void](Add-Finding -FindingList $Findings -Code 'KS-InvalidTaskName' -Severity 'High' -Message $message -TimeUtc)
+}
 
 # Apply JSON defaults only if caller did not provide explicit values
 if (-not $DisableAdapters.IsPresent) {
@@ -563,6 +459,9 @@ if ($BreakGlassRemoteAddress.Count -eq 0) {
   $bg = Get-ConfigValue -Config $config -Name 'BreakGlassRemoteAddress' -Default $Defaults.BreakGlassRemoteAddress
   if ($bg) { $BreakGlassRemoteAddress = @($bg) }
 }
+if (-not $PSBoundParameters.ContainsKey('BreakGlassLocalPort')) {
+  $BreakGlassLocalPort = [int](Get-ConfigValue -Config $config -Name 'BreakGlassLocalPort' -Default $BreakGlassLocalPort)
+}
 if ($AutoRollbackMinutes -eq 0) {
   $arm = [int](Get-ConfigValue -Config $config -Name 'AutoRollbackMinutes' -Default $Defaults.AutoRollbackMinutes)
   if ($arm -gt 0) { $AutoRollbackMinutes = $arm }
@@ -571,13 +470,43 @@ if ($AutoRollbackMinutes -eq 0) {
 $Run.Effective.Reason                 = $Reason
 $Run.Effective.DisableAdapters         = $DisableAdapters.IsPresent
 $Run.Effective.BreakGlassRemoteAddress = @($BreakGlassRemoteAddress)
+$Run.Effective.BreakGlassLocalPort     = $BreakGlassLocalPort
 $Run.Effective.AutoRollbackMinutes     = $AutoRollbackMinutes
+try {
+  Assert-KillSwitchConfig -Config ([pscustomobject]@{ BreakGlassRemoteAddress = @($Run.Effective.BreakGlassRemoteAddress) })
+} catch {
+  $message = $_.Exception.Message
+  Add-RunError $message
+  [void](Add-Finding -FindingList $Findings -Code 'KS-InvalidBreakGlassAddress' -Severity 'High' -Message $message -TimeUtc)
+}
+
+if ($Run.Errors.Count -gt 0) {
+  $resultToken = 'FAIL'
+  $v2Result = Get-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary ([pscustomobject]$Run) -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit (Get-V2ExitCode -Result $resultToken)
+}
 
 # Derived identifiers
-$RuleInName  = "{0}-IN-BLOCK"            -f $Run.Effective.RulePrefix
-$RuleOutName = "{0}-OUT-BLOCK"           -f $Run.Effective.RulePrefix
-$RuleBgName  = "{0}-BREAKGLASS-IN-ALLOW" -f $Run.Effective.RulePrefix
-$RuleNames   = @($RuleInName, $RuleOutName, $RuleBgName)
+$rollbackRunId = [guid]::NewGuid().ToString('N')
+$RuleInName  = "{0}-{1}-IN-BLOCK"            -f $Run.Effective.RulePrefix, $rollbackRunId
+$RuleOutName = "{0}-{1}-OUT-BLOCK"           -f $Run.Effective.RulePrefix, $rollbackRunId
+$RuleBgName  = "{0}-{1}-BREAKGLASS-IN-ALLOW" -f $Run.Effective.RulePrefix, $rollbackRunId
+$ManagedRules = @(
+  [pscustomobject][ordered]@{ Name = $RuleOutName; Direction = 'Outbound'; Action = 'Block' }
+)
+if ($Run.Effective.BreakGlassRemoteAddress -and $Run.Effective.BreakGlassRemoteAddress.Count -gt 0) {
+  $ManagedRules += [pscustomobject][ordered]@{ Name = $RuleBgName; Direction = 'Inbound'; Action = 'Allow' }
+} else {
+  $ManagedRules += [pscustomobject][ordered]@{ Name = $RuleInName; Direction = 'Inbound'; Action = 'Block' }
+}
+$rollbackTaskName = "$($Run.Effective.TaskName)-$rollbackRunId"
+$Run.Effective.RollbackRunId = $rollbackRunId
+$Run.Effective.RollbackTaskName = $rollbackTaskName
+$Run.Effective.RollbackSnapshotEmbedded = $false
+$Run.Effective.RollbackSnapshotSha256 = $null
+$Run.Effective.RollbackRunAt = $null
 
 # -------------------- Execution
 $Run.IsAdmin = Test-IsAdmin
@@ -589,6 +518,7 @@ if ($Remediate) {
 }
 
 if (-not $Run.IsAdmin -and $Remediate) {
+  Add-RunError 'Administrative privileges are required for remediation.'
   Write-UiHeader -Title "Kill Switch"
   Write-UiLine -Text "ERROR: Admin privileges required. Aborting." -Color Red
 
@@ -598,11 +528,8 @@ if (-not $Run.IsAdmin -and $Remediate) {
   }
 
   Invoke-KillSwitchConsoleSummary
-  [pscustomobject]$Run
-  return
 }
-
-if (-not $Remediate) {
+elseif (-not $Remediate) {
   Resolve-Outcome
 
   Write-UiHeader -Title "Kill Switch"
@@ -611,100 +538,105 @@ if (-not $Remediate) {
   Write-KeyValue -Key 'BreakGlass' -Value ($Run.Effective.BreakGlassRemoteAddress -join ', ')
   Write-KeyValue -Key 'AutoRollbackMinutes' -Value $Run.Effective.AutoRollbackMinutes
 } else {
+$killSwitchLockStream = $null
+$rollbackSnapshotJson = $null
+$adapterNamesToDisable = @()
+$createdManagedRules = New-Object System.Collections.Generic.List[object]
+$firewallActivationCommitted = $false
 try {
-  if ($PSCmdlet.ShouldProcess($Run.Effective.RegKey, "Write quarantine registry flag")) {
-    Set-QuarantineFlag -RegKey $Run.Effective.RegKey -ReasonText $Run.Effective.Reason -IncludeUser $Run.Effective.IncludeUserInRegistry
-  } else {
-    $Run.Actions.ConfirmDeclined = $true
-  }
-
-  if ($Run.Effective.AutoRollbackMinutes -gt 0) {
-    # Rollback scheduling is a safety mechanism, but it still creates a
-    # scheduled task. Keep it under the same preview/confirmation policy as the
-    # firewall mutations.
-    if ($PSCmdlet.ShouldProcess($Run.Effective.TaskName, "Schedule automatic rollback task")) {
-      $Run.Actions.RollbackScheduled = Schedule-AutoRollback -Minutes $Run.Effective.AutoRollbackMinutes -TaskName $Run.Effective.TaskName -RuleNames $RuleNames
-    } else {
-      $Run.Actions.ConfirmDeclined = $true
-    }
-  }
-
-  # Capture current firewall profile settings before applying kill switch so rollback can restore them
-  $preKillSwitchFirewallState = @{}
   try {
-    foreach ($fwProfile in Get-NetFirewallProfile) {
-      $preKillSwitchFirewallState[$fwProfile.Name] = @{
-        Enabled              = [string]$fwProfile.Enabled
-        DefaultInboundAction = [string]$fwProfile.DefaultInboundAction
-        DefaultOutboundAction = [string]$fwProfile.DefaultOutboundAction
+    $killSwitchLockStream = Enter-KillSwitchRemediationLock
+  } catch [System.IO.IOException] {
+    Add-RunError 'Another emergency kill-switch remediation is already in progress or its trusted lock cannot be opened exclusively; refusing concurrent execution.'
+    throw 'Emergency kill-switch remediation is already in progress.'
+  }
+  # Inventory is read-only and must complete before scheduled-task mutation.
+  # Existing UUID identities belong to an earlier activation whose
+  # rollback must remain authoritative; never adopt or delete them by prefix.
+  if (-not (Test-NoManagedFirewallRuleConflicts -RulePrefix $Run.Effective.RulePrefix -TaskPrefix $Run.Effective.TaskName)) {
+    throw 'A preexisting kill-switch activation or unowned legacy rule was found; refusing overlapping activation.'
+  }
+  if ($Run.Effective.AutoRollbackMinutes -gt 0 -and -not $Run.Actions.ConfirmDeclined) {
+    # Capture and embed immutable state only when automatic rollback is requested.
+    if ($PSCmdlet.ShouldProcess($rollbackTaskName, "Capture and validate embedded firewall rollback snapshot")) {
+      $rollbackSnapshotJson = Get-CanonicalFirewallRollbackSnapshot -CaptureAdapters:$Run.Effective.DisableAdapters -ManagedRules $ManagedRules
+      if ([string]::IsNullOrWhiteSpace($rollbackSnapshotJson)) {
+        throw 'Pre-kill-switch firewall snapshot capture failed; aborting before firewall mutation.'
       }
-    }
-    $fwStateJson = $preKillSwitchFirewallState | ConvertTo-Json -Depth 4 -Compress
-    $fwStatePath = Join-Path $env:TEMP 'KillSwitch-PreFirewallState.json'
-    # This temp file is consumed by the rollback task. If confirmation is
-    # declined, do not create partial rollback artifacts.
-    if ($PSCmdlet.ShouldProcess($fwStatePath, "Write pre-kill-switch firewall state")) {
-      Set-Content -LiteralPath $fwStatePath -Value $fwStateJson -Encoding UTF8 -Force
+      $adapterNamesToDisable = @(($rollbackSnapshotJson | ConvertFrom-Json -ErrorAction Stop).Adapters)
+      $snapshotHash = [System.Security.Cryptography.SHA256]::Create()
+      try { $Run.Effective.RollbackSnapshotSha256 = ([System.BitConverter]::ToString($snapshotHash.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($rollbackSnapshotJson))) -replace '-', '').ToLowerInvariant() }
+      finally { $snapshotHash.Dispose() }
     } else {
       $Run.Actions.ConfirmDeclined = $true
     }
-  } catch {
-    Add-RunError "Failed to capture pre-kill-switch firewall state: $($_.Exception.Message)"
+
+    # Schedule only after the exact validated snapshot is embedded in its command.
+    if ($PSCmdlet.ShouldProcess($rollbackTaskName, "Schedule automatic rollback task")) {
+      $Run.Actions.RollbackScheduled = Schedule-AutoRollback -Minutes $Run.Effective.AutoRollbackMinutes -TaskName $rollbackTaskName -ManagedRules $ManagedRules -SnapshotJson $rollbackSnapshotJson
+      if (-not $Run.Actions.RollbackScheduled) {
+        throw 'Automatic rollback scheduling failed; aborting before firewall mutation.'
+      }
+      $Run.Effective.RollbackSnapshotEmbedded = $true
+    } else {
+      $Run.Actions.ConfirmDeclined = $true
+    }
   }
 
-  if ($PSCmdlet.ShouldProcess("Windows Firewall Profiles", "Enable firewall + set DefaultInboundAction=Block, DefaultOutboundAction=Block")) {
-    Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Block -DefaultOutboundAction Block
-    $Run.Actions.FirewallProfileSet = $true
-  } else {
-    $Run.Actions.ConfirmDeclined = $true
-  }
-
+  # A declined capture or schedule prompt must not be followed by a later
+  # confirmed firewall mutation. Treat the safety prerequisites as one gate.
+  if (-not $Run.Actions.ConfirmDeclined) {
+  # Prepare and verify every exact rule identity before changing profile
+  # defaults. In particular, break-glass failure must not strand the host in an
+  # isolated state without its recovery path.
   if ($PSCmdlet.ShouldProcess("Windows Defender Firewall Rules", "Create kill switch rules")) {
-    $inRuleCreated = New-OrReplaceRule -Name $RuleInName  -DisplayName "$($Run.Effective.RulePrefix) Inbound Block"  -Direction Inbound  -Action Block -Description "Kill switch: block inbound"
+    $inRuleCreated = $true
+    if ($Run.Effective.BreakGlassRemoteAddress -and $Run.Effective.BreakGlassRemoteAddress.Count -gt 0) {
+      $Run.Actions.BreakGlassApplied = New-OrReplaceRule -Name $RuleBgName -DisplayName "$($Run.Effective.RulePrefix) BreakGlass Inbound Allow" `
+        -Direction Inbound -Action Allow -RemoteAddress $Run.Effective.BreakGlassRemoteAddress -Protocol TCP -LocalPort $Run.Effective.BreakGlassLocalPort -Description "Kill switch: break-glass inbound allow"
+      if (-not $Run.Actions.BreakGlassApplied) { throw 'Break-glass firewall rule creation or verification failed; aborting before isolation.' }
+      [void]$createdManagedRules.Add(($ManagedRules | Where-Object { $_.Name -eq $RuleBgName })[0])
+    } else {
+      $inRuleCreated = New-OrReplaceRule -Name $RuleInName  -DisplayName "$($Run.Effective.RulePrefix) Inbound Block"  -Direction Inbound  -Action Block -Description "Kill switch: block inbound"
+      if (-not $inRuleCreated) { throw 'Inbound block firewall rule creation or verification failed.' }
+      [void]$createdManagedRules.Add(($ManagedRules | Where-Object { $_.Name -eq $RuleInName })[0])
+    }
     $outRuleCreated = New-OrReplaceRule -Name $RuleOutName -DisplayName "$($Run.Effective.RulePrefix) Outbound Block" -Direction Outbound -Action Block -Description "Kill switch: block outbound"
+    if (-not $outRuleCreated) { throw 'Outbound block firewall rule creation or verification failed.' }
+    [void]$createdManagedRules.Add(($ManagedRules | Where-Object { $_.Name -eq $RuleOutName })[0])
     $Run.Actions.RulesCreated = [bool]($inRuleCreated -and $outRuleCreated)
   } else {
     $Run.Actions.ConfirmDeclined = $true
   }
 
-  if ($Run.Effective.BreakGlassRemoteAddress -and $Run.Effective.BreakGlassRemoteAddress.Count -gt 0) {
-    if ($PSCmdlet.ShouldProcess("Windows Defender Firewall Rules", "Create break-glass inbound allow rule")) {
-      $Run.Actions.BreakGlassApplied = New-OrReplaceRule -Name $RuleBgName -DisplayName "$($Run.Effective.RulePrefix) BreakGlass Inbound Allow" `
-        -Direction Inbound -Action Allow -RemoteAddress $Run.Effective.BreakGlassRemoteAddress -Description "Kill switch: break-glass inbound allow"
+  if (-not $Run.Actions.ConfirmDeclined -and $PSCmdlet.ShouldProcess("Windows Firewall Profiles", "Enable firewall + set DefaultInboundAction=Block, DefaultOutboundAction=Block")) {
+    Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Block -DefaultOutboundAction Block
+    $Run.Actions.FirewallProfileSet = $true
+    $firewallActivationCommitted = $true
+    # Do not persist an isolation indicator until the protective firewall
+    # posture has committed. Pre-commit failures must leave no false state.
+    if ($PSCmdlet.ShouldProcess($Run.Effective.RegKey, "Write quarantine registry flag")) {
+      Set-QuarantineFlag -RegKey $Run.Effective.RegKey -ReasonText $Run.Effective.Reason -IncludeUser $Run.Effective.IncludeUserInRegistry
     } else {
       $Run.Actions.ConfirmDeclined = $true
     }
   } else {
-    try {
-      # Absence of break-glass addresses means "remove our managed break-glass
-      # rule", not "leave a stale inbound allow rule behind".
-      if ($PSCmdlet.ShouldProcess($RuleBgName, "Remove break-glass inbound allow rule")) {
-        $Run.Actions.BreakGlassCleanupChecked = $true
-        $rule = Get-NetFirewallRule -Name $RuleBgName -ErrorAction SilentlyContinue
-        if ($rule) {
-          $rule | Remove-NetFirewallRule -ErrorAction Stop
-          $Run.Actions.BreakGlassRemoved = $true
-        }
-      } else {
-        $Run.Actions.ConfirmDeclined = $true
-      }
-    } catch {
-      $message = "Break-glass firewall rule removal failed: $($_.Exception.Message)"
-      Add-RunError $message
-      Write-Warning $message
-    }
+    $Run.Actions.ConfirmDeclined = $true
   }
 
   if ($DisableAdapters) {
     if ($PSCmdlet.ShouldProcess("Network Adapters", "Disable all Up adapters")) {
-      $netAdapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
-      foreach ($a in $netAdapters) {
-        Disable-NetAdapter -Name $a.Name -Confirm:$false
+      if ($Run.Effective.AutoRollbackMinutes -le 0) {
+        $adapterNamesToDisable = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { [string]$_.Name })
       }
-      $Run.Actions.AdaptersDisabled = $true
+      foreach ($adapterName in $adapterNamesToDisable) {
+        Disable-NetAdapter -Name $adapterName -Confirm:$false -ErrorAction Stop
+      }
+      $Run.Actions.AdaptersDisabled = ($adapterNamesToDisable.Count -gt 0)
     } else {
       $Run.Actions.ConfirmDeclined = $true
     }
+  }
   }
 
   Resolve-Outcome
@@ -738,6 +670,25 @@ catch {
   $err = $_.Exception.Message
   Add-RunError "Unhandled error: $err"
 
+  $rollbackTaskCancelled = $true
+  if (-not $firewallActivationCommitted -and $Run.Actions.RollbackScheduled) {
+    try {
+      Unregister-ScheduledTask -TaskName $rollbackTaskName -Confirm:$false -ErrorAction Stop
+      $Run.Actions.RollbackScheduled = $false
+      $Run.Effective.RollbackSnapshotEmbedded = $false
+    } catch {
+      $rollbackTaskCancelled = $false
+      Add-RunError "Failed activation rollback-task cancellation failed: $($_.Exception.Message)"
+    }
+  }
+  if (-not $firewallActivationCommitted -and $rollbackTaskCancelled -and $createdManagedRules.Count -gt 0) {
+    try {
+      Remove-ExactManagedFirewallRules -Rules @($createdManagedRules.ToArray())
+    } catch {
+      Add-RunError "Partial activation cleanup failed: $($_.Exception.Message)"
+    }
+  }
+
   Write-HealthEvent -Log $Run.Effective.EventLog -Source $Run.Effective.EventSource -Id $Run.Effective.EventId `
     -Msg ("KillSwitch failed: {0}" -f $err) -Level 'Error'
 
@@ -747,6 +698,9 @@ catch {
 finally {
   # Always write console summary, even if an exception is thrown.
   try { Invoke-KillSwitchConsoleSummary } catch { Write-UiLine "Summary failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+  if ($null -ne $killSwitchLockStream) {
+    $killSwitchLockStream.Dispose()
+  }
 }
 }
 
@@ -768,8 +722,8 @@ if ($Run.Errors.Count -eq 0 -and $successfulActions.Count -eq 0 -and $actionsDec
     -Message 'Kill switch ran but no protective actions were completed.'
 }
 $resultToken = if ($Run.Errors.Count -gt 0) { 'FAIL' } elseif ($successfulActions.Count -gt 0 -or $Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '21-EmergencyKillSwitch.ps1' -Mode $Mode -Result $resultToken -Findings @($Findings.ToArray()) -Summary ([pscustomobject]$Run) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-if ($Run.Errors.Count -gt 0) { exit 1 }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

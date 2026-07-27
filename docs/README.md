@@ -1,17 +1,14 @@
 # Documentation
 
-This directory contains the public documentation index for the Windows MDM Endpoint Security Hardening Kit.
+Start with the [project README](../README.md) for requirements, installation, configuration, usage, testing, operation, troubleshooting, security, and contribution guidance.
 
-## Active Docs
+Repository references:
 
-- [Project overview and quick start](../README.md)
-- [Launcher GUI (alpha)](launcher-gui.md)
-- [Script catalog and usage](../scripts/README.md)
-- [Shared module reference](../lib/README.md)
-- [Example profiles and configs](../examples/README.md)
-- [Security policy](../SECURITY.md)
+- [Release packaging and protected Windows installation](alpha-release.md)
+- [Windows Forms launcher](launcher-gui.md)
+- [Endpoint and orchestration script catalog](../scripts/README.md)
+- [Configuration and profile examples](../examples/README.md)
+- [Shared PowerShell modules and result contract](../lib/README.md)
 - [Contribution guide](../CONTRIBUTING.md)
+- [Security policy](../SECURITY.md)
 - [Changelog](../CHANGELOG.md)
-
-For the reviewed public/private documentation boundary, see the
-[contribution guide](../CONTRIBUTING.md#documentation-policy).

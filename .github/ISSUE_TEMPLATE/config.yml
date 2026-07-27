@@ -1,3 +1,5 @@
+# Disables unstructured public issues and directs security reports to GitHub's
+# private advisory channel to avoid accidental vulnerability disclosure.
 blank_issues_enabled: false
 contact_links:
   - name: Private security report
@@ -5,4 +7,4 @@ contact_links:
     about: Report vulnerabilities privately instead of opening a public issue.
   - name: Security policy
     url: https://github.com/sebastianspicker/win-mdm-security-hardening-kit/blob/main/SECURITY.md
-    about: Read supported scope, reporting guidance, and expected response timing.
+    about: Read supported scope, reporting guidance, and the response process.

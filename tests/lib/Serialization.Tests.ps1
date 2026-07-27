@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for library-module contracts.
+
+.DESCRIPTION
+Verifies module behavior that security automation depends on.
+#>
 
 BeforeAll {
   Import-Module (Join-Path $PSScriptRoot '../../lib/Serialization.psm1') -Force
@@ -32,6 +39,40 @@ Describe 'Get-V2ResultObject' {
 
   It 'Rejects invalid Result via ValidateSet' {
     { Get-V2ResultObject -ScriptName 'z.ps1' -Mode 'Audit' -Result 'INVALID' -Findings @() -Summary @{} -Metadata @{} } | Should -Throw
+  }
+}
+
+Describe 'Get-V2ExitCode' {
+  It 'Maps <Result> to exit code <ExitCode>' -ForEach @(
+    @{ Result = 'OK'; ExitCode = 0 }
+    @{ Result = 'WARN'; ExitCode = 2 }
+    @{ Result = 'FAIL'; ExitCode = 1 }
+  ) {
+    Get-V2ExitCode -Result $Result | Should -Be $ExitCode
+  }
+
+  It 'Rejects an unknown result token' {
+    { Get-V2ExitCode -Result 'UNKNOWN' } | Should -Throw
+  }
+}
+
+Describe 'Get-V2OutputConfigurationError' {
+  It 'accepts non-file formats without an output path' -ForEach @('Console', 'None') {
+    Get-V2OutputConfigurationError -OutputFormat $_ | Should -BeNullOrEmpty
+  }
+
+  It 'requires an output path for <_>' -ForEach @('Json', 'Csv') {
+    Get-V2OutputConfigurationError -OutputFormat $_ | Should -Be "OutputPath is required when OutputFormat is $_."
+  }
+
+  It 'rejects traversal before serialization' {
+    Get-V2OutputConfigurationError -OutputFormat Json -OutputPath '../escape.json' |
+      Should -BeLike '*path traversal*'
+  }
+
+  It 'rejects a directory as a file output path' {
+    Get-V2OutputConfigurationError -OutputFormat Json -OutputPath ([System.IO.Path]::GetTempPath()) |
+      Should -BeLike '*not a directory*'
   }
 }
 
@@ -83,6 +124,18 @@ Describe 'Save-Json' {
     }
   }
 
+  It 'Writes without BOM by default on every supported runtime' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-default-nobom-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    try {
+      Save-Json -InputObject @{ bom = 'test' } -Path $tmp
+      $bytes = [System.IO.File]::ReadAllBytes($tmp)
+      ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) |
+        Should -BeFalse
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
   It 'Throws for empty path' {
     { Save-Json -InputObject @{ A = 1 } -Path '' } | Should -Throw '*Path*'
   }
@@ -123,6 +176,19 @@ Describe 'Save-Csv' {
       $lines[0] | Should -Match 'Score'
       # Should have header + 2 data rows
       $lines.Count | Should -BeGreaterOrEqual 3
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  }
+
+  It 'Writes an explicit UTF-8 BOM for operator-facing CSV output' {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("ser-bom-{0}.csv" -f [guid]::NewGuid().ToString('N'))
+    try {
+      Save-Csv -InputObject @([pscustomobject]@{ Name = 'Alice' }) -Path $tmp
+      $bytes = [System.IO.File]::ReadAllBytes($tmp)
+      $bytes[0] | Should -Be 0xEF
+      $bytes[1] | Should -Be 0xBB
+      $bytes[2] | Should -Be 0xBF
     } finally {
       if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     }

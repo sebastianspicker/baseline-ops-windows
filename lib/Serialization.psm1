@@ -1,6 +1,21 @@
-Set-StrictMode -Version Latest
-Import-Module (Join-Path $PSScriptRoot 'Validation.psm1') -Force -Global
+<#
+.SYNOPSIS
+Serialization and v2 result object utilities.
 
+.DESCRIPTION
+Provides functions to save objects as JSON or CSV, create standardized v2 result
+objects, and write result objects in the configured output format.
+#>
+
+Set-StrictMode -Version Latest
+Microsoft.PowerShell.Core\Import-Module ([System.IO.Path]::Combine($PSScriptRoot, 'Validation.psm1'))
+
+<#
+.SYNOPSIS
+  Converts scalar or collection input to an object array.
+.DESCRIPTION
+  Normalizes serialization inputs while preserving null and enumerable values.
+#>
 function ConvertTo-ObjectArray {
   [CmdletBinding()]
   param([AllowNull()][object]$InputObject)
@@ -20,15 +35,6 @@ function ConvertTo-ObjectArray {
 
 <#
 .SYNOPSIS
-Serialization and v2 result object utilities.
-
-.DESCRIPTION
-Provides functions to save objects as JSON or CSV, create standardized v2 result
-objects, and write result objects in the configured output format.
-#>
-
-<#
-.SYNOPSIS
   Serializes an object to a JSON file.
 .PARAMETER InputObject
   Object to serialize.
@@ -37,7 +43,7 @@ objects, and write result objects in the configured output format.
 .PARAMETER Depth
   JSON serialization depth (default 20).
 .PARAMETER NoBom
-  Write UTF-8 without byte-order mark.
+  Retained for compatibility. JSON is always UTF-8 without a byte-order mark.
 #>
 function Save-Json {
   [CmdletBinding()]
@@ -53,22 +59,19 @@ function Save-Json {
   if ([string]::IsNullOrWhiteSpace($Path)) {
     throw 'Save-Json: Path cannot be null or empty.'
   }
-  if (Test-PathTraversal -Path $Path) {
+  if (Validation\Test-PathTraversal -Path $Path) {
     throw 'Save-Json: Path must not contain path traversal segments ("..").'
   }
 
   $dir = Split-Path -Path $Path -Parent
   if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
-    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($dir))
   }
 
   $json = $InputObject | ConvertTo-Json -Depth $Depth
-  if ($NoBom) {
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
-  } else {
-    Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
-  }
+  $null = $NoBom
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
 }
 
 <#
@@ -88,16 +91,19 @@ function Save-Csv {
     [string]$Path
   )
 
-  if (Test-PathTraversal -Path $Path) {
+  if (Validation\Test-PathTraversal -Path $Path) {
     throw 'Save-Csv: Path must not contain path traversal segments ("..").'
   }
 
   $dir = Split-Path -Path $Path -Parent
   if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
-    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($dir))
   }
 
-  $InputObject | Export-Csv -Path $Path -NoTypeInformation -Encoding UTF8
+  $lines = @($InputObject | ConvertTo-Csv -NoTypeInformation)
+  $csv = if ($lines.Count -gt 0) { ($lines -join "`r`n") + "`r`n" } else { '' }
+  $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+  [System.IO.File]::WriteAllText($Path, $csv, $utf8Bom)
 }
 
 <#
@@ -164,6 +170,62 @@ function Get-V2ResultObject {
 
 <#
 .SYNOPSIS
+  Maps a v2 result token to its process exit code.
+.PARAMETER Result
+  Overall result token: OK, WARN, or FAIL.
+#>
+function Get-V2ExitCode {
+  [CmdletBinding()]
+  [OutputType([int])]
+  param(
+    [Parameter(Mandatory)]
+    [ValidateSet('OK','WARN','FAIL')]
+    [string]$Result
+  )
+
+  switch ($Result) {
+    'OK'   { return 0 }
+    'WARN' { return 2 }
+    'FAIL' { return 1 }
+  }
+}
+
+<#
+.SYNOPSIS
+  Returns a validation error for an invalid v2 output configuration.
+.PARAMETER OutputFormat
+  Output format: Console, Json, Csv, or None.
+.PARAMETER OutputPath
+  File path required for Json and Csv formats.
+#>
+function Get-V2OutputConfigurationError {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param(
+    [ValidateSet('Console','Json','Csv','None')]
+    [string]$OutputFormat = 'Console',
+    [AllowNull()]
+    [string]$OutputPath
+  )
+
+  if ($OutputFormat -notin @('Json', 'Csv')) {
+    return $null
+  }
+  if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+    return "OutputPath is required when OutputFormat is $OutputFormat."
+  }
+  if (Validation\Test-PathTraversal -Path $OutputPath) {
+    return 'OutputPath must not contain path traversal segments ("..").'
+  }
+  if (Test-Path -LiteralPath $OutputPath -PathType Container) {
+    return 'OutputPath must reference a file, not a directory.'
+  }
+
+  return $null
+}
+
+<#
+.SYNOPSIS
   Writes a result object in the specified output format.
 .PARAMETER ResultObject
   The v2 result object to output.
@@ -182,6 +244,11 @@ function Write-ResultObject {
     [string]$OutputPath
   )
 
+  $configurationError = Get-V2OutputConfigurationError -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($configurationError) {
+    throw $configurationError
+  }
+
   switch ($OutputFormat) {
     'None' {
       return
@@ -190,17 +257,10 @@ function Write-ResultObject {
       return
     }
     'Json' {
-      if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-        throw 'OutputPath is required when OutputFormat is Json.'
-      }
       Save-Json -InputObject $ResultObject -Path $OutputPath -Depth 10 -NoBom
       return
     }
     'Csv' {
-      if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-        throw 'OutputPath is required when OutputFormat is Csv.'
-      }
-
       if ($ResultObject.PSObject.Properties.Name -contains 'Findings') {
         Save-Csv -InputObject @($ResultObject.Findings) -Path $OutputPath
       } else {
@@ -239,5 +299,7 @@ Export-ModuleMember -Function `
   Save-Json, `
   Save-Csv, `
   Get-V2ResultObject, `
+  Get-V2ExitCode, `
+  Get-V2OutputConfigurationError, `
   Write-ResultObject, `
   ConvertTo-V2Json

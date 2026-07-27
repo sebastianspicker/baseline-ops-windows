@@ -5,17 +5,17 @@ Fast event log triage (Windows PowerShell 5.1) using Get-WinEvent -FilterHashtab
 
 .DESCRIPTION
 Best-practice layout:
-- Success output stream: structured objects only (safe for Export-Csv / ConvertTo-Json / Where-Object). [web:90]
-- Console UX: pretty blocks, separators, and colors via Write-UiLine / Write-Information only. [web:89][web:104]
+- Success output stream: structured objects only (safe for Export-Csv / ConvertTo-Json / Where-Object).
+- Console output: blocks, separators, and colors use Write-UiLine / Write-Information only.
 
 Features:
-- Optional JSON config overrides (PATH/TO/JSON\triage.json). Falls back to defaults if missing/invalid.
+- Optional JSON config overrides loaded from $ConfigPath. Falls back to defaults if missing or invalid.
 - Optional record de-duplication (true duplicates only).
 - Optional "collapse" summary: groups similar events without removing records.
 - Optional CSV export.
 
 .PARAMETER ConfigPath
-Optional path to JSON config (e.g. "PATH/TO/JSON\triage.json"). If unreadable/invalid, defaults apply.
+Optional path to JSON config supplied with $ConfigPath. If unreadable or invalid, defaults apply.
 
 .PARAMETER Quiet
 Suppresses console output (still returns objects).
@@ -124,6 +124,7 @@ param(
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1')
 
 
 $script:Quiet = [bool]$Quiet
@@ -132,7 +133,11 @@ $script:NoColor = [bool]$NoColor
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '26-Get-WinEvent-FastTriage.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '26-Get-WinEvent-FastTriage.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -144,10 +149,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # -------------------------
@@ -185,7 +191,7 @@ function Resolve-TriageConfig {
   }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
     return ($raw | ConvertFrom-Json -ErrorAction Stop)
   }
@@ -342,7 +348,7 @@ if ($Id -and $Id.Count -gt 0)                     { $filter.ID          = $Id }
 
 $eventsRaw = @()
 try {
-  $eventsRaw = Get-WinEvent -FilterHashtable $filter -MaxEvents $MaxEvents -ErrorAction Stop
+  $eventsRaw = @(Get-WinEvent -FilterHashtable $filter -MaxEvents $MaxEvents -ErrorAction Stop)
 }
 catch {
   if ($_.Exception.Message -match 'No events were found') {
@@ -352,11 +358,11 @@ catch {
     $v2Result = Get-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $_.Exception.Message } -Metadata @{}
     Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
     if ($PassThru) { $v2Result }
-    exit 1
+    exit (Get-V2ExitCode -Result 'FAIL')
   }
 }
 
-$events = foreach ($e in $eventsRaw) {
+$events = @(foreach ($e in $eventsRaw) {
   $msg = $null
   try { $msg = $e.Message } catch { $msg = $null }
 
@@ -372,7 +378,7 @@ $events = foreach ($e in $eventsRaw) {
     Message           = $msg
     NormalizedMessage = $norm
   }
-}
+})
 
 $dedupRemoved = 0
 if ($Deduplicate -and $events.Count -gt 1) {
@@ -427,12 +433,12 @@ if ($events.Count -gt 0) {
   $minTime = ($events | Measure-Object -Property TimeCreated -Minimum).Minimum
   $maxTime = ($events | Measure-Object -Property TimeCreated -Maximum).Maximum
 
-  $levelStats = $events | Group-Object -Property LevelDisplayName | Sort-Object Count -Descending
-  $providerStats = $events | Group-Object -Property ProviderName | Sort-Object Count -Descending | Select-Object -First 5
-  $idStats = $events | Group-Object -Property Id | Sort-Object Count -Descending | Select-Object -First 5
+  $levelStats = @($events | Group-Object -Property LevelDisplayName | Sort-Object Count -Descending)
+  $providerStats = @($events | Group-Object -Property ProviderName | Sort-Object Count -Descending | Select-Object -First 5)
+  $idStats = @($events | Group-Object -Property Id | Sort-Object Count -Descending | Select-Object -First 5)
 
   if ($Collapse) {
-    $collapseSummary =
+    $collapseSummary = @(
       $events |
       Group-Object -Property { Get-CollapseKey -Event $_ } |
       Sort-Object Count -Descending |
@@ -449,6 +455,7 @@ if ($events.Count -gt 0) {
           LastSeen  = ($times | Measure-Object -Maximum).Maximum
         }
       }
+    )
   }
 }
 
@@ -524,6 +531,7 @@ if ($exportRequested -and -not $exported) {
   }
 }
 $resultToken = if ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $summary = [pscustomobject]@{
   ComputerName    = $env:COMPUTERNAME
   Timestamp       = Get-Date
@@ -536,5 +544,4 @@ $summary = [pscustomobject]@{
 $v2Result = Get-V2ResultObject -ScriptName '26-Get-WinEvent-FastTriage.ps1' -Mode $Mode -Result $resultToken -Findings $findings -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-if ($resultToken -eq 'WARN') { exit 2 }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

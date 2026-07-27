@@ -1,57 +1,69 @@
-# Shared Modules (`lib/`)
+# Shared PowerShell modules
 
-Shared PowerShell modules remove script-level duplication and standardize behavior.
+The modules in `lib/` provide common validation, execution, output, and Windows API wrappers. Numbered scripts load the repository module path through `scripts/_lib/Bootstrap.ps1` and import only the modules they need.
 
 ## Module Index
 
-- `Common.psm1` - caller-scope lookup, admin checks, safe path helpers, `Has-Property`, and `New-SafeFileName`
-- `Output.psm1` - capture-friendly console output helpers
-- `Console.psm1` - severity colors, summaries, finding statistics, and decorative rule output
-- `Registry.psm1` - registry read/write wrappers
-- `Config.psm1` - config loading and merge helpers
-- `External.psm1` - validated native command wrappers
-- `EventLog.psm1` - event source and health event helpers
-- `Results.psm1` - finding object/list helpers
-- `JsonCatalog.psm1` - safe JSON reading helper (`Read-JsonFileSafe`)
-- `Evidence.psm1` - evidence copy/hash helpers
-- `Validation.psm1` - path traversal, script-name, URL, and reference validation
-- `Execution.psm1` - argument-token parsing and timed child script execution
-- `Serialization.psm1` - v2 result objects plus JSON/CSV writers with path-traversal protection
+| Module | Responsibility |
+| --- | --- |
+| `Common.psm1` | Caller-scope access, administrator checks, arrays, directory creation, property checks, and safe file names |
+| `Config.psm1` | JSON configuration loading, default merging, metadata, and object-to-hashtable conversion |
+| `Console.psm1` | Finding-oriented console summaries, severity styles, and statistics |
+| `EventLog.psm1` | Event source creation and health-event writes |
+| `Evidence.psm1` | Environment expansion, SHA-256 calculation, and evidence copies |
+| `Execution.psm1` | Argument-token parsing and bounded child-script execution |
+| `External.psm1` | Native command execution and wrappers for Windows command-line tools |
+| `JsonCatalog.psm1` | JSON catalog reads with status or data-only return values |
+| `Output.psm1` | Capture-friendly sections, key/value lines, warnings, and status output |
+| `Registry.psm1` | Registry reads, writes, existence checks, and removal helpers |
+| `Results.psm1` | Finding collections and finding object construction |
+| `Serialization.psm1` | v2 results, exit codes, JSON and CSV serialization, and output path validation |
+| `Validation.psm1` | Script-name, Git reference, URL, bounded-file, traversal, reparse-point, and Windows ACL validation |
 
-## Module Boundaries
+## Usage
 
-- Use `Output.psm1` for generic human-readable sections, key/value lines, warnings, and status lines.
-- Use `Console.psm1` only when a script needs severity or finding-specific console summaries.
-- Use `Serialization.psm1` for machine-readable v2 output; scripts should not hand-roll final JSON/CSV writers.
-- Use `Execution.psm1` when invoking child PowerShell scripts through the v2 runner path.
-- Use `Validation.psm1` for path, script-name, URL, or reference checks.
-
-Import only the modules the target script needs.
+Load the bootstrap before importing repository modules from a numbered script:
 
 ```powershell
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 ```
 
-## v2 Result Contract
+Use these boundaries when adding shared behavior:
 
-Use `New-V2ResultObject` from `Serialization.psm1` for orchestration-compatible output:
+- Use `Output.psm1` for generic console text.
+- Use `Console.psm1` for finding summaries and severity presentation.
+- Use `Results.psm1` to create finding objects and collections.
+- Use `Serialization.psm1` for final v2 results and JSON or CSV output.
+- Use `Execution.psm1` for child PowerShell invocation through the runner path.
+- Use `External.psm1` for bounded native process calls and Windows command wrappers.
+- Use `Validation.psm1` for untrusted names, paths, references, URLs, and bounded text files.
+- Use `Config.psm1` or `JsonCatalog.psm1` instead of direct, repeated JSON-loading code.
 
-- `SchemaVersion` - always `"2.0"`
-- `ScriptName` - script filename, for example `"27-Defender-Health-Audit.ps1"`
-- `Mode` - `"Audit"` or `"Remediate"`
-- `ComputerName` - target hostname
-- `TimestampUtc` - execution time in UTC
-- `Result` - `"OK"`, `"WARN"`, or `"FAIL"`
-- `Findings` - array of finding objects
-- `Summary` - script-specific summary object
-- `Metadata` - additional key/value metadata
+Do not add a second implementation of path validation, native process capture, result serialization, or finding creation inside an endpoint script.
 
-Use `ConvertTo-V2Json` for consistent JSON serialization.
+## v2 result object
 
-## Finding Object Shape
+`Get-V2ResultObject` in `Serialization.psm1` creates the orchestration result:
+
+| Field | Value |
+| --- | --- |
+| `SchemaVersion` | `2.0` |
+| `ScriptName` | Script filename |
+| `Mode` | `Audit` or `Remediate` |
+| `ComputerName` | Target host name |
+| `TimestampUtc` | UTC execution timestamp |
+| `Result` | `OK`, `WARN`, or `FAIL` |
+| `Findings` | Array of finding objects |
+| `Summary` | Script-specific result summary |
+| `Metadata` | Script-specific metadata |
+
+`Get-V2ExitCode` maps `OK` to `0`, `FAIL` to `1`, and `WARN` to `2`. `Write-ResultObject` writes the selected `Console`, `Json`, `Csv`, or `None` format. `ConvertTo-V2Json` provides consistent JSON serialization.
+
+## Finding object
+
+The shared finding helpers create objects with at least `Code`, `Severity`, and `Message`:
 
 ```json
 {
@@ -61,47 +73,8 @@ Use `ConvertTo-V2Json` for consistent JSON serialization.
 }
 ```
 
-Extra script-specific properties may be attached through the shared finding helper `-Extra` parameter.
+Scripts can attach additional fields through the finding helper's `-Extra` parameter.
 
-## Finding Code Convention
+Finding codes use a domain prefix followed by a descriptive identifier, such as `DEF-`, `FW-`, `LAPS-`, `CG-`, `LSA-`, `WEF-`, or `APPLOCK-`. The complete set is defined by the scripts and is not a closed enum.
 
-Finding codes follow `PREFIX-Description`.
-
-| Prefix | Domain |
-| --- | --- |
-| `AC-` | App Control for Business |
-| `AMSI-` | AMSI provider or bypass detection |
-| `APPLOCK-` | AppLocker policy enforcement |
-| `ASR-` | ASR rules and Defender exclusions |
-| `AUD-` | Advanced audit policy |
-| `BKP-` | Backup readiness |
-| `BLKR-` | BitLocker operations |
-| `CERT-` | Certificate autoenrollment |
-| `CFG-` | Configuration loading |
-| `CG-` | Credential Guard |
-| `DATA-` | Data collection |
-| `DEF-` | Defender health |
-| `DOH-` | DNS-over-HTTPS client config |
-| `DS-` | Driver signing and kernel integrity |
-| `EP-` | Exploit Protection mitigations |
-| `FW-` | Firewall baseline |
-| `Grabber-` | Artifact collection |
-| `HVCI-` | HVCI and memory integrity |
-| `HW-` | Hardware and TPM |
-| `IOC-` | IOC sweep |
-| `JOIN-` | Identity and domain join |
-| `LAPS-` | LAPS hygiene |
-| `LSA-` | LSA protection |
-| `WEF-` | WEF client forwarding |
-| `WDAG-` | Windows Defender Application Guard |
-
-## Severity Levels
-
-| Severity | Meaning |
-| --- | --- |
-| `Critical` | Immediate action required |
-| `High` | Non-compliant, remediation needed |
-| `Medium` | Drift or warning, review recommended |
-| `Low` | Informational finding, low risk |
-| `Info` | No action needed |
-| `OK` / `Pass` | Check passed |
+Severities used by the shared helpers include `Critical`, `High`, `Medium`, `Low`, `Info`, `OK`, and `Pass`. Consumers should use the top-level `Result` for process-level status and retain finding severity for detailed analysis.

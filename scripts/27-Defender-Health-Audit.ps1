@@ -5,7 +5,7 @@ Create a Microsoft Defender health report (status, signatures, RTP, tamper prote
 
 .DESCRIPTION
 Pipeline output is structured objects only (safe for Export-Csv / ConvertTo-Json / filtering).
-All human-friendly formatting is written via Write-UiLine / Write-Information only.
+All console formatting is written via Write-UiLine / Write-Information only.
 Primary data source is Get-MpComputerStatus. [page:1]
 Tamper protection can be checked via IsTamperProtected when present. [page:1]
 
@@ -13,7 +13,7 @@ Tamper protection can be checked via IsTamperProtected when present. [page:1]
 Optional. Export Summary as CSV.
 
 .PARAMETER SettingsJsonPath
-Optional. Path to JSON configuration (example: "PATH/TO/JSON/defender-audit.json").
+Optional. Path to JSON configuration supplied with $SettingsJsonPath.
 If missing/unreadable/invalid, built-in defaults are used.
 
 .PARAMETER WarnSignatureAgeDays
@@ -117,7 +117,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '27-Defender-Health-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '27-Defender-Health-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -129,10 +133,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '27-Defender-Health-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '27-Defender-Health-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 
@@ -198,7 +203,7 @@ function Try-LoadJsonConfig {
   if (-not $Config.JsonPathExists) { return $Config }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { return $Config }
 
     $json = $raw | ConvertFrom-Json
@@ -279,7 +284,7 @@ if (-not $effective.SkipAdminCheck -and -not (Test-IsAdmin)) {
   $v2Result = Get-V2ResultObject -ScriptName '27-Defender-Health-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $msg } -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
-  exit 1
+  exit (Get-V2ExitCode -Result 'FAIL')
 }
 
 $null = Ensure-Cmdlet -Name 'Get-MpComputerStatus'  # Defender status cmdlet. [page:1]
@@ -362,7 +367,7 @@ if ($effective.ExportPath) {
   $summary | Export-Csv -LiteralPath $effective.ExportPath -NoTypeInformation -Encoding UTF8
 }
 
-# ----- Console summary at the end (pretty, host-only)
+# ----- Formatted console summary (host only)
 $findingsAL = [System.Collections.ArrayList]::new()
 foreach ($finding in $Findings) {
   [void]$findingsAL.Add($finding)
@@ -402,4 +407,4 @@ $resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findi
 $v2Result = Get-V2ResultObject -ScriptName '27-Defender-Health-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings) -Summary $result.Summary -Metadata @{ EffectiveConfig = $result.EffectiveConfig }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

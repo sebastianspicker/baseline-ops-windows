@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for security-script contracts.
+
+.DESCRIPTION
+Verifies safe, repeatable operator behavior and evidence.
+#>
 
 Describe 'Bootstrap Initialize-V2Context' {
   BeforeAll {
@@ -19,42 +26,46 @@ Describe 'Bootstrap Initialize-V2Context' {
   }
 
   It 'stores explicit ScriptName in the v2 context' {
-    $Mode = 'Audit'
-    $ConfigPath = 'PATH/TO/config.json'
-    $OutputFormat = 'None'
-    $OutputPath = $null
-    $PassThru = $true
-    $Strict = $false
-    $Quiet = $false
-    $NoColor = $true
-    $null = $Mode, $ConfigPath, $OutputFormat, $OutputPath, $PassThru, $Strict, $Quiet, $NoColor
+    $context = Initialize-V2Context `
+      -ScriptName '99-Test.ps1' `
+      -BoundParameters @{ OutputFormat = 'None'; PassThru = $true; NoColor = $true } `
+      -Mode Audit `
+      -ConfigPath '.\config.json' `
+      -OutputFormat None `
+      -PassThru `
+      -NoColor
 
-    Initialize-V2Context -ScriptName '99-Test.ps1' -BoundParameters @{
-      OutputFormat = 'None'
-      PassThru = $true
-      NoColor = $true
-    }
-
-    $script:__V2Context.ScriptName | Should -Be '99-Test.ps1'
-    $script:__V2Context.Mode | Should -Be 'Audit'
-    $script:__V2Context.OutputFormat | Should -Be 'None'
-    $script:__V2Context.PassThru | Should -BeTrue
-    $script:__V2Context.NoColor | Should -BeTrue
+    $context.ScriptName | Should -Be '99-Test.ps1'
+    $context.Mode | Should -Be 'Audit'
+    $context.OutputFormat | Should -Be 'None'
+    $context.PassThru | Should -BeTrue
+    $context.NoColor | Should -BeTrue
   }
 
-  It 'sets derived Remediate even when WhatIfPreference is enabled' {
-    $Mode = 'Remediate'
+  It 'returns derived Remediate without mutating caller state' {
     $Remediate = $false
     $null = $Mode
     $oldWhatIfPreference = $WhatIfPreference
 
     try {
       $WhatIfPreference = $true
-      Initialize-V2Context -ScriptName '99-Test.ps1' -BoundParameters @{ Mode = 'Remediate' } -DeriveRemediate
+      $context = Initialize-V2Context `
+        -ScriptName '99-Test.ps1' `
+        -BoundParameters @{ Mode = 'Remediate' } `
+        -Mode Remediate `
+        -DeriveRemediate
 
-      $Remediate | Should -BeTrue
+      $context.Remediate | Should -BeTrue
+      $Remediate | Should -BeFalse
     } finally {
       $WhatIfPreference = $oldWhatIfPreference
     }
+  }
+
+  It 'does not probe or mutate caller scope' {
+    $source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/_lib/Bootstrap.ps1') -Raw
+
+    $source | Should -Not -Match 'Get-Variable.+-Scope 1'
+    $source | Should -Not -Match 'Set-Variable.+-Scope 1'
   }
 }

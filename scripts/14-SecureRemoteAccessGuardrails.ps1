@@ -5,7 +5,7 @@
 .DESCRIPTION
   This script implements an audit-first approach for remote access hardening.
   It evaluates the local system against a policy (“catalog”) and produces:
-  - Human-friendly console output (colored status + readable lists).
+  - Console output with colored status and readable lists.
   - A structured result object on the pipeline (for automation and reporting).
   - A JSON proof file containing the same structured results.
   - An Application event log entry summarizing compliance and actions.
@@ -56,8 +56,8 @@
   - Elevated (bool): Whether the script detected an elevated session.
   - Remediate (bool): Whether remediation mode was requested.
   - Strict (bool): Whether strict mode was requested.
-  - CatalogPath (string): The catalog path used/assumed (anonymized placeholder if not provided).
-  - ConfigPath (string): The config path used/assumed.
+  - CatalogPath (string): A configured-path label when a catalog path was provided; otherwise null.
+  - ConfigPath (string): A configured-path label when a config path was provided; otherwise null.
   - ProofPath (string): Proof file path.
   - Changed (string[]): Human-readable list of successful changes applied.
   - Drift (string[]): Human-readable list of detected drift and/or remediation failures.
@@ -75,7 +75,7 @@
   Runs an audit only using the configured catalog or built-in defaults.
   Writes a console summary, event log entry, proof JSON, and emits one result object.
 .EXAMPLE
-  .\14-SecureRemoteAccessGuardrails.ps1 -CatalogPath "PATH/TO/JSON/catalog.json"
+  .\14-SecureRemoteAccessGuardrails.ps1 -CatalogPath $CatalogPath
   Runs an audit using an explicit policy catalog file.
 .EXAMPLE
   .\14-SecureRemoteAccessGuardrails.ps1 -Mode Remediate -WhatIf
@@ -121,7 +121,12 @@ Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -133,10 +138,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # C10: canonical findings list
@@ -273,6 +279,85 @@ function Disable-LocalBuiltinRdpInbound {
     Write-Verbose ("Built-in RDP firewall rule enumeration failed: {0}" -f $_.Exception.Message)
   }
 }
+function Get-RdpFirewallSettings {
+  param([Parameter(Mandatory)][psobject]$Rdp)
+  $profiles = Normalize-Array -Value $Rdp.Profiles
+  if (@($profiles).Count -eq 0) { $profiles = @('Domain') }
+  $scope = Normalize-Array -Value $Rdp.RemoteAddresses
+  if (@($scope).Count -eq 0) { $scope = @('LocalSubnet') }
+  $port = 3389
+  try { if ($Rdp.Port) { $port = [int]$Rdp.Port } } catch { $port = 3389 }
+  $messages = @()
+  if ($port -lt 1 -or $port -gt 65535) { $port = 3389; $messages += 'Invalid RDP.Port in catalog; using 3389.' }
+  $allowUdp = $false
+  try { if ($null -ne $Rdp.AllowUDP) { $allowUdp = [bool]$Rdp.AllowUDP } } catch { $allowUdp = $false }
+  return [pscustomobject]@{ Profiles = $profiles; Scope = $scope; Port = $port; AllowUdp = $allowUdp; Messages = $messages }
+}
+function New-RdpFirewallRule {
+  [CmdletBinding(SupportsShouldProcess = $true)]
+  param(
+    [Parameter(Mandatory)][string]$DisplayName,
+    [Parameter(Mandatory)][string]$Action,
+    [Parameter(Mandatory)][string]$Protocol,
+    [Parameter(Mandatory)][int]$Port,
+    [Parameter(Mandatory)][string[]]$Profiles,
+    [Parameter(Mandatory)][string[]]$RemoteAddress,
+    [Parameter(Mandatory)][string]$Group
+  )
+  if (-not $PSCmdlet.ShouldProcess('Firewall', "Create $DisplayName")) { return $false }
+  New-NetFirewallRule -PolicyStore PersistentStore -DisplayName $DisplayName -Group $Group `
+    -Direction Inbound -Action $Action -Enabled True -Protocol $Protocol -LocalPort $Port `
+    -Profile $Profiles -RemoteAddress $RemoteAddress -Service 'TermService' | Out-Null
+  return $true
+}
+function Get-RdpTcpFirewallDrift {
+  param([Parameter(Mandatory)]$Rule,[Parameter(Mandatory)]$Settings,[Parameter(Mandatory)][string]$DisplayName)
+  $drifts = @()
+  $portFilter = $Rule | Get-NetFirewallPortFilter -ErrorAction Stop
+  $addressFilter = $Rule | Get-NetFirewallAddressFilter -ErrorAction Stop
+  if ($Rule.Enabled -ne 'True') { $drifts += "${DisplayName}: not enabled" }
+  if ($Rule.Action -ne 'Allow') { $drifts += "${DisplayName}: action not Allow" }
+  if (-not (Compare-FwMultiValue -Actual $Rule.Profile -Expected $Settings.Profiles)) { $drifts += "${DisplayName}: profile drift" }
+  if ("$($portFilter.LocalPort)" -ne "$($Settings.Port)") { $drifts += "${DisplayName}: LocalPort $($portFilter.LocalPort) != $($Settings.Port)" }
+  if (-not (Compare-FwMultiValue -Actual $addressFilter.RemoteAddress -Expected $Settings.Scope)) { $drifts += "${DisplayName}: RemoteAddress drift" }
+  return [pscustomobject]@{ Messages = $drifts; PortFilter = $portFilter; AddressFilter = $addressFilter }
+}
+function Set-RdpTcpFirewallRule {
+  [CmdletBinding(SupportsShouldProcess = $true)]
+  param([Parameter(Mandatory)]$Rule,[Parameter(Mandatory)]$Settings,[Parameter(Mandatory)][string]$DisplayName)
+  if (-not $PSCmdlet.ShouldProcess('Firewall', "Repair $DisplayName")) { return $false }
+  $Rule | Set-NetFirewallRule -Enabled True -Action Allow -Profile $Settings.Profiles -ErrorAction Stop | Out-Null
+  $Rule | Set-NetFirewallPortFilter -Protocol TCP -LocalPort $Settings.Port -ErrorAction Stop | Out-Null
+  $Rule | Set-NetFirewallAddressFilter -RemoteAddress $Settings.Scope -ErrorAction Stop | Out-Null
+  return $true
+}
+function Ensure-RdpUdpFirewallMode {
+  [CmdletBinding(SupportsShouldProcess = $true)]
+  param([Parameter(Mandatory)]$Settings,[Parameter(Mandatory)][string]$AllowName,[Parameter(Mandatory)][string]$BlockName,[Parameter(Mandatory)][string]$Group,[switch]$Remediate)
+  $actions = @(); $drifts = @()
+  $createName = if ($Settings.AllowUdp) { $AllowName } else { $BlockName }
+  $createAction = if ($Settings.AllowUdp) { 'Allow' } else { 'Block' }
+  $createRemoteAddress = if ($Settings.AllowUdp) { $Settings.Scope } else { @('Any') }
+  if (-not (Get-LocalFirewallRuleByDisplayName -DisplayName $createName)) {
+    if ($Remediate) {
+      try {
+        if (New-RdpFirewallRule -DisplayName $createName -Action $createAction -Protocol UDP -Port $Settings.Port -Profiles $Settings.Profiles -RemoteAddress $createRemoteAddress -Group $Group) { $actions += "Created $createName" }
+        else { $drifts += "Missing local rule: $createName" }
+      } catch { $drifts += "Failed to create $createName - $($_.Exception.Message)" }
+    } else { $drifts += "Missing local rule: $createName" }
+  }
+  $oppositeName = if ($Settings.AllowUdp) { $BlockName } else { $AllowName }
+  $oppositeMode = if ($Settings.AllowUdp) { 'UDP allowed' } else { 'UDP blocked' }
+  if ($Remediate) {
+    if (Get-LocalFirewallRuleByDisplayName -DisplayName $oppositeName) {
+      if (Remove-LocalFirewallRuleByDisplayName -DisplayName $oppositeName) { $actions += "Removed $oppositeName ($oppositeMode)" }
+      else { $drifts += "Failed to remove $oppositeName ($oppositeMode)" }
+    }
+  } elseif (Get-LocalFirewallRuleByDisplayName -DisplayName $oppositeName) {
+    $drifts += "$(if ($Settings.AllowUdp) { 'UDP allowed but block rule exists' } else { 'UDP blocked but allow rule exists' }): $oppositeName"
+  }
+  return [pscustomobject]@{ Actions = $actions; Drifts = $drifts }
+}
 function Ensure-RdpFirewallRules {
   [CmdletBinding(SupportsShouldProcess = $true)]
   param([psobject]$Rdp,[switch]$Remediate)
@@ -281,15 +366,8 @@ function Ensure-RdpFirewallRules {
   if (-not (Test-CmdletAvailable -Name 'Get-NetFirewallRule')) {
     return @("NetSecurity cmdlets not available (Get-NetFirewallRule missing).")
   }
-  $profiles = Normalize-Array -Value $Rdp.Profiles
-  if (@($profiles).Count -eq 0) { $profiles = @('Domain') }
-  $scope = Normalize-Array -Value $Rdp.RemoteAddresses
-  if (@($scope).Count -eq 0) { $scope = @('LocalSubnet') }
-  $port = 3389
-  try { if ($Rdp.Port) { $port = [int]$Rdp.Port } } catch { $port = 3389 }
-  if ($port -lt 1 -or $port -gt 65535) { $port = 3389; $drifts += "Invalid RDP.Port in catalog; using 3389." }
-  $allowUdp = $false
-  try { if ($null -ne $Rdp.AllowUDP) { $allowUdp = [bool]$Rdp.AllowUDP } } catch { $allowUdp = $false }
+  $settings = Get-RdpFirewallSettings -Rdp $Rdp
+  $drifts += $settings.Messages
   $nameTCP      = "Guardrails RDP TCP-In Scoped"
   $nameUDPAllow = "Guardrails RDP UDP-In Scoped"
   $nameUDPBlock = "Guardrails RDP UDP-In Blocked"
@@ -313,13 +391,10 @@ function Ensure-RdpFirewallRules {
   # TCP allow rule
   $ruleTCP = Get-LocalFirewallRuleByDisplayName -DisplayName $nameTCP
   if (-not $ruleTCP) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess("Firewall", "Create $nameTCP")) {
+    if ($Remediate) {
       try {
-        New-NetFirewallRule -PolicyStore PersistentStore -DisplayName $nameTCP -Group $group `
-          -Direction Inbound -Action Allow -Enabled True `
-          -Protocol TCP -LocalPort $port -Profile $profiles -RemoteAddress $scope `
-          -Service 'TermService' | Out-Null
-        $actions += "Created $nameTCP"
+        if (New-RdpFirewallRule -DisplayName $nameTCP -Action Allow -Protocol TCP -Port $settings.Port -Profiles $settings.Profiles -RemoteAddress $settings.Scope -Group $group) { $actions += "Created $nameTCP" }
+        else { $drifts += "Missing local rule: $nameTCP" }
       } catch {
         $drifts += "Failed to create $nameTCP - $($_.Exception.Message)"
       }
@@ -328,21 +403,11 @@ function Ensure-RdpFirewallRules {
     }
   } else {
     try {
-      # Port and address must be read via filter objects.
-      $pf = $ruleTCP | Get-NetFirewallPortFilter -ErrorAction Stop
-      $af = $ruleTCP | Get-NetFirewallAddressFilter -ErrorAction Stop
-      $needsFix = $false
-      if ($ruleTCP.Enabled -ne 'True') { $needsFix = $true; $drifts += "${nameTCP}: not enabled" }
-      if ($ruleTCP.Action -ne 'Allow') { $needsFix = $true; $drifts += "${nameTCP}: action not Allow" }
-      if (-not (Compare-FwMultiValue -Actual $ruleTCP.Profile -Expected $profiles)) { $needsFix = $true; $drifts += "${nameTCP}: profile drift" }
-      if ("$($pf.LocalPort)" -ne "$port") { $needsFix = $true; $drifts += "${nameTCP}: LocalPort $($pf.LocalPort) != $port" }
-      if (-not (Compare-FwMultiValue -Actual $af.RemoteAddress -Expected $scope)) { $needsFix = $true; $drifts += "${nameTCP}: RemoteAddress drift" }
-      if ($needsFix -and $Remediate -and $PSCmdlet.ShouldProcess("Firewall", "Repair $nameTCP")) {
+      $tcpDrift = Get-RdpTcpFirewallDrift -Rule $ruleTCP -Settings $settings -DisplayName $nameTCP
+      $drifts += $tcpDrift.Messages
+      if ($tcpDrift.Messages.Count -gt 0 -and $Remediate) {
         try {
-          $ruleTCP | Set-NetFirewallRule -Enabled True -Action Allow -Profile $profiles -ErrorAction Stop | Out-Null
-          $ruleTCP | Set-NetFirewallPortFilter -Protocol TCP -LocalPort $port -ErrorAction Stop | Out-Null
-          $ruleTCP | Set-NetFirewallAddressFilter -RemoteAddress $scope -ErrorAction Stop | Out-Null
-          $actions += "Repaired $nameTCP"
+          if (Set-RdpTcpFirewallRule -Rule $ruleTCP -Settings $settings -DisplayName $nameTCP) { $actions += "Repaired $nameTCP" }
         } catch {
           $drifts += "Failed to repair $nameTCP - $($_.Exception.Message)"
         }
@@ -351,58 +416,8 @@ function Ensure-RdpFirewallRules {
       $drifts += "Failed to inspect $nameTCP - $($_.Exception.Message)"
     }
   }
-  # UDP behavior
-  if ($allowUdp) {
-    $ruleUDP = Get-LocalFirewallRuleByDisplayName -DisplayName $nameUDPAllow
-    if (-not $ruleUDP) {
-      if ($Remediate -and $PSCmdlet.ShouldProcess("Firewall", "Create $nameUDPAllow")) {
-        try {
-          New-NetFirewallRule -PolicyStore PersistentStore -DisplayName $nameUDPAllow -Group $group `
-            -Direction Inbound -Action Allow -Enabled True `
-            -Protocol UDP -LocalPort $port -Profile $profiles -RemoteAddress $scope `
-            -Service 'TermService' | Out-Null
-          $actions += "Created $nameUDPAllow"
-        } catch {
-          $drifts += "Failed to create $nameUDPAllow - $($_.Exception.Message)"
-        }
-      } else {
-        $drifts += "Missing local rule: $nameUDPAllow"
-      }
-    }
-    if ($Remediate) {
-      if (Get-LocalFirewallRuleByDisplayName -DisplayName $nameUDPBlock) {
-        if (Remove-LocalFirewallRuleByDisplayName -DisplayName $nameUDPBlock) { $actions += "Removed $nameUDPBlock (UDP allowed)" }
-        else { $drifts += "Failed to remove $nameUDPBlock (UDP allowed)" }
-      }
-    } else {
-      if (Get-LocalFirewallRuleByDisplayName -DisplayName $nameUDPBlock) { $drifts += "UDP allowed but block rule exists: $nameUDPBlock" }
-    }
-  } else {
-    $ruleUDPBlock = Get-LocalFirewallRuleByDisplayName -DisplayName $nameUDPBlock
-    if (-not $ruleUDPBlock) {
-      if ($Remediate -and $PSCmdlet.ShouldProcess("Firewall", "Create $nameUDPBlock")) {
-        try {
-          New-NetFirewallRule -PolicyStore PersistentStore -DisplayName $nameUDPBlock -Group $group `
-            -Direction Inbound -Action Block -Enabled True `
-            -Protocol UDP -LocalPort $port -Profile $profiles -RemoteAddress Any `
-            -Service 'TermService' | Out-Null
-          $actions += "Created $nameUDPBlock"
-        } catch {
-          $drifts += "Failed to create $nameUDPBlock - $($_.Exception.Message)"
-        }
-      } else {
-        $drifts += "Missing local rule: $nameUDPBlock"
-      }
-    }
-    if ($Remediate) {
-      if (Get-LocalFirewallRuleByDisplayName -DisplayName $nameUDPAllow) {
-        if (Remove-LocalFirewallRuleByDisplayName -DisplayName $nameUDPAllow) { $actions += "Removed $nameUDPAllow (UDP blocked)" }
-        else { $drifts += "Failed to remove $nameUDPAllow (UDP blocked)" }
-      }
-    } else {
-      if (Get-LocalFirewallRuleByDisplayName -DisplayName $nameUDPAllow) { $drifts += "UDP blocked but allow rule exists: $nameUDPAllow" }
-    }
-  }
+  $udp = Ensure-RdpUdpFirewallMode -Settings $settings -AllowName $nameUDPAllow -BlockName $nameUDPBlock -Group $group -Remediate:$Remediate
+  $actions += $udp.Actions; $drifts += $udp.Drifts
   return @($actions + $drifts)
 }
 # ----------------------------
@@ -614,8 +629,8 @@ try {
     Elevated     = $isElevated
     Remediate    = [bool]$Remediate
     Strict       = [bool]$Strict
-    CatalogPath  = $(if ($CatalogPath) { $CatalogPath } else { "PATH/TO/JSON/catalog.json" })
-    ConfigPath   = $(if ($ConfigPath) { $ConfigPath } else { "PATH/TO/JSON/global-config.json" })
+    CatalogPath  = $(if ($CatalogPath) { '[configured path]' } else { $null })
+    ConfigPath   = $(if ($ConfigPath) { '[configured path]' } else { $null })
     ProofPath    = $ProofPath
     Changed      = @($changes)
     Drift        = @($drifts)
@@ -647,7 +662,7 @@ try {
   $resultObject.EventId = $(if ($eventIsBad) { 4850 } else { 4840 })
   if ($eventIsBad) { Write-HealthEvent -Id 4850 -Message $msg -Level 'Warning' -Source $ScriptEventSource }
   else { Write-HealthEvent -Id 4840 -Message $msg -Level 'Information' -Source $ScriptEventSource }
-  # Pretty console output (no pipeline pollution)
+  # Formatted console output (no pipeline output)
   Write-UiLine ""
   Write-UiSeparator -Title "Secure Remote Access Guardrails"
   Write-KeyValue -Key "Computer"  -Value $env:COMPUTERNAME -Color Gray
@@ -701,8 +716,8 @@ catch {
     Elevated     = $isElevated
     Remediate    = [bool]$Remediate
     Strict       = [bool]$Strict
-    CatalogPath  = $(if ($CatalogPath) { $CatalogPath } else { "PATH/TO/JSON/catalog.json" })
-    ConfigPath   = $(if ($ConfigPath) { $ConfigPath } else { "PATH/TO/JSON/global-config.json" })
+    CatalogPath  = $(if ($CatalogPath) { '[configured path]' } else { $null })
+    ConfigPath   = $(if ($ConfigPath) { '[configured path]' } else { $null })
     ProofPath    = $ProofPath
     Changed      = @()
     Drift        = @()
@@ -731,4 +746,4 @@ $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
 $v2Result = Get-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

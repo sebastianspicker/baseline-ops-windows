@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for security-script contracts.
+
+.DESCRIPTION
+Verifies safe, repeatable operator behavior and evidence.
+#>
 
 Describe '11-IOC-Sweep-Defender source failure reporting' {
   BeforeAll {
@@ -66,7 +73,9 @@ Describe '11-IOC-Sweep-Defender source failure reporting' {
       param(
         [Parameter(Mandatory)][int]$DefenderExitCode,
         [ValidateSet('Quick','Full','None')][string]$ScanType = 'Quick',
-        [string[]]$CustomScanPaths = @()
+        [string[]]$CustomScanPaths = @(),
+        [switch]$NativeTimedOut,
+        [switch]$NativeOutputTruncated
       )
 
       $catalogPath = Join-Path $TestDrive ("ioc-catalog-{0}.json" -f [guid]::NewGuid().ToString('N'))
@@ -86,29 +95,25 @@ Describe '11-IOC-Sweep-Defender source failure reporting' {
       } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $catalogPath -Encoding UTF8
 
       $oldOS = $env:OS
-      $oldProgramFiles = $env:ProgramFiles
+      $oldTestProgramFiles = $env:BASELINEOPS_TEST_PROGRAM_FILES
       try {
         $env:OS = 'Windows_NT'
-        $env:ProgramFiles = Join-Path $TestDrive 'ProgramFiles'
-        $fakeMpCmdRun = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+        $env:BASELINEOPS_TEST_PROGRAM_FILES = Join-Path $TestDrive 'ProgramFiles'
+        $fakeMpCmdRun = "$env:BASELINEOPS_TEST_PROGRAM_FILES\Windows Defender\MpCmdRun.exe"
         New-Item -ItemType File -Path $fakeMpCmdRun -Force | Out-Null
         Set-Variable -Name __IocDefenderExitCode -Scope Global -Value $DefenderExitCode
+        Set-Variable -Name __IocDefenderNativeTimedOut -Scope Global -Value ([bool]$NativeTimedOut)
+        Set-Variable -Name __IocDefenderNativeOutputTruncated -Scope Global -Value ([bool]$NativeOutputTruncated)
 
-        function global:Start-Process {
-          [CmdletBinding()]
-          param(
-            [string]$FilePath,
-            [string[]]$ArgumentList,
-            [switch]$PassThru,
-            [switch]$Wait,
-            [object]$WindowStyle
-          )
-          [void]$FilePath
-          [void]$ArgumentList
-          [void]$PassThru
-          [void]$Wait
-          [void]$WindowStyle
-          return [pscustomobject]@{ ExitCode = (Get-Variable -Name __IocDefenderExitCode -Scope Global -ValueOnly) }
+        Import-Module (Join-Path $PSScriptRoot '../../lib/External.psm1') -Force -DisableNameChecking
+        Mock -CommandName Invoke-NativeCommand -MockWith {
+          [pscustomobject]@{
+            ExitCode = (Get-Variable -Name __IocDefenderExitCode -Scope Global -ValueOnly)
+            Success = $true
+            TimedOut = (Get-Variable -Name __IocDefenderNativeTimedOut -Scope Global -ValueOnly)
+            OutputTruncated = (Get-Variable -Name __IocDefenderNativeOutputTruncated -Scope Global -ValueOnly)
+            StderrTruncated = $false
+          }
         }
 
         $invokeArgs = @{
@@ -130,13 +135,14 @@ Describe '11-IOC-Sweep-Defender source failure reporting' {
         } else {
           $env:OS = $oldOS
         }
-        if ($null -eq $oldProgramFiles) {
-          Remove-Item -LiteralPath Env:ProgramFiles -ErrorAction SilentlyContinue
+        if ($null -eq $oldTestProgramFiles) {
+          Remove-Item -LiteralPath Env:BASELINEOPS_TEST_PROGRAM_FILES -ErrorAction SilentlyContinue
         } else {
-          $env:ProgramFiles = $oldProgramFiles
+          $env:BASELINEOPS_TEST_PROGRAM_FILES = $oldTestProgramFiles
         }
-        Remove-Item -LiteralPath Function:\Start-Process -ErrorAction SilentlyContinue
         Remove-Variable -Name __IocDefenderExitCode -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable -Name __IocDefenderNativeTimedOut -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable -Name __IocDefenderNativeOutputTruncated -Scope Global -ErrorAction SilentlyContinue
       }
 
       $result = @($output | Where-Object {
@@ -256,5 +262,14 @@ Describe '11-IOC-Sweep-Defender source failure reporting' {
     $run.Result.Result | Should -Be 'FAIL'
     $run.Result.Summary.Scan.Result | Should -Be 'exit:5'
     @($run.Result.Findings | Where-Object Code -eq 'IOC-DefenderError').Count | Should -Be 1
+  }
+
+  It 'Reports FAIL when Defender scan native evidence times out or is truncated' {
+    $run = Invoke-IocSweepDefenderScanCase -DefenderExitCode 0 -ScanType Quick -NativeTimedOut
+
+    $run.ExitCode | Should -Be 1
+    $run.Result.Result | Should -Be 'FAIL'
+    $run.Result.Summary.Scan.Result | Should -Be 'incomplete native evidence'
+    @($run.Result.Findings | Where-Object { $_.Code -eq 'IOC-DefenderError' -and $_.Message -match 'timed out or produced truncated output' }).Count | Should -Be 1
   }
 }

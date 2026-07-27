@@ -13,7 +13,13 @@ Unit tests for the Common module functions including:
 [CmdletBinding()]
 param()
 
+$script:IsWindowsHost = ($env:OS -eq 'Windows_NT')
+
 BeforeAll {
+  # Top-level assignments run during Pester discovery; initialize the runtime
+  # script scope as well for assertions that branch on the current platform.
+  $script:IsWindowsHost = ($env:OS -eq 'Windows_NT')
+
   # Import the module
   $modulePath = Join-Path $PSScriptRoot '../../lib/Common.psm1'
   Import-Module $modulePath -Force -DisableNameChecking
@@ -94,10 +100,9 @@ Describe "Ensure-Directory" {
   }
 
   It "Returns false when directory creation fails" {
-    Mock -ModuleName Common -CommandName Test-Path -MockWith { $false }
-    Mock -ModuleName Common -CommandName New-Item -MockWith { throw 'Access denied' }
+    $invalidPath = $script:TestDir + [char]0 + 'blocked'
 
-    Ensure-Directory -Path (Join-Path $script:TestDir 'blocked') -ErrorAction SilentlyContinue |
+    Ensure-Directory -Path $invalidPath -ErrorAction SilentlyContinue |
       Should -BeFalse
   }
 }
@@ -198,12 +203,12 @@ Describe "Sanitize-Path" {
 }
 
 Describe "Require-Admin" {
-  It "Does not throw on non-Windows (warns instead)" -Skip:$IsWindows {
+  It "Does not throw on non-Windows (warns instead)" -Skip:$script:IsWindowsHost {
     { Require-Admin } | Should -Not -Throw
   }
 
   It "Accepts a custom message parameter" {
-    if ($IsWindows -and -not (Test-IsAdmin)) {
+    if ($script:IsWindowsHost -and -not (Test-IsAdmin)) {
       { Require-Admin -Message 'Custom admin message' } | Should -Throw 'Custom admin message'
     } else {
       { Require-Admin -Message 'Custom admin message' } | Should -Not -Throw
@@ -262,3 +267,16 @@ Describe "Get-SafeFileName" {
 # Read-JsonConfig was removed in Phase 4.1 dedup. JSON reading is now handled by
 # Read-JsonFileSafe (JsonCatalog.psm1) for simple reads, and
 # Read-ConfigWithDefaults (Config.psm1) for config loading with defaults.
+
+Describe 'Has-Property' {
+  It 'recognizes both object properties and dictionary keys' {
+    Has-Property -Object ([pscustomobject]@{ Name = 'value' }) -Name 'Name' | Should -BeTrue
+    Has-Property -Object @{ Name = 'value' } -Name 'Name' | Should -BeTrue
+    Has-Property -Object ([ordered]@{ Name = 'value' }) -Name 'Name' | Should -BeTrue
+  }
+
+  It 'returns false for absent keys and null objects' {
+    Has-Property -Object @{ Present = $true } -Name 'Missing' | Should -BeFalse
+    Has-Property -Object $null -Name 'Missing' | Should -BeFalse
+  }
+}

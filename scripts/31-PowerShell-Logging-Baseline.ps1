@@ -15,7 +15,7 @@ Computer Configuration policies (HKLM) take precedence over User Configuration (
 Audit | Remediate
 
 .PARAMETER ConfigJsonPath
-Optional JSON path, e.g. "PATH/TO/JSON/powershell-logging.json".
+Optional JSON path supplied with $ConfigJsonPath.
 If missing/unreadable/invalid, defaults are used.
 
 .PARAMETER IncludeHKCU
@@ -46,7 +46,7 @@ Modules to log (ModuleNames subkey values 1..N). Use @('*') for all.
 Optional CSV export of the Summary object.
 
 .PARAMETER QuietConsole
-If set, suppresses pretty console output (no Write-UiLine summary).
+If set, suppresses formatted console output (no Write-UiLine summary).
 
 
 .PARAMETER ConfigPath
@@ -79,7 +79,7 @@ PSCustomObject with properties:
 
 .NOTES
 PowerShell 5.1 compatible.
-ConvertFrom-Json in Windows PowerShell 5.1 fails on JSON comments. [web:55]
+ConvertFrom-Json in Windows PowerShell 5.1 fails on JSON comments.
 .EXAMPLE
   .\31-PowerShell-Logging-Baseline.ps1
 
@@ -131,7 +131,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '31-PowerShell-Logging-Baseline.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '31-PowerShell-Logging-Baseline.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 # ---------------------------
@@ -178,11 +182,13 @@ function Test-IsSafeTranscriptPath {
   param([string]$Path)
 
   if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-  if ([string]::IsNullOrWhiteSpace($env:ProgramData)) { return $false }
+  $commonData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { $commonData = [IO.Path]::GetTempPath() }
+  if ([string]::IsNullOrWhiteSpace($commonData)) { return $false }
   try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return $false }
 
-  $pd = [System.IO.Path]::GetFullPath($env:ProgramData)
-  return $full.StartsWith($pd, [System.StringComparison]::OrdinalIgnoreCase)
+  $pd = [System.IO.Path]::GetFullPath($commonData)
+  return (Test-PathUnderRoot -Path $full -Root $pd)
 }
 
 function Normalize-ModuleNames {
@@ -330,10 +336,11 @@ if (-not $isWindowsHost) {
     Notes        = @('Skipped: PowerShell logging baseline auditing is only supported on Windows hosts.')
   }
 
-  $result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 Require-Admin
@@ -354,8 +361,12 @@ function Add-RegistryWriteFailureFinding {
 }
 
 # Defaults (used when JSON missing/invalid)
+$commonApplicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { $commonApplicationData = [IO.Path]::GetTempPath() }
+if ([string]::IsNullOrWhiteSpace($commonApplicationData)) { throw 'CommonApplicationData could not be resolved.' }
+$defaultTranscriptDirectory = Join-Path $commonApplicationData 'PowerShellTranscripts'
 $defaults = @{
-  TranscriptOutputDirectory           = "$env:ProgramData\PowerShellTranscripts"
+  TranscriptOutputDirectory           = $defaultTranscriptDirectory
   EnableTranscription                = $true
   EnableInvocationHeader             = $true
   EnableScriptBlockLogging           = $true
@@ -388,7 +399,7 @@ $targetTranscriptDir = if ($PSBoundParameters.ContainsKey('TranscriptOutputDirec
 } elseif (-not [string]::IsNullOrWhiteSpace([string]$config.TranscriptOutputDirectory)) {
   [string]$config.TranscriptOutputDirectory
 } else {
-  "$env:ProgramData\PowerShellTranscripts"
+  $defaultTranscriptDirectory
 }
 
 $targetEnableTranscription = Resolve-Bool -ParameterValue $EnableTranscription -ParameterWasBound $PSBoundParameters.ContainsKey('EnableTranscription') -ConfigValue $config.EnableTranscription -DefaultValue $true -NameForFinding 'EnableTranscription' -Findings $Findings
@@ -520,7 +531,7 @@ $summary = [pscustomobject]@{
   Target_EnableModuleLogging                = $targetEnableModuleLogging
   Target_ModuleNames                        = @($targetModuleNames)
 
-  ConfigJsonPath                            = if ($ConfigJsonPath) { 'PATH/TO/JSON' } else { $null }
+  ConfigJsonPath                            = if ($ConfigJsonPath) { '[configured path]' } else { $null }
   PolicyBasePath                            = $hklmBase
   IncludeHKCU                               = [bool]$IncludeHKCU
 }
@@ -558,4 +569,4 @@ $resultToken = if ($registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findin
 $v2Result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $summary -Metadata @{ Current = [pscustomobject]@{ HKLM = [pscustomobject]@{ Before = $currentHKLM; After = $afterHKLM }; HKCU = if ($IncludeHKCU) { [pscustomobject]@{ Before = $currentHKCU; After = $afterHKCU } } else { $null }; Effective = [pscustomobject]@{ Before = $effectiveBefore; After = $effectiveAfter } } }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

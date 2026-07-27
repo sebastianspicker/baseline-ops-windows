@@ -1,29 +1,28 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "Example Windows Update for Business proofing configuration",
-  
-  "UpdateSettings": {
-    "DeferFeatureUpdates": true,
-    "DeferFeatureUpdatesPeriodDays": 30,
-    "DeferQualityUpdates": true,
-    "DeferQualityUpdatesPeriodDays": 7,
-    "PauseFeatureUpdates": false,
-    "PauseQualityUpdates": false,
-    "BranchReadinessLevel": "SemiAnnualChannel"
+  "UpdateSource": "WUfB",
+  "WSUS": {
+    "WUServer": null,
+    "WUStatusServer": null
   },
-  
+  "AllowMU": true,
+  "Deferrals": {
+    "FeatureDays": 30,
+    "QualityDays": 7
+  },
+  "TargetRelease": {
+    "Enable": false,
+    "ProductVersion": null,
+    "TargetReleaseVersionInfo": null
+  },
+  "ActiveHours": {
+    "Enable": false,
+    "Start": 8,
+    "End": 18
+  },
   "DeliveryOptimization": {
-    "DOMode": "HttpOnly",
-    "DODownloadMode": 1,
-    "DOMaxCacheSize": 20
+    "DownloadMode": 0
   },
-  
-  "TargetReleaseVersion": {
-    "Enabled": true,
-    "Version": "22H2"
-  },
-  
   "Proof": {
-    "OutFile": "C:\\ProgramData\\SecurityHardening\\wufb-proof.json"
+    "OutFile": null
   }
 }

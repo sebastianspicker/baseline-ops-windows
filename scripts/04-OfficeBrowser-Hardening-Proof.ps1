@@ -37,12 +37,11 @@
 .PARAMETER ConfigPath
   Path to an optional configuration JSON.
   If present, the script looks for:
-    { "OfficeBrowser": { "CatalogPath": "PATH/TO/CATALOG.json" } }
+    { "OfficeBrowser": { "CatalogPath": "[configured path]" } }
   If the config file is missing or invalid, it is ignored and embedded defaults are used.
 
 .PARAMETER Strict
-  Switch. When specified, the script returns exit code 1 whenever drift is detected,
-  even if remediation was enabled and some items were successfully changed.
+  Switch. Enables strict compliance evaluation.
 
 
 .PARAMETER Mode
@@ -83,12 +82,11 @@
 
 .NOTES
   Proof file location:
-  - Default: PATH/TO/PROOF.json
+  - Default: $env:TEMP\OfficeBrowser-Hardening-Proof.json
   - Can be overridden via the catalog field: Proof.OutFile
 
   Exit codes:
-  - 0: No drift detected (all checks compliant) and Strict is not set.
-  - 1: Drift detected, or Strict is set (Strict forces a non-zero exit code regardless of remediation outcome).
+  - 0 = OK, 2 = WARN, 1 = FAIL.
 
   Recommended usage:
   - Use audit mode for continuous compliance checks (e.g., scheduled task).
@@ -102,7 +100,7 @@
   Writes a proof JSON file and outputs per-check objects to the pipeline.
 
 .EXAMPLE
-  .\04-OfficeBrowser-Hardening-Proof.ps1 -CatalogPath "PATH/TO/CATALOG.json"
+  .\04-OfficeBrowser-Hardening-Proof.ps1 -CatalogPath $CatalogPath
 
   Runs audit mode using the specified catalog JSON as the baseline source.
 
@@ -110,12 +108,12 @@
   .\04-OfficeBrowser-Hardening-Proof.ps1 -Mode Remediate
 
   Runs remediation mode: applies the baseline settings and re-checks compliance.
-  Returns exit code 1 only if drift remains (unless -Strict is also used).
+  Returns a V2 result and its corresponding process exit code.
 
 .EXAMPLE
   .\04-OfficeBrowser-Hardening-Proof.ps1 -Mode Remediate -Strict; exit $LASTEXITCODE
 
-  Runs remediation mode, but forces exit code 1 if any drift was detected at any point.
+  Runs remediation mode with strict compliance evaluation.
   Useful for CI-style compliance enforcement.
 
 .EXAMPLE
@@ -125,7 +123,7 @@
   Runs the script and filters the pipeline output for non-compliant items.
 
 .EXAMPLE
-  .\04-OfficeBrowser-Hardening-Proof.ps1 | Export-Csv -NoTypeInformation -Path "PATH/TO/report.csv"
+  .\04-OfficeBrowser-Hardening-Proof.ps1 | Export-Csv -NoTypeInformation -Path $OutputPath
 
   Runs the script and exports the per-check results to CSV for reporting.
 #>
@@ -158,7 +156,12 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -170,10 +173,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 if (-not $Quiet) { $InformationPreference = 'Continue' }   # Information stream shown by default
@@ -298,37 +302,9 @@ function Ensure-Edge {
   $items = New-Object System.Collections.Generic.List[object]
   $base  = Get-EdgeBaseKey -EdgeCfg $EdgeCfg
 
-  $r = Set-RegValueProof -Product 'Edge' -Area 'Core' -Policy 'SmartScreenEnabled' -Path $base -Name 'SmartScreenEnabled' -Type DWord -Value ([int](Get-BoolDefault $EdgeCfg.SmartScreen $true)) -Remediate:$Remediate
-  $items.Add($r) | Out-Null
-
-  $r = Set-RegValueProof -Product 'Edge' -Area 'Core' -Policy 'SmartScreenPuaEnabled' -Path $base -Name 'SmartScreenPuaEnabled' -Type DWord -Value ([int](Get-BoolDefault $EdgeCfg.PUA $true)) -Remediate:$Remediate
-  $items.Add($r) | Out-Null
-
-  $r = Set-RegValueProof -Product 'Edge' -Area 'Core' -Policy 'PasswordManagerEnabled' -Path $base -Name 'PasswordManagerEnabled' -Type DWord -Value ([int](Get-BoolDefault $EdgeCfg.PasswordManager $false)) -Remediate:$Remediate
-  $items.Add($r) | Out-Null
-
-  $r = Set-RegValueProof -Product 'Edge' -Area 'Core' -Policy 'AutofillAddressEnabled' -Path $base -Name 'AutofillAddressEnabled' -Type DWord -Value ([int](Get-BoolDefault $EdgeCfg.AutofillAddress $false)) -Remediate:$Remediate
-  $items.Add($r) | Out-Null
-
-  $r = Set-RegValueProof -Product 'Edge' -Area 'Core' -Policy 'AutofillCreditCardEnabled' -Path $base -Name 'AutofillCreditCardEnabled' -Type DWord -Value ([int](Get-BoolDefault $EdgeCfg.AutofillCreditCard $false)) -Remediate:$Remediate
-  $items.Add($r) | Out-Null
-
-  $r = Set-RegValueProof -Product 'Edge' -Area 'Core' -Policy 'SyncDisabled' -Path $base -Name 'SyncDisabled' -Type DWord -Value ([int](Get-BoolDefault $EdgeCfg.SyncDisabled $true)) -Remediate:$Remediate
-  $items.Add($r) | Out-Null
-
-  $sslMin = Get-TextOrNull $EdgeCfg.SSLVersionMin
-  if (-not $sslMin) { $sslMin = 'tls1.2' }
-  $r = Set-RegValueProof -Product 'Edge' -Area 'Security' -Policy 'SSLVersionMin' -Path $base -Name 'SSLVersionMin' -Type String -Value $sslMin -Remediate:$Remediate
-  $items.Add($r) | Out-Null
-
-  $tpMap = @{ 'Basic'=1; 'Balanced'=2; 'Strict'=3 }
-  $tpKey = Get-TextOrNull $EdgeCfg.TrackingPrevention
-  if (-not $tpKey) { $tpKey = 'Balanced' }
-  $tp = 2
-  foreach($k in $tpMap.Keys) { if ($k -ieq $tpKey) { $tp = $tpMap[$k] } }
-
-  $r = Set-RegValueProof -Product 'Edge' -Area 'Privacy' -Policy 'TrackingPrevention' -Path $base -Name 'TrackingPrevention' -Type DWord -Value $tp -Remediate:$Remediate
-  $items.Add($r) | Out-Null
+  foreach ($policy in Get-EdgePolicyDefinitions -EdgeCfg $EdgeCfg) {
+    $items.Add((Set-RegValueProof -Product 'Edge' -Area $policy.Area -Policy $policy.Policy -Path $base -Name $policy.Name -Type $policy.Type -Value $policy.Value -Remediate:$Remediate)) | Out-Null
+  }
 
   $hp = Get-TextOrNull $EdgeCfg.HomePageURL
   if ($hp) {
@@ -344,85 +320,26 @@ function Ensure-Edge {
     $items.Add($r) | Out-Null
   }
 
-  $urlsKey     = Join-Path $base 'RestoreOnStartupURLs'
-  $desiredUrls = Get-ArrayStrings $EdgeCfg.StartupURLs
+  $urlsKey = Join-Path $base 'RestoreOnStartupURLs'
+  $desiredUrls = Get-EdgeStartupUrlMap -StartupURLs $EdgeCfg.StartupURLs
 
   if ($Remediate) {
     if ($PSCmdlet.ShouldProcess($urlsKey, 'Reset Edge startup URLs')) {
       Ensure-RegistryKey -Path $urlsKey
-
-      try {
-        $p = Get-ItemProperty -Path $urlsKey -ErrorAction SilentlyContinue
-        if ($p) {
-          foreach ($prop in $p.PSObject.Properties) {
-            if ($prop.Name -match '^\d+$') {
-              try {
-                Remove-ItemProperty -Path $urlsKey -Name $prop.Name -ErrorAction Stop
-              } catch {
-                Write-Warning "Could not remove URL property $($prop.Name): $($_.Exception.Message)"
-              }
-            }
-          }
-        }
-      } catch {
-        Write-Warning "Could not clear Edge startup URLs for remediation: $($_.Exception.Message)"
-      }
+      Clear-EdgeStartupUrlValues -Path $urlsKey
     }
 
-    $i = 1
-    foreach($u in $desiredUrls) {
-      $name     = "$i"
-      $expected = [string]$u
-      $changed  = $false
-      $msg      = $null
-
+    foreach ($name in @($desiredUrls.Keys | Sort-Object { [int]$_ })) {
+      $expected = $desiredUrls[$name]
       if ($PSCmdlet.ShouldProcess("$urlsKey\$name", 'Set Edge startup URL')) {
-        try {
-          Ensure-RegistryKey -Path $urlsKey
-          New-ItemProperty -Path $urlsKey -Name $name -PropertyType String -Value $expected -Force -ErrorAction Stop | Out-Null
-          $changed = $true
-        } catch {
-          $msg = "Write failed: $($_.Exception.Message)"
-        }
+        $items.Add((Set-EdgeStartupUrlProof -Path $urlsKey -Name $name -Expected $expected)) | Out-Null
       } else {
-        $msg = 'Set skipped by confirmation/WhatIf'
+        $items.Add((Set-EdgeStartupUrlProof -Path $urlsKey -Name $name -Expected $expected -Skipped)) | Out-Null
       }
-
-      $cur = Get-RegValue -Path $urlsKey -Name $name
-      $compliant = ($cur -eq $expected)
-      if (-not $msg) { $msg = $(if ($compliant -and $changed) { 'Set applied' } elseif (-not $compliant) { 'Set attempted but differs' } else { $null }) }
-
-      $r = Get-ProofItem -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartupURLs' -Target $urlsKey -Name $name -Type String -Expected $expected -Actual $cur -Compliant $compliant -Changed $changed -Message $msg
-      $items.Add($r) | Out-Null
-      $i++
     }
   } else {
-    $current = @{}
-    try {
-      $p = Get-ItemProperty -Path $urlsKey -ErrorAction SilentlyContinue
-      if ($p) {
-        foreach($prop in $p.PSObject.Properties) {
-          if ($prop.Name -match '^\d+$') { $current[$prop.Name] = [string]$prop.Value }
-        }
-      }
-    } catch {
-      Write-Verbose ("Edge startup URL registry read failed for '{0}': {1}" -f $urlsKey,$_.Exception.Message)
-    }
-
-    $want = @{}
-    $i = 1
-    foreach($u in $desiredUrls) { $want["$i"] = [string]$u; $i++ }
-
-    $allKeys = @($current.Keys + $want.Keys | Select-Object -Unique)
-    foreach($k in $allKeys) {
-      $expected  = $want[$k]
-      $actual    = $current[$k]
-      $compliant = ($expected -eq $actual)
-      $msg       = $(if (-not $compliant) { 'Drift detected' } else { $null })
-
-      $r = Get-ProofItem -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartupURLs' -Target $urlsKey -Name $k -Type String -Expected $expected -Actual $actual -Compliant $compliant -Changed $false -Message $msg
-      $items.Add($r) | Out-Null
-    }
+    $currentUrls = Get-EdgeStartupUrlValues -Path $urlsKey
+    foreach ($item in Get-EdgeStartupUrlAuditProofItems -Path $urlsKey -DesiredUrls $desiredUrls -CurrentUrls $currentUrls) { $items.Add($item) | Out-Null }
   }
 
   return $items
@@ -529,4 +446,4 @@ $v2Result = Get-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 
-if (-not $overallOk -or $Strict) { exit 1 } else { exit 0 }
+exit (Get-V2ExitCode -Result $resultToken)

@@ -10,7 +10,7 @@
   - MissingZeroDayKBs: required updates flagged as zero-day mitigations that are not installed.
 
   The script produces:
-  - A human-friendly console report (colored, grouped, readable).
+  - A grouped, colorized console report.
   - A structured report object (only when -PassThru is used) suitable for automation:
     Export-Csv, ConvertTo-Json, Where-Object, etc.
   - A JSON state file for auditing/monitoring.
@@ -21,16 +21,9 @@
 
 .PARAMETER KBFeedPath
   Path to the JSON KB feed file.
-  If this path is a placeholder (for example "PATH/TO/JSON/..."), the feed is treated as missing.
+  If this path is empty or matches a legacy template-path pattern, the feed is treated as missing.
 
-  Expected JSON shape (minimum):
-  {
-    "KBs": [
-      { "KB": "KB503XXXX", "Title": "Description (optional)", "IsZeroDay": true|false }
-    ]
-  }
-
-  Supported per-item properties:
+  The root object must contain a KBs array. Supported per-item properties:
   - KB        (required) String in the form "KB" + digits (e.g., KB5031234)
   - Title     (optional) Human readable text shown in the console output
   - IsZeroDay (optional) Boolean; when true the KB is counted as zero-day gap if missing
@@ -38,7 +31,7 @@
 
 .PARAMETER StatePath
   Path to the JSON state file written by the script.
-  If this path is a placeholder (for example "PATH/TO/STATE/..."), the script automatically switches to a safe default path under ProgramData.
+  If this path is empty or matches a legacy template-path pattern, the script uses a safe default under ProgramData.
 
   The state file contains the same structured information that can be emitted via -PassThru, plus execution metadata and status fields.
 
@@ -105,19 +98,19 @@
   the script falls back to console-only output for the event message.
 
   Exit codes:
-  This script does not explicitly call exit. Use -PassThru and evaluate the returned object (EventId/EventLevel) if you need deterministic CI/task outcomes.
+  0=OK, 2=WARN, 1=FAIL.
 
 .EXAMPLE
   # Run with a real KB feed and write the state JSON.
-  .\20-MissingPatch-Notification.ps1 -KBFeedPath "PATH/TO/JSON/critical-kb-feed.json" -StatePath "C:\ProgramData\PatchReminder\update-reminder.json"
+  .\20-MissingPatch-Notification.ps1 -KBFeedPath $KBFeedPath -StatePath "C:\ProgramData\PatchReminder\update-reminder.json"
 
 .EXAMPLE
   # Strict mode for monitoring: treat any missing patch OR feed issue as an Error-level condition.
-  .\20-MissingPatch-Notification.ps1 -KBFeedPath "PATH/TO/JSON/critical-kb-feed.json" -Strict
+  .\20-MissingPatch-Notification.ps1 -KBFeedPath $KBFeedPath -Strict
 
 .EXAMPLE
   # Automation-friendly usage: get the structured report and export a flat view.
-  $r = .\20-MissingPatch-Notification.ps1 -KBFeedPath "PATH/TO/JSON/critical-kb-feed.json" -PassThru
+  $r = .\20-MissingPatch-Notification.ps1 -KBFeedPath $KBFeedPath -PassThru
   $r | Select-Object Host, Time, FeedStatus, CheckedFeedKBCount,
                     @{n='MissingCriticalCount';e={$_.MissingCriticalKBs.Count}},
                     @{n='MissingZeroDayCount';e={$_.MissingZeroDayKBs.Count}} |
@@ -125,7 +118,7 @@
 
 .EXAMPLE
   # Filter missing zero-day KBs in the pipeline (requires -PassThru).
-  .\20-MissingPatch-Notification.ps1 -KBFeedPath "PATH/TO/JSON/critical-kb-feed.json" -PassThru |
+  .\20-MissingPatch-Notification.ps1 -KBFeedPath $KBFeedPath -PassThru |
     Select-Object -ExpandProperty MissingZeroDayKBs |
     Where-Object { $_.KB -match '^KB\d+$' }
 #>
@@ -161,7 +154,11 @@ $script:UseInformationStream = [bool]$UseInformationStream
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '20-MissingPatch-Notification.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '20-MissingPatch-Notification.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -173,10 +170,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '20-MissingPatch-Notification.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '20-MissingPatch-Notification.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # C10: canonical findings list
@@ -192,14 +190,13 @@ function Get-Count {
   @($Value).Count
 }
 
-function Is-PlaceholderPath {
+function Test-UnusablePath {
   [CmdletBinding()]
   param([string]$Path)
 
   if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
   $p = $Path.Trim()
-  if ($p -match '^(?i)PATH/TO(/|\\)') { return $true }
-  if ($p -match '^(?i)PATH\\TO(\\|/)') { return $true }
+  if ($p -match '(?i)^PATH[/\\]TO[/\\]') { return $true }
   if ($p -match '^(?i)<.+>$') { return $true }
   return $false
 }
@@ -245,7 +242,7 @@ function Load-KBFeedSafe {
   }
 
   try {
-    $raw = Get-Content -Raw -LiteralPath $Path -Encoding UTF8
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) {
       return [pscustomobject]@{ Feed = (Get-DefaultFeed); Status = 'InvalidOrEmpty'; Error = 'Feed file is empty.' }
     }
@@ -355,15 +352,15 @@ $run = [ordered]@{
   Errors      = @()
 }
 
-if (Is-PlaceholderPath -Path $StatePath) {
+if (Test-UnusablePath -Path $StatePath) {
   $StatePath = Get-DefaultStatePath
   $run.StatePath = $StatePath
-  $run.Errors += "StatePath is a placeholder. Using default: $StatePath"
+  $run.Errors += "StatePath was not usable. Using default: $StatePath"
 }
 
-if (Is-PlaceholderPath -Path $KBFeedPath) {
+if (Test-UnusablePath -Path $KBFeedPath) {
   $run.FeedStatus = 'Missing'
-  $run.Errors += "KBFeedPath is a placeholder. Provide a real JSON path via -KBFeedPath."
+  $run.Errors += "KBFeedPath was not usable. Provide a readable JSON file with -KBFeedPath."
 }
 
 $installedKB = @()
@@ -485,7 +482,7 @@ elseif ((Get-Count $missingCritical) -gt 0) { $msg += " | Missing: $mList" }
 
 Write-HealthEvent -Id $status -Msg $msg -Level $level -Source $eventSource
 
-# Pretty console output.
+# Formatted console output.
 $headerLine = Get-ConsoleLine -Char '='
 $line       = Get-ConsoleLine -Char '-'
 $levelStyle = Get-UiStyleForLevel -Level $level
@@ -544,4 +541,4 @@ $resultToken = if ($report.Errors.Count -gt 0) { 'FAIL' } elseif ($script:Findin
 $v2Result = Get-V2ResultObject -ScriptName '20-MissingPatch-Notification.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $report -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

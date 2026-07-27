@@ -1,3 +1,5 @@
+# Publishes the OpenSSF Scorecard result and SARIF evidence using least-privilege
+# job permissions and a hardened runner.
 name: OpenSSF Scorecard
 
 on:

@@ -2,6 +2,11 @@
 <#
 .SYNOPSIS
 Generate a v2 script template.
+
+.DESCRIPTION
+Creates a fail-closed PowerShell scaffold with the repository's v2 invocation
+and output contract. The generated audit path returns WARN because it contains
+no endpoint audit logic.
 #>
 
 [CmdletBinding()]
@@ -69,10 +74,11 @@ $template = @"
 #requires -version 5.1
 <#
 .SYNOPSIS
-Summarize what this script checks.
+Scaffold for the $Name entry point.
 
 .DESCRIPTION
-Describe the audit signal and any remediation behavior.
+Contains the repository v2 invocation and output contract for $Name. This
+generated file does not implement an endpoint audit.
 
 $modeComment
 .PARAMETER OutputFormat
@@ -123,18 +129,25 @@ $modeBody
 `$summary = [pscustomobject]@{
   Script = '$Name.ps1'
   Mode = `$Mode
+  Implemented = `$false
 }
 
-`$result = Get-V2ResultObject -ScriptName '$Name.ps1' -Mode `$Mode -Result 'OK' -Findings @() -Summary `$summary -Metadata @{}
+`$findings = @([pscustomobject]@{
+  Code = 'ScaffoldNotImplemented'
+  Severity = 'Warning'
+  Message = 'The generated scaffold contains no endpoint audit logic.'
+})
+`$result = Get-V2ResultObject -ScriptName '$Name.ps1' -Mode `$Mode -Result 'WARN' -Findings `$findings -Summary `$summary -Metadata @{}
 
 if (-not `$Quiet -and `$OutputFormat -eq 'Console') {
   Write-Section -Title '$Name'
   Write-KeyValue -Key 'Mode' -Value `$Mode
+  Write-KeyValue -Key 'Implemented' -Value 'No'
 }
 
 Write-ResultObject -ResultObject `$result -OutputFormat `$OutputFormat -OutputPath `$OutputPath
 if (`$PassThru) { `$result }
-exit 0
+exit 2
 "@
 
 Set-Content -LiteralPath $filePath -Value $template -Encoding UTF8

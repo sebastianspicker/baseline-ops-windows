@@ -1,8 +1,8 @@
 {
-  "name": "win-mdm-security-hardening-kit",
+  "name": "baselineops-windows",
   "version": "0.0.0",
   "private": true,
-  "description": "Developer-only verification harness for the Windows MDM security hardening kit.",
+  "description": "Developer-only verification harness for BaselineOps for Windows.",
   "scripts": {
     "test": "node --test tests/fuzz/*.test.mjs",
     "fuzz": "node --test tests/fuzz/*.test.mjs"

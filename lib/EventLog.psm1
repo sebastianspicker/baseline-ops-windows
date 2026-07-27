@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -Force -Global -DisableNameChecking
-
 <#
 .SYNOPSIS
 Windows Event Log helpers for health scripts.
@@ -9,6 +6,93 @@ Windows Event Log helpers for health scripts.
 Provides functions to ensure an event source exists and to write structured
 health events to the Windows Application Event Log.
 #>
+
+Set-StrictMode -Version Latest
+Microsoft.PowerShell.Core\Import-Module ([System.IO.Path]::Combine($PSScriptRoot, 'Common.psm1')) -DisableNameChecking
+
+<#
+.SYNOPSIS
+Resolves one event-log setting from canonical or deprecated caller state.
+.DESCRIPTION
+Prefers the current setting name and emits a warning when compatibility fallback
+to the deprecated name is required.
+#>
+function Get-EventLogSetting {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$CanonicalName,
+    [Parameter(Mandatory)][string]$DeprecatedName,
+    [Parameter(Mandatory)][string]$DeprecationWarning
+  )
+
+  $value = Get-CallerValue -Name $CanonicalName -IncludeGlobal
+  if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+    return [string]$value
+  }
+
+  $value = Get-CallerValue -Name $DeprecatedName -IncludeGlobal
+  if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+    Write-Warning $DeprecationWarning
+    return [string]$value
+  }
+
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Tests whether a Windows Event Log source is registered.
+.DESCRIPTION
+  Isolates the platform source lookup used before event writing.
+#>
+function Test-EventLogSourceExists {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Source)
+
+  return [System.Diagnostics.EventLog]::SourceExists($Source)
+}
+
+<#
+.SYNOPSIS
+  Registers a Windows Event Log source.
+.DESCRIPTION
+  Creates the source for the requested event log when it is absent.
+#>
+function Register-EventLogSource {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Source,
+    [Parameter(Mandatory)][string]$LogName
+  )
+
+  $sourceData = [System.Diagnostics.EventSourceCreationData]::new($Source, $LogName)
+  [System.Diagnostics.EventLog]::CreateEventSource($sourceData)
+}
+
+<#
+.SYNOPSIS
+  Writes one structured Windows Event Log entry.
+.DESCRIPTION
+  Creates and disposes the event-log writer around a single record.
+#>
+function Write-EventLogEntry {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$LogName,
+    [Parameter(Mandatory)][string]$Source,
+    [Parameter(Mandatory)][int]$Id,
+    [Parameter(Mandatory)][string]$Message,
+    [Parameter(Mandatory)][ValidateSet('Information','Warning','Error')][string]$Level
+  )
+
+  $entryType = [System.Diagnostics.EventLogEntryType]$Level
+  $eventLog = [System.Diagnostics.EventLog]::new($LogName, '.', $Source)
+  try {
+    $eventLog.WriteEntry($Message, $entryType, $Id)
+  } finally {
+    $eventLog.Dispose()
+  }
+}
 
 <#
 .SYNOPSIS
@@ -29,18 +113,16 @@ function Ensure-EventSource {
   )
 
   if ([string]::IsNullOrWhiteSpace($Source)) {
-    $Source = Get-CallerValue -Name 'EventSource' -IncludeGlobal
-    if (-not $Source) {
-      $Source = Get-CallerValue -Name 'EventSourceName' -IncludeGlobal
-      if ($Source) { Write-Warning 'Use EventSource, not EventSourceName (deprecated)' }
-    }
+    $Source = Get-EventLogSetting `
+      -CanonicalName 'EventSource' `
+      -DeprecatedName 'EventSourceName' `
+      -DeprecationWarning 'Use EventSource, not EventSourceName (deprecated)'
   }
   if ([string]::IsNullOrWhiteSpace($LogName)) {
-    $LogName = Get-CallerValue -Name 'EventLogName' -IncludeGlobal
-    if (-not $LogName) {
-      $LogName = Get-CallerValue -Name 'EventLog' -IncludeGlobal
-      if ($LogName) { Write-Warning 'Use EventLogName, not EventLog (deprecated)' }
-    }
+    $LogName = Get-EventLogSetting `
+      -CanonicalName 'EventLogName' `
+      -DeprecatedName 'EventLog' `
+      -DeprecationWarning 'Use EventLogName, not EventLog (deprecated)'
     if ([string]::IsNullOrWhiteSpace($LogName)) { $LogName = 'Application' }
   }
   if ([string]::IsNullOrWhiteSpace($Source)) {
@@ -49,8 +131,8 @@ function Ensure-EventSource {
   }
 
   try {
-    if (-not [System.Diagnostics.EventLog]::SourceExists($Source)) {
-      New-EventLog -LogName $LogName -Source $Source -ErrorAction Stop | Out-Null
+    if (-not (Test-EventLogSourceExists -Source $Source)) {
+      Register-EventLogSource -Source $Source -LogName $LogName
     }
     return $true
   } catch {
@@ -87,18 +169,16 @@ function Write-HealthEvent {
   )
 
   if (-not $Source) {
-    $Source = Get-CallerValue -Name 'EventSource' -IncludeGlobal
-    if (-not $Source) {
-      $Source = Get-CallerValue -Name 'EventSourceName' -IncludeGlobal
-      if ($Source) { Write-Warning 'Use EventSource, not EventSourceName (deprecated)' }
-    }
+    $Source = Get-EventLogSetting `
+      -CanonicalName 'EventSource' `
+      -DeprecatedName 'EventSourceName' `
+      -DeprecationWarning 'Use EventSource, not EventSourceName (deprecated)'
   }
   if (-not $LogName) {
-    $LogName = Get-CallerValue -Name 'EventLogName' -IncludeGlobal
-    if (-not $LogName) {
-      $LogName = Get-CallerValue -Name 'EventLog' -IncludeGlobal
-      if ($LogName) { Write-Warning 'Use EventLogName, not EventLog (deprecated)' }
-    }
+    $LogName = Get-EventLogSetting `
+      -CanonicalName 'EventLogName' `
+      -DeprecatedName 'EventLog' `
+      -DeprecationWarning 'Use EventLogName, not EventLog (deprecated)'
   }
 
   if ([string]::IsNullOrWhiteSpace($Source) -or [string]::IsNullOrWhiteSpace($LogName)) {
@@ -108,7 +188,7 @@ function Write-HealthEvent {
   }
 
   try {
-    Write-EventLog -LogName $LogName -Source $Source -EntryType $Level -EventId $Id -Message $Message -ErrorAction Stop
+    Write-EventLogEntry -LogName $LogName -Source $Source -Id $Id -Message $Message -Level $Level
     return $true
   } catch {
     if ($OnErrorMessage) { Write-Warning $OnErrorMessage } else { Write-Warning $_.Exception.Message }

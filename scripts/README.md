@@ -1,138 +1,144 @@
-# Security Hardening Scripts
+# Script reference
 
-This directory contains PowerShell scripts for Windows MDM security auditing, triage, and controlled remediation.
+The `scripts/` directory contains operator entry points. Files under `scripts/internal/` and `scripts/_lib/` are implementation details and should not be invoked directly.
 
-Use `00-*` scripts as the orchestration layer. Use numbered scripts as endpoint-operation units.
+## Orchestration scripts
 
-## Maintainer Map
-
-- Profiles describe intent and sequencing.
-- Profiles must not bypass runner-owned script-root, hash/signature, `-WhatIf`, or `-Confirm` controls.
-- When reviewing a numbered script, start with the help block and parameter block, then inspect the final result object.
-- Helper functions should wrap Windows APIs/commands, normalize configuration, or build findings for the v2 result contract.
-
-## Orchestration Scripts
-
-| Script | Purpose |
+| Script | Function |
 | --- | --- |
-| `00-Copy-Local.ps1` | Copy the repository to a local execution path. |
-| `00-Run-Local.ps1` | Run one script through the local runner path. |
-| `00-Validate-Profile.ps1` | Validate a v2 orchestration profile. |
-| `00-Run-Profile.ps1` | Run profile steps in dependency/order sequence. |
-| `00-Run-Batch.ps1` | Run scripts by category. |
-| `00-Report-Aggregate.ps1` | Aggregate JSON outputs from multiple runs. |
+| `00-Copy-Local.ps1` | Copies a selected repository revision or local source into a destination root. |
+| `00-Report-Aggregate.ps1` | Reads v2 JSON results from a directory and writes a combined report. |
+| `00-Run-Batch.ps1` | Builds a temporary profile for a curated category and delegates to the profile runner. |
+| `00-Run-Local.ps1` | Resolves and runs one numbered script with optional signature or hash verification. |
+| `00-Run-Profile.ps1` | Validates and executes profile steps in dependency order. |
+| `00-Validate-Profile.ps1` | Validates profile structure, script references, dependencies, and integrity fields. |
 
-## Script Catalog
+The default deployment root for the runners is `C:\install\mdm\ps1`. When that path is absent and `-RootPath` was not supplied, source-tree execution falls back to the repository root. Pass `-RootPath` explicitly in automation.
 
-| Script | Area | Mode |
-| --- | --- | --- |
-| `01-ASR-Defender-Allowlist.ps1` | Defender ASR and exclusions | Audit, Remediate |
-| `02-LAPS-Hygiene.ps1` | LAPS hygiene | Audit, Remediate |
-| `03-LocalAdmins-Guardrail.ps1` | Local administrator membership | Audit, Remediate |
-| `04-OfficeBrowser-Hardening-Proof.ps1` | Office/browser hardening proof | Audit, Remediate |
-| `05-WUFB-Proofing.ps1` | Windows Update for Business | Audit, Remediate |
-| `06-UpdateHealth-SSU-Proof.ps1` | Update health and SSU proof | Audit, Remediate |
-| `07-ScheduledTasks-Hygiene.ps1` | Scheduled task hygiene | Audit, Remediate |
-| `08-WinGet-SelfHeal.ps1` | WinGet self-heal checks | Audit, Remediate |
-| `09-SupportBundle.ps1` | Support bundle collection | Audit |
-| `10-SupportBundle-Parser.ps1` | Support bundle parsing | Audit |
-| `11-IOC-Sweep-Defender.ps1` | Defender IOC sweep | Audit, Remediate |
-| `12-Suspicious-Artifact-Grabber.ps1` | Suspicious artifact collection | Audit |
-| `13-LSASS-CG-HVCI-VBS.ps1` | LSASS, Credential Guard, HVCI, VBS | Audit, Remediate |
-| `14-SecureRemoteAccessGuardrails.ps1` | Secure remote access guardrails | Audit, Remediate |
-| `15-HardwareTPM-Audit.ps1` | Hardware and TPM posture | Audit |
-| `16-Sysmon-Config-Updater.ps1` | Sysmon configuration | Audit, Remediate |
-| `17-Sysmon-Rule-Drift-Sensor.ps1` | Sysmon rule drift | Audit |
-| `18-Firewall-Baseline.ps1` | Firewall baseline | Audit, Remediate |
-| `19-Software-Audit.ps1` | Software inventory | Audit |
-| `20-MissingPatch-Notification.ps1` | Patch notification state | Audit |
-| `21-EmergencyKillSwitch.ps1` | Emergency containment | Audit, Remediate |
-| `22-SMB-Encryption-Enforcer.ps1` | SMB encryption | Audit, Remediate |
-| `23-BitLocker-Operations-Audit.ps1` | BitLocker operations | Audit |
-| `24-Cert-AutoEnrollment-Health.ps1` | Certificate autoenrollment | Audit |
-| `25-WinGet-Config-Baseline-Runner.ps1` | WinGet configuration baseline | Audit, Remediate |
-| `26-Get-WinEvent-FastTriage.ps1` | Event log triage | Audit |
-| `27-Defender-Health-Audit.ps1` | Defender health | Audit |
-| `28-Join-Identity-Audit.ps1` | Domain/join identity | Audit |
-| `29-Network-Config-Audit.ps1` | Network configuration | Audit |
-| `30-Service-Process-Audit.ps1` | Services and processes | Audit |
-| `31-PowerShell-Logging-Baseline.ps1` | PowerShell logging baseline | Audit, Remediate |
-| `32-Firewall-Logging-Audit.ps1` | Firewall logging | Audit, Remediate |
-| `33-AdvancedAuditPolicy-Audit.ps1` | Advanced audit policy | Audit, Remediate |
-| `34-TimeSync-Health.ps1` | Time sync health | Audit |
-| `35-Storage-Reliability-Audit.ps1` | Storage reliability | Audit |
-| `36-Backup-Readiness-Audit.ps1` | Backup readiness | Audit |
-| `37-Remote-Surface-Audit.ps1` | Remote access surface | Audit |
-| `38-SecurityOptions-Drift.ps1` | Security options drift | Audit, Remediate |
-| `39-CredentialGuard-VBS-AuditRemediate.ps1` | Credential Guard and VBS | Audit, Remediate |
-| `40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1` | LSA protection | Audit, Remediate |
-| `41-NTLM-Audit-Client.ps1` | NTLM client posture | Audit |
-| `42-Client-SecurityBaseline-Report-IntuneRef.ps1` | Intune baseline comparison | Audit |
-| `43-AppControlForBusiness-Audit.ps1` | App Control for Business | Audit |
-| `44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1` | Defender ransomware and network protection | Audit, Remediate |
-| `45-WEF-Client-Forwarding-Readiness-Audit.ps1` | WEF forwarding readiness | Audit |
-| `46-SecureBoot-UEFI-Audit.ps1` | Secure Boot and UEFI | Audit |
-| `47-WDAG-Readiness-Audit.ps1` | Windows Defender Application Guard readiness | Audit |
-| `48-ExploitProtection-Audit.ps1` | Exploit Protection | Audit |
-| `49-DriverSigning-Integrity-Audit.ps1` | Driver signing integrity | Audit |
-| `50-AMSI-Audit.ps1` | AMSI posture | Audit |
-| `51-AppLocker-Audit.ps1` | AppLocker policy | Audit |
-| `52-DoH-Audit.ps1` | DNS-over-HTTPS client configuration | Audit |
+`00-Run-Batch.ps1` accepts these categories:
 
-## Common Parameters
-
-Most scripts support a subset of these parameters:
-
-| Parameter | Description |
+| Category | Script numbers |
 | --- | --- |
-| `-Mode` | v2 normalized mode: `Audit` or `Remediate`. |
-| `-ConfigPath` / `-CatalogPath` | JSON configuration or catalog path. |
+| `Audit` | 01-07, 09-11, 13-15, 18-20, 22-24, 26-52 |
+| `Remediation` | 01-08, 13, 14, 16, 18, 21, 22, 25, 31-33, 38-40, 44 |
+| `Collection` | 09-12, 20 |
+| `Utility` | 08, 25 |
+| `Monitoring` | 17, 32, 34, 38 |
+| `All` | Every numbered script |
+
+These are curated batch memberships. A script can expose additional direct-invocation behavior that is not represented by a batch category.
+
+## Endpoint script catalog
+
+| Script | Primary function |
+| --- | --- |
+| `01-ASR-Defender-Allowlist.ps1` | Synchronize Defender exclusions, ASR-only exclusions, and Controlled Folder Access allow lists. |
+| `02-LAPS-Hygiene.ps1` | Check Windows LAPS health and optionally trigger password rotation. |
+| `03-LocalAdmins-Guardrail.ps1` | Compare and optionally reconcile local Administrators membership. |
+| `04-OfficeBrowser-Hardening-Proof.ps1` | Audit and optionally set Office, Edge, and Firefox registry policy values. |
+| `05-WUFB-Proofing.ps1` | Audit and optionally set Windows Update policy from a catalog. |
+| `06-UpdateHealth-SSU-Proof.ps1` | Check update health, SSU state, services, and tasks; apply selected fixes. |
+| `07-ScheduledTasks-Hygiene.ps1` | Audit scheduled tasks and optionally enable or quarantine selected tasks. |
+| `08-WinGet-SelfHeal.ps1` | Check WinGet prerequisites and optionally install dependencies or add a source. |
+| `09-SupportBundle.ps1` | Collect diagnostics and selected event logs into a ZIP archive. |
+| `10-SupportBundle-Parser.ps1` | Extract and summarize the newest support bundle in a directory. |
+| `11-IOC-Sweep-Defender.ps1` | Check catalog-defined indicators and optionally perform requested containment actions. |
+| `12-Suspicious-Artifact-Grabber.ps1` | Collect process and file artifacts into an incident-response bundle. |
+| `13-LSASS-CG-HVCI-VBS.ps1` | Audit and optionally set LSASS, Credential Guard, HVCI, and VBS policy. |
+| `14-SecureRemoteAccessGuardrails.ps1` | Audit and optionally configure RDP, Remote Assistance, firewall, and group membership. |
+| `15-HardwareTPM-Audit.ps1` | Report TPM, Secure Boot, BitLocker, and BIOS posture. |
+| `16-Sysmon-Config-Updater.ps1` | Validate, install, or update a Sysmon configuration. |
+| `17-Sysmon-Rule-Drift-Sensor.ps1` | Detect Sysmon event-rule drift and optionally trigger a trusted updater. |
+| `18-Firewall-Baseline.ps1` | Audit and optionally apply firewall profile, logging, and local-rule configuration. |
+| `19-Software-Audit.ps1` | Compare installed software with a catalog. |
+| `20-MissingPatch-Notification.ps1` | Compare installed KBs with a curated JSON feed. |
+| `21-EmergencyKillSwitch.ps1` | Audit or apply host network isolation with optional break-glass and rollback settings. |
+| `22-SMB-Encryption-Enforcer.ps1` | Audit or require SMB encryption globally, per share, or for client connections. |
+| `23-BitLocker-Operations-Audit.ps1` | Report BitLocker state for a volume. |
+| `24-Cert-AutoEnrollment-Health.ps1` | Trigger autoenrollment and report related events and certificate expiry. |
+| `25-WinGet-Config-Baseline-Runner.ps1` | Run WinGet Configuration validate, test, and optional apply operations. |
+| `26-Get-WinEvent-FastTriage.ps1` | Query Windows event logs with bounded filters and optional export. |
+| `27-Defender-Health-Audit.ps1` | Report Defender service, protection, signature, and scan state. |
+| `28-Join-Identity-Audit.ps1` | Report host, domain or workgroup, role, and operating system identity. |
+| `29-Network-Config-Audit.ps1` | Report per-interface IP, gateway, and DNS configuration. |
+| `30-Service-Process-Audit.ps1` | Report processes, services, resource use, and executable paths. |
+| `31-PowerShell-Logging-Baseline.ps1` | Audit and optionally set PowerShell logging policy. |
+| `32-Firewall-Logging-Audit.ps1` | Audit and optionally set firewall log configuration. |
+| `33-AdvancedAuditPolicy-Audit.ps1` | Audit and optionally apply Advanced Audit Policy subcategories. |
+| `34-TimeSync-Health.ps1` | Report Windows Time service, source, sync, and configuration state. |
+| `35-Storage-Reliability-Audit.ps1` | Report physical disks and available reliability counters. |
+| `36-Backup-Readiness-Audit.ps1` | Report built-in backup and restore readiness indicators. |
+| `37-Remote-Surface-Audit.ps1` | Report WinRM, SSH, RDP, and SMB exposure. |
+| `38-SecurityOptions-Drift.ps1` | Compare selected security-related registry settings with desired state. |
+| `39-CredentialGuard-VBS-AuditRemediate.ps1` | Audit and optionally set Credential Guard and VBS policy. |
+| `40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1` | Audit and optionally set LSA protection policy. |
+| `41-NTLM-Audit-Client.ps1` | Report LAN Manager authentication-level policy. |
+| `42-Client-SecurityBaseline-Report-IntuneRef.ps1` | Compare local state with a reference client security baseline. |
+| `43-AppControlForBusiness-Audit.ps1` | Report WDAC and App Control for Business indicators. |
+| `44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1` | Audit and optionally set Controlled Folder Access and Network Protection. |
+| `45-WEF-Client-Forwarding-Readiness-Audit.ps1` | Report Windows Event Forwarding client readiness. |
+| `46-SecureBoot-UEFI-Audit.ps1` | Report Secure Boot and UEFI state. |
+| `47-WDAG-Readiness-Audit.ps1` | Report Windows Defender Application Guard readiness. |
+| `48-ExploitProtection-Audit.ps1` | Report Windows exploit-protection settings. |
+| `49-DriverSigning-Integrity-Audit.ps1` | Report driver-signing and kernel code-integrity state. |
+| `50-AMSI-Audit.ps1` | Report AMSI provider registration and common bypass indicators. |
+| `51-AppLocker-Audit.ps1` | Report AppLocker enforcement and rule coverage. |
+| `52-DoH-Audit.ps1` | Report Windows DNS-over-HTTPS client configuration. |
+
+## Common parameters
+
+Every script has comment-based help. Run `Get-Help .\scripts\<name>.ps1 -Full` before use because parameters and side effects are script-specific.
+
+Most numbered scripts expose some of these shared parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `-Mode` | `Audit` or `Remediate`, subject to the script's accepted values and implementation. |
+| `-ConfigPath` | Script-specific wrapper configuration. |
 | `-OutputFormat` | `Console`, `Json`, `Csv`, or `None`. |
-| `-OutputPath` | Target path for JSON or CSV output. |
-| `-ExportPath` | Base path for script-specific exports. |
-| `-Strict` | Fail on warnings where supported. |
-| `-PassThru` | Emit one structured object for the pipeline. |
-| `-Quiet` / `-NoColor` | Reduce console noise or disable color. |
-| `-WhatIf` | Preview changes without applying them. |
-| `-Confirm` | Require confirmation before changes. |
+| `-OutputPath` | Path for shared JSON or CSV result output. |
+| `-PassThru` | Emit the structured result object. |
+| `-Strict` | Apply stricter warning or drift handling where implemented. |
+| `-Quiet` | Reduce informational console output. |
+| `-NoColor` | Disable colored console rendering. |
+| `-WhatIf` | Skip state-changing operations guarded by `ShouldProcess`. |
+| `-Confirm` | Request or suppress confirmation for guarded operations. |
 
-Mutation-capable scripts implement `SupportsShouldProcess` and honor `-WhatIf` / `-Confirm` on state-changing paths.
+Script-specific exports use parameters such as `-ExportPath`, `-ProofPath`, `-AuditPath`, or `-StatePath`. These outputs can be written in Audit mode.
 
 ## Examples
 
+Run a direct audit with a shipped catalog:
+
 ```powershell
-# Audit with defaults
-.\01-ASR-Defender-Allowlist.ps1
-
-# Audit with config
-.\01-ASR-Defender-Allowlist.ps1 -ConfigPath "C:\Config\asr-config.json"
-
-# Preview remediation
-.\03-LocalAdmins-Guardrail.ps1 -Mode Remediate -WhatIf
-
-# Get structured output
-$result = .\05-WUFB-Proofing.ps1 -PassThru
-$result | ConvertTo-Json -Depth 6
+.\scripts\18-Firewall-Baseline.ps1 `
+  -CatalogPath .\examples\configs\firewall-baseline.json -Mode Audit
 ```
 
-## Prerequisites
+Preview direct remediation:
 
-- Windows 10/11 or Windows Server 2016+
-- PowerShell 5.1 or PowerShell 7+
-- Administrator privileges for most scripts
-- Domain privileges for some identity operations
-- Script-specific Windows features such as Defender, BitLocker, Sysmon, or WinGet
+```powershell
+.\scripts\18-Firewall-Baseline.ps1 `
+  -CatalogPath .\examples\configs\firewall-baseline.json `
+  -Mode Remediate -WhatIf
+```
 
-The optional Windows Forms launcher has a narrower current prerequisite:
-Windows PowerShell 5.1 with .NET Framework 4.8. PowerShell 7 support is intended,
-but the launcher remains alpha until both runtimes complete the Windows UI gate.
+Run one script with an expected SHA-256 hash:
 
-## Configuration
+```powershell
+$hash = (Get-FileHash .\scripts\27-Defender-Health-Audit.ps1 -Algorithm SHA256).Hash
+.\scripts\00-Run-Local.ps1 `
+  -ScriptName 27-Defender-Health-Audit.ps1 -RootPath . `
+  -ExpectedHash "SHA256:$hash" -Mode Audit
+```
 
-Most scripts support JSON configuration files. See `../examples/configs/` for examples.
+Validate a profile before execution:
 
-## Output Contract
+```powershell
+.\scripts\00-Validate-Profile.ps1 `
+  -ProfilePath .\examples\profiles\baseline-audit.json -RootPath .
+```
 
-Scripts that support `-PassThru` return one structured object. v2 orchestration-compatible scripts use the shared result helpers in `lib/Serialization.psm1`.
+## Result contract
 
-See [lib/README.md](../lib/README.md) for the shared result shape and finding-code conventions.
+Orchestration-compatible scripts use the v2 result helpers in `lib/Serialization.psm1`. See the [shared module reference](../lib/README.md) for the object and finding structure.

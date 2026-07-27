@@ -1,5 +1,12 @@
 #requires -version 5.1
 
+<#
+.SYNOPSIS
+  Runs repository static verification gates.
+.DESCRIPTION
+  Checks public files and configured analyzers to catch release-blocking regressions.
+#>
+
 [CmdletBinding()]
 param(
   [string]$RootPath = '',
@@ -22,6 +29,10 @@ if ([string]::IsNullOrWhiteSpace($RootPath)) {
 
   $RootPath = (Resolve-Path (Join-Path $scriptDir '..')).Path
 }
+$RootPath = (Resolve-Path -LiteralPath $RootPath -ErrorAction Stop).Path
+if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
+  throw "Verification root is not a directory: $RootPath"
+}
 
 $bootstrapPath = [System.IO.Path]::Combine($RootPath, 'scripts', '_lib', 'Bootstrap.ps1')
 if (-not (Test-Path -LiteralPath $bootstrapPath)) {
@@ -30,11 +41,19 @@ if (-not (Test-Path -LiteralPath $bootstrapPath)) {
 }
 . $bootstrapPath
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '../lib/External.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot '../lib/Validation.psm1')
 
 Write-Section -Title 'verify.ps1 - Static Checks'
 
 $script:GateResults = New-Object System.Collections.Generic.List[object]
 
+<#
+.SYNOPSIS
+  Records one verification gate outcome.
+.DESCRIPTION
+  Adds a named status and detail record to the final verification report.
+#>
 function Add-GateResult {
   [CmdletBinding()]
   param(
@@ -50,6 +69,12 @@ function Add-GateResult {
     })
 }
 
+<#
+.SYNOPSIS
+  Prints the final verification verdict and exits.
+.DESCRIPTION
+  Reports each gate result before returning the selected process exit code.
+#>
 function Complete-Verification {
   [CmdletBinding()]
   param(
@@ -71,23 +96,44 @@ function Complete-Verification {
   exit $ExitCode
 }
 
+<#
+.SYNOPSIS
+  Gets paths that belong to the repository public surface.
+.DESCRIPTION
+  Recursively enumerates files while excluding local-only and generated areas.
+#>
 function Get-PublicSurfacePaths {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Path)
 
-  $isGitWorkTree = $false
-  $git = Get-Command -Name git -ErrorAction SilentlyContinue
-  if ($git) {
-    $gitResult = & $git.Source -C $Path rev-parse --is-inside-work-tree 2>$null
-    $isGitWorkTree = ($LASTEXITCODE -eq 0 -and $gitResult -contains 'true')
-  }
-
-  if ($isGitWorkTree) {
-    return @(
-      & $git.Source -C $Path ls-files --cached --others --exclude-standard |
-        Sort-Object -Unique |
-        Where-Object { Test-Path -LiteralPath (Join-Path $Path $_) -PathType Leaf }
-    )
+  if (Test-CommandExists -Name 'git') {
+    $gitRootResult = Invoke-NativeCommand -Command 'git' -Arguments @('-C', $Path, 'rev-parse', '--is-inside-work-tree') `
+      -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 1048576
+    $gitResultComplete = $gitRootResult -and $gitRootResult.Success -and -not $gitRootResult.TimedOut -and
+      -not $gitRootResult.OutputTruncated -and -not $gitRootResult.StderrTruncated
+    if ($gitResultComplete -and $gitRootResult.Stdout.Trim() -eq 'true') {
+      $gitFilesResult = Invoke-NativeCommand -Command 'git' -Arguments @('-C', $Path, 'ls-files', '-z', '--cached', '--others', '--exclude-standard') `
+        -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 1048576
+      $gitFilesComplete = $gitFilesResult -and $gitFilesResult.Success -and -not $gitFilesResult.TimedOut -and
+        -not $gitFilesResult.OutputTruncated -and -not $gitFilesResult.StderrTruncated
+      if ($gitFilesComplete) {
+        $rootFull = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar))
+        $verifiedPaths = New-Object System.Collections.Generic.List[string]
+        foreach ($relativePath in $gitFilesResult.Stdout.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)) {
+          if ([System.IO.Path]::IsPathRooted($relativePath) -or $relativePath -match '[\x00-\x1F\x7F]') {
+            throw 'git returned an unsafe repository-relative path.'
+          }
+          $candidate = [System.IO.Path]::GetFullPath((Join-Path $rootFull $relativePath))
+          if (-not (Test-PathUnderRoot -Path $candidate -Root $rootFull)) {
+            throw 'git returned a path outside the requested verification root.'
+          }
+          if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            [void]$verifiedPaths.Add($relativePath)
+          }
+        }
+        return @($verifiedPaths | Sort-Object -Unique)
+      }
+    }
   }
 
   return @(
@@ -100,6 +146,12 @@ function Get-PublicSurfacePaths {
   )
 }
 
+<#
+.SYNOPSIS
+  Tests whether a relative path belongs to the public surface.
+.DESCRIPTION
+  Applies the verifier's explicit exclusions for local and generated content.
+#>
 function Test-PublicSurfacePath {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$RelativePath)
@@ -155,7 +207,12 @@ function Test-PublicSurfacePath {
     return 'local ledger, remediation, or workspace documentation'
   }
 
-  if ($segments[0] -eq 'docs' -and $path -notin @('docs/readme.md', 'docs/launcher-gui.md')) {
+  $reviewedPublicDocs = @(
+    'docs/readme.md',
+    'docs/alpha-release.md',
+    'docs/launcher-gui.md'
+  )
+  if ($segments[0] -eq 'docs' -and $path -notin $reviewedPublicDocs) {
     return 'documentation path is not in the reviewed public allowlist'
   }
 

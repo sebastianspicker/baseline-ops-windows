@@ -48,10 +48,10 @@ When -PassThru is used, emits a PSCustomObject v2 result with ScriptName, Mode,
 Result, Findings, Summary, and Metadata properties.
 
 .EXAMPLE
-.\50-AMSI-Audit.ps1
+.\scripts\50-AMSI-Audit.ps1
 
 .EXAMPLE
-.\50-AMSI-Audit.ps1 -OutputFormat Json -OutputPath C:\Temp\amsi.json -PassThru
+.\scripts\50-AMSI-Audit.ps1 -OutputFormat Json -OutputPath .\reports\amsi.json -PassThru
 #>
 
 [CmdletBinding()]
@@ -84,7 +84,11 @@ Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChe
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
 Set-StrictMode -Version Latest
-Initialize-V2Context -ScriptName '50-AMSI-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '50-AMSI-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -96,11 +100,12 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '50-AMSI-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() `
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '50-AMSI-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() `
     -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # ----------------------------
@@ -141,7 +146,7 @@ try {
         Add-Finding -FindingList $script:Findings -Code 'AMSI-DefenderRegistered' -Severity 'Low' `
           -Message ("Windows Defender AMSI provider is registered ({0})." -f $clsid)
       } else {
-        # Unknown provider — could be a third-party AV or injected payload
+        # An unknown provider could be a third-party AV or an injected payload.
         $providerName = try {
           (Get-ItemProperty -Path "HKLM:\SOFTWARE\Classes\CLSID\$clsid" -ErrorAction SilentlyContinue).'(default)'
         } catch { $null }
@@ -173,13 +178,13 @@ $bypassChecks = @(
     Path    = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
     Name    = 'AMSI_BYPASS'
     Code    = 'AMSI-BypassEnvVar'
-    Message = 'AMSI_BYPASS environment variable found in system environment — potential bypass artifact.'
+    Message = 'AMSI_BYPASS environment variable found in the system environment; this may be a bypass artifact.'
   },
   @{
     Path    = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
     Name    = 'DisableAMSI'
     Code    = 'AMSI-PolicyDisabled'
-    Message = 'Group Policy key DisableAMSI found under PowerShell policy — AMSI may be policy-disabled.'
+    Message = 'Group Policy key DisableAMSI found under PowerShell policy; AMSI may be policy-disabled.'
   }
 )
 
@@ -268,4 +273,4 @@ $v2Result = Get-V2ResultObject -ScriptName '50-AMSI-Audit.ps1' -Mode $Mode `
 
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

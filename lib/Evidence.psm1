@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-Import-Module (Join-Path $PSScriptRoot 'Validation.psm1') -Force -Global
-
 <#
 .SYNOPSIS
 Shared evidence and hashing helpers for IOC/artifact scripts.
@@ -9,6 +6,9 @@ Shared evidence and hashing helpers for IOC/artifact scripts.
 Get-FileSha256, Copy-ToEvidence (with optional size/total limits), Expand-Env.
 Used by 11-IOC-Sweep-Defender, 12-Suspicious-Artifact-Grabber, 16-Sysmon-Config-Updater.
 #>
+
+Set-StrictMode -Version Latest
+Microsoft.PowerShell.Core\Import-Module ([System.IO.Path]::Combine($PSScriptRoot, 'Validation.psm1'))
 
 <#
 .SYNOPSIS
@@ -80,10 +80,10 @@ function Copy-ToEvidence {
   # like %TEMP%\..\..\..\Windows are correctly detected after expansion
   $expandedSource = [System.Environment]::ExpandEnvironmentVariables($SourcePath)
   $expandedBase   = [System.Environment]::ExpandEnvironmentVariables($EvidenceBaseDir)
-  if ((Test-PathTraversal -Path $expandedSource) -or (Test-PathTraversal -Path $expandedBase)) {
+  if ((Validation\Test-PathTraversal -Path $expandedSource) -or (Validation\Test-PathTraversal -Path $expandedBase)) {
     return $false, 'path-traversal-not-allowed'
   }
-  if ((Test-PathTraversal -Path $SourcePath) -or (Test-PathTraversal -Path $EvidenceBaseDir)) {
+  if ((Validation\Test-PathTraversal -Path $SourcePath) -or (Validation\Test-PathTraversal -Path $EvidenceBaseDir)) {
     return $false, 'path-traversal-not-allowed'
   }
   try {

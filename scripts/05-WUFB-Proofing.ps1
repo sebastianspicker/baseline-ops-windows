@@ -80,15 +80,15 @@
 
 .EXAMPLE
   # Audit using an explicit catalog JSON
-  .\05-WUFB-Proofing.ps1 -CatalogPath "PATH/TO/CATALOG.json"
+  .\scripts\05-WUFB-Proofing.ps1 -CatalogPath .\examples\configs\wufb-proofing.json
 
 .EXAMPLE
   # Audit using a config JSON that references a catalog path
-  .\05-WUFB-Proofing.ps1 -ConfigPath "PATH/TO/CONFIG.json"
+  .\05-WUFB-Proofing.ps1 -ConfigPath $ConfigPath
 
 .EXAMPLE
   # Remediate and show structured output for further processing
-  .\05-WUFB-Proofing.ps1 -CatalogPath "PATH/TO/CATALOG.json" -Mode Remediate -PassThru
+  .\scripts\05-WUFB-Proofing.ps1 -CatalogPath .\examples\configs\wufb-proofing.json -Mode Remediate -PassThru
 
 .EXAMPLE
   # Integrate in reporting pipelines (one object only)
@@ -96,7 +96,7 @@
 
 .EXAMPLE
   # Export a single-run result to CSV (flattening may be required for nested properties)
-  .\05-WUFB-Proofing.ps1 -PassThru | Select-Object Time,Hostname,Result,HasDrift,DriftCount,ChangesCount,ProofPath | Export-Csv -NoTypeInformation -Path "PATH/TO/report.csv"
+  .\05-WUFB-Proofing.ps1 -PassThru | Select-Object Time,Hostname,Result,HasDrift,DriftCount,ChangesCount,ProofPath | Export-Csv -NoTypeInformation -Path $OutputPath
 
 .NOTES
   Requires local administrator privileges only for operations that write to HKLM policy registry keys and for
@@ -104,9 +104,7 @@
   If not elevated, the script can still audit but remediation may fail and is reported accordingly.
 
   Exit codes:
-  - 0: Completed successfully (OK or DRIFT in non-strict mode).
-  - 1: Error (a failure occurred during processing or remediation).
-  - 2: Warning (drift detected in strict mode).
+  - 0 = OK, 2 = WARN, 1 = FAIL.
 
   Proof output:
   - A proof JSON is written even in error cases (best effort), using a safe fallback path when necessary.
@@ -140,7 +138,12 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '05-WUFB-Proofing.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '05-WUFB-Proofing.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -152,10 +155,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # C10: canonical findings list
@@ -310,11 +314,18 @@ function Add-Result {
 # Catalog defaults + loader
 # -----------------------------
 
+function Get-WufbTrustedDataRoot {
+  $root = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { $root = [IO.Path]::GetTempPath() }
+  if ([string]::IsNullOrWhiteSpace($root)) { throw 'CommonApplicationData could not be resolved.' }
+  return [IO.Path]::GetFullPath($root)
+}
+
 function Get-DefaultCatalog {
   [CmdletBinding()]
   param()
 
-  $defaultProof = Join-Path $env:ProgramData 'WUfB-Proofing\proof.json'
+  $defaultProof = Join-Path (Get-WufbTrustedDataRoot) 'WUfB-Proofing\proof.json'
 
   return [pscustomobject]@{
     UpdateSource = 'WUfB'
@@ -340,7 +351,7 @@ function Load-Catalog {
 
   if ($CatalogPath) {
     if (Test-Path -LiteralPath $CatalogPath) {
-      try { $Notes.Add("Catalog loaded from CatalogPath.") | Out-Null; return (Get-Content -Raw -LiteralPath $CatalogPath -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop) }
+      try { $Notes.Add("Catalog loaded from CatalogPath.") | Out-Null; return (Get-BoundedUtf8FileContent -Path $CatalogPath -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop) }
       catch { $Notes.Add("CatalogPath JSON invalid. Using defaults. Error: $($_.Exception.Message)") | Out-Null; return $default }
     } else {
       $Notes.Add("CatalogPath not found. Using defaults.") | Out-Null
@@ -350,13 +361,13 @@ function Load-Catalog {
 
   if ($ConfigPath -and (Test-Path -LiteralPath $ConfigPath)) {
     try {
-      $cfg = Get-Content -Raw -LiteralPath $ConfigPath -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+      $cfg = Get-BoundedUtf8FileContent -Path $ConfigPath -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop
       $p = $null
       if ($cfg -and $cfg.WUfB -and $cfg.WUfB.CatalogPath) { $p = [string]$cfg.WUfB.CatalogPath }
 
       if ($p) {
         if (Test-Path -LiteralPath $p) {
-          try { $Notes.Add("Catalog loaded from ConfigPath reference.") | Out-Null; return (Get-Content -Raw -LiteralPath $p -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop) }
+          try { $Notes.Add("Catalog loaded from ConfigPath reference.") | Out-Null; return (Get-BoundedUtf8FileContent -Path $p -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop) }
           catch { $Notes.Add("Referenced catalog JSON invalid. Using defaults. Error: $($_.Exception.Message)") | Out-Null; return $default }
         } else {
           $Notes.Add("Referenced catalog path not found. Using defaults.") | Out-Null
@@ -392,7 +403,7 @@ function Get-SafeProofPath {
   [CmdletBinding()]
   param([string]$Candidate)
 
-  $fallback = Join-Path $env:ProgramData 'WUfB-Proofing\proof.json'
+  $fallback = Join-Path (Get-WufbTrustedDataRoot) 'WUfB-Proofing\proof.json'
   if ([string]::IsNullOrWhiteSpace($Candidate)) { return $fallback }
 
   try {
@@ -430,7 +441,7 @@ $notes   = New-Object 'System.Collections.Generic.List[string]'
 $ops     = New-Object 'System.Collections.Generic.List[object]'
 
 $proofWrittenPath = $null
-$outFile = Join-Path $env:ProgramData 'WUfB-Proofing\proof.json'
+$outFile = Join-Path (Get-WufbTrustedDataRoot) 'WUfB-Proofing\proof.json'
 
 $Proof = [ordered]@{
   Time      = (Get-Date).ToString('s')
@@ -622,7 +633,7 @@ try {
   $eventLogStatus = "Not written (error)"
 
   try {
-    $fallback = Join-Path $env:ProgramData 'WUfB-Proofing\proof-error.json'
+    $fallback = Join-Path (Get-WufbTrustedDataRoot) 'WUfB-Proofing\proof-error.json'
     Save-Json -InputObject $Proof -Path $fallback -Depth 12 -NoBom
     $proofWrittenPath = $fallback
   } catch {
@@ -709,8 +720,6 @@ try {
     }
   }
 
-  if (-not $ok) { exit 1 }
-  if ($Strict -and $hasDriftFinal) { exit 2 }
 }
 
 # C10: populate canonical findings from drifts
@@ -730,4 +739,4 @@ $resultToken = if (-not $ok) { 'FAIL' } elseif ($hasDriftFinal) { 'WARN' } else 
 $v2Result = Get-V2ResultObject -ScriptName '05-WUFB-Proofing.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Ok = $ok; HasDrift = $hasDriftFinal; Timestamp = Get-Date }) -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

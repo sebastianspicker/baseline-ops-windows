@@ -1,4 +1,10 @@
-# Require review for CI/CD and security-sensitive paths
+# Identifies the maintainer across the release surface. Review enforcement
+# requires a repository ruleset or branch-protection configuration.
+*                       @sebastianspicker
 .github/                @sebastianspicker
+scripts/                @sebastianspicker
+lib/                    @sebastianspicker
+tools/                  @sebastianspicker
+docs/                   @sebastianspicker
 SECURITY.md             @sebastianspicker
 tools/secret-scan.ps1   @sebastianspicker

@@ -6,7 +6,7 @@ Audits physical disks and (if available) storage reliability counters.
 .DESCRIPTION
 Best-practice output model (PowerShell 5.1):
 - Pipeline output: structured objects only (safe for Export-Csv/ConvertTo-Json/Where-Object).
-- Console output: all human-friendly formatting via Write-UiLine / Write-Information only.
+- Console output: all formatting uses Write-UiLine / Write-Information only.
 
 Features:
 - Lists PhysicalDisks (status, media, size, bus, identifiers).
@@ -14,13 +14,13 @@ Features:
 - Generates findings (health not healthy, operational not OK, counter issues).
 - Optional CSV export.
 - Optional JSON-driven thresholds; safe defaults if JSON is missing/invalid.
-- Pretty, colorized console summary at the end.
+- A colorized console summary at the end.
 
 .PARAMETER ExportPath
 Optional: Base path/filename for CSV export (suffixes: _summary/_findings/_disks/_reliability).
 
 .PARAMETER ConfigJsonPath
-Optional: JSON config path (placeholder: "PATH/TO/JSON/storage-audit.json").
+Optional: JSON config path supplied with $ConfigJsonPath.
 
 .PARAMETER PassThru
 If set, writes a single structured result object to the pipeline.
@@ -88,7 +88,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '35-Storage-Reliability-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '35-Storage-Reliability-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -100,10 +104,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # region Helpers
@@ -157,7 +162,7 @@ function Load-Config {
 
   try {
     # ConvertFrom-Json can throw terminating errors; always use try/catch in PS 5.1.
-    $raw = Get-Content -Path $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     $userCfg = $raw | ConvertFrom-Json
 
     if ($null -ne $userCfg.Thresholds) {
@@ -225,7 +230,7 @@ if (-not (Test-CmdletAvailable -Name 'Get-PhysicalDisk')) {
   $v2Result = Get-V2ResultObject -ScriptName '35-Storage-Reliability-Audit.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary @{} -Metadata @{}
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
-  exit 1
+  exit (Get-V2ExitCode -Result 'FAIL')
 }
 
 $hasReliability = Test-CmdletAvailable -Name 'Get-StorageReliabilityCounter'
@@ -278,7 +283,7 @@ if ($hasReliability) {
         @{ n = 'DeviceId'     ; e = { $d.DeviceId } }, `
         Wear, Temperature, ReadErrorsTotal, WriteErrorsTotal, UncorrectableErrors, PowerOnHours, StartStopCount)
 
-      # Thresholds (robust parsing)
+      # Thresholds (defensive parsing)
       $tWarn = 55; $tHigh = 65
       try { $tWarn = [int]$Config.Thresholds.TemperatureWarnC } catch {
         Write-Verbose ("TemperatureWarnC threshold cast failed: {0}" -f $_.Exception.Message)
@@ -382,4 +387,4 @@ Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPa
 if ($PassThru) { $v2Result }
 
 # endregion Main
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

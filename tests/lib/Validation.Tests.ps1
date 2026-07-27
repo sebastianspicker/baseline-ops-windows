@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for library-module contracts.
+
+.DESCRIPTION
+Verifies module behavior that security automation depends on.
+#>
 
 BeforeAll {
   Import-Module (Join-Path $PSScriptRoot '../../lib/Validation.psm1') -Force
@@ -207,6 +214,11 @@ Describe 'Test-SafeUrl' {
 }
 
 Describe 'Test-PathUnderRoot' {
+  It 'treats the root directory itself as contained' {
+    Test-PathUnderRoot -Path $TestDrive -Root $TestDrive | Should -BeTrue
+    Test-PathUnderRoot -Path ($TestDrive + [System.IO.Path]::DirectorySeparatorChar) -Root $TestDrive | Should -BeTrue
+  }
+
   It 'Returns true when path is under root' {
     $tempRoot = if ([string]::IsNullOrWhiteSpace($env:TEMP)) { [System.IO.Path]::GetTempPath() } else { $env:TEMP }
     $child = Join-Path $tempRoot 'subdir/file.txt'
@@ -223,5 +235,138 @@ Describe 'Test-PathUnderRoot' {
     $tempRoot = if ([string]::IsNullOrWhiteSpace($env:TEMP)) { [System.IO.Path]::GetTempPath() } else { $env:TEMP }
     $sibling = Join-Path (Split-Path $tempRoot -Parent) 'sibling-dir'
     Test-PathUnderRoot -Path $sibling -Root $tempRoot | Should -Be $false
+  }
+
+  It 'does not collapse case distinctions on non-Windows hosts' -Skip:([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    $root = Join-Path $TestDrive 'CaseSensitiveRoot'
+    $caseSibling = Join-Path $TestDrive 'casesensitiveroot/file.txt'
+
+    Test-PathUnderRoot -Path $caseSibling -Root $root | Should -BeFalse
+  }
+}
+
+Describe 'Windows privileged-path ACL validation' {
+  It 'excludes inherit-only templates from current-object rights in every host build' {
+    (Get-Command Test-TrustedWindowsPathAcl).Definition |
+      Should -Match 'PropagationFlags\]::InheritOnly'
+  }
+
+  It 'is a portable no-op on non-Windows hosts' -Skip:([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    Test-TrustedWindowsPathAcl -Path $TestDrive | Should -BeTrue
+    { Assert-TrustedWindowsPathAcl -Path $TestDrive | Out-Null } | Should -Not -Throw
+  }
+
+  It 'ignores inherit-only templates but rejects an effective Users Modify ACE' -Skip:([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+    $path = Join-Path $TestDrive 'trusted-acl'
+    New-Item -Path $path -ItemType Directory -Force | Out-Null
+    try {
+      $administrators = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+      $system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+      $users = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')
+      $creatorOwner = New-Object System.Security.Principal.SecurityIdentifier('S-1-3-0')
+      $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+      $security = New-Object System.Security.AccessControl.DirectorySecurity
+      $security.SetOwner($administrators)
+      $security.SetAccessRuleProtection($true, $false)
+      foreach ($sid in @($administrators, $system)) {
+        [void]$security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+              $sid,
+              [System.Security.AccessControl.FileSystemRights]::FullControl,
+              $inheritance,
+              [System.Security.AccessControl.PropagationFlags]::None,
+              [System.Security.AccessControl.AccessControlType]::Allow)))
+      }
+      [void]$security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $creatorOwner,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::InheritOnly,
+            [System.Security.AccessControl.AccessControlType]::Allow)))
+      Set-Acl -LiteralPath $path -AclObject $security -ErrorAction Stop
+    } catch {
+      Set-ItResult -Skipped -Because "The current Windows test identity cannot create the required ACL fixture: $($_.Exception.Message)"
+      return
+    }
+
+    Test-TrustedWindowsPathAcl -Path $path | Should -BeTrue
+    $unsafe = Get-Acl -LiteralPath $path
+    [void]$unsafe.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+          $users,
+          [System.Security.AccessControl.FileSystemRights]::Modify,
+          $inheritance,
+          [System.Security.AccessControl.PropagationFlags]::None,
+          [System.Security.AccessControl.AccessControlType]::Allow)))
+    Set-Acl -LiteralPath $path -AclObject $unsafe -ErrorAction Stop
+    Test-TrustedWindowsPathAcl -Path $path | Should -BeFalse
+  }
+}
+
+Describe 'Test-PathContainsReparsePoint' {
+  It 'preserves the filesystem root while walking path components' {
+    $volumeRoot = [System.IO.Path]::GetPathRoot($TestDrive)
+
+    Test-PathContainsReparsePoint -Path $TestDrive -Root $volumeRoot | Should -BeFalse
+  }
+
+  It 'accepts an ordinary existing child path' {
+    $root = Join-Path $TestDrive 'plain-root'
+    $childDir = Join-Path $root 'child'
+    $child = Join-Path $childDir 'script.ps1'
+    New-Item -Path $childDir -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath $child -Value 'param()' -Encoding UTF8
+
+    Test-PathContainsReparsePoint -Path $child -Root $root | Should -BeFalse
+  }
+
+  It 'fails closed for a missing or out-of-root path' {
+    $root = Join-Path $TestDrive 'closed-root'
+    New-Item -Path $root -ItemType Directory -Force | Out-Null
+
+    Test-PathContainsReparsePoint -Path (Join-Path $root 'missing.ps1') -Root $root | Should -BeTrue
+    Test-PathContainsReparsePoint -Path (Join-Path $TestDrive 'outside.ps1') -Root $root | Should -BeTrue
+  }
+
+  It 'rejects an ancestor symbolic link' {
+    $root = Join-Path $TestDrive 'linked-root'
+    $outside = Join-Path $TestDrive 'linked-outside'
+    New-Item -Path $root -ItemType Directory -Force | Out-Null
+    New-Item -Path $outside -ItemType Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $outside 'script.ps1') -Value 'param()' -Encoding UTF8
+    $link = Join-Path $root 'link'
+    try {
+      New-Item -Path $link -ItemType SymbolicLink -Target $outside -ErrorAction Stop | Out-Null
+    } catch {
+      Set-ItResult -Skipped -Because 'Symbolic links are not available in this environment.'
+      return
+    }
+
+    Test-PathContainsReparsePoint -Path (Join-Path $link 'script.ps1') -Root $root | Should -BeTrue
+  }
+}
+
+Describe 'Get-BoundedUtf8FileContent' {
+  It 'reads ordinary UTF-8 content and exposes a stable content hash' {
+    $path = Join-Path $TestDrive 'bounded.json'
+    [System.IO.File]::WriteAllText($path, '{"value":1}', (New-Object System.Text.UTF8Encoding($false)))
+
+    $text = Get-BoundedUtf8FileContent -Path $path -MaximumBytes 1024
+
+    $text | Should -Be '{"value":1}'
+    Get-TextSha256 -Text $text | Should -Match '^[A-F0-9]{64}$'
+  }
+
+  It 'rejects an oversized file before reading it' {
+    $path = Join-Path $TestDrive 'oversized.json'
+    [System.IO.File]::WriteAllBytes($path, ([byte[]](1..32)))
+
+    { Get-BoundedUtf8FileContent -Path $path -MaximumBytes 16 } | Should -Throw '*size limit*'
+  }
+
+  It 'rejects invalid UTF-8' {
+    $path = Join-Path $TestDrive 'invalid-utf8.json'
+    [System.IO.File]::WriteAllBytes($path, [byte[]](0xC3, 0x28))
+
+    { Get-BoundedUtf8FileContent -Path $path -MaximumBytes 16 } | Should -Throw
   }
 }

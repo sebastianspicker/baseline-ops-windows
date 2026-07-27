@@ -1,6 +1,23 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for security-script contracts.
 
-Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' {
+.DESCRIPTION
+Verifies safe, repeatable operator behavior and evidence.
+#>
+
+$script:SkipNonSystemWindowsIntegration = $false
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+  try {
+    $script:SkipNonSystemWindowsIntegration =
+      [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18'
+  } catch {
+    $script:SkipNonSystemWindowsIntegration = $true
+  }
+}
+
+Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' -Skip:$script:SkipNonSystemWindowsIntegration {
   BeforeAll {
     $script:SupportBundleScript = Join-Path $PSScriptRoot '../../scripts/09-SupportBundle.ps1'
     . (Join-Path $PSScriptRoot '../../scripts/internal/09-SupportBundle.helpers.ps1')
@@ -9,20 +26,27 @@ Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' {
       param(
         [switch]$KbFailure,
         [switch]$SidecarSummaryFailure,
-        [switch]$UseRealArchive
+        [switch]$UseRealArchive,
+        [switch]$CompressionFailure,
+        [switch]$Triggered,
+        [switch]$MissingTrigger,
+        [switch]$IdleTrigger,
+        [switch]$InvalidTrigger
       )
 
       $oldOS = $env:OS
       $oldTemp = $env:TEMP
+      $oldProgramData = $env:ProgramData
       $oldComputerName = $env:COMPUTERNAME
       $oldUserName = $env:USERNAME
       try {
         $env:OS = 'Windows_NT'
         $env:TEMP = $TestDrive
+        $env:ProgramData = $TestDrive
         $env:COMPUTERNAME = 'TEST-HOST'
         $env:USERNAME = 'tester'
 
-        $proofDir = Join-Path $TestDrive 'proof'
+        $proofDir = Join-Path (Join-Path $TestDrive 'BaselineOpsForWindows') 'SupportBundles'
         $configPath = Join-Path $TestDrive 'support-bundle.json'
         $config = [ordered]@{
           Paths = [ordered]@{
@@ -65,11 +89,33 @@ Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' {
           }
           $Object | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $Path -Encoding UTF8
         }
-        if (-not $UseRealArchive) {
-          Mock -CommandName Compress-Archive -MockWith { }
+        if ($CompressionFailure) { Mock -CommandName Compress-Archive -MockWith { throw 'compression failed' } }
+        if ($Triggered -or $MissingTrigger -or $IdleTrigger -or $InvalidTrigger) {
+          Mock -CommandName SB_GetRegistryTrigger -MockWith {
+            [pscustomobject]@{
+              Ok = -not (Get-Variable -Name __SupportBundleMissingTrigger -Scope Global -ValueOnly)
+              Error = $(if (Get-Variable -Name __SupportBundleMissingTrigger -Scope Global -ValueOnly) { 'trigger missing' } else { $null })
+              Request = $(
+                if (Get-Variable -Name __SupportBundleIdleTrigger -Scope Global -ValueOnly) { 0 }
+                elseif (Get-Variable -Name __SupportBundleInvalidTrigger -Scope Global -ValueOnly) { 2 }
+                else { 1 }
+              )
+              Days = $null
+              IncludeSecurity = $null
+              IncludeDefenderSupport = $null
+              Reason = $null
+            }
+          }
         }
 
-        $output = & $script:SupportBundleScript -Force -ConfigPath $configPath -OutputFormat None -PassThru -Confirm:$false 2>&1 3>&1 6>&1
+        Set-Variable -Name __SupportBundleMissingTrigger -Scope Global -Value ([bool]$MissingTrigger)
+        Set-Variable -Name __SupportBundleIdleTrigger -Scope Global -Value ([bool]$IdleTrigger)
+        Set-Variable -Name __SupportBundleInvalidTrigger -Scope Global -Value ([bool]$InvalidTrigger)
+        if ($Triggered -or $MissingTrigger -or $IdleTrigger -or $InvalidTrigger) {
+          $output = & $script:SupportBundleScript -ConfigPath $configPath -OutputFormat None -PassThru -Confirm:$false 2>&1 3>&1 6>&1
+        } else {
+          $output = & $script:SupportBundleScript -Force -ConfigPath $configPath -OutputFormat None -PassThru -Confirm:$false 2>&1 3>&1 6>&1
+        }
         $exitCode = $LASTEXITCODE
       } finally {
         if ($null -eq $oldOS) {
@@ -81,6 +127,11 @@ Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' {
           Remove-Item -LiteralPath Env:TEMP -ErrorAction SilentlyContinue
         } else {
           $env:TEMP = $oldTemp
+        }
+        if ($null -eq $oldProgramData) {
+          Remove-Item -LiteralPath Env:ProgramData -ErrorAction SilentlyContinue
+        } else {
+          $env:ProgramData = $oldProgramData
         }
         if ($null -eq $oldComputerName) {
           Remove-Item -LiteralPath Env:COMPUTERNAME -ErrorAction SilentlyContinue
@@ -94,6 +145,9 @@ Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' {
         }
         Remove-Variable -Scope Global -Name __SupportBundleKbFailure -ErrorAction SilentlyContinue
         Remove-Variable -Scope Global -Name __SupportBundleSidecarSummaryFailure -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Global -Name __SupportBundleMissingTrigger -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Global -Name __SupportBundleIdleTrigger -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Global -Name __SupportBundleInvalidTrigger -ErrorAction SilentlyContinue
       }
 
       $result = @($output | Where-Object {
@@ -160,5 +214,99 @@ Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' {
     $summary.Hostname | Should -Be 'TEST-HOST'
     @($summary.Records | Where-Object { $_.Name -eq 'KBFeed' -and $_.Ok }).Count |
       Should -Be 1
+  }
+
+  It 'keeps a triggered request pending and does not publish a bundle path when compression fails' {
+    $run = Invoke-SupportBundleCase -CompressionFailure -Triggered
+
+    $run.ExitCode | Should -Be 1
+    $run.Result.Result | Should -Be 'FAIL'
+    $run.Result.Summary.ZipCreated | Should -BeFalse
+    $run.Result.Summary.ZipPath | Should -BeNullOrEmpty
+    @($run.Result.Summary.Records | Where-Object {
+        $_.Name -eq 'RegistryReset' -and $_.Note -match 'Request left pending'
+      }).Count | Should -Be 1
+  }
+
+  It 'returns a terminal V2 failure when the trigger cannot be read' {
+    $run = Invoke-SupportBundleCase -MissingTrigger
+
+    $run.ExitCode | Should -Be 1
+    $run.Result.Result | Should -Be 'FAIL'
+    $run.Result.Summary.WorkDir | Should -BeNullOrEmpty
+    @($run.Result.Findings | Where-Object { $_.RecordName -eq 'Trigger' -and $_.Error -match 'trigger missing' }).Count | Should -Be 1
+  }
+
+  It 'returns a terminal V2 failure for an invalid trigger value' {
+    $run = Invoke-SupportBundleCase -InvalidTrigger
+
+    $run.ExitCode | Should -Be 1
+    $run.Result.Result | Should -Be 'FAIL'
+    $run.Result.Summary.WorkDir | Should -BeNullOrEmpty
+    @($run.Result.Findings | Where-Object { $_.RecordName -eq 'Trigger' -and $_.Error -match 'must be 0 or 1' }).Count | Should -Be 1
+  }
+
+  It 'returns V2 OK without collecting when a valid trigger is idle' {
+    $run = Invoke-SupportBundleCase -IdleTrigger
+
+    $run.ExitCode | Should -Be 0
+    $run.Result.Result | Should -Be 'OK'
+    $run.Result.Summary.WorkDir | Should -BeNullOrEmpty
+    $run.Result.Summary.ZipCreated | Should -BeFalse
+    $run.Result.Summary.TriggerIdle | Should -BeTrue
+    $run.Result.Summary.CollectionRequested | Should -BeFalse
+    @($run.Result.Findings).Count | Should -Be 0
+    @($run.Result.Summary.Records | Where-Object { $_.Name -eq 'Trigger' -and $_.Ok -and $_.Note -match 'Idle' }).Count | Should -Be 1
+  }
+
+  It 'returns a structured failure for an explicit invalid config path' {
+    $oldOS = $env:OS
+    $oldProgramData = $env:ProgramData
+    $oldComputerName = $env:COMPUTERNAME
+    $oldUserName = $env:USERNAME
+    try {
+      $env:OS = 'Windows_NT'
+      $env:ProgramData = $TestDrive
+      $env:COMPUTERNAME = 'TEST-HOST'
+      $env:USERNAME = 'tester'
+      $configPath = Join-Path $TestDrive 'invalid-support-bundle.json'
+      '{"Paths":{},"Unexpected":true}' | Set-Content -LiteralPath $configPath -Encoding UTF8
+      $result = & $script:SupportBundleScript -Force -ConfigPath $configPath -OutputFormat None -PassThru -Confirm:$false 6>$null
+      $exitCode = $LASTEXITCODE
+    } finally {
+      $env:OS = $oldOS
+      if ($null -eq $oldProgramData) {
+        Remove-Item -LiteralPath Env:ProgramData -ErrorAction SilentlyContinue
+      } else {
+        $env:ProgramData = $oldProgramData
+      }
+      $env:COMPUTERNAME = $oldComputerName
+      $env:USERNAME = $oldUserName
+    }
+
+    $exitCode | Should -Be 1
+    $result.Result | Should -Be 'FAIL'
+    @($result.Summary.Records | Where-Object { $_.Name -eq 'Config' -and -not $_.Ok }).Count | Should -Be 1
+    $result.Summary.ZipPath | Should -BeNullOrEmpty
+  }
+}
+
+Describe '09-SupportBundle bounded event-log fallback' -Tag 'SupportBundle', 'Security' {
+  BeforeAll {
+    . (Join-Path $PSScriptRoot '../../scripts/internal/09-SupportBundle.helpers.ps1')
+    function Ensure-Directory { param([string]$Path) [void][System.IO.Directory]::CreateDirectory($Path); return $Path }
+    function Get-WinEvent {
+      param([string]$LogName, [string]$FilterXPath, [int]$MaxEvents, [string]$ErrorAction)
+    }
+  }
+
+  It 'passes MaxEvents to Get-WinEvent before materializing fallback output' {
+    Mock -CommandName Get-WinEvent -MockWith {
+      [pscustomobject]@{ TimeCreated = Get-Date; Id = 1; LevelDisplayName = 'Information'; ProviderName = 'Pester'; LogName = 'Application'; Message = 'bounded' }
+    } -ParameterFilter { $MaxEvents -eq 7 }
+    $outBase = Join-Path $TestDrive 'eventlogs/Application'
+    $record = SB_ExportEventLogFallback -LogName 'Application' -OutFileBase $outBase -DaysBack 1 -MaxEvents 7
+    $record.Ok | Should -BeTrue
+    Should -Invoke -CommandName Get-WinEvent -Times 1 -Exactly -ParameterFilter { $MaxEvents -eq 7 }
   }
 }

@@ -5,7 +5,7 @@ Audit device identity (hostname, domain/workgroup, domain role, OS base data).
 
 .DESCRIPTION
 Pipeline: emits exactly one structured object (no strings, no formatting objects).
-Console: prints a human-readable summary using Write-UiLine only (not the pipeline). [web:135]
+Console: prints a human-readable summary using Write-UiLine only (not the pipeline).
 
 .PARAMETER ExpectedDomain
 Optional. If provided (or loaded from JSON), deviations are reported as findings.
@@ -14,7 +14,7 @@ Optional. If provided (or loaded from JSON), deviations are reported as findings
 Optional. If provided (or loaded from JSON), exports the Summary to CSV.
 
 .PARAMETER ConfigPath
-Optional JSON configuration file path (placeholder: PATH/TO/JSON\identity-audit.json).
+Optional JSON configuration file path supplied with $ConfigPath.
 
 .PARAMETER NoConsoleSummary
 Suppress the console summary output.
@@ -73,10 +73,15 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1')
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '28-Join-Identity-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '28-Join-Identity-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -88,10 +93,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # region Helpers
@@ -130,12 +136,12 @@ function Import-JsonConfig {
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
     $raw | ConvertFrom-Json
   }
   catch {
-    Add-Finding -Code 'CONFIG-JsonInvalid' -Severity 'Medium' -Message ("Config JSON could not be loaded from '{0}': {1}" -f $Path, $_.Exception.Message) -TimestampLocal
+    Add-Finding -FindingList $Findings -Code 'CONFIG-JsonInvalid' -Severity 'Medium' -Message ("Config JSON could not be loaded from '{0}': {1}" -f $Path, $_.Exception.Message) -TimestampLocal
     $null
   }
 }
@@ -185,7 +191,7 @@ try {
     OsName, OsVersion, OsBuildNumber, WindowsProductName, WindowsVersion, TimeZone
 }
 catch {
-  Add-Finding -Code 'DATA-GetComputerInfo-Failed' -Severity 'High' -Message ("Get-ComputerInfo failed: {0}" -f $_.Exception.Message) -TimestampLocal
+  Add-Finding -FindingList $Findings -Code 'DATA-GetComputerInfo-Failed' -Severity 'High' -Message ("Get-ComputerInfo failed: {0}" -f $_.Exception.Message) -TimestampLocal
 }
 
 $cs = $null
@@ -193,7 +199,7 @@ try {
   $cs = Get-CimInstance -ClassName Win32_ComputerSystem
 }
 catch {
-  Add-Finding -Code 'DATA-CIM-Win32_ComputerSystem-Failed' -Severity 'High' -Message ("Get-CimInstance Win32_ComputerSystem failed: {0}" -f $_.Exception.Message) -TimestampLocal
+  Add-Finding -FindingList $Findings -Code 'DATA-CIM-Win32_ComputerSystem-Failed' -Severity 'High' -Message ("Get-CimInstance Win32_ComputerSystem failed: {0}" -f $_.Exception.Message) -TimestampLocal
 }
 
 $domainRoleValue = if ($cs -and $null -ne $cs.DomainRole) { [int]$cs.DomainRole } else { $null }
@@ -205,18 +211,18 @@ $domainRoleText  = Resolve-DomainRoleText -DomainRole $domainRoleValue
 
 if ($effective.ExpectedDomain) {
   if (-not $cs) {
-    Add-Finding -Code 'JOIN-Unknown' -Severity 'Medium' -Message 'Domain join status could not be determined (Win32_ComputerSystem not available).' -TimestampLocal
+    Add-Finding -FindingList $Findings -Code 'JOIN-Unknown' -Severity 'Medium' -Message 'Domain join status could not be determined (Win32_ComputerSystem not available).' -TimestampLocal
   }
   else {
     if ($cs.PartOfDomain -ne $true) {
-      Add-Finding -Code 'JOIN-NotDomainJoined' -Severity 'High' -Message 'System is not domain-joined (PartOfDomain is False/Null).' -TimestampLocal
+      Add-Finding -FindingList $Findings -Code 'JOIN-NotDomainJoined' -Severity 'High' -Message 'System is not domain-joined (PartOfDomain is False/Null).' -TimestampLocal
     }
     else {
       if ([string]::IsNullOrWhiteSpace([string]$cs.Domain)) {
-        Add-Finding -Code 'JOIN-DomainEmpty' -Severity 'Medium' -Message 'PartOfDomain=True but Domain is empty/whitespace (unexpected).' -TimestampLocal
+        Add-Finding -FindingList $Findings -Code 'JOIN-DomainEmpty' -Severity 'Medium' -Message 'PartOfDomain=True but Domain is empty/whitespace (unexpected).' -TimestampLocal
       }
       elseif ($cs.Domain.ToLowerInvariant() -ne $effective.ExpectedDomain.ToLowerInvariant()) {
-        Add-Finding -Code 'JOIN-DomainMismatch' -Severity 'High' -Message ("Domain='{0}' differs from ExpectedDomain='{1}'." -f $cs.Domain, $effective.ExpectedDomain) -TimestampLocal
+        Add-Finding -FindingList $Findings -Code 'JOIN-DomainMismatch' -Severity 'High' -Message ("Domain='{0}' differs from ExpectedDomain='{1}'." -f $cs.Domain, $effective.ExpectedDomain) -TimestampLocal
       }
     }
   }
@@ -260,7 +266,7 @@ if ($effective.ExportPath) {
     $summary | Export-Csv -Path $effective.ExportPath -NoTypeInformation -Encoding UTF8
   }
   catch {
-    Add-Finding -Code 'EXPORT-Csv-Failed' -Severity 'Medium' -Message ("Export-Csv failed: {0}" -f $_.Exception.Message) -TimestampLocal
+    Add-Finding -FindingList $Findings -Code 'EXPORT-Csv-Failed' -Severity 'Medium' -Message ("Export-Csv failed: {0}" -f $_.Exception.Message) -TimestampLocal
 
     $summary = [pscustomobject]@{
       ComputerName   = $summary.ComputerName
@@ -309,7 +315,7 @@ $result | Add-Member -MemberType MemberSet -Name PSStandardMembers -Value ([Syst
 
 # endregion Result object
 
-# region Pretty console output (host only)
+# region Formatted console output (host only)
 
 if (-not $NoConsoleSummary) {
 
@@ -360,11 +366,11 @@ if (-not $NoConsoleSummary) {
   Write-UiLine '' 'Gray'
 }
 
-# endregion Pretty console output
+# endregion Formatted console output
 
 # V2 output contract
 $resultToken = if ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
 $v2Result = Get-V2ResultObject -ScriptName '28-Join-Identity-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

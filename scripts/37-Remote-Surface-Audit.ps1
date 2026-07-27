@@ -8,14 +8,14 @@ Audit-only (no remediation). Safe for support bundles/collections.
 
 Target design:
 - Pipeline output: structured objects only (Export-Csv / ConvertTo-Json / Where-Object).
-- Console output: pretty, human-friendly, colorized, using Write-UiLine only (host stream). [web:192]
+- Console output: formatted and colorized using Write-UiLine only (host stream).
 
 .PARAMETER ExportPath
 Optional base path for CSV export. Creates *_summary.csv, *_surfaces.csv, *_findings.csv.
 
 .PARAMETER ConfigPath
-Optional JSON config path (e.g. "PATH/TO/JSON"). If missing/invalid/unreadable, safe defaults are used.
-Note: ConvertFrom-Json error handling should be done with try/catch. [web:52]
+Optional JSON config path supplied with $ConfigPath. If missing, invalid, or unreadable, safe defaults are used.
+Note: ConvertFrom-Json error handling should be done with try/catch.
 
 .PARAMETER NoConsoleSummary
 Suppress console summary output.
@@ -71,12 +71,18 @@ param(
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1')
 
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '37-Remote-Surface-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '37-Remote-Surface-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -88,10 +94,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '37-Remote-Surface-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '37-Remote-Surface-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # -------------------------
@@ -132,7 +139,7 @@ function Get-AuditConfig {
   if (-not (Test-Path -LiteralPath $Path)) { return $Defaults }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { return $Defaults }
 
     $cfg = $raw | ConvertFrom-Json
@@ -179,10 +186,10 @@ $Findings = Get-FindingsList
 $winrmSvc = Get-Service -Name 'WinRM' -ErrorAction SilentlyContinue
 
 $winrmListenersRaw = $null
-try {
-  $winrmListenersRaw = (& winrm.cmd enumerate winrm/config/listener 2>$null | Out-String).Trim()
-} catch {
-  $winrmListenersRaw = $null
+$winrmListenerEvidence = Invoke-WinrmCommand -Arguments @('enumerate','winrm/config/listener') -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 262144
+$winrmListenerEvidenceComplete = ($null -ne $winrmListenerEvidence -and $winrmListenerEvidence.Success -and -not $winrmListenerEvidence.TimedOut -and -not $winrmListenerEvidence.OutputTruncated -and -not $winrmListenerEvidence.StderrTruncated)
+if ($winrmListenerEvidenceComplete) {
+  $winrmListenersRaw = ([string]$winrmListenerEvidence.Output).Trim()
 }
 
 if ($winrmSvc) {
@@ -195,6 +202,20 @@ if ($winrmSvc) {
   }
 } else {
   Add-Finding -FindingList $Findings -Code 'REMOTE-WinRMServiceMissing' -Severity 'Info' -Message 'WinRM service not found (edition/component/hardening).'
+}
+
+if (-not $winrmListenerEvidenceComplete) {
+  $reason = if ($null -eq $winrmListenerEvidence) {
+    'command did not start'
+  } elseif ($winrmListenerEvidence.TimedOut) {
+    'command timed out'
+  } elseif ($winrmListenerEvidence.OutputTruncated -or $winrmListenerEvidence.StderrTruncated) {
+    'command output was truncated'
+  } else {
+    "command exited with code $($winrmListenerEvidence.ExitCode)"
+  }
+  $data = if ($null -ne $winrmListenerEvidence) { [string]$winrmListenerEvidence.Output } else { '' }
+  Add-Finding -FindingList $Findings -Code 'REMOTE-WinRMListenerEvidenceIncomplete' -Severity 'Medium' -Message ("WinRM listener evidence is incomplete: {0}." -f $reason) -Extra @{ Data = $data }
 }
 
 if ($winrmListenersRaw -and $winrmListenersRaw.Length -gt 0) {
@@ -282,6 +303,7 @@ if ($smbClientCfg) {
 $surfaces = [pscustomobject]@{
   WinRM_ServiceStatus               = if ($winrmSvc) { [string]$winrmSvc.Status } else { $null }
   WinRM_ListenersRaw                = $winrmListenersRaw
+  WinRM_ListenerEvidenceComplete    = [bool]$winrmListenerEvidenceComplete
   OpenSSH_ServerCapabilityState     = if ($sshCap) { [string]$sshCap.State } else { $null }
   SSHD_ServiceStatus                = if ($sshdSvc) { [string]$sshdSvc.Status } else { $null }
   RDP_fDenyTSConnections            = $rdpDenyRaw
@@ -325,7 +347,7 @@ if ($ExportPath) {
 }
 
 # -------------------------
-# Pretty console summary (host stream only)
+# Formatted console summary (host stream only)
 # -------------------------
 if (-not $NoConsoleSummary) {
   Write-Section "Remote Surface Audit"
@@ -378,4 +400,4 @@ $resultToken = if ($Strict -and $findingsOut.Count -gt 0) { 'FAIL' } elseif ($fi
 $v2Result = Get-V2ResultObject -ScriptName '37-Remote-Surface-Audit.ps1' -Mode $Mode -Result $resultToken -Findings $findingsOut -Summary $result.Summary -Metadata @{ Surfaces = $result.Surfaces }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

@@ -23,7 +23,7 @@ Safety / guardrails:
 
 Operational behavior:
 - Always writes a concise event log entry with the overall status (best effort).
-- Always prints a human-friendly console summary (unless -Quiet).
+- Always prints a human-readable console summary (unless -Quiet).
 - Emits a single structured result object to the pipeline (unless -NoPipelineOutput).
 
 .PARAMETER AllowDomainRemediation
@@ -56,7 +56,7 @@ Each entry can be:
 Use this to temporarily allow accounts without modifying the central JSON.
 
 .PARAMETER Quiet
-Suppresses the pretty console summary output.
+Suppresses the formatted console summary.
 The script still writes the event log entry (best effort) and can still emit the structured pipeline result unless -NoPipelineOutput is used.
 
 .PARAMETER NoPipelineOutput
@@ -96,37 +96,37 @@ All nested properties are structured to support filtering and exporting.
 
 .EXAMPLE
 # Report-only run using config/allow-list defaults (no changes)
-.\LocalAdmins-Guardrail.ps1
+.\scripts\03-LocalAdmins-Guardrail.ps1
 
 .EXAMPLE
 # Report-only run with explicit allow-list path
-.\LocalAdmins-Guardrail.ps1 -AllowListPath "PATH/TO/JSON/local-admins-allowlist.json"
+.\scripts\03-LocalAdmins-Guardrail.ps1 -AllowListPath .\examples\configs\local-admins-allowlist.json
 
 .EXAMPLE
 # Report-only run with an ad-hoc allowed entry
-.\LocalAdmins-Guardrail.ps1 -ExtraAllow "CONTOSO\Helpdesk-LocalAdmins"
+.\scripts\03-LocalAdmins-Guardrail.ps1 -ExtraAllow "CONTOSO\Helpdesk-LocalAdmins"
 
 .EXAMPLE
 # Remediate using allow-list (adds missing allowed members; removes disallowed local members when safe)
-.\LocalAdmins-Guardrail.ps1 -Mode Remediate
+.\scripts\03-LocalAdmins-Guardrail.ps1 -Mode Remediate
 
 .EXAMPLE
 # Remediate and allow removal of domain-like members (use with extreme caution)
-.\LocalAdmins-Guardrail.ps1 -Mode Remediate -AllowDomainRemediation -Confirm
+.\scripts\03-LocalAdmins-Guardrail.ps1 -Mode Remediate -AllowDomainRemediation -Confirm
 
 .EXAMPLE
 # Dry-run to see what would change without applying changes
-.\LocalAdmins-Guardrail.ps1 -Mode Remediate -WhatIf
+.\scripts\03-LocalAdmins-Guardrail.ps1 -Mode Remediate -WhatIf
 
 .EXAMPLE
 # Automation: export the structured result to JSON
-.\LocalAdmins-Guardrail.ps1 | ConvertTo-Json -Depth 6
+.\scripts\03-LocalAdmins-Guardrail.ps1 | ConvertTo-Json -Depth 6
 
 .EXAMPLE
 # Automation: export a flattened view to CSV (example of selecting fields)
-.\LocalAdmins-Guardrail.ps1 |
+.\scripts\03-LocalAdmins-Guardrail.ps1 |
   Select-Object Timestamp,ComputerName,GroupName,DriftDetected,PostCompliant,FailSafeNoRemove,EventId,EventLevel |
-  Export-Csv -NoTypeInformation -Path "PATH/TO/REPORT/local-admins-guardrail.csv"
+  Export-Csv -NoTypeInformation -Path .\local-admins-guardrail.csv
 
 .NOTES
 - The script checks only direct members of the Administrators group (no recursive group expansion).
@@ -158,13 +158,19 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1')
 
 
 $script:Quiet = [bool]$Quiet
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '03-LocalAdmins-Guardrail.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '03-LocalAdmins-Guardrail.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $null = $NoPipelineOutput
 $ErrorActionPreference = 'Stop'
 
@@ -177,10 +183,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # ---------------- Constants / Defaults ----------------
@@ -202,7 +209,7 @@ function Try-ReadJsonFile {
 
   try {
     if ($Path -and (Test-Path -LiteralPath $Path)) {
-      return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+      return (Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576 | ConvertFrom-Json)
     }
   } catch {
     Write-Verbose ("JSON read failed for '{0}': {1}" -f $Path,$_.Exception.Message)
@@ -218,19 +225,6 @@ function Get-Config {
   $cfg = $null
   if ($Path) { $cfg = Try-ReadJsonFile -Path $Path }
   if ($cfg) { return $cfg }
-
-  # Optional relative fallback (anonymized)
-  try {
-    $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-    if ($here) {
-      $alt = Join-Path (Split-Path -Parent $here) "config\global.config.json"
-      $cfg2 = Try-ReadJsonFile -Path $alt
-      if ($cfg2) { return $cfg2 }
-    }
-  } catch {
-    Write-Verbose ("Fallback config lookup failed: {0}" -f $_.Exception.Message)
-  }
-
   return $null
 }
 
@@ -516,7 +510,7 @@ try {
   $result.AllowListPathUsed = $AllowListPath
 
   # Read allow-list (optional) + defaults
-  $allowInput = Read-AllowList -AllowListPath $AllowListPath -Extra $ExtraAllow
+  $allowInput = @(Read-AllowList -AllowListPath $AllowListPath -Extra $ExtraAllow)
   if (-not $allowInput -or $allowInput.Count -eq 0) { $allowInput = @($script:DefaultAllowList) }
   $result.AllowInput = @($allowInput)
 
@@ -710,7 +704,8 @@ try {
 
 # V2 output contract
 $resultToken = if ($result.DriftDetected) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

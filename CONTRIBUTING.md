@@ -1,57 +1,137 @@
 # Contributing
 
-Keep changes small, reviewable, and safe for endpoint operations.
+Changes to endpoint audit and remediation code can affect privileged Windows state. Keep pull requests focused, document operational impact, and add regression coverage for changed behavior.
 
-## Baseline Rules
+## Development requirements
 
-- Never commit secrets, tokens, credentials, private keys, or generated evidence.
-- Prefer behavior-preserving refactors unless the PR explicitly documents a breaking change.
-- For remediation scripts, verify `ShouldProcess` semantics through `-WhatIf` and `-Confirm`.
-- Use shared `lib/` modules instead of adding inline helper duplicates.
-- Treat profile JSON as untrusted run input.
+- PowerShell 7.6.3
+- PSScriptAnalyzer 1.25.0
+- Pester 5.8.0
+- Node.js and npm for `tests/fuzz/*.test.mjs`
+- Bash for `scripts/ci-local.sh`
+- Windows PowerShell 5.1 for compatibility checks
+- A disposable Windows test device for changes that depend on endpoint features or remediation
 
-## Development Flow
+CI uses Node 24 for property tests. The release workflow uses Node 22. The Node package is a private test harness and is not part of the operator ZIP.
 
-1. Create a branch.
-2. Implement one focused change.
-3. Run the relevant local checks.
-4. Open a PR with scope, risk, and validation evidence.
+## Change workflow
 
-If a change touches orchestration, profile parsing, remediation, or runner integrity, call that out in the PR summary and include a focused regression test.
+1. Create a branch from the intended base branch.
+2. Make one focused change.
+3. Add or update tests for behavior changes.
+4. Update public documentation when parameters, configuration, output, security boundaries, or operation changes.
+5. Run the focused tests and applicable full gates.
+6. Review `git diff --check` and the complete diff.
+7. Open a pull request with scope, risk, compatibility impact, and validation results.
 
-## Required Local Checks
+Call out changes to profile parsing, dependency handling, remediation, integrity checks, privileged path validation, native process execution, evidence collection, or result serialization.
+
+## Source requirements
+
+- Keep common behavior in `lib/` and script-specific helpers in `scripts/internal/`.
+- Do not expose files under `scripts/internal/` or `scripts/_lib/` as operator entry points.
+- Treat profiles, configuration files, paths, URLs, native output, and arguments as untrusted input.
+- Preserve runner-owned mode, root, output, confirmation, signature, and hash controls.
+- Implement state changes through `SupportsShouldProcess` and verify `-WhatIf` and `-Confirm` behavior.
+- Do not weaken ACL, ownership, reparse-point, signature, hash, or input-validation checks to accommodate a local environment.
+- Use the v2 result helpers for orchestration-compatible output.
+- Avoid committing generated reports, support bundles, launcher logs, Pester XML, or other endpoint evidence.
+
+Every maintained `.ps1` and `.psm1` file must begin with comment-based help containing `.SYNOPSIS` and `.DESCRIPTION`. Shell, JavaScript, Docker, PowerShell data, and YAML sources need a leading purpose comment where the format permits comments.
+
+Create a numbered script scaffold with:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1 -SkipAnalyzer
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\secret-scan.ps1
-pwsh -NoProfile -Command "Invoke-Pester -Path .\tests -CI -Output Detailed"
-npm ci
-npm test
+pwsh -NoProfile -File .\tools\new-script.ps1 -Name 53-Example-Audit
 ```
 
-Run the PowerShell gates together with:
+Add `-SupportsRemediate` only when the script will implement guarded state changes:
+
+```powershell
+pwsh -NoProfile -File .\tools\new-script.ps1 `
+  -Name 53-Example-Audit -SupportsRemediate
+```
+
+## Local checks
+
+Run the complete PowerShell 7 gate from Bash or Git Bash:
 
 ```bash
 ./scripts/ci-local.sh
 ```
 
-## Documentation Policy
+The wrapper requires PowerShell Core 7.6.3. Set `PWSH_BIN` to an absolute executable path when necessary:
 
-Root docs are intentionally minimal:
+```bash
+PWSH_BIN='/absolute/path/to/pwsh' ./scripts/ci-local.sh
+```
+
+Run individual PowerShell 7 checks:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\secret-scan.ps1 -RootPath .
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Documentation.ps1 -RootPath .
+pwsh -NoProfile -ExecutionPolicy Bypass -Command `
+  "Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force; & .\tools\verify.ps1 -RootPath ."
+pwsh -NoProfile -Command `
+  "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"
+```
+
+Run Windows PowerShell 5.1 compatibility checks on Windows:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `
+  "Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force; & .\tools\verify.ps1 -RootPath ."
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `
+  "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"
+```
+
+Run Node property tests:
+
+```powershell
+npm ci --ignore-scripts
+$env:PWSH_BIN = (Get-Command pwsh -CommandType Application -ErrorAction Stop |
+  Select-Object -First 1).Source
+npm test
+Remove-Item -LiteralPath Env:PWSH_BIN
+```
+
+Standard-user Pester runs skip tests that require LocalSystem, a protected workspace, another operating system, or unavailable Windows features. Do not convert those expected environmental skips into weaker assertions.
+
+The operator release ZIP excludes the test suite and Node harness. Package checks are documented in the [release guide](docs/alpha-release.md#check-the-extracted-operator-package).
+
+## Pull request content
+
+A pull request should state:
+
+- What changed and why
+- Which scripts, modules, profiles, or workflows are affected
+- Whether the change reads, writes, deletes, exports, launches, or stops anything
+- Required privilege and Windows feature assumptions
+- Compatibility impact for PowerShell 7.6.3 and Windows PowerShell 5.1
+- Tests and manual validation performed
+- Remaining limitations or untested platform behavior
+
+For remediation changes, include a focused `-WhatIf` test and describe the rollback or recovery path.
+
+## Documentation policy
+
+Public Markdown belongs in one of these maintained locations:
 
 - `README.md`
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 - `CHANGELOG.md`
+- `docs/`
+- `scripts/README.md`
+- `lib/README.md`
+- `examples/README.md`
 
-Keep implementation plans, experiments, audit ledgers, remediation scratch plans, deprecated docs, agent instructions, and machine-specific workspace state out of commits.
+Add durable documents to [docs/README.md](docs/README.md). Verify every local link with `tools/Test-Documentation.ps1`. Do not add machine-specific notes, private operational data, screenshots containing endpoint identifiers, or unverified test counts.
 
 Only `docs/README.md` and `docs/launcher-gui.md` are currently allowlisted under
 `docs/`. Add any new durable public document to the index, `.gitignore` allowlist,
 and public-surface verifier in the same change. Keep private or generated
 material in ignored local lanes; never force-add it.
 
-## Security Reporting
-
-Use [SECURITY.md](SECURITY.md) for vulnerability reporting.
+Do not report vulnerabilities in a public pull request or issue. Follow [SECURITY.md](SECURITY.md).

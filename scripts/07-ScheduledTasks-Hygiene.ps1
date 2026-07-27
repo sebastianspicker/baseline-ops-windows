@@ -10,7 +10,7 @@
   Evidence and reporting:
   - Writes an evidence record to Windows Event Log (Application log, configurable source).
   - Writes an evidence JSON file ("proof") containing summary + findings.
-  - Prints a human-friendly summary to the console with highlighted status.
+  - Prints a human-readable summary to the console with highlighted status.
   - Emits exactly one structured proof object to the pipeline (for automation/export).
   Catalog input sources (highest precedence first):
   - -CatalogPath: explicit catalog JSON.
@@ -18,7 +18,7 @@
   - Built-in defaults (safe baseline) if no JSON can be loaded.
 .PARAMETER CatalogPath
   Path to a catalog JSON that defines the hygiene rules.
-  If the file cannot be read or parsed, the script falls back to built-in defaults.
+  If explicitly provided, the file must exist and parse successfully; otherwise the run fails before inventory or remediation.
   Expected catalog fields (all optional; missing fields are filled with defaults):
   - CriticalTasks: Array of regex patterns matching FullPath (e.g. "\\Microsoft\\Windows\\...").
   - AllowTaskExact: Array of regex patterns for tasks that should be excluded from "risky" classification.
@@ -36,7 +36,7 @@
 .PARAMETER ConfigPath
   Path to a configuration JSON that may contain a nested property TasksHygiene.CatalogPath.
   This allows central configuration to point to the catalog JSON without passing -CatalogPath explicitly.
-  If ConfigPath is missing/unreadable/invalid, the script falls back to defaults.
+  If explicitly provided, the file must exist and parse successfully. A valid config without a TasksHygiene catalog reference uses defaults.
 .INPUTS
   None. This script does not accept pipeline input.
 .PARAMETER Mode
@@ -71,7 +71,7 @@
   Runs an audit using built-in defaults (or configured JSON if available via ConfigPath).
   Writes event log + proof JSON, prints summary, returns a proof object to the pipeline.
 .EXAMPLE
-  PS> .\07-ScheduledTasks-Hygiene.ps1 -CatalogPath 'PATH/TO/JSON/tasks-catalog.json'
+  PS> .\07-ScheduledTasks-Hygiene.ps1 -CatalogPath $CatalogPath
   Runs an audit using an explicit catalog JSON.
 .EXAMPLE
   PS> .\07-ScheduledTasks-Hygiene.ps1 -Mode Remediate
@@ -121,7 +121,12 @@ Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '07-ScheduledTasks-Hygiene.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '07-ScheduledTasks-Hygiene.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -133,10 +138,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result 'WARN' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 2
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # C10: canonical findings list
@@ -144,56 +150,32 @@ $script:Findings = Get-FindingsList
 $DefaultEventSource    = 'TasksHygiene'
 $DefaultQuarantineDir  = Join-Path ([System.IO.Path]::GetTempPath()) 'TasksHygiene-Quarantine'
 $DefaultProofOutFile   = Join-Path ([System.IO.Path]::GetTempPath()) 'TasksHygiene-proof.json'
-# =========================
-# Console (pretty)
-# =========================
-# =========================
-# Helpers
-# =========================
-# Test-IsAdmin imported from lib/Common.psm1
-# Save-Json: using canonical Save-Json from lib/Serialization.psm1
-# Try-LoadJsonFile replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
-function Get-PropValue {
-  param(
-    [Parameter(Mandatory=$true)]$Object,
-    [Parameter(Mandatory=$true)][string]$Name,
-    $Default = $null
-  )
-  if ($null -eq $Object) { return $Default }
-  try {
-    if ($Object.PSObject -and $Object.PSObject.Properties -and $null -ne $Object.PSObject.Properties[$Name]) {
-      return $Object.PSObject.Properties[$Name].Value
-    }
-  } catch {
-    Write-Verbose ("Property lookup failed for '{0}': {1}" -f $Name,$_.Exception.Message)
-  }
-  return $Default
-}
-function Coalesce-String {
-  param([object]$Value,[string]$Default)
-  $s = $null
-  try { $s = [string]$Value } catch { $s = $null }
-  if ([string]::IsNullOrWhiteSpace($s)) { return $Default }
-  return $s
-}
-function Normalize-TaskPath {
-  param([string]$TaskPath)
-  if ([string]::IsNullOrWhiteSpace($TaskPath)) { return "\" }
-  if ($TaskPath[0] -ne '\') { $TaskPath = "\" + $TaskPath }
-  if ($TaskPath[-1] -ne '\') { $TaskPath = $TaskPath + "\" }
-  return $TaskPath
-}
-function Normalize-FullTaskPath {
-  param([string]$TaskPath,[string]$TaskName)
-  $tp = Normalize-TaskPath $TaskPath
-  return ($tp + $TaskName)
-}
+# Shared pure helpers and canonical module functions.
+. (Join-Path $PSScriptRoot 'internal/07-ScheduledTasks-Hygiene.helpers.ps1')
 function Expand-NormalizePath {
   param([string]$Path)
   if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
-  $p2 = [Environment]::ExpandEnvironmentVariables($Path)
+  $windowsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+  $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+  $programFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+  $nativeWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+  if ([string]::IsNullOrWhiteSpace($windowsRoot) -and -not $nativeWindows) { $windowsRoot = 'C:\Windows' }
+  if ([string]::IsNullOrWhiteSpace($programFiles) -and -not $nativeWindows) { $programFiles = 'C:\Program Files' }
+  if ([string]::IsNullOrWhiteSpace($programFilesX86) -and -not $nativeWindows) { $programFilesX86 = 'C:\Program Files (x86)' }
+  if ([string]::IsNullOrWhiteSpace($windowsRoot)) { throw 'Trusted Windows directory is unavailable.' }
+  $p2 = $Path
+  foreach ($entry in @(
+      @{ Pattern = '%(?:SystemRoot|WINDIR)%'; Value = $windowsRoot },
+      @{ Pattern = '%ProgramFiles%'; Value = $programFiles },
+      @{ Pattern = '%ProgramFiles\(x86\)%'; Value = $programFilesX86 }
+    )) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$entry.Value)) {
+      $replacement = [string]$entry.Value
+      $p2 = [regex]::Replace($p2, $entry.Pattern, $replacement, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase, ([TimeSpan]::FromMilliseconds(100)))
+    }
+  }
   if ($p2 -match '^[\\/](System32|SysWOW64)[\\/]' ) {
-    $p2 = Join-Path $env:WINDIR ($p2.TrimStart('\','/'))
+    $p2 = "{0}\{1}" -f $windowsRoot.TrimEnd('\'),$p2.TrimStart('\','/')
   }
   return $p2
 }
@@ -201,10 +183,12 @@ function Match-AnyRegex {
   param([string]$Text,[object]$Patterns)
   if ([string]::IsNullOrWhiteSpace($Text) -or $null -eq $Patterns) { return $false }
   foreach($p in @($Patterns)) {
-    if ($p -and ($Text -match [string]$p)) { return $true }
+    if ($p -and $p.IsMatch($Text)) { return $true }
   }
   return $false
 }
+function New-TaskCatalogRegex { param([string]$Pattern,[string]$Label); if ($Pattern.Length -gt 1024) { throw "Tasks $Label regex exceeds the 1024-character limit." }; try { New-Object System.Text.RegularExpressions.Regex($Pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, ([TimeSpan]::FromMilliseconds(250))) } catch { throw "Tasks $Label regex is invalid: $($_.Exception.Message)" } }
+function Initialize-TaskCatalogRegex { param($Catalog); foreach ($name in @('CriticalTasks','AllowTaskExact','DenyActionPathRegex','DenyCommandLineRegex','AllowPublisherOrgRegex')) { $patterns = @($Catalog.$name | Where-Object { $null -ne $_ }); if ($patterns.Count -gt 256) { throw "Tasks $name supports at most 256 patterns." }; $compiled = foreach ($pattern in $patterns) { if ($pattern -isnot [string]) { throw "Tasks $name must contain strings." }; New-TaskCatalogRegex -Pattern $pattern -Label $name }; $Catalog | Add-Member -NotePropertyName $name -NotePropertyValue @($compiled) -Force } }
 function StartsWithAny {
   param([string]$Text,[object]$Prefixes)
   if ([string]::IsNullOrWhiteSpace($Text) -or $null -eq $Prefixes) { return $false }
@@ -218,6 +202,14 @@ function StartsWithAny {
 # =========================
 function Get-DefaultCatalog {
   param([string]$QuarantineDir,[string]$ProofOutFile)
+  $windowsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+  $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+  $programFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+  $nativeWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+  if ([string]::IsNullOrWhiteSpace($windowsRoot) -and -not $nativeWindows) { $windowsRoot = 'C:\Windows' }
+  if ([string]::IsNullOrWhiteSpace($programFiles) -and -not $nativeWindows) { $programFiles = 'C:\Program Files' }
+  if ([string]::IsNullOrWhiteSpace($programFilesX86) -and -not $nativeWindows) { $programFilesX86 = 'C:\Program Files (x86)' }
+  if ([string]::IsNullOrWhiteSpace($windowsRoot)) { throw 'Trusted Windows directory is unavailable.' }
   return [pscustomobject]([ordered]@{
     CriticalTasks = @(
       "\\Microsoft\\Windows\\Windows Defender\\.*",
@@ -227,14 +219,11 @@ function Get-DefaultCatalog {
       "\\Microsoft\\Windows\\StorageSense\\.*",
       "\\Microsoft\\Windows\\Servicing\\StartComponentCleanup"
     )
-    AllowTaskExact = @(
-      "\\Company\\Managed\\.*"
-    )
+    AllowTaskExact = @()
     AllowActionPathPrefixes = @(
-      "$env:SystemRoot\",
-      "$env:ProgramFiles\",
-      "${env:ProgramFiles(x86)}\",
-      "PATH/TO/SCRIPTS/"
+      "$windowsRoot\",
+      "$programFiles\",
+      "$programFilesX86\"
     )
     DenyActionPathRegex = @(
       "(?i)\\Users\\[^\\]+\\AppData\\",
@@ -247,8 +236,7 @@ function Get-DefaultCatalog {
       "(?i)\bcmd(\.exe)?\b.*\b/c\b.*(AppData\\|\\Users\\|\\Windows\\Temp\\|\\ProgramData\\Temp\\)"
     )
     AllowPublisherOrgRegex = @(
-      "(?i)\bO=Microsoft Corporation\b",
-      "(?i)\bO=Company\b"
+      "(?i)\bO=Microsoft Corporation\b"
     )
     PurgeUnapproved = $false
     QuarantineDir   = $QuarantineDir
@@ -282,16 +270,32 @@ function Normalize-Catalog {
 }
 function Load-Catalog {
   param([string]$CatalogPath,[string]$ConfigPath,[object]$DefaultCatalog)
-  $cat = Read-JsonFileSafe -Path $CatalogPath
-  if ($cat) { return (Normalize-Catalog -cat $cat -fallback $DefaultCatalog) }
-  $cfg = Read-JsonFileSafe -Path $ConfigPath
+  if (-not [string]::IsNullOrWhiteSpace($CatalogPath)) {
+    $catalogResult = Read-JsonFileWithStatus -Path $CatalogPath
+    if (-not $catalogResult.Meta.Loaded) {
+      throw "Explicit task catalog failed to load ($($catalogResult.Meta.Status)): $($catalogResult.Meta.Error)"
+    }
+    return (Normalize-Catalog -cat $catalogResult.Data -fallback $DefaultCatalog)
+  }
+
+  $cfg = $null
+  if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $configResult = Read-JsonFileWithStatus -Path $ConfigPath
+    if (-not $configResult.Meta.Loaded) {
+      throw "Explicit task config failed to load ($($configResult.Meta.Status)): $($configResult.Meta.Error)"
+    }
+    $cfg = $configResult.Data
+  }
   $th  = $null
   if ($cfg) { $th = Get-PropValue $cfg 'TasksHygiene' $null }
   if ($th) {
     $p = Get-PropValue $th 'CatalogPath' $null
     if (-not [string]::IsNullOrWhiteSpace([string]$p)) {
-      $cat = Read-JsonFileSafe -Path ([string]$p)
-      if ($cat) { return (Normalize-Catalog -cat $cat -fallback $DefaultCatalog) }
+      $catalogResult = Read-JsonFileWithStatus -Path ([string]$p)
+      if (-not $catalogResult.Meta.Loaded) {
+        throw "Task catalog referenced by ConfigPath failed to load ($($catalogResult.Meta.Status)): $($catalogResult.Meta.Error)"
+      }
+      return (Normalize-Catalog -cat $catalogResult.Data -fallback $DefaultCatalog)
     }
   }
   return (Normalize-Catalog -cat $null -fallback $DefaultCatalog)
@@ -567,7 +571,7 @@ function Evaluate-TaskRisk {
     } else {
       $approved = $false
       foreach($rx in @(Get-PropValue $Catalog 'AllowPublisherOrgRegex' @())) {
-        if ($risk.PublisherSubject -and ($risk.PublisherSubject -match [string]$rx)) { $approved = $true; break }
+        if ($risk.PublisherSubject -and $rx.IsMatch($risk.PublisherSubject)) { $approved = $true; break }
       }
       if (-not $approved) { $risk.Risky = $true; $risk.Reasons += "HighestPrivileges with unapproved publisher"
       }
@@ -595,9 +599,6 @@ $Proof = [pscustomobject]([ordered]@{
 # Main
 # =========================
 $EventSource = $DefaultEventSource
-if (-not (Ensure-EventSource -Source $EventSource)) {
-  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
-}
 $ok = $true
 $drifts  = New-Object System.Collections.Generic.List[string]
 $changes = New-Object System.Collections.Generic.List[string]
@@ -611,6 +612,8 @@ try {
     if ($Strict) { $ok = $false }
   }
   $cat = Load-Catalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath -DefaultCatalog $catalogFallback
+  Initialize-TaskCatalogRegex -Catalog $cat
+  if (-not (Ensure-EventSource -Source $EventSource)) { Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable." }
   $cat.QuarantineDir = Coalesce-String (Get-PropValue $cat 'QuarantineDir' $null) $DefaultQuarantineDir
   $proofObj = Get-PropValue $cat 'Proof' $null
   if ($null -eq $proofObj) {
@@ -632,7 +635,7 @@ try {
   # --- Ensure critical tasks ---
   $criticalRecords = New-Object System.Collections.Generic.List[object]
   foreach($pat in @($cat.CriticalTasks)) {
-    $hits = @($taskInfos | Where-Object { $_.FullPath -match [string]$pat })
+    $hits = @($taskInfos | Where-Object { $pat.IsMatch($_.FullPath) })
     if (@($hits).Count -eq 0) {
       $drifts.Add("Critical missing: $pat")
       $ok = $false
@@ -712,7 +715,7 @@ try {
   $eventId = if ($ok -and -not $Strict) { 5040 } else { 5050 }
   $level   = if ($ok -and -not $Strict) { 'Information' } else { 'Warning' }
   Write-HealthEvent -Id $eventId -Msg $msg -Level $level -Source $EventSource
-  # Pretty console output (no pipeline pollution)
+  # Formatted console output (no pipeline output)
   Write-UiHeader "Scheduled Tasks Hygiene Summary"
   Write-KeyValue "Host"       $Proof.Hostname
   Write-KeyValue "Time"       $Proof.Time
@@ -751,7 +754,9 @@ try {
   #$Proof
 }
 catch {
-  $errMsg = "Tasks hygiene error: " + $_.Exception.Message
+  $isRegexTimeout = $_.Exception -is [System.Text.RegularExpressions.RegexMatchTimeoutException] -or $_.Exception.InnerException -is [System.Text.RegularExpressions.RegexMatchTimeoutException]
+  $prefix = if ($isRegexTimeout) { 'Tasks hygiene incomplete evidence: regex match timed out: ' } else { 'Tasks hygiene error: ' }
+  $errMsg = $prefix + $_.Exception.Message
   Write-HealthEvent -Id 5050 -Msg $errMsg -Level 'Error' -Source $EventSource
   Write-UiHeader "Scheduled Tasks Hygiene Summary"
   Write-UiStatus -Label "FAIL" -State FAIL -Text $errMsg
@@ -785,5 +790,4 @@ $v2Summary = [pscustomobject]@{
 $v2Result = Get-V2ResultObject -ScriptName '07-ScheduledTasks-Hygiene.ps1' -Mode $Mode -Result $resultToken -Findings $script:Findings.ToArray() -Summary $v2Summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-if ($resultToken -eq 'WARN') { exit 2 }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

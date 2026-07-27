@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-
 <#
 .SYNOPSIS
 Script execution and process invocation utilities.
@@ -8,6 +6,15 @@ Script execution and process invocation utilities.
 Provides helpers for argument tokenization and timed script execution.
 #>
 
+Set-StrictMode -Version Latest
+
+<#
+.SYNOPSIS
+Converts one argument token to its supported scalar value.
+.DESCRIPTION
+Recognizes literal PowerShell boolean tokens while leaving other argument text
+unchanged for later parameter binding.
+#>
 function Convert-TokenValue {
   [CmdletBinding()]
   param(
@@ -37,13 +44,17 @@ function Convert-ArgumentTokens {
     [string[]]$Arguments = @()
   )
 
+  # Windows PowerShell 5.1 binds an explicitly supplied empty string array as
+  # $null. Normalize it before using Count or indexing so callers can pass an
+  # optional token vector without special-casing the legacy binder.
+  $argumentTokens = @($Arguments | Where-Object { $null -ne $_ })
   $namedArgs = @{}
   $positionalArgs = New-Object System.Collections.ArrayList
   $optionPattern = '^-{1,2}[A-Za-z][A-Za-z0-9-]*$'
   $optionWithInlineValuePattern = '^-{1,2}([A-Za-z][A-Za-z0-9-]*):(.*)$'
 
-  for ($i = 0; $i -lt $Arguments.Count; $i++) {
-    $token = [string]$Arguments[$i]
+  for ($i = 0; $i -lt $argumentTokens.Count; $i++) {
+    $token = [string]$argumentTokens[$i]
 
     if ($token -match $optionWithInlineValuePattern) {
       $name = $Matches[1]
@@ -60,8 +71,8 @@ function Convert-ArgumentTokens {
     if ($token -match $optionPattern) {
       $name = $token.TrimStart('-')
       $next = $null
-      if ($i + 1 -lt $Arguments.Count) {
-        $next = [string]$Arguments[$i + 1]
+      if ($i + 1 -lt $argumentTokens.Count) {
+        $next = [string]$argumentTokens[$i + 1]
       }
 
       if ($null -eq $next -or $next -match $optionPattern -or $next -match $optionWithInlineValuePattern) {

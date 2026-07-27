@@ -12,6 +12,39 @@
 [CmdletBinding()]
 param()
 
+$script:SkipNonSystemWindowsIntegration = $false
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+  try {
+    $script:SkipNonSystemWindowsIntegration =
+      [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18'
+  } catch {
+    $script:SkipNonSystemWindowsIntegration = $true
+  }
+}
+
+Describe 'Extracted script helpers' {
+  It 'keeps each helper parseable and dot-sourced by its main script' -ForEach @(
+    @{ Main = '00-Copy-Local.ps1'; Helper = '00-Copy-Local.helpers.ps1'; Functions = @('Invoke-GitCommand', 'Test-CopyLocalBlockedGitEnvironmentName', 'Get-CopyLocalSafeGitEnvironment', 'Enable-CopyLocalSafeGitEnvironment', 'Restore-CopyLocalGitEnvironment', 'Get-FullPath', 'Test-RepoPathOverlapsDeploymentTarget', 'Remove-CopyLocalCommittedBackup', 'Restore-CopyLocalDeploymentSwaps') }
+    @{ Main = '16-Sysmon-Config-Updater.ps1'; Helper = '16-Sysmon-Config-Updater.helpers.ps1'; Functions = @('Test-ManifestPolicy', 'New-StagedTrustedSysmonExecutable', 'Ensure-SysmonChannel') }
+    @{ Main = '17-Sysmon-Rule-Drift-Sensor.ps1'; Helper = '17-Sysmon-Rule-Drift-Sensor.helpers.ps1'; Functions = @('Resolve-RemediationScriptPath', 'Invoke-RemediationScript') }
+  ) {
+    param($Main, $Helper, $Functions)
+    $scriptsDir = Join-Path $PSScriptRoot '../../scripts'
+    $mainPath = Join-Path $scriptsDir $Main
+    $helperPath = Join-Path $scriptsDir (Join-Path 'internal' $Helper)
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($helperPath, [ref]$tokens, [ref]$errors)
+
+    $errors | Should -BeNullOrEmpty
+    (Get-Content -LiteralPath $mainPath -Raw -Encoding UTF8) | Should -Match ([regex]::Escape($Helper))
+    $defined = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object Name)
+    foreach ($functionName in $Functions) {
+      $defined | Should -Contain $functionName
+    }
+  }
+}
+
 # ---------------------------------------------------------------------------
 # 04 - OfficeBrowser helpers
 # ---------------------------------------------------------------------------
@@ -116,6 +149,8 @@ Describe '04 OfficeBrowser helpers' {
       $expected = @(
         'Get-TextOrNull', 'Get-BoolDefault', 'Get-IntDefault', 'Get-ArrayStrings',
         'Convert-RegValue', 'Get-ProofItem', 'Get-EdgeBaseKey', 'Has-Prop',
+        'Get-EdgePolicyDefinitions', 'Get-EdgeStartupUrlMap', 'Get-EdgeStartupUrlValues',
+        'Get-EdgeStartupUrlAuditProofItems', 'Clear-EdgeStartupUrlValues', 'Set-EdgeStartupUrlProof',
         'Bool-Prop', 'Ensure-ProofItemLike', 'Get-ResultSummary', 'Load-Catalog'
       )
       foreach ($fn in $expected) {
@@ -157,12 +192,68 @@ Describe '09 SupportBundle helpers' {
     }
   }
 
+  Context 'trusted SupportBundle proof paths' {
+    It 'derives the default root from CommonApplicationData rather than a temporary directory' {
+      $oldProgramData = $env:ProgramData
+      try {
+        $env:ProgramData = $TestDrive
+        $root = SB_GetDefaultTrustedOutputRoot
+      } finally {
+        $env:ProgramData = $oldProgramData
+      }
+      $commonData = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+      } else {
+        $TestDrive
+      }
+      $root | Should -Be (Join-Path (Join-Path $commonData 'BaselineOpsForWindows') 'SupportBundles')
+    }
+
+    It 'rejects a configured proof file outside the trusted root' {
+      $root = Join-Path $TestDrive 'proof-root'
+      New-Item -ItemType Directory -Path $root -Force | Out-Null
+      { SB_ResolveTrustedProofFile -ConfiguredPath (Join-Path $TestDrive 'outside.json') -TrustedRoot $root -ExpectedFileName 'SysmonState.json' -PropertyName 'SysmonState' } |
+        Should -Throw
+    }
+
+    It 'rejects a configured proof directory even when its name is expected' {
+      $root = Join-Path $TestDrive 'proof-root'
+      New-Item -ItemType Directory -Path $root -Force | Out-Null
+      New-Item -ItemType Directory -Path (Join-Path $root 'SysmonState.json') | Out-Null
+      { SB_ResolveTrustedProofFile -ConfiguredPath 'SysmonState.json' -TrustedRoot $root -ExpectedFileName 'SysmonState.json' -PropertyName 'SysmonState' } |
+        Should -Throw
+    }
+
+    It 'rejects a configured proof symlink when the platform permits creating one' {
+      $root = Join-Path $TestDrive 'proof-root'
+      New-Item -ItemType Directory -Path $root -Force | Out-Null
+      $link = Join-Path $root 'SysmonState.json'
+      try {
+        New-Item -ItemType SymbolicLink -Path $link -Target (Join-Path $TestDrive 'outside.json') -ErrorAction Stop | Out-Null
+      } catch {
+        Set-ItResult -Skipped -Because 'Symbolic links are unavailable to this test host.'
+        return
+      }
+      { SB_ResolveTrustedProofFile -ConfiguredPath 'SysmonState.json' -TrustedRoot $root -ExpectedFileName 'SysmonState.json' -PropertyName 'SysmonState' } |
+        Should -Throw
+    }
+
+    It 'fails an explicit unreadable or wrong-schema config instead of substituting defaults' {
+      $path = Join-Path $TestDrive 'wrong-schema.json'
+      '{"Paths":{"ProofDir":"C:\\unsafe"},"Unexpected":true}' | Set-Content -LiteralPath $path -Encoding UTF8
+      $result = SB_LoadJsonConfig -Path $path -DefaultConfig (SB_NewDefaultConfig -ProofDirDefault $TestDrive)
+      $result.Ok | Should -BeFalse
+      $result.Error | Should -Match 'unsupported property|must contain'
+    }
+  }
+
   Context 'functions are dot-sourceable and defined' {
     It 'exports all expected function names' {
       $expected = @(
         'SB_WriteLog', 'SB_NewRecord',
         'SB_NewSummary', 'SB_AddRecord', 'SB_NewDefaultConfig',
-        'SB_TryStep', 'SB_LoadJsonConfig', 'SB_TryGetRegValue'
+        'SB_TryStep', 'SB_LoadJsonConfig', 'SB_AssertTrustedOutputRoot', 'SB_AssertTrustedChildDirectory',
+        'SB_GetDefaultTrustedOutputRoot', 'SB_SetRestrictedDirectoryAcl', 'SB_ResolveTrustedProofFile', 'SB_TryGetRegValue'
       )
       foreach ($fn in $expected) {
         Get-Command -Name $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty -Because "$fn must be defined after dot-sourcing"
@@ -181,6 +272,47 @@ Describe '09 SupportBundle helpers' {
 # ---------------------------------------------------------------------------
 # 12 - SuspiciousArtifactGrabber helpers
 # ---------------------------------------------------------------------------
+Describe '11 IOC sweep helpers' {
+  BeforeAll {
+    $helperPath = Join-Path $PSScriptRoot '../../scripts/internal/11-IOC-Sweep-Defender.helpers.ps1'
+    . $helperPath
+  }
+
+  It 'precompiles catalog regexes with a finite timeout' {
+    $regex = New-IocRegex -Pattern '^safe$' -Label 'test'
+    $regex.IsMatch('safe') | Should -BeTrue
+    $regex.MatchTimeout.TotalMilliseconds | Should -Be 250
+  }
+
+  It 'rejects oversized or invalid catalog regexes before scanning' {
+    { New-IocRegex -Pattern ('a' * 1025) -Label 'test' } | Should -Throw '*1024-character limit*'
+    { New-IocRegex -Pattern '(' -Label 'test' } | Should -Throw '*invalid*'
+  }
+}
+
+Describe '21 EmergencyKillSwitch helpers' {
+  BeforeAll {
+    Import-Module (Join-Path $PSScriptRoot '../../lib/Results.psm1') -Force
+    $script:Run = [pscustomobject]@{ Errors = (New-Object System.Collections.Generic.List[string]); Actions = @{}; Effective = @{}; Outcome = @{} }
+    $script:Findings = Get-FindingsList
+    function Add-RunError { param([string]$Message) [void]$script:Run.Errors.Add($Message) }
+    function global:Get-NetFirewallRule { [pscustomobject]@{ Name = 'owner-unknown' } }
+    function global:New-NetFirewallRule { throw 'must not replace an existing rule' }
+    . (Join-Path $PSScriptRoot '../../scripts/internal/21-EmergencyKillSwitch.helpers.ps1')
+  }
+
+  AfterAll {
+    Remove-Item -LiteralPath Function:\Get-NetFirewallRule -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Function:\New-NetFirewallRule -ErrorAction SilentlyContinue
+  }
+
+  It 'preserves an owner-unknown colliding firewall rule' {
+    (New-OrReplaceRule -Name 'existing-rule' -DisplayName 'test' -Direction Inbound -Action Block -Confirm:$false) | Should -BeFalse
+    @($script:Run.Errors | Where-Object { $_ -match 'refusing to replace owner-unknown' }).Count | Should -Be 1
+    @($script:Findings.ToArray() | Where-Object Code -eq 'Firewall-RuleCollision').Count | Should -Be 1
+  }
+}
+
 Describe '12 SuspiciousArtifactGrabber helpers' {
   BeforeAll {
     $helperPath = Join-Path $PSScriptRoot '../../scripts/internal/12-Suspicious-Artifact-Grabber.helpers.ps1'
@@ -247,9 +379,12 @@ Describe '12 SuspiciousArtifactGrabber helpers' {
   }
 
   Context 'Get-RunId' {
-    It 'returns a non-empty string in yyyyMMdd-HHmmss format' {
-      $id = Get-RunId
-      $id | Should -Match '^\d{8}-\d{6}$'
+    It 'returns a collision-resistant timestamped identifier' {
+      $first = Get-RunId
+      $second = Get-RunId
+
+      $first | Should -Match '^\d{8}-\d{6}-[a-f0-9]{32}$'
+      $second | Should -Not -Be $first
     }
   }
 
@@ -276,6 +411,27 @@ Describe '12 SuspiciousArtifactGrabber helpers' {
     }
   }
 
+  Context 'catalog regex hardening' {
+    It 'precompiles bounded patterns with a finite timeout' {
+      $regex = New-ArtifactRegex -Pattern '^safe$' -Label 'test'
+      $regex.IsMatch('safe') | Should -BeTrue
+      $regex.MatchTimeout.TotalMilliseconds | Should -Be 250
+    }
+
+    It 'rejects oversized, invalid, and over-count catalog patterns before collection' {
+      { New-ArtifactRegex -Pattern ('a' * 1025) -Label 'test' } | Should -Throw '*1024-character limit*'
+      { New-ArtifactRegex -Pattern '(' -Label 'test' } | Should -Throw '*invalid*'
+      $catalog = Get-BaseClone -Obj $DefaultCatalog
+      $catalog.Tasks.SuspiciousRegex = @(1..257 | ForEach-Object { 'safe' })
+      { Initialize-ArtifactRegexRules -Catalog $catalog } | Should -Throw '*at most 256 patterns*'
+    }
+
+    It 'times out catastrophic catalog matches instead of using unbounded matching' {
+      $regex = New-ArtifactRegex -Pattern '^(a+)+$' -Label 'test'
+      { $regex.IsMatch((('a' * 24000) + '!')) } | Should -Throw
+    }
+  }
+
   Context 'functions are dot-sourceable and defined' {
     It 'exports all expected function names' {
       $expected = @(
@@ -290,7 +446,7 @@ Describe '12 SuspiciousArtifactGrabber helpers' {
   }
 }
 
-Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifactGrabber' {
+Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifactGrabber' -Skip:$script:SkipNonSystemWindowsIntegration {
   BeforeAll {
     $script:ArtifactGrabberScript = Join-Path $PSScriptRoot '../../scripts/12-Suspicious-Artifact-Grabber.ps1'
     Import-Module (Join-Path $PSScriptRoot '../../lib/EventLog.psm1') -Force
@@ -300,7 +456,13 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
     function Invoke-ArtifactGrabberParentCase {
       param(
         [switch]$SuspiciousTask,
-        [switch]$ProcessError
+        [switch]$ProcessError,
+        [switch]$InvalidRegex,
+        [switch]$CatastrophicRegex,
+        [switch]$MissingCatalog,
+        [switch]$InvalidCatalogJson,
+        [switch]$RemoteOutputBase,
+        [switch]$NoTrigger
       )
 
       $oldOS = $env:OS
@@ -312,7 +474,7 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
 
         $catalogPath = Join-Path $TestDrive ("grabber-catalog-{0}.json" -f [guid]::NewGuid().ToString('N'))
         $catalog = [ordered]@{
-          OutputBase = $TestDrive
+          OutputBase = $(if ($RemoteOutputBase) { '\\server\share\evidence' } else { Get-ArtifactEvidenceRoot })
           Trigger    = [ordered]@{
             Registry = 'HKLM:\Software\TestArtifactGrabber'
             FileFlag = (Join-Path $TestDrive 'missing.flag')
@@ -322,13 +484,18 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
           }
           Tasks      = [ordered]@{
             ExportXmlForSuspicious = $false
-            SuspiciousRegex        = @('AppData')
+            SuspiciousRegex        = $(if ($InvalidRegex) { @('(') } elseif ($CatastrophicRegex) { @('^(a+)+$') } else { @('AppData') })
             MaxXml                 = 0
           }
         }
-        $catalog | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $catalogPath -Encoding UTF8
+        if ($InvalidCatalogJson) {
+          Set-Content -LiteralPath $catalogPath -Value '{ not json' -Encoding UTF8
+        } elseif (-not $MissingCatalog) {
+          $catalog | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $catalogPath -Encoding UTF8
+        }
 
         function global:Get-ScheduledTask {
+          Set-Variable -Name __ArtifactGrabberEnumerationReached -Scope Global -Value $true
           if (Get-Variable -Name __ArtifactGrabberSuspiciousTask -Scope Global -ValueOnly) {
             return @(
               [pscustomobject]@{
@@ -337,7 +504,7 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
                 Principal = [pscustomobject]@{ UserId = 'SYSTEM' }
                 Actions   = @(
                   [pscustomobject]@{
-                    Execute   = 'C:\Users\alice\AppData\Roaming\bad.exe'
+                    Execute   = $(if ($CatastrophicRegex) { (('a' * 24000) + '!') } else { 'C:\Users\alice\AppData\Roaming\bad.exe' })
                     Arguments = ''
                   }
                 )
@@ -398,11 +565,20 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
         }
 
         Set-Variable -Name __ArtifactGrabberSuspiciousTask -Scope Global -Value ([bool]$SuspiciousTask)
+        Set-Variable -Name __ArtifactGrabberEnumerationReached -Scope Global -Value $false
 
         Mock -CommandName Ensure-EventSource -MockWith { }
         Mock -CommandName Write-HealthEvent -MockWith { $true }
 
-        $output = & $script:ArtifactGrabberScript -Force -CatalogPath $catalogPath -OutputFormat None -PassThru -Quiet -Confirm:$false 2>&1 3>&1 6>&1
+        $runParameters = @{
+          CatalogPath = $catalogPath
+          OutputFormat = 'None'
+          PassThru = $true
+          Quiet = $true
+          Confirm = $false
+        }
+        if (-not $NoTrigger) { $runParameters.Force = $true }
+        $output = & $script:ArtifactGrabberScript @runParameters 2>&1 3>&1 6>&1
         $exitCode = $LASTEXITCODE
       } finally {
         if ($null -eq $oldOS) {
@@ -433,11 +609,14 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
           $_.PSObject.Properties.Name -contains 'Result' -and
           $_.PSObject.Properties.Name -contains 'Summary'
         })[-1]
+      $enumerationReached = Get-Variable -Name __ArtifactGrabberEnumerationReached -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+      Remove-Variable -Scope Global -Name __ArtifactGrabberEnumerationReached -ErrorAction SilentlyContinue
 
       [pscustomobject]@{
         ExitCode = $exitCode
         Result   = $result
         Text     = ($output | Out-String)
+        EnumerationReached = $enumerationReached
       }
     }
   }
@@ -457,5 +636,51 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
 
     $run.Result.Result | Should -Be 'FAIL'
     @($run.Result.Summary.Errors | Where-Object { $_ -match 'process source unavailable' }).Count | Should -Be 1
+  }
+
+  It 'fails invalid catalog regexes before collection starts' {
+    $run = Invoke-ArtifactGrabberParentCase -InvalidRegex
+
+    $run.Result.Result | Should -Be 'FAIL'
+    $run.EnumerationReached | Should -BeFalse
+    $run.Result.Summary.Errors[0] | Should -Match 'regex is invalid'
+  }
+
+  It 'treats a catalog regex timeout as an incomplete-evidence failure' {
+    $run = Invoke-ArtifactGrabberParentCase -CatastrophicRegex -SuspiciousTask
+
+    $run.Result.Result | Should -Be 'FAIL'
+    $run.Result.Summary.Errors[0] | Should -Match 'incomplete evidence: regex match timed out'
+  }
+
+  It 'fails explicit unusable catalogs before artifact collection' -TestCases @(
+    @{ Missing = $true; Invalid = $false }
+    @{ Missing = $false; Invalid = $true }
+  ) {
+    param($Missing, $Invalid)
+    $run = Invoke-ArtifactGrabberParentCase -MissingCatalog:$Missing -InvalidCatalogJson:$Invalid
+
+    $run.ExitCode | Should -Be 1
+    $run.Result.Result | Should -Be 'FAIL'
+    $run.Result.Summary.Errors[0] | Should -Match 'Explicit artifact catalog'
+    $run.EnumerationReached | Should -BeFalse
+  }
+
+  It 'rejects a UNC catalog OutputBase before collection starts' {
+    $run = Invoke-ArtifactGrabberParentCase -RemoteOutputBase
+
+    $run.ExitCode | Should -Be 1
+    $run.Result.Result | Should -Be 'FAIL'
+    $run.Result.Summary.Errors[0] | Should -Match 'UNC, device, or remote path'
+    $run.EnumerationReached | Should -BeFalse
+  }
+
+  It 'returns one terminal V2 result when no collection trigger is set' {
+    $run = Invoke-ArtifactGrabberParentCase -NoTrigger
+
+    $run.ExitCode | Should -Be 0
+    $run.Result.Result | Should -Be 'OK'
+    $run.Result.Summary.Output.WorkDir | Should -BeNullOrEmpty
+    $run.EnumerationReached | Should -BeFalse
   }
 }

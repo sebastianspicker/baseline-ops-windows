@@ -1,26 +1,26 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-Audits Windows network configuration per interface (IP, gateways, DNS) and prints a human-friendly console report.
+Audits Windows network configuration per interface (IP, gateways, DNS) and prints a readable console report.
 
 .DESCRIPTION
-Uses Get-NetIPConfiguration (NetTCPIP) for structured per-interface data. [web:1]
-Optionally exports CSV files (summary + interfaces). [web:18]
-Optionally loads a JSON config (e.g. "PATH/TO/JSON/config.json"); if missing/invalid, built-in defaults are used.
+Uses Get-NetIPConfiguration (NetTCPIP) for structured per-interface data.
+Optionally exports CSV files (summary + interfaces).
+Optionally loads a JSON config from $JsonPath; if missing or invalid, built-in defaults are used.
 
 .DESIGN GOALS
 - Pipeline: structured objects only (safe for Export-Csv / ConvertTo-Json / Where-Object).
-- Console: all "pretty" output via Write-UiLine or Write-Information only (no strings/format objects to pipeline). [web:58]
+- Console: all formatting uses Write-UiLine or Write-Information and does not write strings or format objects to the pipeline.
 
 .PARAMETER ExportPath
 Optional base file path for CSV exports. Creates:
 <base>_summary.csv and <base>_interfaces.csv in the target folder.
 
 .PARAMETER IncludeHidden
-If set, includes ALL interfaces (virtual/loopback/disconnected) via Get-NetIPConfiguration -All. [web:148]
+If set, includes ALL interfaces (virtual/loopback/disconnected) via Get-NetIPConfiguration -All.
 
 .PARAMETER JsonPath
-Optional path to a JSON config file (e.g. "PATH/TO/JSON/config.json").
+Optional path to a JSON config file supplied with $JsonPath.
 
 .PARAMETER Quiet
 Suppress console output.
@@ -91,7 +91,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '29-Network-Config-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '29-Network-Config-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -103,10 +107,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # C10: canonical findings list
@@ -178,7 +183,7 @@ function Import-JsonConfigOrDefault {
   if (-not (Test-Path -Path $JsonPath)) { return $cfg }
 
   try {
-    $raw = Get-Content -Path $JsonPath -Raw -Encoding UTF8
+    $raw = Get-BoundedUtf8FileContent -Path $JsonPath -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { return $cfg }
 
     $json = $raw | ConvertFrom-Json
@@ -225,7 +230,7 @@ function To-ConsoleTableText {
     [int]$Width
   )
 
-  # Console-only formatting; caller must write via Write-UiLine/Write-Information. [web:146]
+  # Console-only formatting; caller must write via Write-UiLine/Write-Information.
   return ($InputObjects | Format-Table -AutoSize | Out-String -Width $Width)
 }
 
@@ -263,7 +268,7 @@ Ensure-Cmdlet -Name 'Get-NetIPConfiguration'
 $config = Import-JsonConfigOrDefault -JsonPath $JsonPath
 
 # Get-NetIPConfiguration without parameters returns non-virtual connected interfaces;
-# -All returns all interfaces (including virtual/loopback/disconnected). [web:1][web:148]
+# -All returns all interfaces (including virtual/loopback/disconnected).
 $netCfg = if ($IncludeHidden) { Get-NetIPConfiguration -All } else { Get-NetIPConfiguration }
 
 if (-not $IncludeHidden -and $config.FilterWhenNotIncludeHidden) {
@@ -315,7 +320,7 @@ if ($ExportPath) {
     New-Item -Path $target.Folder -ItemType Directory -Force | Out-Null
   }
 
-  # Do not format objects before Export-Csv; select properties instead. [web:18][web:146]
+  # Do not format objects before Export-Csv; select properties instead.
   if ($config.CsvUseCultureDelimiter) {
     $summary    | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_summary.csv"))    -NoTypeInformation -Encoding $config.CsvEncoding -UseCulture
     $interfaces | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_interfaces.csv")) -NoTypeInformation -Encoding $config.CsvEncoding -UseCulture
@@ -379,7 +384,8 @@ foreach ($iface in $issueInterfaces) {
 
 # V2 output contract
 $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result.Summary -Metadata @{ Interfaces = $result.Interfaces }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

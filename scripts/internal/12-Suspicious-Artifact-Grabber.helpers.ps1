@@ -1,4 +1,12 @@
-# Helper functions extracted from 12-Suspicious-Artifact-Grabber.ps1
+<#
+.SYNOPSIS
+Internal evidence collectors for the suspicious-artifact grabber.
+
+.DESCRIPTION
+Normalizes configuration, bounds regular expressions, and gathers process,
+network, persistence, and Autoruns evidence into structured result objects.
+The split keeps acquisition details testable without obscuring entry-script flow.
+#>
 function Get-ResultObject([string]$Name) {
   [pscustomobject]@{
     Name   = $Name
@@ -64,7 +72,7 @@ function Get-PSObjectPropertyValue {
 }
 
 function Get-RunId {
-  (Get-Date).ToString('yyyyMMdd-HHmmss')
+  "{0}-{1}" -f (Get-Date).ToString('yyyyMMdd-HHmmss'), [guid]::NewGuid().ToString('N')
 }
 
 function Get-BaseClone {
@@ -73,11 +81,70 @@ function Get-BaseClone {
   return ($Obj | ConvertTo-Json -Depth 30 | ConvertFrom-Json)
 }
 
+function Get-ArtifactEvidenceRoot {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param()
+
+  if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    $programData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::CommonApplicationData)
+    if ([string]::IsNullOrWhiteSpace($programData)) { $programData = $env:ProgramData }
+    if ([string]::IsNullOrWhiteSpace($programData)) { throw 'Cannot resolve the local ProgramData evidence root.' }
+    return (Join-Path $programData 'BaselineOpsForWindows\Evidence\IR-Grabber')
+  }
+
+  # Portable tests use one deterministic local root; Windows enforces the
+  # protected ProgramData root and its ACL below.
+  return (Join-Path ([System.IO.Path]::GetTempPath()) 'baselineops-windows-evidence')
+}
+
+# Fixes evidence output to the protected local root; catalog input may configure
+# collection behavior but cannot redirect privileged artifacts elsewhere.
+function Assert-ArtifactEvidenceOutputBase {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param([Parameter(Mandatory)][string]$OutputBase)
+
+  if ([string]::IsNullOrWhiteSpace($OutputBase)) { throw 'Catalog.OutputBase must name the protected local evidence root.' }
+  if ($OutputBase -match '^(\\\\|//|\\\\[?.]\\)') { throw "Catalog.OutputBase must not be a UNC, device, or remote path: $OutputBase" }
+  Assert-NoPathTraversal -Path $OutputBase -ParameterName 'Catalog.OutputBase'
+
+  $evidenceRoot = [System.IO.Path]::GetFullPath((Get-ArtifactEvidenceRoot))
+  $candidateRoot = [System.IO.Path]::GetFullPath($OutputBase)
+  $comparison = if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    [System.StringComparison]::OrdinalIgnoreCase
+  } else {
+    [System.StringComparison]::Ordinal
+  }
+  if (-not $candidateRoot.Equals($evidenceRoot, $comparison)) {
+    throw "Catalog.OutputBase is restricted to the protected local evidence root: $evidenceRoot"
+  }
+  if (-not (Ensure-Directory $evidenceRoot)) { throw "Unable to create protected local evidence root: $evidenceRoot" }
+  if (Test-PathContainsReparsePoint -Path $evidenceRoot -Root $evidenceRoot) { throw "Protected local evidence root contains a reparse point: $evidenceRoot" }
+  if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    Assert-TrustedWindowsPathAcl -Path $evidenceRoot -CheckAncestors | Out-Null
+  }
+  return $evidenceRoot
+}
+
+function New-ArtifactRegex { param([Parameter(Mandatory)][string]$Pattern,[Parameter(Mandatory)][string]$Label); if ($Pattern.Length -gt 1024) { throw "Grabber $Label regex exceeds the 1024-character limit." }; try { New-Object System.Text.RegularExpressions.Regex($Pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, ([TimeSpan]::FromMilliseconds(250))) } catch { throw "Grabber $Label regex is invalid: $($_.Exception.Message)" } }
+# Compiles and bounds all catalog patterns before collection so timeouts and
+# malformed rules fail early, before partial evidence has been written.
+function Initialize-ArtifactRegexRules {
+  param([Parameter(Mandatory)]$Catalog)
+  foreach ($rule in @(@{ Section='Process'; Property='UserPathsRegex'; Compiled='__UserPathsRegex' },@{ Section='Samples'; Property='PathIncludeRegex'; Compiled='__PathIncludeRegex' },@{ Section='Tasks'; Property='SuspiciousRegex'; Compiled='__SuspiciousRegex' })) {
+    $section = $Catalog.($rule.Section); $patterns = @($section.($rule.Property))
+    if ($patterns.Count -gt 256) { throw "Grabber $($rule.Section).$($rule.Property) supports at most 256 patterns." }
+    $compiled = foreach ($pattern in $patterns) { if ($pattern -isnot [string]) { throw "Grabber $($rule.Section).$($rule.Property) must contain strings." }; New-ArtifactRegex -Pattern $pattern -Label "$($rule.Section).$($rule.Property)" }
+    $section | Add-Member -NotePropertyName $rule.Compiled -NotePropertyValue @($compiled) -Force
+  }
+}
+
 # -------------------------
 # Defaults (used when JSON is missing/unreadable)
 # -------------------------
 $DefaultCatalog = [pscustomobject]@{
-  OutputBase = (Join-Path ([System.IO.Path]::GetTempPath()) 'win-mdm-ir-grabber')
+  OutputBase = (Get-ArtifactEvidenceRoot)
   Trigger    = [pscustomobject]@{
     Registry = 'HKLM:\SOFTWARE\IR\Grabber'
     FileFlag = $null
@@ -143,38 +210,51 @@ function Merge-Catalog {
   return $base
 }
 
+# Merges only validated catalog input over defaults and records its provenance,
+# keeping optional acquisition settings explicit in the final evidence.
 function Load-Catalog {
   param([string]$CatalogPath,[string]$ConfigPath,[ref]$CatalogLoadNote)
 
   $CatalogLoadNote.Value = $null
   $cat = $null
 
-  $sanitizedCatalog = Sanitize-Path -Path $CatalogPath -MustExist
-  if ($sanitizedCatalog) {
-    $cat = Read-JsonFileSafe -Path $sanitizedCatalog
-    if ($cat) { $CatalogLoadNote.Value = "Catalog loaded from -CatalogPath" }
+  if (-not [string]::IsNullOrWhiteSpace($CatalogPath)) {
+    $sanitizedCatalog = Sanitize-Path -Path $CatalogPath -MustExist
+    if ([string]::IsNullOrWhiteSpace($sanitizedCatalog)) { throw 'Explicit artifact catalog path is missing or unsafe.' }
+    $catalogResult = Read-JsonFileWithStatus -Path $sanitizedCatalog
+    if (-not $catalogResult.Meta.Loaded) {
+      throw "Explicit artifact catalog failed to load ($($catalogResult.Meta.Status)): $($catalogResult.Meta.Error)"
+    }
+    $cat = $catalogResult.Data
+    $CatalogLoadNote.Value = "Catalog loaded from -CatalogPath"
   }
 
   if ($null -eq $cat -and $ConfigPath) {
     $sanitizedConfig = Sanitize-Path -Path $ConfigPath -MustExist
-    if ($sanitizedConfig) {
-      $cfg = Read-JsonFileSafe -Path $sanitizedConfig
+    if ([string]::IsNullOrWhiteSpace($sanitizedConfig)) { throw 'Explicit artifact config path is missing or unsafe.' }
+    $configResult = Read-JsonFileWithStatus -Path $sanitizedConfig
+    if (-not $configResult.Meta.Loaded) {
+      throw "Explicit artifact config failed to load ($($configResult.Meta.Status)): $($configResult.Meta.Error)"
+    }
+    $cfg = $configResult.Data
+    $p = $null
+    try { $p = $cfg.Grabber.CatalogPath } catch {
+      Write-Verbose ("Config CatalogPath lookup failed: {0}" -f $_.Exception.Message)
       $p = $null
-      try { $p = $cfg.Grabber.CatalogPath } catch {
-        Write-Verbose ("Config CatalogPath lookup failed: {0}" -f $_.Exception.Message)
-        $p = $null
+    }
+    if ($p) {
+      $sanitizedP = Sanitize-Path -Path $p -MustExist
+      if ([string]::IsNullOrWhiteSpace($sanitizedP)) { throw 'Artifact catalog referenced by ConfigPath is missing or unsafe.' }
+      $catalogResult = Read-JsonFileWithStatus -Path $sanitizedP
+      if (-not $catalogResult.Meta.Loaded) {
+        throw "Artifact catalog referenced by ConfigPath failed to load ($($catalogResult.Meta.Status)): $($catalogResult.Meta.Error)"
       }
-      if ($p) {
-        $sanitizedP = Sanitize-Path -Path $p -MustExist
-        if ($sanitizedP) {
-          $cat = Read-JsonFileSafe -Path $sanitizedP
-          if ($cat) { $CatalogLoadNote.Value = "Catalog loaded from ConfigPath reference" }
-        }
-      }
+      $cat = $catalogResult.Data
+      $CatalogLoadNote.Value = "Catalog loaded from ConfigPath reference"
     }
   }
 
-  if ($null -eq $cat) { $CatalogLoadNote.Value = "Using defaults (no JSON or unreadable JSON)" }
+  if ($null -eq $cat) { $CatalogLoadNote.Value = "Using defaults (no catalog configured)" }
 
   $baseClone = Get-BaseClone $DefaultCatalog
   return (Merge-Catalog -base $baseClone -override $cat)
@@ -227,6 +307,8 @@ function Read-Trigger {
 # -------------------------
 # Collectors
 # -------------------------
+# Captures process metadata and selectively hashes images according to the
+# bounded catalog policy, limiting expensive work on large endpoints.
 function Collect-Processes {
   param([string]$outDir,$cat,[switch]$hashAll)
 
@@ -236,7 +318,7 @@ function Collect-Processes {
   try {
     [void](Ensure-Directory $outDir)
 
-    $rxList=@(); try { $rxList=@($cat.Process.UserPathsRegex) } catch {
+    $rxList=@(); try { $rxList=@($cat.Process.__UserPathsRegex) } catch {
       Write-Verbose ("Process UserPathsRegex lookup failed: {0}" -f $_.Exception.Message)
     }
     $hashUserlandOnly = Safe-ToBool $cat.Process.HashUserlandOnly $true
@@ -248,7 +330,7 @@ function Collect-Processes {
       }
 
       $userlandMatch=$false
-      if ($path) { foreach ($rx in $rxList) { if ($path -match $rx) { $userlandMatch=$true; break } } }
+      if ($path) { foreach ($rx in $rxList) { if ($rx.IsMatch($path)) { $userlandMatch=$true; break } } }
 
       $doHash=$false
       if ($hashAll) { $doHash=$true }
@@ -277,6 +359,8 @@ function Collect-Processes {
 
     $rows | Export-Csv -NoTypeInformation -Encoding UTF8 -Path $csv
     $res.Counts.Count = @($rows).Count
+  } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] {
+    throw
   } catch {
     Add-Error $res ("process: " + $_.Exception.Message)
     $res.Counts.Count = 0
@@ -337,7 +421,11 @@ function Collect-NetworkNetstatFallback {
   $counts.Value.Udp = 0
 
   try {
-    $raw = & netstat.exe -ano 2>$null
+    $native = Invoke-NativeCommand -Command 'netstat.exe' -Arguments @('-ano') -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 1048576
+    if ($null -eq $native -or -not $native.Success -or $native.TimedOut -or $native.OutputTruncated -or $native.StderrTruncated) {
+      throw 'netstat fallback timed out, failed, or produced truncated output.'
+    }
+    $raw = $native.Stdout -split "`r?`n"
     $rows = foreach ($line in @($raw)) {
       $t = ($line -as [string]).Trim()
       if (-not $t) { continue }
@@ -395,6 +483,8 @@ function Collect-NetworkNetstatFallback {
   }
 }
 
+# Prefers structured networking cmdlets and falls back to netstat while recording
+# which collection path succeeded so evidence consumers can judge fidelity.
 function Collect-Network {
   param([string]$outDir)
 
@@ -488,11 +578,13 @@ function Export-SuspiciousTaskXml {
   return $exported
 }
 
+# Flattens scheduled tasks, flags catalog-matching actions, and exports bounded
+# XML only for suspicious entries to avoid an unbounded evidence set.
 function Collect-Tasks {
   param([string]$outDir,$cat)
 
   $res = Get-ResultObject 'Tasks'
-  $rx=@(); try { $rx=@($cat.Tasks.SuspiciousRegex) } catch {
+  $rx=@(); try { $rx=@($cat.Tasks.__SuspiciousRegex) } catch {
     Add-Note $res ("task suspicious-regex lookup failed: " + $_.Exception.Message)
   }
   $exportXml = Safe-ToBool $cat.Tasks.ExportXmlForSuspicious $true
@@ -509,7 +601,7 @@ function Collect-Tasks {
       $actionText = Convert-TaskActionsToText -Actions $actions
 
       $isSusp=$false
-      foreach ($r in $rx) { if ($actionText -match $r) { $isSusp=$true; break } }
+      foreach ($r in $rx) { if ($r.IsMatch($actionText)) { $isSusp=$true; break } }
 
       $state=$null
       try { $state = (Get-ScheduledTaskInfo -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction SilentlyContinue).State } catch {
@@ -545,6 +637,8 @@ function Collect-Tasks {
         }
         [void](Add-Finding -FindingList $script:Findings -Code 'Grabber-SuspiciousTask' -Severity 'Medium' -Message "Suspicious scheduled task detected: $($t.TaskPath)$($t.TaskName)" -Extra $extra)
     }
+  } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] {
+    throw
   } catch {
     Add-Error $res ("tasks: " + $_.Exception.Message)
     $res.Counts.Total = 0
@@ -555,6 +649,8 @@ function Collect-Tasks {
   return $res
 }
 
+# Captures the WMI subscription objects commonly used for persistence as
+# separate tables so filters, consumers, and bindings can be correlated.
 function Collect-WmiPersistence {
   param([string]$outDir)
 
@@ -593,6 +689,8 @@ function Collect-WmiPersistence {
   return $res
 }
 
+# Exports the supported registry autorun locations into a uniform table; this is
+# evidence collection only and never executes discovered command lines.
 function Export-Autoruns {
   param([string]$outDir)
 

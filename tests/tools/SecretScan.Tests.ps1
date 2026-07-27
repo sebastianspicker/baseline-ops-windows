@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for repository tooling contracts.
+
+.DESCRIPTION
+Verifies tooling safeguards that protect maintainers and releases.
+#>
 
 [CmdletBinding()]
 param()
@@ -6,6 +13,17 @@ param()
 Describe 'tools/secret-scan.ps1' {
   BeforeAll {
     $script:ToolPath = Join-Path $PSScriptRoot '../../tools/secret-scan.ps1'
+  }
+
+  It 'uses bounded, NUL-delimited Git file enumeration and rejects escaped paths' {
+    $toolText = Get-Content -LiteralPath $script:ToolPath -Raw -Encoding UTF8
+
+    $toolText | Should -Match 'Invoke-NativeCommand\s+-Command\s+''git'''
+    $toolText | Should -Match "'ls-files', '-z'"
+    $toolText | Should -Match 'TimeoutSeconds\s+30'
+    $toolText | Should -Match 'OutputTruncated'
+    $toolText | Should -Match 'ConvertTo-RootedGitFilePath'
+    $toolText | Should -Not -Match '&\s*git\b'
   }
 
   It 'scans non-git directory recursive fallback' {
@@ -31,6 +49,24 @@ Describe 'tools/secret-scan.ps1' {
     $LASTEXITCODE | Should -Be 0
     $output | Should -Match 'cabinet\.md'
     $output | Should -Not -Match 'ignored\.md'
+  }
+
+  It 'scans shell, JavaScript module, and SVG source files' {
+    $scanRoot = Join-Path $TestDrive 'additional-text-formats'
+    New-Item -Path $scanRoot -ItemType Directory -Force | Out-Null
+    $key = 'to' + 'ken'
+    foreach ($name in @('build.sh', 'fuzz.mjs', 'diagram.svg')) {
+      Set-Content -LiteralPath (Join-Path $scanRoot $name) `
+        -Value ($key + ' = "1234567890abcdef"') -Encoding UTF8
+    }
+
+    $output = & $script:ToolPath -RootPath $scanRoot -NoFail 6>&1 | Out-String
+    $compactOutput = $output -replace '\s', ''
+
+    $LASTEXITCODE | Should -Be 0
+    $compactOutput | Should -Match 'build\.sh'
+    $compactOutput | Should -Match 'fuzz\.mjs'
+    $compactOutput | Should -Match 'diagram\.svg'
   }
 
   It 'scans untracked non-ignored files in a git worktree' {

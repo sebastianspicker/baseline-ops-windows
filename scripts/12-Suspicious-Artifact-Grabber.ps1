@@ -10,7 +10,7 @@
   Collection is normally gated by a trigger (registry value and/or file flag). Use -Force to run immediately.
 
   The script is designed for two consumers at once:
-  - Humans: a “pretty” console summary at the end (with colored highlights and optional Top-N suspicious items).
+  - Console: a colorized summary with optional Top-N suspicious items.
   - Automation: structured outputs (CSV and JSON) that remain pipeline-friendly and easy to parse.
 
   Artifacts collected (high level):
@@ -22,16 +22,20 @@
   - Samples (optional): copies selected executables into an evidence folder (size-limited and policy-controlled).
 
 .PARAMETER CatalogPath
-  Optional path to a JSON “catalog” that defines output base path, trigger locations, and collection policies.
+  Optional path to a JSON “catalog” that defines trigger locations and collection policies.
 
-  If provided and readable, it overrides the built-in defaults. If missing/unreadable, the script continues with
-  safe defaults.
+  OutputBase is constrained to the protected local evidence root
+  C:\ProgramData\BaselineOpsForWindows\Evidence\IR-Grabber on Windows; remote, device,
+  mapped-remote, and alternate local output roots are rejected.
+
+  If provided, it overrides the built-in defaults and must exist and parse successfully. Invalid explicit input fails
+  before any collection begins.
 
 .PARAMETER ConfigPath
   Optional path to a JSON config file that can point to a catalog (for example, via a property like Grabber.CatalogPath).
 
-  If CatalogPath is not specified or cannot be loaded, the script attempts to load a catalog via ConfigPath.
-  If that also fails, built-in defaults are used.
+  If CatalogPath is not specified, the script attempts to load a catalog reference via ConfigPath. An explicitly
+  provided ConfigPath must parse successfully; a valid config without a catalog reference uses built-in defaults.
 
 .PARAMETER Force
   Runs the script immediately, even if no registry/file trigger is present.
@@ -89,32 +93,32 @@
   - A ZIP archive containing the full working directory content.
 
   Pipeline output:
-  - None by default (intentionally). All “pretty” formatting is done via host output to keep pipelines clean.
+  - None by default. All console formatting uses host output to keep the pipeline clean.
 
 .EXAMPLE
   # Run using deployed triggers (registry/file flag)
-  .\IR-Grabber.ps1
+  .\scripts\12-Suspicious-Artifact-Grabber.ps1
 
 .EXAMPLE
   # Force a run (ignores triggers)
-  .\IR-Grabber.ps1 -Force
+  .\scripts\12-Suspicious-Artifact-Grabber.ps1 -Force
 
 .EXAMPLE
   # Force a run and enable sample collection
-  .\IR-Grabber.ps1 -Force -CollectSamples
+  .\scripts\12-Suspicious-Artifact-Grabber.ps1 -Force -CollectSamples
 
 .EXAMPLE
   # Load a specific catalog JSON
-  .\IR-Grabber.ps1 -CatalogPath "C:\ProgramData\WinMdmSecurity\grabber.catalog.json" -Force
+  .\scripts\12-Suspicious-Artifact-Grabber.ps1 -CatalogPath "C:\ProgramData\BaselineOpsForWindows\grabber.catalog.json" -Force
 
 .EXAMPLE
   # Hash all process images (more I/O)
-  .\IR-Grabber.ps1 -Force -HashAllProcesses
+  .\scripts\12-Suspicious-Artifact-Grabber.ps1 -Force -HashAllProcesses
 
 .EXAMPLE
   # Automated usage: run and then consume the generated summary
-  .\IR-Grabber.ps1 -Force
-  Get-Content -Raw "$env:TEMP\win-mdm-ir-grabber\<timestamp>\Summary.json" | ConvertFrom-Json
+  .\scripts\12-Suspicious-Artifact-Grabber.ps1 -Force
+  Get-Content -Raw "$env:ProgramData\BaselineOpsForWindows\Evidence\IR-Grabber\<timestamp>\Summary.json" | ConvertFrom-Json
 
 .NOTES
   Operational guidance:
@@ -124,8 +128,8 @@
   - Network and DNS cache collection are best-effort; availability varies by OS features and permissions.
 
   Using Get-Help:
-  - Get full help:    Get-Help .\IR-Grabber.ps1 -Full
-  - View examples:   Get-Help .\IR-Grabber.ps1 -Examples
+  - Get full help:    Get-Help .\scripts\12-Suspicious-Artifact-Grabber.ps1 -Full
+  - View examples:   Get-Help .\scripts\12-Suspicious-Artifact-Grabber.ps1 -Examples
 #>
 
 
@@ -153,6 +157,7 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Evidence.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
@@ -160,7 +165,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -172,10 +181,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # Make Write-Information visible for humans; it is controlled by InformationPreference.
@@ -231,9 +241,6 @@ function Reset-Trigger {
 # MAIN
 # -------------------------
 $script:Findings = Get-FindingsList
-if (-not (Ensure-EventSource)) {
-  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
-}
 
 $errors   = New-Object System.Collections.Generic.List[string]
 $hasFindings = $false
@@ -246,6 +253,10 @@ try {
 
   $cat = Load-Catalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath -CatalogLoadNote ([ref]$catalogNote)
   if (-not $cat) { $cat = Get-BaseClone $DefaultCatalog }
+  Initialize-ArtifactRegexRules -Catalog $cat
+  if (-not (Ensure-EventSource)) { Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable." }
+
+  $base = Assert-ArtifactEvidenceOutputBase -OutputBase ([string]$cat.OutputBase)
 
   $tr = Read-Trigger -cat $cat -Force:$Force -CollectSamples:$CollectSamples
   if (-not $tr.Want) {
@@ -268,15 +279,8 @@ try {
       Samples = @()
     }
 
-    return
-  }
-
-  $ts = Get-RunId
-
-  $base = $null
-  try { $base = [string]$cat.OutputBase } catch { $base = $null }
-  if (-not $base) { $base = [string]$DefaultCatalog.OutputBase }
-  Assert-NoPathTraversal -Path $base -ParameterName 'Catalog.OutputBase'
+  } else {
+    $ts = Get-RunId
 
   $work = Join-Path $base $ts
   $zip  = Join-Path $base ("Grabber-{0}-{1}.zip" -f $env:COMPUTERNAME,$ts)
@@ -352,7 +356,7 @@ try {
         if (-not (Test-Path -LiteralPath $path)) { continue }
 
         $pick = $false
-        foreach ($rx in @($cat.Samples.PathIncludeRegex)) { if ($path -match $rx) { $pick = $true; break } }
+        foreach ($rx in @($cat.Samples.__PathIncludeRegex)) { if ($rx.IsMatch($path)) { $pick = $true; break } }
         if (-not $pick) { continue }
 
         if (Safe-ToBool $cat.Samples.OnlyUnsignedOrUnknown $true) {
@@ -407,10 +411,15 @@ try {
 
   Write-HealthEvent $eventId $msg $level
   Reset-Trigger -cat $cat
+  }
 
 } catch {
-  $errMsg = "IR Grabber fatal: " + $_.Exception.Message
+  $isRegexTimeout = $_.Exception -is [System.Text.RegularExpressions.RegexMatchTimeoutException] -or $_.Exception.InnerException -is [System.Text.RegularExpressions.RegexMatchTimeoutException]
+  $prefix = if ($isRegexTimeout) { 'IR Grabber incomplete evidence: regex match timed out: ' } else { 'IR Grabber fatal: ' }
+  $errMsg = $prefix + $_.Exception.Message
   [void]$errors.Add($errMsg)
+  if ($null -eq $summary) { $summary = [ordered]@{ Errors = @($errors); IncompleteEvidence = $isRegexTimeout } }
+  elseif ($isRegexTimeout) { $summary['IncompleteEvidence'] = $true }
   Write-HealthEvent 10021 $errMsg 'Error'
 } finally {
   if ($null -ne $summary) {
@@ -428,4 +437,4 @@ $resultToken = if ($errors.Count -gt 0) { 'FAIL' } elseif ($hasFindings -or $scr
 $v2Result = Get-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result $resultToken -Findings $script:Findings.ToArray() -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

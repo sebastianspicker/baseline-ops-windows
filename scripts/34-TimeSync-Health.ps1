@@ -10,7 +10,7 @@ creates structured findings, and optionally exports CSV + raw TXT dumps.
 Best-practice goals (PowerShell 5.1, 2025):
 - Pipeline output: structured objects only (Export-Csv / ConvertTo-Json / Where-Object safe).
 - Console output: all formatting via Write-UiLine / Write-Information only (no formatting objects on the pipeline).
-- StrictMode-safe counting patterns (.Count pitfalls). [web:92]
+- StrictMode-safe counting patterns (.Count pitfalls).
 
 .PARAMETER ExportPath
 Base path/filename for export. Example: C:\Temp\TimeHealth.csv -> _summary.csv/_findings.csv and _*.txt.
@@ -19,10 +19,10 @@ Base path/filename for export. Example: C:\Temp\TimeHealth.csv -> _summary.csv/_
 Attempts to start w32time if not running (may require admin rights).
 
 .PARAMETER ConfigJsonPath
-Optional JSON file path (e.g. PATH/TO/JSON\TimeSyncHealth.json). If missing/invalid, defaults apply.
+Optional JSON file path supplied with $ConfigJsonPath. If missing or invalid, defaults apply.
 
 .PARAMETER NoConsoleSummary
-Suppresses pretty console summary (pipeline output still returned).
+Suppresses the formatted console summary; pipeline output is still returned.
 
 
 .PARAMETER Mode
@@ -81,12 +81,17 @@ Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '34-TimeSync-Health.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '34-TimeSync-Health.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -98,10 +103,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # ----------------------------
@@ -122,14 +128,27 @@ function Invoke-NativeCommandSoft {
     [Parameter(Mandatory)][string[]]$Arguments
   )
 
-  $text = (& $FilePath @Arguments 2>&1 | Out-String).Trim()
-  $exit = $LASTEXITCODE
+  $native = Invoke-NativeCommand -Command $FilePath -Arguments $Arguments -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 262144
+  $complete = ($null -ne $native -and $native.Success -and -not $native.TimedOut -and -not $native.OutputTruncated -and -not $native.StderrTruncated)
+  $failureReason = if ($null -eq $native) {
+    'start failure'
+  } elseif ($native.TimedOut) {
+    'timeout'
+  } elseif ($native.OutputTruncated -or $native.StderrTruncated) {
+    'truncated output'
+  } elseif (-not $native.Success) {
+    'non-zero exit code'
+  } else {
+    $null
+  }
 
   [pscustomobject]@{
     FilePath  = $FilePath
     Arguments = ($Arguments -join ' ')
-    ExitCode  = $exit
-    Text      = $text
+    ExitCode  = if ($null -ne $native) { $native.ExitCode } else { -1 }
+    Text      = if ($null -ne $native) { [string]$native.Output } else { '' }
+    Complete  = [bool]$complete
+    FailureReason = $failureReason
   }
 }
 
@@ -188,12 +207,12 @@ function Load-Config {
   }
 
   if (-not (Test-Path -LiteralPath $Path)) {
-    $result.LoadDetail = 'JSON config not found at PATH/TO/JSON.'
+    $result.LoadDetail = 'JSON config not found at [configured path].'
     return $result
   }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     $obj = $raw | ConvertFrom-Json -ErrorAction Stop
   } catch {
     $result.LoadDetail = 'JSON config could not be loaded/parsed; using defaults.'
@@ -222,7 +241,7 @@ function Load-Config {
   }
 
   $result.LoadState  = 'Loaded'
-  $result.LoadDetail = 'JSON config loaded successfully from PATH/TO/JSON.'
+  $result.LoadDetail = 'JSON config loaded successfully from [configured path].'
   return $result
 }
 
@@ -258,11 +277,12 @@ $script:Findings = Get-FindingsList
 
 $configLoad = Load-Config -Path $ConfigJsonPath
 $ConfigUsed = $configLoad.Config
+$configPathLabel = $(if ($ConfigJsonPath) { '[configured path]' } else { $null })
 
 if ($configLoad.LoadState -eq 'Loaded') {
-  Add-Finding -FindingList $script:Findings -Code 'CFG-Loaded' -Severity 'Low' -Message $configLoad.LoadDetail -Extra @{ Data = 'PATH/TO/JSON' }
+  Add-Finding -FindingList $script:Findings -Code 'CFG-Loaded' -Severity 'Low' -Message $configLoad.LoadDetail -Extra @{ Data = $configPathLabel }
 } else {
-  Add-Finding -FindingList $script:Findings -Code 'CFG-DefaultUsed' -Severity 'Low' -Message $configLoad.LoadDetail -Extra @{ Data = 'PATH/TO/JSON' }
+  Add-Finding -FindingList $script:Findings -Code 'CFG-DefaultUsed' -Severity 'Low' -Message $configLoad.LoadDetail -Extra @{ Data = $configPathLabel }
 }
 
 $svc = Get-Service -Name 'w32time' -ErrorAction Stop
@@ -320,9 +340,9 @@ if ($shouldRunW32tm) {
   $cfgText  = $cfgR.Text
 
   foreach ($r in @($srcR, $statR, $cfgR)) {
-    if ($r.ExitCode -ne 0) {
+    if (-not $r.Complete) {
       $sev = if ($ConfigUsed.Behavior.TreatW32tmFailureAsHighFinding) { 'High' } else { 'Medium' }
-      Add-Finding -FindingList $script:Findings -Code 'TIME-W32tmCommandFailed' -Severity $sev -Message ("w32tm failed: {0} {1} (ExitCode={2})." -f $r.FilePath, $r.Arguments, $r.ExitCode) -Extra @{ Data = $r.Text }
+      Add-Finding -FindingList $script:Findings -Code 'TIME-W32tmCommandFailed' -Severity $sev -Message ("w32tm evidence is incomplete: {0} {1} ({2}; ExitCode={3})." -f $r.FilePath, $r.Arguments, $r.FailureReason, $r.ExitCode) -Extra @{ Data = $r.Text }
     }
   }
 
@@ -398,8 +418,8 @@ if ($ExportPath) {
 }
 
 if (-not $NoConsoleSummary) {
-  $healthLabel = if (($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'ATTENTION REQUIRED' }
-    elseif (($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARNINGS' }
+  $healthLabel = if (@($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'ATTENTION REQUIRED' }
+    elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARNINGS' }
     else { 'OK' }
 
   $customFields = [ordered]@{
@@ -421,4 +441,4 @@ $resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' } elseif ($findin
 $v2Result = Get-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result $resultToken -Findings $Findings -Summary $result.Summary -Metadata @{ Raw = $result.Raw; ConfigUsed = $result.ConfigUsed; ConfigMeta = $result.ConfigMeta }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

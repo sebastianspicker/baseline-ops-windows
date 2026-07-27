@@ -40,23 +40,37 @@ Thumbs.db
 *.har
 *.clixml
 *.nupkg
+*.db
+*.sqlite
+*.sqlite3
+
+# Allow reviewed text fixtures and examples despite the artifact extensions above.
+!/examples/**/*.csv
+!/examples/**/*.tsv
+!/examples/**/*.jsonl
+!/tests/fixtures/**
 
 # Common output folders (support bundles / proofs)
-support/
-proof/
-proofs/
-evidence/
-reports/
-eventlogs/
-defender/
-defender-support/
-_extracted/
-tmp/
-temp/
+/support/
+/proof/
+/proofs/
+/evidence/
+/reports/
+/eventlogs/
+/defender/
+/defender-support/
+/_extracted/
+/tmp/
+/temp/
+/recordings/
+/screenshots/
 
 # Environment files and credentials
 .env
 .env.*
+!.env.example
+!.env.sample
+!.env.template
 .envrc
 .direnv/
 *.pem
@@ -82,21 +96,23 @@ secrets/
 /validation.md
 /HANDOFF.md
 /progress.md
+/RELEASE_STATUS.md
 
 # Development artifacts
-ralph-loop/
-plans/
-.claude/
-.codacy/
+/ralph-loop/
+/plans/
+/.claude/
+/.codacy/
 
-# Local-only agent, audit, and release-readiness workspace state
+# Local-only workspace and release-readiness state
 /AGENTS.md
 /AGENT.md
 /CLAUDE.md
 /CODEX.md
 /GEMINI.md
 /AUDIT.md
-private/
+/private/
+/docs/agent/
 /.github/agents/
 /.github/codex/
 /.github/copilot-instructions.md
@@ -105,17 +121,14 @@ private/
 /.github/workflows/codex.yml
 /HARNESS_PRINCIPLES.md
 /code_review.md
-archive/
-/docs/*
-!/docs/README.md
-!/docs/launcher-gui.md
+/archive/
 /scripts/topology_inventory.sh
 
 # Vendored, copied, or external source trees
-vendor/
-third_party/
-third-party/
-external/
+/vendor/
+/third_party/
+/third-party/
+/external/
 
 # CI/test artifacts
 coverage/
@@ -132,6 +145,10 @@ junit.xml
 .ruff_cache/
 .cache/
 .terraform/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
 node_modules/
 dist/
 build/

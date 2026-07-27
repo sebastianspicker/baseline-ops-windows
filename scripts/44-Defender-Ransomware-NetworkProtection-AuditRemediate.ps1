@@ -8,7 +8,7 @@ Audit + optional remediation for Microsoft Defender (PowerShell 5.1):
 
 .DESCRIPTION
 - Pipeline outputs ONLY structured objects (one final result object).
-- Human-friendly console output uses Write-UiLine only (colors, sections).
+- Colorized, sectioned console output uses Write-UiLine only.
 - Optional JSON config; safe defaults if JSON is missing/invalid/empty.
 - Optional CSV export of the summary object.
 
@@ -107,7 +107,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -119,10 +123,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # -----------------------------
@@ -211,7 +216,7 @@ function Load-ConfigFromJson {
   try {
     if (-not $sanitized) { return @{ Config = $null; FindingList = $FindingList } }
 
-    $raw = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $sanitized -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { return @{ Config = $null; FindingList = $FindingList } }
 
     $cfg = ($raw | ConvertFrom-Json)
@@ -219,8 +224,8 @@ function Load-ConfigFromJson {
   }
   catch {
     $FindingList = Add-Finding -FindingList $FindingList -Code 'CFG-JSON-LoadFailed' -Severity 'Low' -Message (
-      "JSON config could not be loaded; using safe defaults/CLI. Path='{0}'. Error='{1}'" -f 'PATH/TO/JSON', $_.Exception.Message
-    )
+      "JSON config could not be loaded; using safe defaults/CLI. Path='{0}'. Error='{1}'" -f '[configured path]', $_.Exception.Message
+    ) -PassThru
     return @{ Config = $null; FindingList = $FindingList }
   }
 }
@@ -390,25 +395,25 @@ $before = [pscustomobject]@{
 if ($EnableControlledFolderAccess -ne $before.ControlledFolderAccess) {
   $findingList = Add-Finding -FindingList $findingList -Code 'DEF-CFA-NotDesired' -Severity 'Medium' -Message (
     "ControlledFolderAccess is '{0}', desired '{1}'." -f $before.ControlledFolderAccess, $EnableControlledFolderAccess
-  ) -Extra @{ Current = $before.ControlledFolderAccess; Desired = $EnableControlledFolderAccess }
+  ) -Extra @{ Current = $before.ControlledFolderAccess; Desired = $EnableControlledFolderAccess } -PassThru
 }
 
 if ($EnableNetworkProtection -ne $before.NetworkProtection) {
   $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-NotDesired' -Severity 'Medium' -Message (
     "NetworkProtection is '{0}', desired '{1}'." -f $before.NetworkProtection, $EnableNetworkProtection
-  ) -Extra @{ Current = $before.NetworkProtection; Desired = $EnableNetworkProtection }
+  ) -Extra @{ Current = $before.NetworkProtection; Desired = $EnableNetworkProtection } -PassThru
 }
 
 if ($isServer -and $ApplyNetworkProtectionServerPrereqs) {
   if ($pref.AllowNetworkProtectionOnWinServer -ne $true) {
     $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-ServerPrereq-Missing' -Severity 'High' -Message (
       "Windows Server: AllowNetworkProtectionOnWinServer is '{0}', desired '$true'." -f $pref.AllowNetworkProtectionOnWinServer
-    ) -TypeName 'Defender.AuditFinding'
+    ) -TypeName 'Defender.AuditFinding' -PassThru
   }
   if ($null -ne $pref.AllowNetworkProtectionDownLevel -and $pref.AllowNetworkProtectionDownLevel -ne $true) {
     $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-DownLevelPrereq-Missing' -Severity 'High' -Message (
       "Windows Server: AllowNetworkProtectionDownLevel is '{0}', desired '$true'." -f $pref.AllowNetworkProtectionDownLevel
-    ) -TypeName 'Defender.AuditFinding'
+    ) -TypeName 'Defender.AuditFinding' -PassThru
   }
 }
 
@@ -416,7 +421,7 @@ if ($isServer -and $DisableDatagramProcessingOnWinServer) {
   if ($null -ne $pref.AllowDatagramProcessingOnWinServer -and $pref.AllowDatagramProcessingOnWinServer -ne $false) {
     $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-DatagramProcessing-NotRecommended' -Severity 'Medium' -Message (
       "Windows Server: AllowDatagramProcessingOnWinServer is '{0}', recommended '$false'." -f $pref.AllowDatagramProcessingOnWinServer
-    ) -TypeName 'Defender.AuditFinding'
+    ) -TypeName 'Defender.AuditFinding' -PassThru
   }
 }
 
@@ -478,7 +483,7 @@ $summary = [pscustomobject]@{
   DesiredNP       = $EnableNetworkProtection
   ApplyNPPrereqs  = [bool]$ApplyNetworkProtectionServerPrereqs
   DisableDatagram = [bool]$DisableDatagramProcessingOnWinServer
-  ConfigJsonPath  = $(if ($ConfigJsonPath) { 'PATH/TO/JSON' } else { $null })
+  ConfigJsonPath  = $(if ($ConfigJsonPath) { '[configured path]' } else { $null })
   ExportPath      = $ExportPath
 }
 
@@ -491,7 +496,7 @@ if ($ExportPath) {
 }
 
 # -----------------------------
-# Pretty console output (no pipeline pollution)
+# Formatted console output (no pipeline output)
 # -----------------------------
 
 Write-ConsoleReport -Summary $summary -Before $before -After $after -FindingList $findingList
@@ -505,4 +510,4 @@ $resultToken = if ($Strict -and $findingList.Count -gt 0) { 'FAIL' } elseif ($fi
 $v2Result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $findingList) -Summary $summary -Metadata @{ Before = $before; After = $after }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

@@ -1,4 +1,14 @@
-# Helper functions extracted from 04-OfficeBrowser-Hardening-Proof.ps1
+<#
+.SYNOPSIS
+Internal browser and Office policy helpers for the hardening proof script.
+
+.DESCRIPTION
+Normalizes catalog input and applies narrowly scoped Edge, Firefox, and Office
+policy operations. Keeping these helpers separate makes policy decisions
+independently testable while the entry script retains orchestration ownership.
+#>
+Import-Module (Join-Path $PSScriptRoot '../../lib/Validation.psm1')
+
 function Get-TextOrNull {
   [CmdletBinding()]
   param($Value)
@@ -69,7 +79,7 @@ function Get-ProofItem {
     [Parameter(Mandatory)][string]$Target,
     [Parameter(Mandatory)][string]$Name,
     [Parameter(Mandatory)][ValidateSet('DWord','String','File')][string]$Type,
-    [Parameter(Mandatory)]$Expected,
+    [AllowNull()][Parameter(Mandatory)]$Expected,
     $Actual,
     [bool]$Compliant,
     [bool]$Changed,
@@ -99,6 +109,143 @@ function Get-EdgeBaseKey {
     return 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\Recommended'
   }
   return 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+}
+
+function Get-EdgePolicyDefinitions {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][object]$EdgeCfg)
+
+  $trackingPrevention = @{ 'Basic' = 1; 'Balanced' = 2; 'Strict' = 3 }
+  $trackingName = Get-TextOrNull $EdgeCfg.TrackingPrevention
+  if (-not $trackingName) { $trackingName = 'Balanced' }
+  $trackingValue = 2
+  foreach ($name in $trackingPrevention.Keys) {
+    if ($name -ieq $trackingName) { $trackingValue = $trackingPrevention[$name] }
+  }
+
+  $sslMinimum = Get-TextOrNull $EdgeCfg.SSLVersionMin
+  if (-not $sslMinimum) { $sslMinimum = 'tls1.2' }
+
+  @(
+    [pscustomobject]@{ Area = 'Core'; Policy = 'SmartScreenEnabled'; Name = 'SmartScreenEnabled'; Type = 'DWord'; Value = [int](Get-BoolDefault $EdgeCfg.SmartScreen $true) }
+    [pscustomobject]@{ Area = 'Core'; Policy = 'SmartScreenPuaEnabled'; Name = 'SmartScreenPuaEnabled'; Type = 'DWord'; Value = [int](Get-BoolDefault $EdgeCfg.PUA $true) }
+    [pscustomobject]@{ Area = 'Core'; Policy = 'PasswordManagerEnabled'; Name = 'PasswordManagerEnabled'; Type = 'DWord'; Value = [int](Get-BoolDefault $EdgeCfg.PasswordManager $false) }
+    [pscustomobject]@{ Area = 'Core'; Policy = 'AutofillAddressEnabled'; Name = 'AutofillAddressEnabled'; Type = 'DWord'; Value = [int](Get-BoolDefault $EdgeCfg.AutofillAddress $false) }
+    [pscustomobject]@{ Area = 'Core'; Policy = 'AutofillCreditCardEnabled'; Name = 'AutofillCreditCardEnabled'; Type = 'DWord'; Value = [int](Get-BoolDefault $EdgeCfg.AutofillCreditCard $false) }
+    [pscustomobject]@{ Area = 'Core'; Policy = 'SyncDisabled'; Name = 'SyncDisabled'; Type = 'DWord'; Value = [int](Get-BoolDefault $EdgeCfg.SyncDisabled $true) }
+    [pscustomobject]@{ Area = 'Security'; Policy = 'SSLVersionMin'; Name = 'SSLVersionMin'; Type = 'String'; Value = $sslMinimum }
+    [pscustomobject]@{ Area = 'Privacy'; Policy = 'TrackingPrevention'; Name = 'TrackingPrevention'; Type = 'DWord'; Value = $trackingValue }
+  )
+}
+
+function Get-EdgeStartupUrlMap {
+  [CmdletBinding()]
+  param($StartupURLs)
+
+  $urls = Get-ArrayStrings $StartupURLs
+  $map = @{}
+  $index = 1
+  foreach ($url in $urls) {
+    $map[[string]$index] = [string]$url
+    $index++
+  }
+  return $map
+}
+
+function Get-EdgeStartupUrlValues {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Path)
+
+  $values = @{}
+  try {
+    $properties = Get-ItemProperty -Path $Path -ErrorAction SilentlyContinue
+    if ($properties) {
+      foreach ($property in $properties.PSObject.Properties) {
+        if ($property.Name -match '^\d+$') { $values[$property.Name] = [string]$property.Value }
+      }
+    }
+  } catch {
+    Write-Verbose ("Edge startup URL registry read failed for '{0}': {1}" -f $Path, $_.Exception.Message)
+  }
+  return $values
+}
+
+function Get-EdgeStartupUrlAuditProofItems {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][hashtable]$DesiredUrls,
+    [Parameter(Mandatory)][hashtable]$CurrentUrls
+  )
+
+  $items = New-Object System.Collections.Generic.List[object]
+  $keys = @($CurrentUrls.Keys + $DesiredUrls.Keys | Select-Object -Unique | Sort-Object { [int]$_ })
+  foreach ($name in $keys) {
+    $expected = $DesiredUrls[$name]
+    $actual = $CurrentUrls[$name]
+    $compliant = ($expected -eq $actual)
+    $message = if ($compliant) { $null } else { 'Drift detected' }
+    $items.Add((Get-ProofItem -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartupURLs' -Target $Path -Name $name -Type String -Expected $expected -Actual $actual -Compliant $compliant -Changed $false -Message $message)) | Out-Null
+  }
+  return $items
+}
+
+# Removes only numbered startup URL values before rebuilding the desired list,
+# avoiding deletion of unrelated Edge policy values in the same key.
+function Clear-EdgeStartupUrlValues {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Path)
+
+  try {
+    $properties = Get-ItemProperty -Path $Path -ErrorAction SilentlyContinue
+    if ($properties) {
+      foreach ($property in $properties.PSObject.Properties) {
+        if ($property.Name -match '^\d+$') {
+          try {
+            Remove-ItemProperty -Path $Path -Name $property.Name -ErrorAction Stop
+          } catch {
+            Write-Warning "Could not remove URL property $($property.Name): $($_.Exception.Message)"
+          }
+        }
+      }
+    }
+  } catch {
+    Write-Warning "Could not clear Edge startup URLs for remediation: $($_.Exception.Message)"
+  }
+}
+
+# Applies one startup URL and returns proof for the attempted write so audit and
+# remediation paths share the same evidence shape.
+function Set-EdgeStartupUrlProof {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$Expected,
+    [switch]$Skipped
+  )
+
+  $changed = $false
+  $message = $null
+  if ($Skipped) {
+    $message = 'Set skipped by confirmation/WhatIf'
+  } else {
+    try {
+      Ensure-RegistryKey -Path $Path
+      New-ItemProperty -Path $Path -Name $Name -PropertyType String -Value $Expected -Force -ErrorAction Stop | Out-Null
+      $changed = $true
+    } catch {
+      $message = "Write failed: $($_.Exception.Message)"
+    }
+  }
+
+  $actual = Get-RegValue -Path $Path -Name $Name
+  $compliant = ($actual -eq $Expected)
+  if (-not $message) {
+    if ($compliant -and $changed) { $message = 'Set applied' }
+    elseif (-not $compliant) { $message = 'Set attempted but differs' }
+  }
+  return (Get-ProofItem -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartupURLs' -Target $Path -Name $Name -Type String -Expected $Expected -Actual $actual -Compliant $compliant -Changed $changed -Message $message)
 }
 
 function Has-Prop {
@@ -155,6 +302,8 @@ function Get-ResultSummary {
   }
 }
 
+# Resolves explicit, config-referenced, or embedded policy data in that order;
+# invalid optional input falls back visibly instead of producing partial policy.
 function Load-Catalog {
   [CmdletBinding()]
   param(
@@ -178,7 +327,7 @@ function Load-Catalog {
   if ($p) {
     if (Test-Path -LiteralPath $p) {
       try {
-        $cat = Get-Content -Raw -Path $p -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $cat = Get-BoundedUtf8FileContent -Path $p -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop
         $loadedFrom = 'CatalogPath'
       } catch {
         $notes.Add('CatalogPath JSON parse failed; using embedded defaults.') | Out-Null
@@ -193,7 +342,7 @@ function Load-Catalog {
     if ($cp) {
       if (Test-Path -LiteralPath $cp) {
         try {
-          $cfg = Get-Content -Raw -Path $cp -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+          $cfg = Get-BoundedUtf8FileContent -Path $cp -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop
           $cfgCat = $null
 
           if ($cfg -and $cfg.PSObject.Properties['OfficeBrowser']) {
@@ -206,7 +355,7 @@ function Load-Catalog {
           if ($cfgCat) {
             if (Test-Path -LiteralPath $cfgCat) {
               try {
-                $cat = Get-Content -Raw -Path $cfgCat -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                $cat = Get-BoundedUtf8FileContent -Path $cfgCat -MaximumBytes 1048576 | ConvertFrom-Json -ErrorAction Stop
                 $loadedFrom = 'ConfigPath->OfficeBrowser.CatalogPath'
               } catch {
                 $notes.Add('Config-referenced catalog JSON parse failed; using embedded defaults.') | Out-Null
@@ -248,6 +397,8 @@ function Load-Catalog {
 # Hardeners
 # -----------------------------
 
+# Evaluates and optionally remediates the supported Office policy set while
+# emitting one proof item per decision for later aggregation.
 function Ensure-Office {
   [CmdletBinding()]
   param(
@@ -320,16 +471,19 @@ function Get-FirefoxDistDir {
   $explicit = Get-TextOrNull $FirefoxCfg.DistributionDir
   if ($explicit) { return $explicit }
 
-  $paths = @(
-    "$env:ProgramFiles\Mozilla Firefox\distribution",
-    "$env:ProgramFiles(x86)\Mozilla Firefox\distribution"
-  )
+  $paths = @(@(
+      [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles),
+      [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { Join-Path $_ 'Mozilla Firefox\distribution' })
   foreach($p in $paths) {
     if (Test-Path -LiteralPath (Split-Path -Parent $p)) { return $p }
   }
-  return $paths[0]
+  if ($paths.Count -gt 0) { return $paths[0] }
+  throw 'A trusted Program Files directory could not be resolved.'
 }
 
+# Builds the complete policies.json object in memory first so remediation writes
+# a coherent Firefox policy document rather than incrementally mutating JSON.
 function Build-FirefoxPolicies {
   [CmdletBinding()]
   param([Parameter(Mandatory)][object]$FirefoxCfg)
@@ -379,6 +533,8 @@ function Build-FirefoxPolicies {
   return $pol
 }
 
+# Compares the desired Firefox policy document with the installed file and
+# writes only through the trusted distribution directory when remediation runs.
 function Ensure-Firefox {
   [CmdletBinding()]
   param(
@@ -403,7 +559,7 @@ function Ensure-Firefox {
 
   $existingRaw = $null
   if (Test-Path -LiteralPath $polPath) {
-    try { $existingRaw = Get-Content -Raw -Path $polPath -Encoding UTF8 -ErrorAction Stop } catch { $existingRaw = $null }
+    try { $existingRaw = Get-BoundedUtf8FileContent -Path $polPath -MaximumBytes 1048576 } catch { $existingRaw = $null }
   }
 
   $same = $false
@@ -448,7 +604,7 @@ function Ensure-Firefox {
 }
 
 # -----------------------------
-# Console summary / pretty output
+# Formatted console summary
 # -----------------------------
 
 function Write-ConsoleSummary {

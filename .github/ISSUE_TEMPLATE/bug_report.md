@@ -6,8 +6,6 @@ labels: bug
 
 # Bug report
 
-Thanks for helping improve this repo.
-
 Do not include secrets, private hostnames, user names, tenant IDs, full support
 bundles, or exploit details in public issues.
 
@@ -15,6 +13,10 @@ bundles, or exploit details in public issues.
 
 Script, profile, module, workflow, or documentation path. Example:
 `scripts/18-Firewall-Baseline.ps1`.
+
+## Release, tag, or commit
+
+Identify the published prerelease, Git tag, or commit you tested.
 
 ## Expected behavior
 
@@ -35,7 +37,7 @@ output format, and whether the shell was elevated.
 
 ## Environment
 
-OS version, PowerShell version, and any relevant tools.
+OS version, PowerShell version, elevation state, and any relevant tools.
 
 ## Logs or output
 

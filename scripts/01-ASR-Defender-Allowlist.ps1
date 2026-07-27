@@ -83,29 +83,29 @@
 
 .EXAMPLE
   # Audit-only: show drift (no changes applied)
-  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON"
+  .\scripts\01-ASR-Defender-Allowlist.ps1 -ExceptionsPath .\examples\configs\asr-defender-allowlist.json
 
 .EXAMPLE
   # Remediate: apply the diff to match the JSON allowlist
-  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -Mode Remediate
+  .\scripts\01-ASR-Defender-Allowlist.ps1 -ExceptionsPath .\examples\configs\asr-defender-allowlist.json -Mode Remediate
 
 .EXAMPLE
-  # Use a config file that contains the allowlist path (ExceptionsPath not specified)
-  .\Defender-Allowlist-Sync.ps1 -ConfigPath "PATH/TO/CONFIG.json"
+  # Audit with the minimum fallback and no external JSON
+  .\scripts\01-ASR-Defender-Allowlist.ps1 -BaselineMode Minimum
 
 .EXAMPLE
   # Enforce strict JSON loading (fail if JSON is missing/invalid)
-  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -StrictJson
+  .\scripts\01-ASR-Defender-Allowlist.ps1 -ExceptionsPath .\examples\configs\asr-defender-allowlist.json -StrictJson
 
 .EXAMPLE
   # Emit structured output for reporting
-  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -PassThru | ConvertTo-Json -Depth 6
+  .\scripts\01-ASR-Defender-Allowlist.ps1 -ExceptionsPath .\examples\configs\asr-defender-allowlist.json -PassThru | ConvertTo-Json -Depth 6
 
 .EXAMPLE
   # Emit structured output and export a compact report
-  .\Defender-Allowlist-Sync.ps1 -ExceptionsPath "PATH/TO/JSON" -PassThru |
+  .\scripts\01-ASR-Defender-Allowlist.ps1 -ExceptionsPath .\examples\configs\asr-defender-allowlist.json -PassThru |
     Select-Object Timestamp,ComputerName,Result,TotalAdd,TotalRemove,TotalRejected,TotalErrors,SourceJson |
-    Export-Csv -NoTypeInformation -Path "PATH/TO/REPORT.csv"
+    Export-Csv -NoTypeInformation -Path .\asr-defender-allowlist.csv
 
 .NOTES
   Safety and behavior notes:
@@ -154,7 +154,12 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '01-ASR-Defender-Allowlist.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '01-ASR-Defender-Allowlist.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -166,10 +171,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # ----------------------------- Helpers --------------------------------------------
@@ -257,14 +263,7 @@ function Get-Config {
   try {
     $sanitized = if ([string]::IsNullOrWhiteSpace($Path)) { $null } else { Sanitize-Path -Path $Path -MustExist }
     if ($sanitized) {
-      return Get-Content -Raw -LiteralPath $sanitized -Encoding UTF8 | ConvertFrom-Json
-    }
-
-    $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $alt  = Join-Path (Split-Path -Parent $here) "config\CONFIG.json"
-    $sanitizedAlt = Sanitize-Path -Path $alt -MustExist
-    if ($sanitizedAlt) {
-      return Get-Content -Raw -LiteralPath $sanitizedAlt -Encoding UTF8 | ConvertFrom-Json
+      return Get-BoundedUtf8FileContent -Path $sanitized -MaximumBytes 1048576 | ConvertFrom-Json
     }
   } catch {
     return $null
@@ -508,10 +507,11 @@ if (-not $isWindowsHost) {
       Write-UiLine ("{0,-45}  Add={1,3}  Rem={2,3}  Rej={3,3}" -f $row.Name,$row.Add,$row.Remove,$row.Rejected) -ForegroundColor Gray
     }
   }
-  $v2Result = Get-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $final -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $v2Result = Get-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $final -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $v2Result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 try {
@@ -537,7 +537,7 @@ try {
 
   if ($ExceptionsPath -and (Test-Path -LiteralPath $ExceptionsPath)) {
     try {
-      $raw = Get-Content -Raw -LiteralPath $ExceptionsPath -Encoding UTF8
+      $raw = Get-BoundedUtf8FileContent -Path $ExceptionsPath -MaximumBytes 1048576
       if ([string]::IsNullOrWhiteSpace($raw)) {
         $jsonError = "Allowlist JSON file is empty."
         if ($StrictJson) { throw $jsonError }
@@ -598,11 +598,11 @@ try {
 
   if (($totalAdd + $totalRem + $totalBad) -eq 0) {
     $resultCode = "OK_NO_DRIFT"
-    Write-HealthEvent -Id 3200 -Msg "Defender/ASR allowlist OK: no drift. JSON=$sourceJson Audit=$AuditPath" -Level Information
+    $null = Write-HealthEvent -Id 3200 -Msg "Defender/ASR allowlist OK: no drift. JSON=$sourceJson Audit=$AuditPath" -Level Information
   }
   elseif (-not $Remediate) {
     $resultCode = "DRIFT_NO_REMEDIATION"
-    Write-HealthEvent -Id 3210 -Msg "Defender/ASR allowlist drift: add=$totalAdd remove=$totalRem rejected=$totalBad (no remediation). JSON=$sourceJson Audit=$AuditPath" -Level Warning
+    $null = Write-HealthEvent -Id 3210 -Msg "Defender/ASR allowlist drift: add=$totalAdd remove=$totalRem rejected=$totalBad (no remediation). JSON=$sourceJson Audit=$AuditPath" -Level Warning
     foreach ($d in $diffs) {
         if ($d.ToAdd.Count -gt 0) { Add-Finding -FindingList $script:Findings -Code 'ASR-Drift-Add' -Severity 'Low' -Message "ASR drift (missing): $($d.Name)" -Extra @{ Missing = $d.ToAdd } }
         if ($d.ToRemove.Count -gt 0) { Add-Finding -FindingList $script:Findings -Code 'ASR-Drift-Remove' -Severity 'Low' -Message "ASR drift (extra): $($d.Name)" -Extra @{ Extra = $d.ToRemove } }
@@ -615,10 +615,10 @@ try {
 
     if ($errsFlat.Count -gt 0) {
       $resultCode = "REMEDIATION_ERRORS"
-      Write-HealthEvent -Id 3210 -Msg ("Defender/ASR allowlist sync completed with errors. add=$totalAdd remove=$totalRem rejected=$totalBad JSON=$sourceJson Audit=$AuditPath`r`nErrors: " + ($errsFlat -join ' | ')) -Level Error
+      $null = Write-HealthEvent -Id 3210 -Msg ("Defender/ASR allowlist sync completed with errors. add=$totalAdd remove=$totalRem rejected=$totalBad JSON=$sourceJson Audit=$AuditPath`r`nErrors: " + ($errsFlat -join ' | ')) -Level Error
     } else {
       $resultCode = "REMEDIATION_OK"
-      Write-HealthEvent -Id 3200 -Msg "Defender/ASR allowlist sync OK. add=$totalAdd remove=$totalRem rejected=$totalBad JSON=$sourceJson Audit=$AuditPath" -Level Information
+      $null = Write-HealthEvent -Id 3200 -Msg "Defender/ASR allowlist sync OK. add=$totalAdd remove=$totalRem rejected=$totalBad JSON=$sourceJson Audit=$AuditPath" -Level Information
     }
   }
 
@@ -684,7 +684,7 @@ try {
 }
 catch {
   $msg = "Defender/ASR allowlist failed: $($_.Exception.Message)"
-  Write-HealthEvent -Id 3210 -Msg $msg -Level Error
+  $null = Write-HealthEvent -Id 3210 -Msg $msg -Level Error
 
   $final = [pscustomobject]@{
     Timestamp     = (Get-Date).ToString("o")
@@ -739,7 +739,8 @@ catch {
 
 # V2 output contract
 $resultToken = if ($final.Result -eq 'FAILED') { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '01-ASR-Defender-Allowlist.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $final -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

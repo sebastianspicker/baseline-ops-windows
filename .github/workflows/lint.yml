@@ -1,3 +1,5 @@
+# Validates shell, YAML, Markdown, and workflow syntax before platform-specific
+# PowerShell jobs consume repository metadata.
 name: Lint (shell/yaml/markdown/actions)
 
 on:
@@ -41,9 +43,70 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Repository lint smoke
+      - name: Shell syntax and analysis
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/ci-local.sh
+          bash -n scripts/ci-local.sh .clusterfuzzlite/build.sh
+          shellcheck scripts/ci-local.sh .clusterfuzzlite/build.sh
+
+      - name: YAML and Actions metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' \
+            "${workflow_files[@]}" \
+            .github/dependabot.yml \
+            .github/release.yml \
+            .github/ISSUE_TEMPLATE/config.yml
+          ruby <<'RUBY'
+          failures = []
+          Dir['.github/workflows/*.{yml,yaml}'].sort.each do |path|
+            File.foreach(path).with_index(1) do |line, line_number|
+              match = line.match(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/)
+              next unless match
+              action = match[1]
+              next if action.start_with?('./')
+              reference = action.rpartition('@').last
+              unless reference.match?(/\A[0-9a-f]{40}\z/)
+                failures << "#{path}:#{line_number}: external action is not pinned to a full commit SHA: #{action}"
+              end
+            end
+          end
+          abort failures.join("\n") unless failures.empty?
+          RUBY
+
+      - name: GitHub Actions semantic validation
+        env:
+          ACTIONLINT_VERSION: '1.7.12'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_root="$(mktemp -d)"
+          trap 'rm -rf "${tool_root}"' EXIT
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_x86_64.tar.gz"
+          checksums="actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          release_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          curl --fail --silent --show-error --location \
+            --output "${tool_root}/${archive}" "${release_url}/${archive}"
+          curl --fail --silent --show-error --location \
+            --output "${tool_root}/${checksums}" "${release_url}/${checksums}"
+          (
+            cd "${tool_root}"
+            grep -F "  ${archive}" "${checksums}" > selected-checksum.txt
+            sha256sum --check selected-checksum.txt
+            tar -xzf "${archive}" actionlint
+            ./actionlint -color
+          )
+
+      - name: Markdown links and image descriptions
+        shell: pwsh
+        run: ./tools/Test-Documentation.ps1 -RootPath $env:GITHUB_WORKSPACE
+
+      - name: Whitespace errors
+        shell: bash
+        run: |
+          set -euo pipefail
           git diff --check -- .

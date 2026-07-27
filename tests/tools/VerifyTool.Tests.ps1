@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for repository tooling contracts.
+
+.DESCRIPTION
+Verifies tooling safeguards that protect maintainers and releases.
+#>
 
 Describe 'tools/verify.ps1 gate reporting' {
   BeforeAll {
@@ -42,8 +49,20 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
       $path = Join-Path $Root $RelativePath
       $parent = Split-Path -Parent $path
       New-Item -Path $parent -ItemType Directory -Force | Out-Null
-      'placeholder' | Set-Content -LiteralPath $path -Encoding UTF8
+      'fixture content' | Set-Content -LiteralPath $path -Encoding UTF8
     }
+  }
+
+  It 'uses bounded, NUL-delimited Git public-surface enumeration' {
+    $toolText = Get-Content -LiteralPath $script:VerifyTool -Raw -Encoding UTF8
+
+    $toolText | Should -Match 'Invoke-NativeCommand\s+-Command\s+''git'''
+    $toolText | Should -Match "'ls-files', '-z'"
+    $toolText | Should -Match 'TimeoutSeconds\s+30'
+    $toolText | Should -Match 'OutputTruncated'
+    $toolText | Should -Match 'git returned an unsafe repository-relative path'
+    $toolText | Should -Match 'Test-PathUnderRoot'
+    $toolText | Should -Not -Match '&\s*\$git\.Source\b'
   }
 
   It 'Reports explicit analyzer skip as partial verification instead of full success' {
@@ -79,6 +98,7 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
     Get-MinimalVerifyRoot -Path $root
     Add-VerifyFile -Root $root -RelativePath 'scripts/internal/helper.ps1'
     Add-VerifyFile -Root $root -RelativePath 'docs/README.md'
+    Add-VerifyFile -Root $root -RelativePath 'docs/alpha-release.md'
     Add-VerifyFile -Root $root -RelativePath 'docs/launcher-gui.md'
     Add-VerifyFile -Root $root -RelativePath 'SECURITY.md'
 
@@ -102,6 +122,20 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
 
     $exitCode | Should -Be 1
     $text | Should -Match 'docs[\\/]unreviewed-notes\.md'
+    $text | Should -Match 'public allowlist'
+  }
+
+  It 'rejects unreviewed assets outside the public allowlist' {
+    $root = Join-Path $TestDrive 'verify-asset-allowlist'
+    Get-MinimalVerifyRoot -Path $root
+    Add-VerifyFile -Root $root -RelativePath 'docs/assets/unreviewed.svg'
+
+    $output = & pwsh -NoProfile -File $script:VerifyTool -RootPath $root -SkipAnalyzer 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = $output | Out-String
+
+    $exitCode | Should -Be 1
+    $text | Should -Match 'docs[\\/]assets[\\/]unreviewed\.svg'
     $text | Should -Match 'public allowlist'
   }
 

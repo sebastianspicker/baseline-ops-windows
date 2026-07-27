@@ -16,6 +16,16 @@
   guard within the same remediation block.
 #>
 
+$script:SkipNonSystemWindowsIntegration = $false
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+  try {
+    $script:SkipNonSystemWindowsIntegration =
+      [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18'
+  } catch {
+    $script:SkipNonSystemWindowsIntegration = $true
+  }
+}
+
 BeforeDiscovery {
   $scriptsDir = Join-Path $PSScriptRoot '../../scripts'
   $scriptFiles = Get-ChildItem -LiteralPath $scriptsDir -Filter '*.ps1' -File |
@@ -92,6 +102,17 @@ Describe 'ShouldProcess guards for registry-write calls' {
 }
 
 Describe 'Direct registry-write paths in audited scripts' {
+  BeforeAll {
+    $scriptsDir = Join-Path $PSScriptRoot '../../scripts'
+    $script:sysmonExtractionSources = @{}
+    foreach ($scriptName in @('16-Sysmon-Config-Updater.ps1', '17-Sysmon-Rule-Drift-Sensor.ps1')) {
+      $mainPath = Join-Path $scriptsDir $scriptName
+      $helperName = [IO.Path]::GetFileNameWithoutExtension($scriptName) + '.helpers.ps1'
+      $helperPath = Join-Path $scriptsDir (Join-Path 'internal' $helperName)
+      $script:sysmonExtractionSources[$scriptName] = (Get-Content -LiteralPath $mainPath -Raw -Encoding UTF8), (Get-Content -LiteralPath $helperPath -Raw -Encoding UTF8) -join [Environment]::NewLine
+    }
+  }
+
   It '05-WUFB-Proofing helper writes are protected by ShouldProcess' {
     $path = Join-Path $PSScriptRoot '../../scripts/05-WUFB-Proofing.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
@@ -149,7 +170,7 @@ Describe 'Direct registry-write paths in audited scripts' {
     $path = Join-Path $PSScriptRoot '../../scripts/08-WinGet-SelfHeal.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
 
-    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$Path, ''Install VC\+\+ redistributable''\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$resolvedPath, "Install VC\+\+ \$Architecture redistributable"\)'
   }
 
   It '09-SupportBundle gates event-source registration and trigger reset behind ShouldProcess' {
@@ -177,36 +198,41 @@ Describe 'Direct registry-write paths in audited scripts' {
   }
 
   It '17-Sysmon-Rule-Drift-Sensor gates remediation process launch behind ShouldProcess' {
-    $path = Join-Path $PSScriptRoot '../../scripts/17-Sysmon-Rule-Drift-Sensor.ps1'
-    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $content = $script:sysmonExtractionSources['17-Sysmon-Rule-Drift-Sensor.ps1']
 
-    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$ScriptPath, ''Launch remediation PowerShell process''\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$ScriptPath, ''Launch trusted remediation PowerShell process''\)'
   }
 
   It '17-Sysmon-Rule-Drift-Sensor rejects unsafe remediation script paths before launch' {
-    $path = Join-Path $PSScriptRoot '../../scripts/17-Sysmon-Rule-Drift-Sensor.ps1'
-    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $content = $script:sysmonExtractionSources['17-Sysmon-Rule-Drift-Sensor.ps1']
 
     $content | Should -Match 'function Resolve-RemediationScriptPath'
     $content | Should -Match 'Resolve-Path -LiteralPath \$ScriptPath -ErrorAction Stop'
     $content | Should -Match 'Test-PathUnderRoot -Path \$canonicalScriptPath -Root \$canonicalScriptsDir'
+    $content | Should -Match 'Test-PathContainsReparsePoint -Path \$resolvedScriptPath\.Path -Root \$resolvedScriptsDir\.Path'
     $content | Should -Match '\[System\.IO\.FileAttributes\]::ReparsePoint'
-    $content | Should -Match 'Get-AuthenticodeSignature -FilePath \$canonicalScriptPath'
+    $content | Should -Match 'Get-AuthenticodeSignature -FilePath \$ScriptPath'
     $content | Should -Match '\$ScriptPath = Resolve-RemediationScriptPath -ScriptPath \$ScriptPath'
-    $content | Should -Match 'Start-Process -FilePath "powershell\.exe"'
+    $content | Should -Match '\$closurePaths = Get-SysmonRemediationExecutionClosure -ScriptPath \$ScriptPath'
+    $content | Should -Not -Match 'Get-ChildItem -LiteralPath .*''\.\.\\lib''.*-Filter ''\*\.psm1'' -File'
+    $content | Should -Match '\[IO\.FileShare\]::Read'
+    $content | Should -Match 'Assert-TrustedWindowsPathAcl -Path \$windowsPowerShell -CheckAncestors'
+    $content | Should -Not -Match 'New-StagedRemediationScript'
+    $content | Should -Not -Match '\[IO\.FileMode\]::CreateNew'
+    $content | Should -Match 'Invoke-NativeCommand -Command \$windowsPowerShell'
+    $content | Should -Not -Match 'Start-Process -FilePath "powershell\.exe"'
   }
 
   It '16-Sysmon-Config-Updater gates Sysmon install and config update behind ShouldProcess' {
-    $path = Join-Path $PSScriptRoot '../../scripts/16-Sysmon-Config-Updater.ps1'
-    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $content = $script:sysmonExtractionSources['16-Sysmon-Config-Updater.ps1']
 
-    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$exe, "Install Sysmon with config ''\$cfgPath''"\)'
-    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$exe, "Update Sysmon config to ''\$cfgPath''"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$exe, "Install Sysmon with staged configuration"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$exe, "Update Sysmon with staged configuration"\)'
+    $content | Should -Match 'Invoke-StagedSysmonCommand -Exe \$exe'
   }
 
   It '16-Sysmon-Config-Updater gates Sysmon event channel mutations behind ShouldProcess' {
-    $path = Join-Path $PSScriptRoot '../../scripts/16-Sysmon-Config-Updater.ps1'
-    $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $content = $script:sysmonExtractionSources['16-Sysmon-Config-Updater.ps1']
 
     $content | Should -Match 'function Ensure-SysmonChannel'
     $content | Should -Match '\[CmdletBinding\(SupportsShouldProcess = \$true\)\]'
@@ -216,33 +242,39 @@ Describe 'Direct registry-write paths in audited scripts' {
     $content | Should -Match 'Ensure-SysmonChannel -DoIt:\$doIt -MiB \$ChannelSizeMiB -Cmdlet \$PSCmdlet'
   }
 
-  It '21-EmergencyKillSwitch gates scheduled task, firewall-state file, and break-glass removal' {
+  It '21-EmergencyKillSwitch uses ScheduledTasks APIs for its gated rollback task and embedded snapshot' {
     $path = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
 
-    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$Run\.Effective\.TaskName, "Schedule automatic rollback task"\)'
-    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$fwStatePath, "Write pre-kill-switch firewall state"\)'
-    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$RuleBgName, "Remove break-glass inbound allow rule"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$rollbackTaskName, "Schedule automatic rollback task"\)'
+    $content | Should -Match '\$PSCmdlet\.ShouldProcess\(\$rollbackTaskName, "Capture and validate embedded firewall rollback snapshot"\)'
+    $content | Should -Match 'New-ScheduledTaskAction'
+    $content | Should -Match 'New-ScheduledTaskTrigger'
+    $content | Should -Match 'New-ScheduledTaskSettingsSet'
+    $content | Should -Match 'Register-ScheduledTask'
+    $content | Should -Not -Match '(?i)\bschtasks(?:\.exe)?\b'
+    $content | Should -Match 'Test-NoManagedFirewallRuleConflicts -RulePrefix \$Run\.Effective\.RulePrefix -TaskPrefix \$Run\.Effective\.TaskName'
+    $content | Should -Match 'Remove-ExactManagedFirewallRules -Rules @\(\$createdManagedRules\.ToArray\(\)\)'
   }
 
   It '21-EmergencyKillSwitch keeps mutation execution behind Remediate mode' {
     $path = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
 
-    $content | Should -Match 'Initialize-V2Context .* -DeriveRemediate'
+    $content | Should -Match '(?s)Initialize-V2Context .*?-DeriveRemediate'
     $content | Should -Match 'if \(-not \$Run\.IsAdmin -and \$Remediate\)'
     $content | Should -Match 'if \(-not \$Remediate\)'
     $content | Should -Match 'Audit mode: no kill switch actions applied\.'
     $content | Should -Match 'if \(\$Remediate\) \{\s*if \(-not \(Ensure-EventSource'
   }
 
-  It '21-EmergencyKillSwitch rollback fails closed without saved firewall state' {
+  It '21-EmergencyKillSwitch rollback fails closed without an embedded valid firewall snapshot' {
     $path = Join-Path $PSScriptRoot '../../scripts/21-EmergencyKillSwitch.ps1'
     $content = Get-Content -LiteralPath $path -Raw -Encoding UTF8
 
     $content | Should -Not -Match 'DefaultInboundAction Allow -DefaultOutboundAction Allow'
-    $content | Should -Match 'refusing unsafe Allow/Allow fallback'
-    $content | Should -Match 'refusing to apply unsafe firewall profile fallback'
+    $content | Should -Match 'Embedded firewall snapshot has an invalid schema'
+    $content | Should -Not -Match 'Get-Content -LiteralPath \$fwStatePath'
   }
 
   It '25-WinGet-Config-Baseline-Runner gates apply and keeps Audit mode test-only' {
@@ -272,6 +304,7 @@ Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
     function global:Get-NetFirewallProfile { }
     function global:Set-NetFirewallProfile { }
     function global:Get-NetFirewallRule { }
+    function global:Get-ScheduledTask { }
     function global:New-NetFirewallRule { }
     function global:Remove-NetFirewallRule { }
     function global:Disable-NetAdapter { }
@@ -282,6 +315,7 @@ Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
         'Get-NetFirewallProfile',
         'Set-NetFirewallProfile',
         'Get-NetFirewallRule',
+        'Get-ScheduledTask',
         'New-NetFirewallRule',
         'Remove-NetFirewallRule',
         'Disable-NetAdapter'
@@ -320,7 +354,7 @@ Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
     Should -Invoke Disable-NetAdapter -Times 0
   }
 
-  It '21-EmergencyKillSwitch WhatIf in Remediate mode does not perform mutations' {
+  It '21-EmergencyKillSwitch WhatIf in Remediate mode does not perform mutations' -Skip:$script:SkipNonSystemWindowsIntegration {
     $oldOS = $env:OS
     $oldTemp = $env:TEMP
     try {
@@ -343,6 +377,8 @@ Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
       Mock -CommandName New-NetFirewallRule -MockWith { throw 'firewall mutation should not run under WhatIf' }
       Mock -CommandName Remove-NetFirewallRule -MockWith { throw 'firewall mutation should not run under WhatIf' }
       Mock -CommandName Disable-NetAdapter -MockWith { throw 'adapter mutation should not run under WhatIf' }
+      Mock -CommandName Get-NetFirewallRule -MockWith { @() }
+      Mock -CommandName Get-ScheduledTask -MockWith { @() }
 
       $result = & $script:EmergencyKillSwitchPath -Mode Remediate -OutputFormat None -PassThru -Confirm:$false -WhatIf 2>&1 3>&1 6>&1
     } finally {

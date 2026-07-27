@@ -5,11 +5,11 @@ Audit NTLM / LAN Manager Authentication Level (LmCompatibilityLevel) with quick 
 
 .DESCRIPTION
 Reads HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\LmCompatibilityLevel, evaluates it against a minimum level,
-creates findings, optionally exports CSV, and prints a human-friendly console summary.
+creates findings, optionally exports CSV, and prints a console summary.
 
 Design goals:
 - Pipeline output: structured objects only (works cleanly with Export-Csv / ConvertTo-Json / Where-Object).
-- Console output: display-only formatting via Write-UiLine / Write-Information (never via pipeline strings). [web:102][web:106]
+- Console output: display-only formatting via Write-UiLine / Write-Information (never via pipeline strings).
 
 .PARAMETER MinimumLevel
 Minimum accepted level (0..5). Default is 3.
@@ -18,8 +18,8 @@ Minimum accepted level (0..5). Default is 3.
 Optional CSV path for the summary. Findings are exported as "<base>_findings.csv" in the same folder.
 
 .PARAMETER ConfigPath
-Optional JSON config file path (example: "PATH/TO/JSON/ntlm-audit.json").
-If present, settings override defaults; if missing/invalid, defaults are used. [web:62][web:65]
+Optional JSON config file path supplied with $ConfigPath.
+If present, settings override defaults; if missing/invalid, defaults are used.
 
 .JSON (optional)
 Supported properties (all optional):
@@ -94,7 +94,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '41-NTLM-Audit-Client.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '41-NTLM-Audit-Client.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -106,10 +110,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '41-NTLM-Audit-Client.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '41-NTLM-Audit-Client.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 #region Helpers
@@ -197,10 +202,10 @@ function Import-JsonConfigOrDefault {
   if (-not (Test-Path -LiteralPath $Path)) { return $DefaultConfig }
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultConfig }
 
-    # ConvertFrom-Json can behave unexpectedly with errors; try/catch is the robust approach. [web:65][web:62]
+    # Use try/catch so invalid JSON produces a controlled fallback.
     $j = $raw | ConvertFrom-Json
     if ($null -eq $j) { return $DefaultConfig }
 
@@ -224,7 +229,7 @@ $MinimumLevel  = $config.MinimumLevel
 $configLoaded = $false
 if (-not [string]::IsNullOrWhiteSpace($ConfigPath) -and (Test-Path -LiteralPath $ConfigPath)) {
   try {
-    $raw = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $ConfigPath -MaximumBytes 1048576
     if (-not [string]::IsNullOrWhiteSpace($raw)) {
       $null = $raw | ConvertFrom-Json
       $configLoaded = $true
@@ -280,7 +285,7 @@ $summary = [pscustomobject]@{
   FindingsCount        = $findings.Count
   Timestamp            = Get-Date
   ConfigLoaded         = $configLoaded
-  ConfigPath           = $(if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $null } else { 'PATH/TO/JSON/ntlm-audit.json' })
+  ConfigPath           = $(if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $null } else { '[configured path]' })
 }
 #endregion Output objects (pipeline-safe)
 
@@ -288,7 +293,7 @@ $summary = [pscustomobject]@{
 if ($ExportPath) {
   [void](Ensure-DirectoryForFile -FilePath $ExportPath)
 
-  # Windows PowerShell 5.1 writes UTF-8 with BOM for -Encoding UTF8; keep for broad CSV/tool compatibility. [web:66]
+  # Windows PowerShell 5.1 writes UTF-8 with BOM for -Encoding UTF8; keep for broad CSV/tool compatibility.
   $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
 
   $base   = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
@@ -317,4 +322,4 @@ $resultToken = if ($Strict -and $findings.Count -gt 0) { 'FAIL' } elseif ($findi
 $v2Result = Get-V2ResultObject -ScriptName '41-NTLM-Audit-Client.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $findings) -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

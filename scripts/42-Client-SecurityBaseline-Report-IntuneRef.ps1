@@ -4,9 +4,9 @@
 Lightweight client "Security Baseline" report (read-only).
 
 .DESCRIPTION
-- Pipeline output: ONLY structured objects. [web:162]
-- Console output: formatting via Write-UiLine / Write-Information only. [web:114][web:162]
-- Optional JSON reference ("PATH/TO/JSON/...") for expected values; safe defaults when missing/invalid.
+- Pipeline output: ONLY structured objects.
+- Console output: formatting via Write-UiLine / Write-Information only.
+- Optional JSON reference for expected values; safe defaults when missing or invalid.
 
 .PARAMETER ExportPath
 Optional CSV export:
@@ -14,7 +14,7 @@ Optional CSV export:
 - <basename>_sections.csv (rows)
 
 .PARAMETER ReferenceJsonPath
-Optional JSON reference file path, e.g. "PATH/TO/JSON/baseline-reference.json".
+Optional JSON reference file path supplied with $ReferenceJsonPath.
 
 .PARAMETER NoConsoleSummary
 Disable the human-readable summary block at the end.
@@ -83,7 +83,11 @@ $script:NoConsoleSummary = [bool]$NoConsoleSummary
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -95,10 +99,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 #region Helpers
@@ -134,14 +139,14 @@ function ConvertTo-DisplayString {
 }
 
 function Get-ObjectList {
-  # Strong list internally, but do NOT expose as typed parameter to avoid empty-collection binding issues. [web:56]
+  # Strong list internally, but do NOT expose as typed parameter to avoid empty-collection binding issues.
   New-Object 'System.Collections.Generic.List[object]'
 }
 
 function Add-Row {
   [CmdletBinding()]
   param(
-    # Accept as object to avoid PowerShell "empty collection" parameter binding pitfalls with generic lists. [web:56]
+    # Accept as object to avoid PowerShell "empty collection" parameter binding pitfalls with generic lists.
     [Parameter(Mandatory)]
     [object]$List,
 
@@ -212,7 +217,7 @@ function Load-ReferenceJson {
       return [pscustomobject]$result
     }
 
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) {
       $result.Error = "Reference JSON is empty: $Path"
       $result.Reference = Get-ReferenceDefaults
@@ -488,7 +493,7 @@ $summary = [pscustomobject]@{
   ComputerName = $env:COMPUTERNAME
   Timestamp    = (Get-Date)
   Rows         = $rows.Count
-  ReferenceJsonPath  = if ($ReferenceJsonPath) { 'PATH/TO/JSON' } else { $null }
+  ReferenceJsonPath  = if ($ReferenceJsonPath) { '[configured path]' } else { $null }
   ReferenceLoaded    = $refInfo.Loaded
   ReferenceLoadError = $refInfo.Error
   Partial            = ($partialReasons.Count -gt 0)
@@ -513,8 +518,8 @@ if ($ExportPath) {
 if (-not $script:Quiet -and -not $script:NoConsoleSummary) {
   $rowsArr = $rows.ToArray()
   $refText  = 'Defaults (no path provided)'
-  if ($refInfo.Loaded) { $refText = "Loaded (PATH/TO/JSON)" }
-  elseif ($refInfo.Path) { $refText = "Defaults (failed: PATH/TO/JSON)" }
+  if ($refInfo.Loaded) { $refText = 'Loaded ([configured path])' }
+  elseif ($refInfo.Path) { $refText = 'Defaults (failed: [configured path])' }
 
   Write-ConsoleSummary -Summary $summary -Findings ([System.Collections.ArrayList]::new()) `
     -CustomFields ([ordered]@{
@@ -587,10 +592,10 @@ if ($sourceStatus.FirewallProfile.Succeeded -eq $false) {
   }
 }
 $resultToken = if ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result $resultToken -Findings $findings -Summary $summary -Metadata @{ Rows = @($rows.ToArray()); RefInfo = $refInfo }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 
 #endregion Main
-if ($resultToken -eq 'WARN') { exit 2 }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

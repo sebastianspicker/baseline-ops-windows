@@ -1,3 +1,5 @@
+# Analyzes GitHub Actions workflow code when automation changes, complementing
+# the repository's PowerShell-focused static analysis.
 name: CodeQL
 
 on:

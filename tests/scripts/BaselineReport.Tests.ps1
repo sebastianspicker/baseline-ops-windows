@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for security-script contracts.
+
+.DESCRIPTION
+Verifies safe, repeatable operator behavior and evidence.
+#>
 
 Describe '42-Client-SecurityBaseline-Report-IntuneRef partial result reporting' -Tag 'BaselineReport' {
   BeforeAll {

@@ -1,6 +1,23 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for security-script contracts.
 
-Describe 'Registry remediation write-back failure reporting' -Tag 'RegistryWriteBack' {
+.DESCRIPTION
+Verifies safe, repeatable operator behavior and evidence.
+#>
+
+$script:SkipNonSystemWindowsIntegration = $false
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+  try {
+    $script:SkipNonSystemWindowsIntegration =
+      [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18'
+  } catch {
+    $script:SkipNonSystemWindowsIntegration = $true
+  }
+}
+
+Describe 'Registry remediation write-back failure reporting' -Tag 'RegistryWriteBack' -Skip:$script:SkipNonSystemWindowsIntegration {
   BeforeAll {
     $script:PsLoggingScript = Join-Path $PSScriptRoot '../../scripts/31-PowerShell-Logging-Baseline.ps1'
     $script:CredentialGuardScript = Join-Path $PSScriptRoot '../../scripts/39-CredentialGuard-VBS-AuditRemediate.ps1'

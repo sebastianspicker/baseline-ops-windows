@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for security-script contracts.
+
+.DESCRIPTION
+Verifies safe, repeatable operator behavior and evidence.
+#>
 
 Describe 'explicit config and catalog input reporting' -Tag 'Config' {
   BeforeAll {
@@ -158,8 +165,8 @@ Describe 'explicit config and catalog input reporting' -Tag 'Config' {
 
       $result = @($output | Where-Object {
           $null -ne $_ -and
-          $_.PSObject.Properties.Name -contains 'Catalog' -and
-          $_.PSObject.Properties.Name -contains 'Status'
+          $_.PSObject.Properties.Name -contains 'Result' -and
+          $_.PSObject.Properties.Name -contains 'Summary'
         })[-1]
 
       [pscustomobject]@{
@@ -222,9 +229,11 @@ Describe 'explicit config and catalog input reporting' -Tag 'Config' {
 
     $run = Invoke-SoftwareAuditCatalogCase -CatalogPath $catalogPath
 
-    $run.ExitCode | Should -Be 1
-    $run.Result.Status.Level | Should -Be 'Warning'
-    @($run.Result.Catalog.Meta.Issues | Where-Object { $_.Kind -eq 'CatalogPath' }).Count |
+    # The v2 contract maps warning-level catalog fallback to exit code 2.
+    $run.ExitCode | Should -Be 2
+    $run.Result.Result | Should -Be 'WARN'
+    $run.Result.Summary.Status.Level | Should -Be 'Warning'
+    @($run.Result.Summary.Catalog.Meta.Issues | Where-Object { $_.Kind -eq 'CatalogPath' }).Count |
       Should -Be 1
     @($run.Result.Findings | Where-Object { $_.Code -eq 'CFG-CatalogLoadFailed' }).Count |
       Should -Be 1

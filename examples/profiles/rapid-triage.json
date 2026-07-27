@@ -1,5 +1,5 @@
 {
-  "_NOTE": "PRODUCTION: Set Integrity.RequireSigned to true and populate Integrity.ExpectedHashes with per-script SHA256 hashes before deploying to production environments.",
+  "_NOTE": "ALPHA: Integrity.RequireSigned is false and Integrity.ExpectedHashes is empty in this example. Configure a signature or per-script hash policy before trusted deployment.",
   "ProfileName": "rapid-triage",
   "Version": "2.0",
   "Defaults": {

@@ -17,7 +17,7 @@
 
   Output behavior:
   - Pipeline output is always exactly ONE structured object (suitable for Export-Csv / ConvertTo-Json / Where-Object).
-  - Human-friendly console output is printed at the end (pretty summary with color) and does not pollute the pipeline.
+  - A colorized console summary is printed at the end without writing to the pipeline.
   - A detailed, plain-text summary is written to the Windows Event Log.
 
 .PARAMETER Strict
@@ -75,7 +75,7 @@
   - Runtime state (Device Guard security services configured/running, VBS status)
   - Compliant (bool), Issues (string[]), Warnings (string[])
   - RemediationPerformed (bool), RemediationActions (string[]), RebootRequired (bool)
-  - ExitCode (0=OK, 1=NonCompliant, 2=Error) and EventId
+  - ExitCode and EventId; process exit codes are 0=OK, 2=WARN, 1=FAIL
 
   This enables examples like:
     .\Script.ps1 | ConvertTo-Json -Depth 5
@@ -103,7 +103,7 @@
   Audits blocklist state but does not fail compliance if the blocklist is disabled.
 
 .EXAMPLE
-  PS> .\13-LSASS-CG-HVCI-VBS.ps1 -ConfigPath "PATH/TO/JSON" -Mode Remediate | ConvertTo-Json -Depth 6
+  PS> .\13-LSASS-CG-HVCI-VBS.ps1 -ConfigPath $ConfigPath -Mode Remediate | ConvertTo-Json -Depth 6
 
   Loads settings from JSON (if present) and runs remediation. The structured output is serialized to JSON for logging or upload.
 
@@ -150,7 +150,12 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -BoundParameters $PSBoundParameters -DeriveRemediate
+$script:__V2Context = Initialize-V2Context -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+$Remediate = [bool]$script:__V2Context.Remediate
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -162,10 +167,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # -----------------------------
@@ -226,7 +232,7 @@ function Try-LoadJsonConfig {
   }
 
   try {
-    $raw = Get-Content -LiteralPath $sanitized -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $sanitized -MaximumBytes 1048576
     $obj = $raw | ConvertFrom-Json -ErrorAction Stop
 
     foreach ($k in $cfg.Keys) {
@@ -439,7 +445,7 @@ if (-not (Ensure-EventSource -Source $source -Log $logName)) {
   Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
 }
 
-$sanitizedConfigPath = $(if ([string]::IsNullOrWhiteSpace($ConfigPath) -or $ConfigPath -eq 'PATH/TO/JSON') { 'PATH/TO/JSON' } else { $ConfigPath })
+$sanitizedConfigPath = $(if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $null } else { '[configured path]' })
 
 $result = Get-EmptyResult -Strict $Strict -RequireBlockList $RequireBlockList -Remediate $Remediate -IsAdmin (Test-IsAdmin) -ConfigPath $sanitizedConfigPath -ConfigLoaded $cfgLoad.Loaded -ConfigLoadReason $cfgLoad.Reason
 $result.EventSource = $source
@@ -685,7 +691,7 @@ try {
     Write-HealthEvent -Id $result.EventId -Msg $logText -Level 'Warning' -Source $source
   }
 
-  # Pretty console output (Write-UiLine only; does not pollute pipeline)
+  # Formatted console output (Write-UiLine only; no pipeline output)
   Write-PrettySummary -Result $result -Cfg $cfg -SanitizedConfigPath $sanitizedConfigPath
 
 } catch {
@@ -705,4 +711,4 @@ $v2Result = Get-V2ResultObject -ScriptName '13-LSASS-CG-HVCI-VBS.ps1' -Mode $Mod
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 
-exit $result.ExitCode
+exit (Get-V2ExitCode -Result $resultToken)

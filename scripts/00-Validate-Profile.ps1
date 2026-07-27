@@ -49,7 +49,11 @@ Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '00-Validate-Profile.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '00-Validate-Profile.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $issues = New-Object System.Collections.ArrayList
@@ -77,6 +81,7 @@ function Get-ValidationExceptionCode {
   if ($Message -match 'path traversal') { return 'PROFILE-PATH-TRAVERSAL' }
   if ($Message -like 'Profile file not found:*') { return 'PROFILE-NOT-FOUND' }
   if ($Message -eq 'Profile file is empty.') { return 'PROFILE-EMPTY' }
+  if ($Message -like 'File exceeds the * byte size limit.') { return 'PROFILE-TOO-LARGE' }
   if ($Message -like 'Profile JSON is invalid:*') { return 'PROFILE-INVALID-JSON' }
   'PROFILE-VALIDATION-ERROR'
 }
@@ -113,6 +118,25 @@ function Write-ValidationFailureResult {
 
 # Has-Property moved to lib/Common.psm1
 
+function Test-JsonObject {
+  [CmdletBinding()]
+  param([AllowNull()]$Value)
+
+  return (
+    $null -ne $Value -and
+    $Value -isnot [string] -and
+    $Value -isnot [System.ValueType] -and
+    $Value -isnot [System.Array]
+  )
+}
+
+function Test-JsonArray {
+  [CmdletBinding()]
+  param([AllowNull()]$Value)
+
+  return ($null -ne $Value -and $Value -is [System.Array])
+}
+
 try {
   Assert-NoPathTraversal -Path $ProfilePath -ParameterName 'ProfilePath'
 
@@ -120,15 +144,20 @@ try {
     throw "Profile file not found: $ProfilePath"
   }
 
-  $raw = Get-Content -LiteralPath $ProfilePath -Raw -Encoding UTF8
+  $raw = Get-BoundedUtf8FileContent -Path $ProfilePath -MaximumBytes 1048576
   if ([string]::IsNullOrWhiteSpace($raw)) {
     throw 'Profile file is empty.'
   }
+  $profileContentSha256 = Get-TextSha256 -Text $raw
 
   try {
     $profileDoc = $raw | ConvertFrom-Json -ErrorAction Stop
   } catch {
     throw "Profile JSON is invalid: $($_.Exception.Message)"
+  }
+
+  if (-not (Test-JsonObject -Value $profileDoc)) {
+    Add-Issue -Severity 'High' -Code 'PROFILE-ROOT-TYPE' -Message 'Profile JSON root must be an object.'
   }
 
   foreach ($required in @('ProfileName','Version','Defaults','Steps','Integrity')) {
@@ -139,7 +168,9 @@ try {
 
   if (Has-Property -Object $profileDoc -Name 'Defaults') {
     $defaults = $profileDoc.Defaults
-    if (-not (Has-Property -Object $defaults -Name 'Mode')) {
+    if (-not (Test-JsonObject -Value $defaults)) {
+      Add-Issue -Severity 'High' -Code 'PROFILE-DEFAULTS-TYPE' -Message 'Defaults must be an object.'
+    } elseif (-not (Has-Property -Object $defaults -Name 'Mode')) {
       Add-Issue -Severity 'High' -Code 'PROFILE-DEFAULTS-MODE' -Message "Defaults.Mode is required."
     } elseif (@('Audit','Remediate') -notcontains [string]$defaults.Mode) {
       Add-Issue -Severity 'High' -Code 'PROFILE-DEFAULTS-MODE-VALUE' -Message "Defaults.Mode must be Audit or Remediate."
@@ -148,9 +179,15 @@ try {
     if ((Has-Property -Object $defaults -Name 'OutputFormat') -and @('Console','Json','Csv','None') -notcontains [string]$defaults.OutputFormat) {
       Add-Issue -Severity 'High' -Code 'PROFILE-DEFAULTS-OUTPUTFORMAT' -Message "Defaults.OutputFormat must be Console, Json, Csv, or None."
     }
+    if ((Has-Property -Object $defaults -Name 'Strict') -and $defaults.Strict -isnot [bool]) {
+      Add-Issue -Severity 'High' -Code 'PROFILE-DEFAULTS-STRICT-TYPE' -Message 'Defaults.Strict must be a JSON boolean.'
+    }
   }
 
   if (Has-Property -Object $profileDoc -Name 'Steps') {
+    if (-not (Test-JsonArray -Value $profileDoc.Steps)) {
+      Add-Issue -Severity 'High' -Code 'PROFILE-STEPS-TYPE' -Message 'Steps must be a JSON array.'
+    }
     $scriptsBasePath = if ([string]::IsNullOrWhiteSpace($RootPath)) {
       $PSScriptRoot
     } elseif (Test-Path -LiteralPath (Join-Path $RootPath 'scripts') -PathType Container) {
@@ -164,6 +201,10 @@ try {
     $seenScriptNames = @{}
     foreach ($step in @($profileDoc.Steps)) {
       $index++
+      if (-not (Test-JsonObject -Value $step)) {
+        Add-Issue -Severity 'High' -Code 'PROFILE-STEP-TYPE' -Message "Step #$index must be an object."
+        continue
+      }
       if (-not (Has-Property -Object $step -Name 'Script')) {
         Add-Issue -Severity 'High' -Code 'PROFILE-STEP-SCRIPT' -Message "Step #$index is missing Script."
         continue
@@ -172,6 +213,8 @@ try {
       $scriptName = [string]$step.Script
       if (-not (Test-SafeScriptName -Name $scriptName)) {
         Add-Issue -Severity 'High' -Code 'PROFILE-STEP-SCRIPT-NAME' -Message "Step #$index uses unsafe script name '$scriptName'."
+      } elseif ($scriptName -match '^00-') {
+        Add-Issue -Severity 'High' -Code 'PROFILE-STEP-CONTROL-PLANE' -Message "Step #$index references control-plane script '$scriptName'. Profiles may execute numbered workload scripts only."
       } else {
         $scriptPath = Join-Path $scriptsBasePath $scriptName
         if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
@@ -188,30 +231,44 @@ try {
       $knownStepNames += $scriptName
 
       if ((Has-Property -Object $step -Name 'Args') -and $null -ne $step.Args) {
-        $argIndex = 0
-        foreach ($arg in @($step.Args)) {
-          $argIndex++
-          if ($null -eq $arg -or $arg -isnot [string]) {
-            Add-Issue -Severity 'High' -Code 'PROFILE-STEP-ARGS-TYPE' -Message "Step #$index contains non-string Args value at position $argIndex."
-            continue
+        if (-not (Test-JsonArray -Value $step.Args)) {
+          Add-Issue -Severity 'High' -Code 'PROFILE-STEP-ARGS-ARRAY' -Message "Step #$index Args must be a JSON array."
+        } else {
+          if (@($step.Args).Count -gt 0) {
+            Add-Issue -Severity 'High' -Code 'PROFILE-STEP-ARGS-NOT-ALLOWED' -Message "Step #$index Args must be empty. Profile JSON cannot supply step arguments; use a trusted direct runner invocation for advanced arguments."
           }
+          $argIndex = 0
+          foreach ($arg in @($step.Args)) {
+            $argIndex++
+            if ($null -eq $arg -or $arg -isnot [string]) {
+              Add-Issue -Severity 'High' -Code 'PROFILE-STEP-ARGS-TYPE' -Message "Step #$index contains non-string Args value at position $argIndex."
+              continue
+            }
 
-          if ([string]::IsNullOrWhiteSpace($arg)) {
-            Add-Issue -Severity 'High' -Code 'PROFILE-STEP-ARGS-EMPTY' -Message "Step #$index contains an empty Args token at position $argIndex."
-          }
+            if ([string]::IsNullOrWhiteSpace($arg)) {
+              Add-Issue -Severity 'High' -Code 'PROFILE-STEP-ARGS-EMPTY' -Message "Step #$index contains an empty Args token at position $argIndex."
+            }
 
-          if ([string]$arg -ieq '-Remediate') {
-            Add-Issue -Severity 'Medium' -Code 'PROFILE-STEP-ARGS-LEGACY-REMEDIATE' -Message "Step #$index uses removed legacy token '-Remediate'. Use '-Mode Remediate' instead."
+            if ([string]$arg -ieq '-Remediate') {
+              Add-Issue -Severity 'Medium' -Code 'PROFILE-STEP-ARGS-LEGACY-REMEDIATE' -Message "Step #$index uses removed legacy token '-Remediate'. Use '-Mode Remediate' instead."
+            }
           }
         }
       }
 
       if ((Has-Property -Object $step -Name 'DependsOn') -and $null -ne $step.DependsOn) {
-        foreach ($dep in @($step.DependsOn)) {
-          if ([string]::IsNullOrWhiteSpace([string]$dep)) {
-            Add-Issue -Severity 'Medium' -Code 'PROFILE-STEP-DEPENDS-EMPTY' -Message "Step #$index contains an empty DependsOn value."
+        if (-not (Test-JsonArray -Value $step.DependsOn)) {
+          Add-Issue -Severity 'High' -Code 'PROFILE-STEP-DEPENDS-TYPE' -Message "Step #$index DependsOn must be a JSON array."
+        } else {
+          foreach ($dep in @($step.DependsOn)) {
+            if ($dep -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$dep)) {
+              Add-Issue -Severity 'High' -Code 'PROFILE-STEP-DEPENDS-VALUE' -Message "Step #$index contains a non-string or empty DependsOn value."
+            }
           }
         }
+      }
+      if ((Has-Property -Object $step -Name 'ContinueOnError') -and $step.ContinueOnError -isnot [bool]) {
+        Add-Issue -Severity 'High' -Code 'PROFILE-STEP-CONTINUE-TYPE' -Message "Step #$index ContinueOnError must be a JSON boolean."
       }
     }
 
@@ -231,7 +288,15 @@ try {
 
   if (Has-Property -Object $profileDoc -Name 'Integrity') {
     $integrity = $profileDoc.Integrity
-    if ((Has-Property -Object $integrity -Name 'ExpectedHashes') -and $null -ne $integrity.ExpectedHashes) {
+    if (-not (Test-JsonObject -Value $integrity)) {
+      Add-Issue -Severity 'High' -Code 'PROFILE-INTEGRITY-TYPE' -Message 'Integrity must be an object.'
+    }
+    if ((Has-Property -Object $integrity -Name 'RequireSigned') -and $integrity.RequireSigned -isnot [bool]) {
+      Add-Issue -Severity 'High' -Code 'PROFILE-INTEGRITY-SIGNED-TYPE' -Message 'Integrity.RequireSigned must be a JSON boolean.'
+    }
+    if ((Has-Property -Object $integrity -Name 'ExpectedHashes') -and $null -ne $integrity.ExpectedHashes -and -not (Test-JsonObject -Value $integrity.ExpectedHashes)) {
+      Add-Issue -Severity 'High' -Code 'PROFILE-HASHES-TYPE' -Message 'Integrity.ExpectedHashes must be an object.'
+    } elseif ((Has-Property -Object $integrity -Name 'ExpectedHashes') -and $null -ne $integrity.ExpectedHashes) {
       foreach ($kv in $integrity.ExpectedHashes.PSObject.Properties) {
         if (-not (Test-SafeScriptName -Name $kv.Name)) {
           Add-Issue -Severity 'High' -Code 'PROFILE-HASH-KEY' -Message "Integrity.ExpectedHashes contains unsafe key '$($kv.Name)'."
@@ -247,6 +312,7 @@ try {
   $warnCount = @($issues | Where-Object { $_.Severity -in @('Medium','Low') }).Count
 
   $resultToken = if ($highCount -gt 0) { 'FAIL' } elseif ($warnCount -gt 0) { 'WARN' } else { 'OK' }
+  if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
   $summary = [pscustomobject]@{
     ProfilePath = (Resolve-Path -LiteralPath $ProfilePath).Path
     Issues      = $issues.Count
@@ -260,7 +326,7 @@ try {
     -Result $resultToken `
     -Findings (ConvertTo-ObjectArray -InputObject $issues) `
     -Summary $summary `
-    -Metadata @{ Component = 'ProfileValidation' }
+    -Metadata @{ Component = 'ProfileValidation'; ProfileContentSha256 = $profileContentSha256 }
 
   if ($OutputFormat -eq 'Console') {
     Write-Section -Title 'Profile Validation'
@@ -282,12 +348,10 @@ try {
     $resultObj
   }
 
-  if ($resultToken -eq 'FAIL') { exit 1 }
-  if ($resultToken -eq 'WARN') { exit 2 }
-  exit 0
+  exit (Get-V2ExitCode -Result $resultToken)
 } catch {
   $message = $_.Exception.Message
   Write-UiLine -Text ("Validation failed: {0}" -f $message) -Style Error
   Write-ValidationFailureResult -Code (Get-ValidationExceptionCode -Message $message) -Message $message
-  exit 1
+  exit (Get-V2ExitCode -Result 'FAIL')
 }

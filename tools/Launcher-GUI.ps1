@@ -35,6 +35,7 @@ try {
 }
 
 $script:CurrentProcess = $null
+$script:CurrentProcessJob = $null
 $script:CurrentOperation = $null
 $script:RunStarted = $null
 $script:StopRequested = $false
@@ -42,6 +43,8 @@ $script:CloseAfterStop = $false
 $script:ManifestPath = $null
 $script:FullLogPath = $null
 $script:OutputCollector = $null
+$script:OutputDrainTasks = @()
+$script:TrustedClosure = $null
 $script:OutputQueue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
 $script:VisibleLines = New-Object System.Collections.ArrayList
 $script:ScriptCatalog = @()
@@ -53,6 +56,12 @@ $script:MaxPendingLines = 5000
 $script:MaxVisibleLines = 10000
 $script:MaxLogBytes = 25MB
 
+<#
+.SYNOPSIS
+Creates an autosized accessible label.
+.DESCRIPTION
+Keeps repeated WinForms label defaults consistent across the launcher.
+#>
 function Get-LabelControl {
   param([string]$Text, [string]$AccessibleName)
   $control = New-Object System.Windows.Forms.Label
@@ -62,6 +71,12 @@ function Get-LabelControl {
   return $control
 }
 
+<#
+.SYNOPSIS
+Creates an accessible button with the launcher sizing defaults.
+.DESCRIPTION
+Centralizes minimum target size and padding for consistent keyboard and pointer use.
+#>
 function Get-ButtonControl {
   param([string]$Text, [string]$AccessibleName)
   $control = New-Object System.Windows.Forms.Button
@@ -73,16 +88,29 @@ function Get-ButtonControl {
   return $control
 }
 
+<#
+.SYNOPSIS
+Adds a control to a table-layout cell.
+.DESCRIPTION
+Applies optional column spanning through one layout helper.
+#>
 function Add-TableControl {
   param($Table, $Control, [int]$Column, [int]$Row, [int]$ColumnSpan = 1)
   $Table.Controls.Add($Control, $Column, $Row)
   if ($ColumnSpan -gt 1) { $Table.SetColumnSpan($Control, $ColumnSpan) }
 }
 
+<#
+.SYNOPSIS
+Transitions the launcher UI to a named operational state.
+.DESCRIPTION
+Updates status text and control availability together so validation, execution,
+and stopping cannot leave conflicting actions enabled.
+#>
 function Write-LauncherState {
   param([ValidateSet('Ready', 'Validating', 'Running', 'Stopping', 'Completed', 'Warning', 'Failed', 'Stopped')][string]$State, [string]$Detail)
   $script:State = $State
-  $statusLabel.Text = if ([string]::IsNullOrWhiteSpace($Detail)) { $State } else { "$State — $Detail" }
+  $statusLabel.Text = if ([string]::IsNullOrWhiteSpace($Detail)) { $State } else { "$State - $Detail" }
   $statusLabel.AccessibleName = "Launcher status: $($statusLabel.Text)"
   $active = $State -in @('Validating', 'Running', 'Stopping')
   foreach ($control in @($txtRoot, $btnBrowseRoot, $btnRefresh, $tabs, $txtFilter, $gridScripts, $txtArgs, $txtProfile, $btnBrowseProfile, $btnValidateProfile, $rbAudit, $rbRemediate, $chkStrict, $chkRequireSigned, $txtExpectedHash, $cmbHashAlgorithm)) {
@@ -91,17 +119,34 @@ function Write-LauncherState {
   $txtExpectedHash.Enabled = (-not $active) -and ($tabs.SelectedTab -eq $tabScript)
   if (-not $script:IsElevated) { $rbRemediate.Enabled = $false }
   $btnRun.Enabled = -not $active
-  $btnStop.Enabled = $State -in @('Running', 'Stopping')
+  $btnStop.Enabled = $State -in @('Validating', 'Running')
   if ($State -eq 'Stopping') { $btnStop.Enabled = $false }
 }
 
+<#
+.SYNOPSIS
+Queues one launcher output line.
+.DESCRIPTION
+Routes output through the bounded collector when active and through the bounded
+pending queue before a run artifact exists.
+#>
 function Add-LauncherLine {
   param([AllowEmptyString()][string]$Line)
   if ($null -eq $Line) { return }
   if ($null -ne $script:OutputCollector) { $script:OutputCollector.AddLine($Line) } else { Add-LauncherPendingLine -Queue $script:OutputQueue -Line $Line -Maximum $script:MaxPendingLines }
 }
 
+<#
+.SYNOPSIS
+Releases the current run's manifest, output collector, and trust locks.
+.DESCRIPTION
+Closes immutable execution handles before removing temporary artifacts.
+#>
 function Close-RunArtifact {
+  if ($null -ne $script:TrustedClosure) {
+    Exit-LauncherTrustedClosure -Closure $script:TrustedClosure
+    $script:TrustedClosure = $null
+  }
   if ($null -ne $script:OutputCollector) {
     try { $script:OutputCollector.Dispose() } catch { Write-Verbose ("Full log disposal failed: {0}" -f $_.Exception.Message) }
     $script:OutputCollector = $null
@@ -112,26 +157,45 @@ function Close-RunArtifact {
   $script:ManifestPath = $null
 }
 
+<#
+.SYNOPSIS
+Creates fresh bounded output state for a launcher run.
+.DESCRIPTION
+Removes the previous transient log and assigns a unique log path so evidence
+from separate operations cannot be mixed.
+#>
 function Initialize-RunArtifact {
   $previousLogPath = $script:FullLogPath
   Close-RunArtifact
   if ($previousLogPath -and (Test-Path -LiteralPath $previousLogPath)) {
     Remove-Item -LiteralPath $previousLogPath -Force -ErrorAction SilentlyContinue
   }
-  $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'win-mdm-launcher'
+  $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'baselineops-windows-launcher'
   New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
   $id = [guid]::NewGuid().ToString('N')
-  $script:ManifestPath = Join-Path $tempRoot "$id.json"
+  $script:ManifestPath = $null
   $script:FullLogPath = Join-Path $tempRoot "$id.log"
   $script:OutputCollector = New-Object LauncherOutputCollector($script:FullLogPath, $script:MaxLogBytes, $script:MaxPendingLines)
   $script:OutputQueue = $script:OutputCollector.Pending
 }
 
+<#
+.SYNOPSIS
+Returns the operator-selected execution mode.
+.DESCRIPTION
+Maps the radio-button state to the manifest's Audit or Remediate token.
+#>
 function Get-EffectiveMode {
   if ($rbRemediate.Checked) { return 'Remediate' }
   return 'Audit'
 }
 
+<#
+.SYNOPSIS
+Returns the selected script name or profile path.
+.DESCRIPTION
+Keeps tab-specific target selection out of manifest construction.
+#>
 function Get-SelectedTarget {
   if ($tabs.SelectedTab -eq $tabScript) {
     if ($gridScripts.SelectedRows.Count -eq 0) { return $null }
@@ -140,6 +204,12 @@ function Get-SelectedTarget {
   return $txtProfile.Text.Trim()
 }
 
+<#
+.SYNOPSIS
+Records the operator-visible inputs for a run.
+.DESCRIPTION
+Writes enough context to interpret exported logs without recording secret values.
+#>
 function Write-RunHeader {
   param([string]$Operation, [string]$Target, [string]$Mode, [string[]]$Arguments)
   Add-LauncherLine ('=' * 72)
@@ -155,11 +225,33 @@ function Write-RunHeader {
   Add-LauncherLine ('=' * 72)
 }
 
+<#
+.SYNOPSIS
+Starts the isolated launcher worker for validation or execution.
+.DESCRIPTION
+Validates and locks the execution closure, passes a bounded manifest through the
+environment, and assigns the worker to a job object before allowing it to run.
+#>
 function Invoke-LauncherProcess {
   param($Manifest, [ValidateSet('validation', 'run')][string]$Purpose)
 
-  $Manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $script:ManifestPath -Encoding UTF8
+  $manifestJson = $Manifest | ConvertTo-Json -Depth 10 -Compress
+  $manifestBytes = [System.Text.Encoding]::UTF8.GetBytes($manifestJson)
+  if ($manifestBytes.Length -gt 16384) { throw 'Launcher manifest exceeds the 16 KiB inherited-data limit.' }
+  $manifestBase64 = [Convert]::ToBase64String($manifestBytes)
   $workerPath = Join-Path $PSScriptRoot 'Launcher-Worker.ps1'
+  $selectedExecutionPath = if ($Manifest.operation -eq 'run-script') {
+    Join-Path (Join-Path ([string]$Manifest.root) 'scripts') ([string]$Manifest.target)
+  } else {
+    [string]$Manifest.target
+  }
+  $script:TrustedClosure = Enter-LauncherTrustedClosure -RootPath ([string]$Manifest.root) -AdditionalPaths @(
+    $PSCommandPath,
+    $workerPath,
+    (Join-Path $PSScriptRoot 'Launcher.Core.psm1'),
+    (Join-Path $PSScriptRoot '../lib/Validation.psm1'),
+    $(if ($Manifest.operation -in @('validate-profile', 'run-profile')) { [string]$Manifest.target })
+  ) -Operation ([string]$Manifest.operation) -SelectedExecutionPath $selectedExecutionPath
   $executable = (Get-Process -Id $PID).Path
   $startInfo = New-Object System.Diagnostics.ProcessStartInfo
   $startInfo.FileName = $executable
@@ -169,40 +261,104 @@ function Invoke-LauncherProcess {
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardOutput = $true
   $startInfo.RedirectStandardError = $true
-  $startInfo.EnvironmentVariables['WIN_MDM_LAUNCHER_MANIFEST'] = $script:ManifestPath
+  $startInfo.EnvironmentVariables['BASELINEOPS_LAUNCHER_MANIFEST_B64'] = $manifestBase64
+  $startGateName = 'Local\BaselineOpsLauncherStart-{0}' -f [guid]::NewGuid().ToString('N')
+  $startGate = New-Object System.Threading.EventWaitHandle(
+    $false,
+    [System.Threading.EventResetMode]::ManualReset,
+    $startGateName
+  )
+  $startInfo.EnvironmentVariables['BASELINEOPS_LAUNCHER_START_GATE'] = $startGateName
 
   $process = New-Object System.Diagnostics.Process
   $process.StartInfo = $startInfo
   $process.EnableRaisingEvents = $true
-  $process.add_OutputDataReceived($script:OutputCollector.OutputHandler)
-  $process.add_ErrorDataReceived($script:OutputCollector.ErrorHandler)
-
-  if (-not $process.Start()) { throw 'PowerShell worker process did not start.' }
+  try {
+    if (-not $process.Start()) { throw 'PowerShell worker process did not start.' }
+  } catch {
+    $startGate.Dispose()
+    $process.Dispose()
+    Exit-LauncherTrustedClosure -Closure $script:TrustedClosure
+    $script:TrustedClosure = $null
+    throw
+  }
+  $processJob = $null
+  try {
+    $processJob = New-LauncherProcessJob
+    if ($null -eq $processJob) {
+      throw 'The Windows Job Object required for process-tree control is unavailable.'
+    }
+    Add-LauncherProcessToJob -Job $processJob -Process $process
+    $script:OutputDrainTasks = [System.Threading.Tasks.Task[]]@(
+      $script:OutputCollector.DrainOutputAsync($process.StandardOutput),
+      $script:OutputCollector.DrainErrorAsync($process.StandardError)
+    )
+    [void]$startGate.Set()
+  } catch {
+    $startError = $_.Exception.Message
+    [void](Stop-LauncherProcessTree -Process $process -Job $processJob -WaitMilliseconds 5000)
+    $process.Dispose()
+    Exit-LauncherTrustedClosure -Closure $script:TrustedClosure
+    $script:TrustedClosure = $null
+    throw "Worker process-tree initialization failed: $startError"
+  } finally {
+    $startGate.Dispose()
+  }
   $script:CurrentProcess = $process
+  $script:CurrentProcessJob = $processJob
   $script:CurrentOperation = $Purpose
   $script:RunStarted = Get-Date
   $script:StopRequested = $false
-  $process.BeginOutputReadLine()
-  $process.BeginErrorReadLine()
   if ($Purpose -eq 'validation') { Write-LauncherState -State Validating -Detail 'Validating profile…' } else { Write-LauncherState -State Running -Detail 'Worker started' }
 }
 
+<#
+.SYNOPSIS
+Finalizes an exited launcher worker.
+.DESCRIPTION
+Drains output, releases trust and process-tree resources, and maps the worker
+exit code into an operator-visible terminal state.
+#>
 function Complete-LauncherProcess {
   if ($null -eq $script:CurrentProcess) { return }
   $process = $script:CurrentProcess
   $purpose = $script:CurrentOperation
   try {
-    $process.WaitForExit()
+    if (-not $process.WaitForExit(1000)) {
+      throw 'Worker was reported as exited but did not reach a terminal process state within 1 second.'
+    }
     $exitCode = $process.ExitCode
   } catch {
     $exitCode = 1
     Add-LauncherLine "ERROR: Could not read worker exit status: $($_.Exception.Message)"
   }
 
+  if ($null -ne $script:CurrentProcessJob) {
+    try { $script:CurrentProcessJob.Dispose() } catch { Add-LauncherLine "ERROR: Worker process-tree cleanup failed: $($_.Exception.Message)" }
+    $script:CurrentProcessJob = $null
+  }
+  if ($null -ne $script:TrustedClosure) {
+    Exit-LauncherTrustedClosure -Closure $script:TrustedClosure
+    $script:TrustedClosure = $null
+  }
+  if (@($script:OutputDrainTasks).Count -gt 0) {
+    try {
+      if (-not [System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$script:OutputDrainTasks, 5000)) {
+        Add-LauncherLine 'ERROR: Worker output streams did not drain within 5 seconds.'
+      }
+    } catch {
+      Add-LauncherLine "ERROR: Worker output stream drain failed: $($_.Exception.Message)"
+    }
+    $script:OutputDrainTasks = @()
+  }
+
   $elapsed = if ($null -ne $script:RunStarted) { (Get-Date) - $script:RunStarted } else { [timespan]::Zero }
   $elapsedText = $elapsed.ToString('hh\:mm\:ss')
   if ($purpose -eq 'validation') {
-    if ($exitCode -in @(0, 2) -and -not $script:StopRequested) {
+    if ($script:StopRequested) {
+      Add-LauncherLine '[STOPPED] Profile validation was stopped.'
+      Write-LauncherState -State Stopped -Detail 'Profile validation stopped'
+    } elseif ($exitCode -in @(0, 2)) {
       try {
         $script:ProfileSummary = Get-LauncherProfileSummary -ProfilePath $txtProfile.Text.Trim()
         Write-ProfileSummary
@@ -233,13 +389,53 @@ function Complete-LauncherProcess {
   if ($script:CloseAfterStop) { $form.Close() }
 }
 
+<#
+.SYNOPSIS
+Requests bounded termination of the active worker process tree.
+.DESCRIPTION
+Uses the job-object boundary and restores the running state if termination
+cannot be confirmed within the timeout.
+#>
+function Request-LauncherProcessStop {
+  [CmdletBinding()]
+  [OutputType([bool])]
+  param([Parameter(Mandatory)][string]$Detail)
+
+  if ($null -eq $script:CurrentProcess) { return $true }
+  $previousState = $script:State
+  $script:StopRequested = $true
+  Write-LauncherState -State Stopping -Detail $Detail
+  $stopped = Stop-LauncherProcessTree `
+    -Process $script:CurrentProcess `
+    -Job $script:CurrentProcessJob `
+    -WaitMilliseconds 5000
+  $script:CurrentProcessJob = $null
+  if ($stopped) { return $true }
+
+  $script:StopRequested = $false
+  Add-LauncherLine 'ERROR: The worker process tree did not terminate within 5 seconds.'
+  if ($previousState -eq 'Validating') {
+    Write-LauncherState -State Validating -Detail 'Stop failed; validation is still running'
+  } else {
+    Write-LauncherState -State Running -Detail 'Stop failed; worker may still be running'
+  }
+  return $false
+}
+
+<#
+.SYNOPSIS
+Starts asynchronous discovery of numbered operational scripts.
+.DESCRIPTION
+Validates the selected kit root before background discovery so the UI never
+presents scripts from an incomplete or unrelated directory.
+#>
 function Get-ScriptCatalogView {
   $errorProvider.SetError($txtRoot, '')
   $gridScripts.Rows.Clear()
   $rootPath = $txtRoot.Text.Trim()
   if (-not (Test-LauncherKitRoot -RootPath $rootPath)) {
     $script:ScriptCatalog = @()
-    $lblEnvironment.Text = 'Kit invalid — expected scripts\00-Run-Local.ps1 and 00-Run-Profile.ps1.'
+    $lblEnvironment.Text = 'Kit invalid: expected scripts\00-Run-Local.ps1 and 00-Run-Profile.ps1.'
     $errorProvider.SetError($txtRoot, 'Select a kit root containing the required runner scripts.')
     return
   }
@@ -255,6 +451,12 @@ function Get-ScriptCatalogView {
   $script:DiscoveryTask = [LauncherCatalogDiscovery]::BeginDiscover($rootPath)
 }
 
+<#
+.SYNOPSIS
+Applies a completed catalog-discovery result to the UI.
+.DESCRIPTION
+Discards stale results when the selected root changed while discovery ran.
+#>
 function Complete-ScriptCatalogDiscovery {
   $task = $script:DiscoveryTask
   $requestedRoot = $script:DiscoveryRoot
@@ -277,10 +479,16 @@ function Complete-ScriptCatalogDiscovery {
 
   $script:ScriptCatalog = @($task.Result)
   Show-FilteredScript
-  $elevationText = if ($script:IsElevated) { 'Administrator' } else { 'Standard user — remediation unavailable' }
+  $elevationText = if ($script:IsElevated) { 'Administrator' } else { 'Standard user; remediation unavailable' }
   $lblEnvironment.Text = "$($script:ScriptCatalog.Count) scripts available · $elevationText · $env:COMPUTERNAME"
 }
 
+<#
+.SYNOPSIS
+Renders the catalog rows matching the current filter.
+.DESCRIPTION
+Preserves selection where possible and reports empty-catalog and empty-filter states.
+#>
 function Show-FilteredScript {
   $selectedName = if ($gridScripts.SelectedRows.Count -gt 0) { [string]$gridScripts.SelectedRows[0].Cells['Name'].Value } else { '' }
   $filter = $txtFilter.Text.Trim()
@@ -294,12 +502,24 @@ function Show-FilteredScript {
   $lblScriptState.Text = if ($script:ScriptCatalog.Count -eq 0) { 'No numbered operational scripts found.' } elseif ($gridScripts.Rows.Count -eq 0) { 'No scripts match the filter.' } else { "$($gridScripts.Rows.Count) matching script(s)." }
 }
 
+<#
+.SYNOPSIS
+Displays purpose and supported modes for the selected script.
+.DESCRIPTION
+Gives the operator context before arguments or remediation mode are chosen.
+#>
 function Write-ScriptDetail {
   if ($gridScripts.SelectedRows.Count -eq 0) { $lblScriptDetails.Text = 'Select a script to review its purpose and supported modes.'; return }
   $row = $gridScripts.SelectedRows[0]
   $lblScriptDetails.Text = "Task: $($row.Cells['Name'].Value)`r`n$($row.Cells['Synopsis'].Value)`r`nSupported modes: $($row.Cells['Modes'].Value)"
 }
 
+<#
+.SYNOPSIS
+Displays the validated profile contract and ordered steps.
+.DESCRIPTION
+Uses only the parsed summary produced after validation, not raw profile fields.
+#>
 function Write-ProfileSummary {
   $gridProfileSteps.Rows.Clear()
   if ($null -eq $script:ProfileSummary) {
@@ -312,6 +532,13 @@ function Write-ProfileSummary {
   foreach ($step in $s.Steps) { [void]$gridProfileSteps.Rows.Add($step.Script, $step.DependsOn) }
 }
 
+<#
+.SYNOPSIS
+Validates all operator inputs required for the selected run.
+.DESCRIPTION
+Fails before manifest creation when the root, target, mode, arguments, profile,
+or hash controls violate launcher policy.
+#>
 function Test-LauncherInput {
   $errorProvider.Clear()
   if (-not (Test-LauncherKitRoot -RootPath $txtRoot.Text.Trim())) {
@@ -362,6 +589,13 @@ function Test-LauncherInput {
   return $true
 }
 
+<#
+.SYNOPSIS
+Builds and launches the operation selected in the UI.
+.DESCRIPTION
+Requires explicit remediation confirmation, creates a validated manifest, and
+starts the worker without executing endpoint changes in the GUI process.
+#>
 function Invoke-SelectedRun {
   if (-not (Test-LauncherInput)) { return }
   $mode = Get-EffectiveMode
@@ -404,14 +638,14 @@ Run remediation now?
 
 # Window and root layout
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'Win-MDM Security Hardening — Operator Console (Alpha)'
+$form.Text = 'BaselineOps for Windows - Operator Console (Alpha)'
 $form.StartPosition = 'CenterScreen'
 $form.Size = New-Object System.Drawing.Size(1080, 760)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 600)
 $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Font
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 $form.BackColor = [System.Drawing.SystemColors]::Control
-$form.AccessibleName = 'Win-MDM Security Hardening operator console'
+$form.AccessibleName = 'BaselineOps for Windows operator console'
 
 $errorProvider = New-Object System.Windows.Forms.ErrorProvider
 $errorProvider.ContainerControl = $form
@@ -601,7 +835,8 @@ $rbRemediate.Text = '&Remediate'; $rbRemediate.AutoSize = $true; $rbRemediate.En
 $chkStrict = New-Object System.Windows.Forms.CheckBox
 $chkStrict.Text = '&Strict'; $chkStrict.AutoSize = $true
 $chkRequireSigned = New-Object System.Windows.Forms.CheckBox
-$chkRequireSigned.Text = 'Require valid &signature'; $chkRequireSigned.AutoSize = $true
+$chkRequireSigned.Text = 'Require valid &signature'; $chkRequireSigned.AutoSize = $true; $chkRequireSigned.Checked = $script:IsElevated
+$chkRequireSigned.AccessibleDescription = 'Defaults on for elevated sessions. Signature validation supplements the required protected-path ACL checks.'
 $lblHash = Get-LabelControl -Text 'Expected &hash:' -AccessibleName 'Expected hash label'
 $txtExpectedHash = New-Object System.Windows.Forms.TextBox
 $txtExpectedHash.Width = 190; $txtExpectedHash.AccessibleName = 'Expected script hash'
@@ -668,7 +903,7 @@ $outputTimer.Add_Tick({
       $txtOutput.ScrollToCaret()
     }
     if ($script:State -in @('Running', 'Stopping', 'Validating') -and $null -ne $script:RunStarted) {
-      $statusLabel.Text = "$($script:State) — $(((Get-Date) - $script:RunStarted).ToString('hh\:mm\:ss')) elapsed"
+      $statusLabel.Text = "$($script:State) - $(((Get-Date) - $script:RunStarted).ToString('hh\:mm\:ss')) elapsed"
     }
     if ($null -ne $script:CurrentProcess -and $script:CurrentProcess.HasExited) {
       Complete-LauncherProcess
@@ -720,9 +955,7 @@ $btnStop.Add_Click({
     if ($null -eq $script:CurrentProcess) { return }
     $message = if ((Get-EffectiveMode) -eq 'Remediate') { 'Stop this remediation run? Completed changes are not rolled back. Rerun Audit afterward to establish final state.' } else { 'Stop this audit run?' }
     if ([System.Windows.Forms.MessageBox]::Show($form, $message, 'Stop active run', 'YesNo', 'Warning', 'Button2') -ne 'Yes') { return }
-    $script:StopRequested = $true
-    Write-LauncherState -State Stopping -Detail 'Waiting for worker termination…'
-    try { $script:CurrentProcess.Kill() } catch { Add-LauncherLine "ERROR: Stop request failed: $($_.Exception.Message)" }
+    [void](Request-LauncherProcessStop -Detail 'Waiting for process-tree termination…')
   })
 $btnClear.Add_Click({ $script:VisibleLines.Clear(); $txtOutput.Clear() })
 $btnSave.Add_Click({
@@ -732,7 +965,7 @@ $btnSave.Add_Click({
     }
     $dialog = New-Object System.Windows.Forms.SaveFileDialog
     $dialog.Filter = 'Log files (*.log)|*.log|Text files (*.txt)|*.txt|All files (*.*)|*.*'
-    $dialog.FileName = "win-mdm-launcher-$(Get-Date -Format yyyyMMdd-HHmmss).log"
+    $dialog.FileName = "baselineops-windows-launcher-$(Get-Date -Format yyyyMMdd-HHmmss).log"
     if ($dialog.ShowDialog($form) -eq 'OK') {
       try {
         if ($null -ne $script:OutputCollector) { $script:OutputCollector.Flush() }
@@ -753,9 +986,9 @@ $form.Add_FormClosing({
       $closingEvent.Cancel = $true
       if ($choice -eq 'Yes') {
         $script:CloseAfterStop = $true
-        $script:StopRequested = $true
-        Write-LauncherState -State Stopping -Detail 'Stopping before close…'
-        try { $script:CurrentProcess.Kill() } catch { Add-LauncherLine "ERROR: Stop request failed: $($_.Exception.Message)"; $script:CloseAfterStop = $false }
+        if (-not (Request-LauncherProcessStop -Detail 'Stopping process tree before close…')) {
+          $script:CloseAfterStop = $false
+        }
       }
     }
   })

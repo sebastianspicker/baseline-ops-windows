@@ -5,25 +5,25 @@
 Audit + optional remediation for Credential Guard / VBS via registry (client-focused).
 
 .DESCRIPTION
-Microsoft notes that deleting the registry values may not disable Credential Guard; values must be set to 0, and a reboot is required. [web:35]
+Microsoft notes that deleting the registry values may not disable Credential Guard; values must be set to 0, and a reboot is required.
 
 Best-practice output model (PowerShell 5.1):
 - Pipeline: exactly one structured object (safe for Export-Csv / ConvertTo-Json / Where-Object).
-- Console: pretty output only via Write-UiLine (host output) so the pipeline stays clean. [web:86]
+- Console: formatted output uses Write-UiLine so the pipeline stays clean.
 
 .PARAMETER Mode
 Audit | Remediate
 
 .PARAMETER ConfigPath
-Optional JSON config path, e.g. "PATH/TO/JSON/config.json".
+Optional JSON config path supplied with $ConfigPath.
 If missing/empty/invalid: continues with parameter defaults (non-fatal).
 
 Supported JSON properties:
 {
   "RequirePlatformSecurityFeatures": 1,
   "LsaCfgFlags": 1,
-  "ExportPath": "PATH/TO/JSON/output.json",
-  "ExportCsvBasePath": "PATH/TO/JSON/csv",
+  "ExportPath": "[configured path]",
+  "ExportCsvBasePath": "[configured path]",
   "ShowSummary": true
 }
 
@@ -40,7 +40,7 @@ Optional JSON export path.
 Optional CSV export directory (summary.csv and findings.csv).
 
 .PARAMETER ShowSummary
-Write a human-friendly console summary at the end (default: $true).
+Write a readable console summary at the end (default: $true).
 
 
 .PARAMETER OutputFormat
@@ -109,7 +109,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -121,10 +125,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # -----------------------------
@@ -178,7 +183,7 @@ function Apply-ConfigOverrides {
 function Write-PrettySummary {
   param([Parameter(Mandatory)][object]$Result)
 
-  # Host-only output. Do NOT use Write-Output here (keeps pipeline clean). [web:86]
+  # Host-only output. Do NOT use Write-Output here (keeps pipeline clean).
   $cGood   = 'Green'
   $cWarn   = 'Yellow'
   $cBad    = 'Red'
@@ -400,7 +405,7 @@ $after = [pscustomobject]@{
   LsaCfgFlags                       = Get-RegValue -Path $lsaPath -Name 'LsaCfgFlags'
 }
 
-# Registry-only compliance (effective behavior requires reboot). [web:35]
+# Registry-only compliance (effective behavior requires reboot).
 $compliant = ($after.EnableVirtualizationBasedSecurity -eq 1) -and
              ($after.RequirePlatformSecurityFeatures -in 1, 3) -and
              ($after.LsaCfgFlags -in 1, 2)
@@ -410,7 +415,7 @@ $compliant = ($after.EnableVirtualizationBasedSecurity -eq 1) -and
 # -----------------------------
 
 $publicConfigPath = $null
-if ($ConfigPath) { $publicConfigPath = 'PATH/TO/JSON/config.json' }
+if ($ConfigPath) { $publicConfigPath = '[configured path]' }
 
 $result = [pscustomobject]@{
   Summary = [pscustomobject]@{
@@ -480,4 +485,4 @@ $resultToken = if ($registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findin
 $v2Result = Get-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After; Config = $result.Config }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

@@ -41,7 +41,7 @@
       "SecureBootRequired": true
     },
     "Proof": {
-      "OutFile": "PATH/TO/PROOF/HardwareCompliance.json"
+      "OutFile": null
     }
   }
 
@@ -118,12 +118,12 @@
   - An event log entry
 
 .EXAMPLE
-  PS> .\15-HardwareTPM-Audit.ps1 -CatalogPath "PATH/TO/CATALOG.json"
+  PS> .\15-HardwareTPM-Audit.ps1 -CatalogPath $CatalogPath
 
   Runs using the specified baseline catalog JSON.
 
 .EXAMPLE
-  PS> .\15-HardwareTPM-Audit.ps1 -ConfigPath "PATH/TO/CONFIG.json"
+  PS> .\15-HardwareTPM-Audit.ps1 -ConfigPath $ConfigPath
 
   Runs using the catalog referenced by Hardware.CatalogPath inside the config JSON (if present),
   otherwise falls back to built-in defaults.
@@ -168,7 +168,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '15-HardwareTPM-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '15-HardwareTPM-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -180,10 +184,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # C10: canonical findings list
@@ -255,7 +260,7 @@ function Load-Catalog {
 
   # 1) Explicit catalog
   if ($CatalogPath -and (Test-Path -LiteralPath $CatalogPath)) {
-    $raw = Get-Content -Raw -LiteralPath $CatalogPath -Encoding UTF8 -ErrorAction SilentlyContinue
+    $raw = Get-BoundedUtf8FileContent -Path $CatalogPath -MaximumBytes 1048576 -ErrorAction SilentlyContinue
     if ($raw) {
       $obj = ConvertFrom-JsonSafe -JsonText $raw
       if ($obj) { return (Merge-CatalogWithDefaults -Catalog $obj -Defaults $defaults) }
@@ -264,13 +269,13 @@ function Load-Catalog {
 
   # 2) Config -> Hardware.CatalogPath
   if ($ConfigPath -and (Test-Path -LiteralPath $ConfigPath)) {
-    $rawCfg = Get-Content -Raw -LiteralPath $ConfigPath -Encoding UTF8 -ErrorAction SilentlyContinue
+    $rawCfg = Get-BoundedUtf8FileContent -Path $ConfigPath -MaximumBytes 1048576 -ErrorAction SilentlyContinue
     if ($rawCfg) {
       $cfg = ConvertFrom-JsonSafe -JsonText $rawCfg
       if ($cfg -and $cfg.Hardware -and $cfg.Hardware.CatalogPath) {
         $p = [string]$cfg.Hardware.CatalogPath
         if ($p -and (Test-Path -LiteralPath $p)) {
-          $raw2 = Get-Content -Raw -LiteralPath $p -Encoding UTF8 -ErrorAction SilentlyContinue
+          $raw2 = Get-BoundedUtf8FileContent -Path $p -MaximumBytes 1048576 -ErrorAction SilentlyContinue
           if ($raw2) {
             $obj2 = ConvertFrom-JsonSafe -JsonText $raw2
             if ($obj2) { return (Merge-CatalogWithDefaults -Catalog $obj2 -Defaults $defaults) }
@@ -525,7 +530,7 @@ try {
     Add-ListItem -List ([ref]$notes) -Text 'Required event log write failed.'
   }
 
-  # Pretty console output (out-of-band)
+  # Formatted console output (host stream)
   $summaryObj = [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }
   $findingsAL = [System.Collections.ArrayList]::new()
   foreach ($finding in @($script:Findings.ToArray())) {
@@ -609,6 +614,4 @@ $summary = [pscustomobject]@{
 $v2Result = Get-V2ResultObject -ScriptName '15-HardwareTPM-Audit.ps1' -Mode $Mode -Result $resultToken -Findings $script:Findings.ToArray() -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-if ($resultToken -eq 'FAIL') { exit 1 }
-if ($eventWriteSucceeded -eq $false) { exit 2 }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

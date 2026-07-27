@@ -1,4 +1,11 @@
 #requires -version 5.1
+<#
+.SYNOPSIS
+Pester coverage for library-module contracts.
+
+.DESCRIPTION
+Verifies module behavior that security automation depends on.
+#>
 
 $script:ExecutionModulePath = Join-Path $PSScriptRoot '../../lib/Execution.psm1'
 Import-Module $script:ExecutionModulePath -Force
@@ -100,6 +107,12 @@ Describe 'Convert-ArgumentTokens' {
 
   It 'Handles empty arguments array' {
     $parsed = Convert-ArgumentTokens -Arguments @()
+    $parsed.Named.Count | Should -Be 0
+    @($parsed.Positional).Count | Should -Be 0
+  }
+
+  It 'Handles an explicitly null arguments array' {
+    $parsed = Convert-ArgumentTokens -Arguments $null
     $parsed.Named.Count | Should -Be 0
     @($parsed.Positional).Count | Should -Be 0
   }

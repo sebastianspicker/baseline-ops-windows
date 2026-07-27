@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-
 <#
 .SYNOPSIS
 Console output helper functions for consistent formatting across scripts.
@@ -16,6 +14,8 @@ Consolidated from 15+ duplicate implementations across scripts:
 - Write-ConsoleSummary variants
 #>
 
+Set-StrictMode -Version Latest
+
 # Standard severity levels with their display properties
 $script:SeverityConfig = @{
   'Critical' = @{ Color = 'Red'; Rank = 4; Prefix = '[CRIT] ' }
@@ -30,6 +30,38 @@ $script:SeverityConfig = @{
   'Fail'     = @{ Color = 'Red'; Rank = 3; Prefix = '[FAIL] ' }
   'Skip'     = @{ Color = 'DarkGray'; Rank = -2; Prefix = '[SKIP] ' }
   'Debug'    = @{ Color = 'DarkGray'; Rank = -3; Prefix = '[DEBUG]' }
+}
+
+<#
+.SYNOPSIS
+  Normalizes severity and status aliases to a configured severity name.
+.PARAMETER Severity
+  Severity or status keyword to normalize.
+#>
+function Resolve-Severity {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [AllowNull()]
+    [AllowEmptyString()]
+    [string]$Severity
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Severity)) { return 'Info' }
+
+  switch -Regex ($Severity.Trim()) {
+    '^(Critical|Crit)$' { return 'Critical' }
+    '^(High)$' { return 'High' }
+    '^(Error|Err)$' { return 'Error' }
+    '^(Fail|Failed|Failure|Bad|Danger)$' { return 'Fail' }
+    '^(Medium|Med)$' { return 'Medium' }
+    '^(Warning|Warn|Drift|Changed)$' { return 'Warning' }
+    '^(Low)$' { return 'Low' }
+    '^(OK|Good|Success|Pass|Passed)$' { return 'OK' }
+    '^(Skip|Skipped)$' { return 'Skip' }
+    '^(Debug|Dim|Muted)$' { return 'Debug' }
+    default { return 'Info' }
+  }
 }
 
 <#
@@ -65,31 +97,16 @@ function Get-StatusColor {
     [string]$Status
   )
 
-  # Normalize status to standard severity
-  $normalized = switch -Regex ($Status) {
-    '^(Critical|Crit)$' { 'Critical' }
-    '^(High|Error|Err|Fail|Failed|Failure|Bad|Danger)$' { 'High' }
-    '^(Medium|Warn|Warning|Drift|Changed)$' { 'Medium' }
-    '^(Low)$' { 'Low' }
-    '^(OK|Pass|Passed|Good|Success)$' { 'OK' }
-    '^(Skip|Skipped|Note)$' { 'Skip' }
-    default { 'Info' }
-  }
-
+  $normalized = Resolve-Severity -Severity $Status
   return Get-SeverityColor -Severity $normalized
 }
 
-function Get-ColorForLevel {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [ValidateSet('Critical', 'High', 'Medium', 'Low', 'Info')]
-    [string]$Level
-  )
-
-  return Get-SeverityColor -Severity $Level
-}
-
+<#
+.SYNOPSIS
+  Gets the display color for a legacy console status token.
+.DESCRIPTION
+  Routes the constrained status vocabulary through the shared severity mapping.
+#>
 function Get-ConsoleColor {
   [CmdletBinding()]
   param(
@@ -98,20 +115,7 @@ function Get-ConsoleColor {
     [string]$Kind
   )
 
-  $severity = switch ($Kind) {
-    'OK'    { 'OK' }
-    'WARN'  { 'Warning' }
-    'ERR'   { 'Error' }
-    'INFO'  { 'Info' }
-    'DIM'   { 'Debug' }
-    'CRIT'  { 'Critical' }
-    'HIGH'  { 'High' }
-    'MED'   { 'Medium' }
-    'LOW'   { 'Low' }
-    'DEBUG' { 'Debug' }
-  }
-
-  return Get-SeverityColor -Severity $severity
+  return Get-StatusColor -Status $Kind
 }
 
 <#
@@ -127,24 +131,19 @@ function Get-SeverityRank {
     [string]$Severity
   )
 
-  # Normalize input
-  $normalized = switch -Regex ($Severity) {
-    '^(Critical|Crit)$' { 'Critical' }
-    '^(High|Error|Err|Fail|Failed|Failure)$' { 'High' }
-    '^(Medium|Warn|Warning|Drift|Changed)$' { 'Medium' }
-    '^(Low)$' { 'Low' }
-    '^(OK|Pass|Passed|Good|Success)$' { 'OK' }
-    '^(Skip|Skipped)$' { 'Skip' }
-    '^(Debug)$' { 'Debug' }
-    default { 'Info' }
-  }
-
+  $normalized = Resolve-Severity -Severity $Severity
   if ($script:SeverityConfig.ContainsKey($normalized)) {
     return $script:SeverityConfig[$normalized].Rank
   }
   return 0
 }
 
+<#
+.SYNOPSIS
+  Gets the display prefix for a severity value.
+.DESCRIPTION
+  Normalizes severity aliases before reading the shared presentation mapping.
+#>
 function Get-SeverityPrefix {
   [CmdletBinding()]
   param(
@@ -152,24 +151,19 @@ function Get-SeverityPrefix {
     [string]$Severity
   )
 
-  # Normalize input
-  $normalized = switch -Regex ($Severity) {
-    '^(Critical|Crit)$' { 'Critical' }
-    '^(High|Error|Err|Fail|Failed|Failure)$' { 'High' }
-    '^(Medium|Warn|Warning|Drift|Changed)$' { 'Medium' }
-    '^(Low)$' { 'Low' }
-    '^(OK|Pass|Passed|Good|Success)$' { 'OK' }
-    '^(Skip|Skipped)$' { 'Skip' }
-    '^(Debug)$' { 'Debug' }
-    default { 'Info' }
-  }
-
+  $normalized = Resolve-Severity -Severity $Severity
   if ($script:SeverityConfig.ContainsKey($normalized)) {
     return $script:SeverityConfig[$normalized].Prefix
   }
   return '[INFO] '
 }
 
+<#
+.SYNOPSIS
+  Writes one console line with an optional foreground color.
+.DESCRIPTION
+  Uses the host UI when available and falls back to the information stream.
+#>
 function Write-ColoredLine {
   [CmdletBinding()]
   param(
@@ -185,13 +179,32 @@ function Write-ColoredLine {
     try { [ConsoleColor]$Color } catch { $null }
   } else { $null }
 
-  if ($null -ne $fg) {
-    Write-Host $Text -ForegroundColor $fg -NoNewline:$NoNewLine
-  } else {
-    Write-Host $Text -NoNewline:$NoNewLine
+  try {
+    if ($NoNewLine) {
+      if ($null -ne $fg) {
+        $PSCmdlet.Host.UI.Write($fg, $PSCmdlet.Host.UI.RawUI.BackgroundColor, $Text)
+      } else {
+        $PSCmdlet.Host.UI.Write($Text)
+      }
+      return
+    }
+
+    if ($null -ne $fg) {
+      $PSCmdlet.Host.UI.WriteLine($fg, $PSCmdlet.Host.UI.RawUI.BackgroundColor, $Text)
+    } else {
+      $PSCmdlet.Host.UI.WriteLine($Text)
+    }
+  } catch {
+    Write-Information -MessageData $Text -InformationAction Continue
   }
 }
 
+<#
+.SYNOPSIS
+  Writes a decorative rule with an optional title.
+.DESCRIPTION
+  Provides a consistent visual section boundary for console reports.
+#>
 function Write-DecorativeRule {
   [CmdletBinding()]
   param(
@@ -209,17 +222,12 @@ function Write-DecorativeRule {
   }
 }
 
-function Write-SectionHeader {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [string]$Title,
-    [int]$Width = 70
-  )
-
-  Write-DecorativeRule -Title $Title -Width $Width
-}
-
+<#
+.SYNOPSIS
+  Writes the common audit summary header.
+.DESCRIPTION
+  Displays title, host, time, and finding count with consistent formatting.
+#>
 function Write-SummaryHeader {
   [CmdletBinding()]
   param(
@@ -240,6 +248,12 @@ function Write-SummaryHeader {
   Write-ColoredLine -Text '' -Color 'Gray'
 }
 
+<#
+.SYNOPSIS
+  Writes a single severity-colored finding line.
+.DESCRIPTION
+  Combines the configured prefix, finding code, and optional message.
+#>
 function Write-FindingLine {
   [CmdletBinding()]
   param(
@@ -338,12 +352,15 @@ function Write-ConsoleSummary {
   if ($Findings -and $Findings.Count -gt 0) {
     $stats = Get-FindingStats -Findings $Findings
     $parts = [System.Collections.ArrayList]::new()
-if ($stats.Critical -gt 0) { [void]$parts.Add("Critical=$($stats.Critical)") }
-if ($stats.High -gt 0) { [void]$parts.Add("High=$($stats.High)") }
+    if ($stats.Critical -gt 0) { [void]$parts.Add("Critical=$($stats.Critical)") }
+    if ($stats.High -gt 0) { [void]$parts.Add("High=$($stats.High)") }
     if ($stats.Medium -gt 0) { [void]$parts.Add("Med=$($stats.Medium)") }
     if ($stats.Low -gt 0) { [void]$parts.Add("Low=$($stats.Low)") }
     if ($stats.Info -gt 0) { [void]$parts.Add("Info=$($stats.Info)") }
+    if ($stats.Error -gt 0) { [void]$parts.Add("Error=$($stats.Error)") }
+    if ($stats.OK -gt 0) { [void]$parts.Add("OK=$($stats.OK)") }
     if ($stats.Skip -gt 0) { [void]$parts.Add("Skip=$($stats.Skip)") }
+    if ($stats.Debug -gt 0) { [void]$parts.Add("Debug=$($stats.Debug)") }
     if ($parts.Count -gt 0) {
       Write-ColoredLine -Text '' -Color 'Gray'
       Write-ColoredLine -Text (" Breakdown: " + ($parts -join ' | ')) -Color 'Gray'
@@ -383,28 +400,32 @@ function Get-FindingStats {
   }
 
   $stats = @{
-    Total   = $findingsList.Count
+    Total    = $findingsList.Count
     Critical = 0
-    High    = 0
-    Medium  = 0
-    Low     = 0
-    Info    = 0
-    Warning = 0
-    Error   = 0
-    Skip    = 0
-    Debug   = 0
+    High     = 0
+    Medium   = 0
+    Low      = 0
+    Info     = 0
+    Warning  = 0
+    Error    = 0
+    OK       = 0
+    Skip     = 0
+    Debug    = 0
   }
 
   foreach ($finding in $findingsList) {
     $sev = if ($finding.PSObject.Properties['Severity']) { $finding.Severity } else { 'Info' }
-    switch -Regex ($sev) {
-      '^(Critical|Crit)$' { $stats.Critical++; break }
-      '^(High)$' { $stats.High++; break }
-      '^(Medium|Warning|Warn)$' { $stats.Medium++; break }
-      '^(Low)$' { $stats.Low++; break }
-      '^(Error|Err|Fail)$' { $stats.Error++; break }
-      '^(Skip|Skipped)$' { $stats.Skip++; break }
-      '^(Debug)$' { $stats.Debug++; break }
+    switch (Resolve-Severity -Severity $sev) {
+      'Critical' { $stats.Critical++; break }
+      'High' { $stats.High++; break }
+      'Medium' { $stats.Medium++; break }
+      'Warning' { $stats.Medium++; break }
+      'Low' { $stats.Low++; break }
+      'Error' { $stats.Error++; break }
+      'Fail' { $stats.Error++; break }
+      'OK' { $stats.OK++; break }
+      'Skip' { $stats.Skip++; break }
+      'Debug' { $stats.Debug++; break }
       default { $stats.Info++ }
     }
   }
@@ -412,9 +433,10 @@ function Get-FindingStats {
   return [pscustomobject]$stats
 }
 
-Set-Alias -Name Write-PrettyLine -Value Write-ColoredLine
+Set-Alias -Name Write-PrettyLine -Value Write-ColoredLine -WhatIf:$false
 
 $script:ConsoleExportedFunctions = @(
+  'Resolve-Severity'
   'Get-SeverityColor'
   'Get-StatusColor'
   'Get-ConsoleColor'
@@ -422,6 +444,7 @@ $script:ConsoleExportedFunctions = @(
   'Get-SeverityPrefix'
   'Write-ColoredLine'
   'Write-DecorativeRule'
+  'Write-SummaryHeader'
   'Write-FindingLine'
   'Write-ConsoleSummary'
   'Get-FindingStats'

@@ -4,33 +4,31 @@
 Parses the newest SupportBundle ZIP in a folder, extracts key metadata, and returns a single structured result object for automation.
 .DESCRIPTION
 This script is designed for two audiences at the same time:
-- Automation: It emits exactly one structured PowerShell object to the pipeline, so it can be filtered and exported cleanly (e.g. ConvertTo-Json, Export-Csv, Where-Object).
+- Automation: With -PassThru, it emits exactly one structured PowerShell object to the pipeline, so it can be filtered and exported cleanly (e.g. ConvertTo-Json, Export-Csv, Where-Object).
 - Humans: It prints a readable console summary (with optional colors) without polluting the pipeline.
 High-level workflow:
 1) Locate the newest ZIP named 'SupportBundle-*.zip' under -SupportDir (by LastWriteTime).
-2) Ensure a WorkDir exists by extracting the ZIP to -ExtractRoot\<ZipBaseName> (unless already extracted or -ForceExtract is used).
-3) Load summary data:
-   - First preference: adjacent '<ZipFullPath>.summary.json'
-   - Fallback: 'Summary.json' inside the extracted WorkDir
+2) Safely extract the ZIP to a fresh directory below -ExtractRoot.
+3) Load 'Summary.json' only from that validated extraction.  Sidecar summaries
+   are deliberately not trusted because they can outlive or differ from a ZIP.
 4) Load an optional config JSON from -ConfigPath to determine which proof files are expected.
    If the config is missing or invalid, built-in defaults are used.
 5) Determine proof presence for each expected proof file name:
-   - Match by text markers found in Summary.Outputs (if present)
+   - Match by legacy text markers found in Summary.Outputs (if present)
    - Match by file existence (directly in SearchDir and recursively below it)
 6) Collect event log files (*.evtx) from 'WorkDir\eventlogs' (if that folder exists).
 7) Load 'KBStatus.json' from WorkDir (root or recursively) and expose installed/missing KB lists if present.
-8) Generate Findings based on missing markers/proofs and missing KBs (when available).
+8) Generate Findings based on failed producer records, missing proofs, and missing KBs (when available).
 9) Print a console summary (optional colors), then return the result object to the pipeline.
 .PARAMETER SupportDir
 Folder that contains SupportBundle ZIP files.
 The script searches this directory for 'SupportBundle-*.zip' and selects the newest file by LastWriteTime.
-Default: PATH/TO/SUPPORT
+Default: %ProgramData%\BaselineOpsForWindows\SupportBundles
 .PARAMETER ConfigPath
 Path to an optional configuration JSON that can define expected proof outputs.
 If the file cannot be loaded or is invalid JSON, the script falls back to built-in defaults.
-Default: PATH/TO/JSON/config.json
+Default: <script directory>\support-bundle.json
 Expected config shape (optional):
-- ProofOutFiles.SupportBundle
 - ProofOutFiles.SysmonState
 - ProofOutFiles.SysmonDriftState
 - ProofOutFiles.SoftwareInventory
@@ -38,12 +36,13 @@ Expected config shape (optional):
 - ProofOutFiles.HardwareAudit
 Only the leaf file names are used (Split-Path -Leaf).
 .PARAMETER ExtractRoot
-Root folder where ZIP files are extracted.
-The WorkDir is created as: <ExtractRoot>\<ZipBaseName>
-Default: PATH/TO/SUPPORT/_extracted
+Protected root where ZIP files are extracted. For elevated parsing this path is
+fixed to %ProgramData%\BaselineOpsForWindows\SupportBundles\_extracted;
+an explicitly supplied value must resolve to that same path. Each run uses a
+fresh, uniquely named WorkDir below the protected root.
 .PARAMETER ForceExtract
-Forces re-extraction of the ZIP into the WorkDir even if files already exist there.
-Use this if the extracted directory is incomplete or stale.
+Compatibility switch. Extraction already uses a fresh WorkDir on every run, so
+stale files are never reused.
 .PARAMETER ConsoleMode
 Controls how the human-readable summary is printed:
 - Host: Uses Write-UiLine (supports colors when -NoColor is not set).
@@ -68,7 +67,8 @@ None. You cannot pipe objects into this script.
   Suppress console output.
 .OUTPUTS
 System.Management.Automation.PSCustomObject
-The script returns exactly one object with these top-level properties:
+With -PassThru, the script returns exactly one V2 result object whose Summary
+contains these parser properties:
 - Hostname (String)
   Hostname reported by the summary (if present).
 - Time (String)
@@ -80,7 +80,7 @@ The script returns exactly one object with these top-level properties:
 - Admin (Boolean)
   Indicates whether the bundle was collected with administrative privileges (best-effort, defaults to $false).
 - Errors (String[])
-  Error messages reported by the summary (may be empty).
+  Error messages reported by legacy summaries plus failed Records entries (may be empty).
 - Notes (String[])
   Combined notes from the summary plus script/runtime notes (e.g., config fallback notices).
 - Outputs (String[])
@@ -113,19 +113,21 @@ The script returns exactly one object with these top-level properties:
   - MissingZeroDay (Object[])
   - MissingCritical (Object[])
   - Summary (Object)
+- BundleArchiveValidated (Boolean)
+  True after the selected ZIP has been safely extracted with a valid Summary.json.
 - ZipMarkerPresent (Boolean)
-  True if Summary.Outputs contains at least one entry matching 'ZIP:*'.
+  Compatibility alias for BundleArchiveValidated. New producer summaries do not emit Outputs ZIP markers.
 - Findings (String[])
-  Human-readable findings derived from proof presence, ZIP marker presence, WorkDir availability, and KBStatus.
+  Human-readable findings derived from producer failures, proof presence, WorkDir availability, and KBStatus.
 .EXAMPLE
-PS> .\10-SupportBundle-Parser.ps1
+PS> .\10-SupportBundle-Parser.ps1 -PassThru
 Runs with defaults, prints a console summary, and returns the result object.
 .EXAMPLE
-PS> $r = .\10-SupportBundle-Parser.ps1 -SupportDir 'C:\PATH\TO\SUPPORT' -ExtractRoot 'C:\PATH\TO\SUPPORT\_extracted'
+PS> $r = .\10-SupportBundle-Parser.ps1 -SupportDir $SupportDir -PassThru
 PS> $r.Proofs | Where-Object { -not $_.Present } | Select-Object FileName,FoundPath
 Parses the newest bundle and lists missing proofs in a structured way.
 .EXAMPLE
-PS> .\10-SupportBundle-Parser.ps1 -ConsoleMode Information | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 '.\bundle-result.json'
+PS> .\10-SupportBundle-Parser.ps1 -ConsoleMode Information -PassThru | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 '.\bundle-result.json'
 Sends the object to the pipeline for JSON export while keeping console output on the Information stream.
 .EXAMPLE
 PS> .\10-SupportBundle-Parser.ps1 -ForceExtract -NoColor
@@ -133,7 +135,7 @@ Forces re-extraction and prints a plain (non-colored) console summary.
 .NOTES
 - The script is strict-mode friendly and treats summary/config fields as optional; missing properties are handled with defaults.
 - Console output is intentionally separated from pipeline output to keep automation reliable.
-- Extraction overwrites files when re-extracting; use a dedicated ExtractRoot to avoid collisions.
+- Extraction uses a fresh protected directory for every run and never reuses stale contents.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
@@ -167,9 +169,14 @@ Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameCheck
 Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '10-SupportBundle-Parser.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '10-SupportBundle-Parser.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -181,14 +188,52 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '10-SupportBundle-Parser.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '10-SupportBundle-Parser.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
-# C10: canonical findings list
+# Canonical findings are initialized before path-policy validation so every
+# supported-host preflight failure still terminates through the V2 contract.
 $script:Findings = Get-FindingsList
+
+# Keep parser defaults aligned with the producer's fixed, administrator-owned
+# ProgramData root.  These are resolved after the host check because the
+# script intentionally has no non-Windows execution contract.
+$commonApplicationData = if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) {
+  # Pester exercises Windows behavior from a non-Windows host using a scoped
+  # ProgramData value. Windows resolves CommonApplicationData.
+  $env:ProgramData
+} else {
+  [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+}
+if ([string]::IsNullOrWhiteSpace($commonApplicationData)) { throw 'CommonApplicationData could not be resolved.' }
+$defaultSupportDir = Join-Path (Join-Path $commonApplicationData 'BaselineOpsForWindows') 'SupportBundles'
+$trustedExtractRoot = Join-Path $defaultSupportDir '_extracted'
+if ([string]::IsNullOrWhiteSpace($SupportDir)) { $SupportDir = $defaultSupportDir }
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath = Join-Path $PSScriptRoot 'support-bundle.json' }
+if ([string]::IsNullOrWhiteSpace($ExtractRoot)) { $ExtractRoot = $trustedExtractRoot }
+
+$extractRootAllowed = $false
+try {
+  $extractRootAllowed = [System.IO.Path]::GetFullPath($ExtractRoot).Equals(
+    [System.IO.Path]::GetFullPath($trustedExtractRoot),
+    [System.StringComparison]::OrdinalIgnoreCase)
+} catch {
+  $extractRootAllowed = $false
+}
+if (-not $extractRootAllowed) {
+  $message = 'ExtractRoot must equal the fixed CommonApplicationData support-bundle extraction root.'
+  Add-Finding -FindingList $script:Findings -Code 'SB-UntrustedExtractRoot' -Severity 'High' -Message $message
+  $summary = [pscustomobject]@{ Error = $message; SupportDir = $SupportDir; ConfigPath = $ConfigPath; ExtractRoot = $ExtractRoot }
+  $v2Result = Get-V2ResultObject -ScriptName '10-SupportBundle-Parser.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit (Get-V2ExitCode -Result 'FAIL')
+}
+$ExtractRoot = [System.IO.Path]::GetFullPath($trustedExtractRoot)
 # -------------------- Console helpers (no pipeline output) --------------------
 function Get-ConsoleColor {
   [CmdletBinding()]
@@ -217,10 +262,24 @@ function ConvertTo-SafeDisplayPath {
   )
   if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
   $p = $Path
-  $p = $p -replace '(?i)^[A-Z]:\\ProgramData\\[^\\]+\\', 'PATH\TO\APP\'
-  $p = $p -replace '(?i)^[A-Z]:\\Users\\[^\\]+\\', 'PATH\TO\USER\'
-  $p = $p -replace '(?i)^[A-Z]:\\', 'PATH\TO\DRIVE\'
+  $p = $p -replace '(?i)^[A-Z]:\\ProgramData\\[^\\]+\\', '[application data]\'
+  $p = $p -replace '(?i)^[A-Z]:\\Users\\[^\\]+\\', '[user profile]\'
+  $p = $p -replace '(?i)^[A-Z]:\\', '[local drive]\'
   return $p
+}
+function ConvertTo-SafeFindingDetail {
+  [CmdletBinding()]
+  param(
+    [Parameter()]
+    [AllowNull()]
+    [AllowEmptyString()]
+    [string]$Value
+  )
+  if ([string]::IsNullOrWhiteSpace($Value)) { return '<no detail supplied>' }
+  $detail = ($Value -replace '[\x00-\x1F\x7F]', ' ').Trim()
+  if ([string]::IsNullOrWhiteSpace($detail)) { return '<no detail supplied>' }
+  if ($detail.Length -gt 1024) { $detail = $detail.Substring(0, 1024) + '...' }
+  return $detail
 }
 # -------------------- StrictMode-safe property access --------------------
 function Get-PropValue {
@@ -281,57 +340,7 @@ function Get-LatestSupportBundleZip {
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 }
-function Resolve-SummaryFromZip {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [System.IO.FileInfo]$Zip
-  )
-  $adjacentSummaryPath = "$($Zip.FullName).summary.json"
-  if (Test-Path -LiteralPath $adjacentSummaryPath -PathType Leaf) {
-    $summary = Read-JsonFileSafe -Path $adjacentSummaryPath
-    if ($summary) {
-      return [pscustomobject]@{
-        SummaryPath = $adjacentSummaryPath
-        Summary     = $summary
-      }
-    }
-  }
-  return $null
-}
-function Ensure-ExtractedWorkDir {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$ZipPath,
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
-    [string]$ExtractRoot,
-    [Parameter()]
-    [switch]$Force
-  )
-  if (-not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) { return $null }
-  [void](Ensure-Directory -Path $ExtractRoot)
-  $zipItem = Get-Item -LiteralPath $ZipPath -ErrorAction Stop
-  $dest = Join-Path -Path $ExtractRoot -ChildPath $zipItem.BaseName
-  [void](Ensure-Directory -Path $dest)
-  $needsExtract = $Force.IsPresent
-  if (-not $needsExtract) {
-    $anyFile = Get-ChildItem -LiteralPath $dest -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $anyFile) { $needsExtract = $true }
-  }
-  if ($needsExtract) {
-    try {
-      Expand-Archive -LiteralPath $zipItem.FullName -DestinationPath $dest -Force -ErrorAction Stop  # PS5.1.
-    }
-    catch {
-      Write-Warning ("Failed to extract ZIP: {0} -> {1} ({2})" -f (ConvertTo-SafeDisplayPath $zipItem.FullName), (ConvertTo-SafeDisplayPath $dest), $_.Exception.Message)
-      return $null
-    }
-  }
-  return $dest
-}
+. (Join-Path $PSScriptRoot 'internal/10-SupportBundle-Parser.helpers.ps1')
 function Resolve-WorkDirAndSummary {
   [CmdletBinding()]
   param(
@@ -346,18 +355,7 @@ function Resolve-WorkDirAndSummary {
   $notes = New-Object System.Collections.Generic.List[string]
   $workDir = Ensure-ExtractedWorkDir -ZipPath $Zip.FullName -ExtractRoot $ExtractRoot -Force:$ForceExtract
   if (-not $workDir) {
-    $notes.Add("ZIP could not be extracted; only adjacent summary may be used (if present).")
-  }
-  $sum = Resolve-SummaryFromZip -Zip $Zip
-  if ($sum) {
-    return [pscustomobject]@{
-      ZipPath     = $Zip.FullName
-      ZipName     = $Zip.Name
-      SummaryPath = $sum.SummaryPath
-      WorkDir     = $workDir
-      Summary     = $sum.Summary
-      Notes       = @($notes)
-    }
+    return $null
   }
   if ($workDir -and (Test-Path -LiteralPath $workDir -PathType Container)) {
     $workSummaryPath = Join-Path -Path $workDir -ChildPath 'Summary.json'
@@ -376,6 +374,16 @@ function Resolve-WorkDirAndSummary {
     }
   }
   return $null
+}
+function Exit-ParserFailure {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Message)
+  Add-Finding -FindingList $script:Findings -Code 'SB-ParserFailure' -Severity 'High' -Message $Message
+  $summary = [pscustomobject]@{ Error = $Message; SupportDir = $SupportDir; ConfigPath = $ConfigPath; ExtractRoot = $ExtractRoot }
+  $v2Result = Get-V2ResultObject -ScriptName '10-SupportBundle-Parser.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $v2Result }
+  exit 1
 }
 function Find-FileUnderDir {
   [CmdletBinding()]
@@ -397,7 +405,6 @@ function Get-DefaultExpectedProofFiles {
   [CmdletBinding()]
   param()
   @(
-    'SupportBundle.zip'
     'SysmonState.json'
     'SysmonDriftState.json'
     'SoftwareInventory.json'
@@ -416,7 +423,6 @@ function Get-ExpectedProofFiles {
   $p = $ConfigObject.ProofOutFiles
   if (-not $p) { return (Get-DefaultExpectedProofFiles) }
   $paths = @(
-    (Get-PropValue -Object $p -Name 'SupportBundle' -Default $null)
     (Get-PropValue -Object $p -Name 'SysmonState' -Default $null)
     (Get-PropValue -Object $p -Name 'SysmonDriftState' -Default $null)
     (Get-PropValue -Object $p -Name 'SoftwareInventory' -Default $null)
@@ -536,8 +542,6 @@ function Get-KBStatusSummary {
 function Invoke-FindingsCheck {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory)]
-    [bool]$ZipMarkerPresent,
     [Parameter()]
     [AllowNull()]
     [AllowEmptyCollection()]
@@ -549,11 +553,6 @@ function Invoke-FindingsCheck {
   )
   # C10: populate $script:Findings via Add-Finding; also return legacy string array for backward compat
   $legacyFindings = @()
-  if (-not $ZipMarkerPresent) {
-    $msg = "ZIP marker (ZIP:*) not found in Outputs; bundle may be incomplete or formatted differently."
-    Add-Finding -FindingList $script:Findings -Code 'SB-ZipMarker' -Severity 'Medium' -Message $msg
-    $legacyFindings += $msg
-  }
   if ($Proofs -and (@($Proofs | Where-Object { -not $_.Present }).Count -gt 0)) {
     $msg = "At least one expected proof file is missing."
     Add-Finding -FindingList $script:Findings -Code 'SB-MissingProof' -Severity 'Medium' -Message $msg
@@ -581,18 +580,14 @@ function Invoke-FindingsCheck {
 # -------------------- Main --------------------
 $script:ConsoleMode = $ConsoleMode
 $script:NoColor     = [bool]$NoColor
-[void](Ensure-Directory -Path $SupportDir)
-[void](Ensure-Directory -Path $ExtractRoot)
 $runNotes = New-Object System.Collections.Generic.List[string]
 $zip = Get-LatestSupportBundleZip -SupportDir $SupportDir
 if (-not $zip) {
-  Write-Warning ("No SupportBundle-*.zip found in: {0}" -f (ConvertTo-SafeDisplayPath $SupportDir))
-  return
+  Exit-ParserFailure -Message ("No SupportBundle-*.zip found in: {0}" -f (ConvertTo-SafeDisplayPath $SupportDir))
 }
 $bundle = Resolve-WorkDirAndSummary -Zip $zip -ExtractRoot $ExtractRoot -ForceExtract:$ForceExtract
 if (-not $bundle -or -not $bundle.Summary) {
-  Write-Warning ("No Summary.json found for ZIP: {0}" -f $zip.Name)
-  return
+  Exit-ParserFailure -Message ("ZIP could not be safely extracted with a valid Summary.json: {0}" -f $zip.Name)
 }
 foreach ($n in @($bundle.Notes)) { if ($n) { $runNotes.Add($n) } }
 $summary = $bundle.Summary
@@ -601,20 +596,40 @@ $summaryTime     = Get-PropValue -Object $summary -Name 'Time'     -Default $nul
 $summaryReason   = Get-PropValue -Object $summary -Name 'Reason'   -Default $null
 $summaryUser     = Get-PropValue -Object $summary -Name 'User'     -Default $null
 $summaryAdmin    = Coalesce-Bool (Get-PropValue -Object $summary -Name 'Admin' -Default $null) $false
-$summaryErrors   = Get-PropArrayStrings -Object $summary -Name 'Errors'
-$summaryNotes    = Get-PropArrayStrings -Object $summary -Name 'Notes'
+$legacySummaryErrors = @(Get-PropArrayStrings -Object $summary -Name 'Errors')
+$summaryNotes    = @(Get-PropArrayStrings -Object $summary -Name 'Notes')
 $outputs         = @((Get-PropArrayStrings -Object $summary -Name 'Outputs'))
-$conf = Read-JsonFileSafe -Path $ConfigPath
-if (-not $conf) {
-  $runNotes.Add(("Config not loaded; using defaults (ConfigPath={0})." -f (ConvertTo-SafeDisplayPath $ConfigPath)))
+$producerRecordErrors = New-Object System.Collections.Generic.List[string]
+$summaryRecords = @((Get-PropValue -Object $summary -Name 'Records' -Default @()))
+foreach ($record in $summaryRecords) {
+  if ($null -eq $record) { continue }
+  $recordOk = Get-PropValue -Object $record -Name 'Ok' -Default $null
+  if ($recordOk -isnot [bool] -or $recordOk) { continue }
+
+  $recordName = ConvertTo-SafeFindingDetail -Value ([string](Get-PropValue -Object $record -Name 'Name' -Default '<unnamed>'))
+  $recordError = [string](Get-PropValue -Object $record -Name 'Error' -Default $null)
+  if ([string]::IsNullOrWhiteSpace($recordError)) {
+    $recordError = [string](Get-PropValue -Object $record -Name 'Note' -Default $null)
+  }
+  $safeDetail = ConvertTo-SafeFindingDetail -Value $recordError
+  $producerRecordErrors.Add(("{0}: {1}" -f $recordName, $safeDetail))
+  Add-Finding -FindingList $script:Findings -Code 'SB-ProducerError' -Severity 'Medium' `
+    -Message ("SupportBundle producer record '{0}' failed: {1}" -f $recordName, $safeDetail) `
+    -Extra @{ RecordName = $recordName } | Out-Null
 }
+$summaryErrors = @(@($legacySummaryErrors) + @($producerRecordErrors.ToArray()))
+foreach ($producerError in @($legacySummaryErrors)) {
+  $safeDetail = ConvertTo-SafeFindingDetail -Value $producerError
+  Add-Finding -FindingList $script:Findings -Code 'SB-ProducerError' -Severity 'Medium' -Message ("SupportBundle producer reported an error: {0}" -f $safeDetail) | Out-Null
+}
+$conf = Read-JsonFileSafe -Path $ConfigPath
+if (-not $conf) { $runNotes.Add(("Config not loaded; using defaults (ConfigPath={0})." -f (ConvertTo-SafeDisplayPath $ConfigPath))) }
 $expectedProofNames = @((Get-ExpectedProofFiles -ConfigObject $conf))
 $workDir = $bundle.WorkDir
 $workDirExists = $false
 if ($workDir -and (Test-Path -LiteralPath $workDir -PathType Container)) { $workDirExists = $true }
 $proofSearchDir = $null
 if ($workDirExists) { $proofSearchDir = $workDir }
-elseif ($bundle.SummaryPath) { $proofSearchDir = Split-Path -Path $bundle.SummaryPath -Parent }
 $proofStatus = @(Get-ProofPresence -Outputs $outputs -ExpectedProofFileNames $expectedProofNames -SearchDir $proofSearchDir)
 $eventInfo = [pscustomobject]@{ EventLogDirExists = $false; EventLogs = @() }
 $kbInfo    = [pscustomobject]@{ KbStatusPath = $null; Present = $false; Installed = @(); MissingZeroDay = @(); MissingCritical = @(); Summary = $null }
@@ -625,11 +640,8 @@ if ($workDirExists) {
 else {
   $runNotes.Add("WorkDir is not available; event logs and KB status may be missing.")
 }
-$zipMarkerPresent = $false
-if ($outputs.Count -gt 0) {
-  $zipMarkerPresent = [bool]($outputs | Where-Object { $_ -like 'ZIP:*' } | Select-Object -First 1)
-}
-$findings = Invoke-FindingsCheck -ZipMarkerPresent $zipMarkerPresent -Proofs $proofStatus -WorkDirExists $workDirExists -KbStatus $kbInfo
+$bundleArchiveValidated = $true
+$legacyFindings = Invoke-FindingsCheck -Proofs $proofStatus -WorkDirExists $workDirExists -KbStatus $kbInfo
 $result = [pscustomobject]@{
   Hostname          = $summaryHostname
   Time              = $summaryTime
@@ -647,12 +659,13 @@ $result = [pscustomobject]@{
   EventLogDirExists = $eventInfo.EventLogDirExists
   EventLogs         = @($eventInfo.EventLogs)
   KbStatus          = $kbInfo
-  ZipMarkerPresent  = $zipMarkerPresent
-  Findings          = @($findings)
+  BundleArchiveValidated = $bundleArchiveValidated
+  ZipMarkerPresent  = $bundleArchiveValidated
+  Findings          = @($legacyFindings)
 }
-# Pipeline output: only the structured object.
-$result
-# -------------------- Pretty console summary --------------------
+# The legacy parser payload remains available as the V2 Summary; do not emit it
+# separately because -PassThru has an exactly-one-object contract.
+# -------------------- Formatted console summary --------------------
 $missingProofs      = @($result.Proofs | Where-Object { -not $_.Present })
 $presentProofsCount = @($result.Proofs).Count - $missingProofs.Count
 $errorsCount    = @($result.Errors).Count
@@ -719,8 +732,9 @@ else {
 }
 Write-ConsoleLine -Text "============================================================" -Role Header
 # V2 output contract
-$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$resultToken = if (@($script:Findings).Count -gt 0) { 'WARN' } else { 'OK' }
+if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 $v2Result = Get-V2ResultObject -ScriptName '10-SupportBundle-Parser.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)

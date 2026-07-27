@@ -1,5 +1,3 @@
-Set-StrictMode -Version Latest
-
 <#
 .SYNOPSIS
 Configuration loading and merging utilities.
@@ -9,6 +7,17 @@ Provides functions to read JSON configuration files, merge them with built-in
 defaults, and convert PSCustomObjects to hashtables.
 #>
 
+Set-StrictMode -Version Latest
+
+Import-Module (Join-Path $PSScriptRoot 'Validation.psm1')
+
+<#
+.SYNOPSIS
+Normalizes and optionally verifies a configuration path.
+.DESCRIPTION
+Expands environment variables and rejects traversal or invalid paths before
+configuration input reaches the JSON reader.
+#>
 function Sanitize-ConfigPath {
   [CmdletBinding()]
   param(
@@ -46,6 +55,84 @@ function ConvertTo-Hashtable {
     $ht[$p.Name] = $p.Value
   }
   return $ht
+}
+
+<#
+.SYNOPSIS
+  Creates the standard configuration result envelope.
+.DESCRIPTION
+  Preserves configuration and load metadata in the caller's requested shape.
+#>
+function New-ConfigReadResult {
+  [CmdletBinding()]
+  param(
+    [AllowNull()][hashtable]$Config,
+    [Parameter(Mandatory)][pscustomobject]$Meta,
+    [switch]$AsHashtable,
+    [switch]$NullConfig
+  )
+
+  if ($NullConfig) {
+    return [pscustomobject]@{ Config = $null; Meta = $Meta }
+  }
+
+  $resultConfig = if ($AsHashtable) { $Config } else { [pscustomobject]$Config }
+  return [pscustomobject]@{ Config = $resultConfig; Meta = $Meta }
+}
+
+<#
+.SYNOPSIS
+  Records and returns a configuration fallback result.
+.DESCRIPTION
+  Centralizes default-use metadata and optional warning emission.
+#>
+function Complete-ConfigFallback {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$Config,
+    [Parameter(Mandatory)][pscustomobject]$Meta,
+    [Parameter(Mandatory)][string]$Reason,
+    [AllowNull()][string]$ErrorMessage,
+    [AllowNull()][string]$WarningMessage,
+    [switch]$AsHashtable,
+    [switch]$ReturnNull,
+    [scriptblock]$OnWarning
+  )
+
+  $Meta.UsedDefaultsBecause = $Reason
+  if (-not [string]::IsNullOrWhiteSpace($ErrorMessage)) {
+    $Meta.Error = $ErrorMessage
+  }
+  if ($OnWarning -and -not [string]::IsNullOrWhiteSpace($WarningMessage)) {
+    & $OnWarning $WarningMessage
+  }
+  return New-ConfigReadResult -Config $Config -Meta $Meta -AsHashtable:$AsHashtable -NullConfig:$ReturnNull
+}
+
+<#
+.SYNOPSIS
+  Merges permitted input values into configuration defaults.
+.DESCRIPTION
+  Retains only keys defined by the defaults to prevent unsupported settings.
+#>
+function Merge-ConfigValues {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$Config,
+    [Parameter(Mandatory)][hashtable]$Defaults,
+    [Parameter(Mandatory)][object]$InputObject
+  )
+
+  $inputValues = ConvertTo-Hashtable -Object $InputObject
+  if ($Defaults.Count -eq 0) {
+    return $inputValues
+  }
+  foreach ($key in $inputValues.Keys) {
+    if ($Defaults.ContainsKey($key)) {
+      $Config[$key] = $inputValues[$key]
+    }
+  }
+  return $Config
 }
 
 <#
@@ -92,75 +179,55 @@ function Read-ConfigWithDefaults {
   $sanitized = if ([string]::IsNullOrWhiteSpace($Path)) { $null } else { Sanitize-ConfigPath -Path $Path -MustExist }
   if (-not $sanitized) {
     if ([string]::IsNullOrWhiteSpace($Path)) {
-        $meta.UsedDefaultsBecause = 'No ConfigPath provided.'
-    } else {
-        $meta.Error = 'ConfigPath not found or invalid.'
-        $meta.UsedDefaultsBecause = $meta.Error
-        if ($OnWarning) { & $OnWarning ($meta.Error + ' Using defaults.') }
+      return Complete-ConfigFallback `
+        -Config $config -Meta $meta -Reason 'No ConfigPath provided.' `
+        -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullWhenMissing
     }
-    if ($ReturnNullWhenMissing) {
-      return [pscustomobject]@{ Config = $null; Meta = $meta }
-    }
-    $resultConfig = if ($AsHashtable) { $config } else { [pscustomobject]$config }
-    return [pscustomobject]@{ Config = $resultConfig; Meta = $meta }
+    return Complete-ConfigFallback `
+      -Config $config -Meta $meta `
+      -Reason 'ConfigPath not found or invalid.' `
+      -ErrorMessage 'ConfigPath not found or invalid.' `
+      -WarningMessage 'ConfigPath not found or invalid. Using defaults.' `
+      -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullWhenMissing -OnWarning $OnWarning
   }
 
   $Path = $sanitized # Use sanitized path for Get-Content
 
   try {
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Validation\Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) {
-      $meta.Error = 'Config file is empty.'
-      $meta.UsedDefaultsBecause = $meta.Error
-      if ($OnWarning) { & $OnWarning ($meta.Error + ' Using defaults.') }
-      if ($ReturnNullOnError) {
-        return [pscustomobject]@{ Config = $null; Meta = $meta }
-      }
-      $resultConfig = if ($AsHashtable) { $config } else { [pscustomobject]$config }
-      return [pscustomobject]@{ Config = $resultConfig; Meta = $meta }
+      return Complete-ConfigFallback `
+        -Config $config -Meta $meta `
+        -Reason 'Config file is empty.' -ErrorMessage 'Config file is empty.' `
+        -WarningMessage 'Config file is empty. Using defaults.' `
+        -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
     }
 
     $obj = $raw | ConvertFrom-Json -ErrorAction Stop
     if ($null -eq $obj) {
-      $meta.Error = 'Config file invalid/unreadable JSON.'
-      $meta.UsedDefaultsBecause = $meta.Error
-      if ($OnWarning) { & $OnWarning ($meta.Error + ' Using defaults.') }
-      if ($ReturnNullOnError) {
-        return [pscustomobject]@{ Config = $null; Meta = $meta }
-      }
-      $resultConfig = if ($AsHashtable) { $config } else { [pscustomobject]$config }
-      return [pscustomobject]@{ Config = $resultConfig; Meta = $meta }
+      return Complete-ConfigFallback `
+        -Config $config -Meta $meta `
+        -Reason 'Config file invalid/unreadable JSON.' `
+        -ErrorMessage 'Config file invalid/unreadable JSON.' `
+        -WarningMessage 'Config file invalid/unreadable JSON. Using defaults.' `
+        -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
     }
 
     $meta.Loaded = $true
     $meta.UsedDefaults = $false
     $meta.UsedDefaultsBecause = $null
-
-    $objHash = ConvertTo-Hashtable -Object $obj
-    # Only accept keys that exist in $Defaults to prevent config key injection
-    if ($Defaults.Count -eq 0) {
-      $config = $objHash
-    } else {
-      foreach ($k in $objHash.Keys) {
-        if ($Defaults.ContainsKey($k)) { $config[$k] = $objHash[$k] }
-      }
-    }
-
-    $resultConfig = if ($AsHashtable) { $config } else { [pscustomobject]$config }
-    return [pscustomobject]@{ Config = $resultConfig; Meta = $meta }
+    $config = Merge-ConfigValues -Config $config -Defaults $Defaults -InputObject $obj
+    return New-ConfigReadResult -Config $config -Meta $meta -AsHashtable:$AsHashtable
   } catch {
-    $meta.Error = $_.Exception.Message
-    $meta.UsedDefaultsBecause = 'Config parse failed.'
-    if ($OnWarning) {
-      $msg = 'Config parse failed, using defaults.'
-      if (-not [string]::IsNullOrWhiteSpace($Path)) { $msg += ' File: ' + (Split-Path -Leaf $Path) }
-      & $OnWarning $msg
+    $warning = 'Config parse failed, using defaults.'
+    if (-not [string]::IsNullOrWhiteSpace($Path)) {
+      $warning += ' File: ' + (Split-Path -Leaf $Path)
     }
-    if ($ReturnNullOnError) {
-      return [pscustomobject]@{ Config = $null; Meta = $meta }
-    }
-    $resultConfig = if ($AsHashtable) { $config } else { [pscustomobject]$config }
-    return [pscustomobject]@{ Config = $resultConfig; Meta = $meta }
+    return Complete-ConfigFallback `
+      -Config $config -Meta $meta `
+      -Reason 'Config parse failed.' -ErrorMessage $_.Exception.Message `
+      -WarningMessage $warning `
+      -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
   }
 }
 

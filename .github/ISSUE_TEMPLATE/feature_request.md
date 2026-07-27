@@ -6,8 +6,6 @@ labels: enhancement
 
 # Feature request
 
-Thanks for the suggestion.
-
 ## Problem statement
 
 What problem are you trying to solve?

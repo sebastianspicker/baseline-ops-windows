@@ -1,3 +1,5 @@
+// Property-tests the profile validator with bounded generated documents,
+// exercising rejection paths that are easy to miss with hand-written fixtures.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -77,14 +79,18 @@ const validProfileArbitrary = fc.record({
     OutputFormat: fc.constantFrom('Console', 'Json', 'Csv', 'None')
   }),
   Steps: fc.uniqueArray(
-    fc.constantFrom('00-Report-Aggregate.ps1', '00-Validate-Profile.ps1'),
+    // Profiles may only schedule workload scripts. The 00-* scripts are
+    // control-plane entry points and the validator must reject them.
+    fc.constantFrom('01-ASR-Defender-Allowlist.ps1', '19-Software-Audit.ps1'),
     { minLength: 1, maxLength: 2 }
   ).chain((scripts) =>
     fc.tuple(
       ...scripts.map((script) =>
         fc.record({
           Script: fc.constant(script),
-          Args: fc.array(fc.string({ maxLength: 16 }).filter((value) => !/^\s*$/.test(value)), { maxLength: 3 }),
+          // Profile JSON is untrusted orchestration input. The runner-owned
+          // authority contract permits the schema field but requires it empty.
+          Args: fc.constant([]),
           DependsOn: fc.constant([])
         })
       )
@@ -107,6 +113,12 @@ const invalidProfileArbitrary = fc.oneof(
   validProfileArbitrary.map((profile) => ({
     ...profile,
     Integrity: { ExpectedHashes: { '../escape.ps1': 'SHA256:abc' } }
+  })),
+  validProfileArbitrary.map((profile) => ({
+    ...profile,
+    Steps: profile.Steps.map((step, index) =>
+      index === 0 ? { ...step, Args: ['untrusted-profile-argument'] } : step
+    )
   }))
 );
 

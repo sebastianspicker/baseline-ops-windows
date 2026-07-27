@@ -2,10 +2,10 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-Audits BitLocker state for a single volume and returns one structured result object, plus an optional human-friendly console summary and optional CSV export.
+Audits BitLocker state for a single volume and returns one structured result object, plus an optional console summary and CSV export.
 
 .DESCRIPTION
-This script collects BitLocker operational data for a target volume using a structured PowerShell API first and then supplements it with a command-line fallback for robustness.
+This script collects BitLocker operational data for a target volume using a structured PowerShell API first and then uses a command-line fallback to cross-check protection state.
 
 The script always emits exactly one PSCustomObject to the pipeline. This makes it safe to use with common PowerShell tooling such as Export-Csv, ConvertTo-Json, Where-Object, and logging pipelines.
 
@@ -41,11 +41,11 @@ This output can be large; the script truncates it to a configurable maximum leng
 Use this option for troubleshooting (runbooks, support bundles) rather than routine SIEM ingestion.
 
 .PARAMETER ConfigPath
-Optional path to a JSON configuration file (example: "PATH/TO/JSON/bitlocker-audit.json").
+Optional path to a JSON configuration file supplied with $ConfigPath.
 
 The JSON can override defaults such as:
 - Whether the console summary is printed
-- Whether the console is "pretty" (colors)
+- Whether the console uses color
 - Whether CSV export is enabled and the default export path
 - Whether manage-bde text is included by default and maximum text length
 - Whether to include key protector IDs and protector count
@@ -117,7 +117,7 @@ Audits the volume mounted at D:.
 Audits the default volume and writes a CSV export to the given path.
 
 .EXAMPLE
-.\23-BitLocker-Operations-Audit.ps1 -ConfigPath "PATH/TO/JSON/bitlocker-audit.json"
+.\23-BitLocker-Operations-Audit.ps1 -ConfigPath $ConfigPath
 
 Runs the audit using JSON-provided defaults (if available). If the JSON cannot be loaded, built-in defaults are used.
 
@@ -160,7 +160,11 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 Set-StrictMode -Version Latest
 # v2-init (migrated to Initialize-V2Context)
-Initialize-V2Context -ScriptName '23-BitLocker-Operations-Audit.ps1' -BoundParameters $PSBoundParameters
+$script:__V2Context = Initialize-V2Context -ScriptName '23-BitLocker-Operations-Audit.ps1' -BoundParameters $PSBoundParameters `
+  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
+  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+$script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
@@ -172,10 +176,11 @@ if (-not $isWindowsHost) {
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $result = Get-V2ResultObject -ScriptName '23-BitLocker-Operations-Audit.ps1' -Mode $Mode -Result 'OK' -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+  $result = Get-V2ResultObject -ScriptName '23-BitLocker-Operations-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
-  exit 0
+  exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 
@@ -188,7 +193,7 @@ function Normalize-MountPoint {
     [string]$Value
   )
 
-  # manage-bde <drive> expects drive letter followed by a colon. [web:21]
+  # manage-bde <drive> expects drive letter followed by a colon.
   if ($Value -match '^[A-Za-z]$')     { return ($Value + ':') }
   if ($Value -match '^[A-Za-z]:\\$')  { return $Value.TrimEnd('\') }
   return $Value
@@ -206,13 +211,13 @@ function Get-DefaultConfig {
 
     # CSV export
     ExportEnabledDefault           = $false
-    ExportPathDefault              = 'PATH/TO/EXPORT/bitlocker-audit.csv'
+    ExportPathDefault              = (Join-Path ([System.IO.Path]::GetTempPath()) 'bitlocker-audit.csv')
 
     # Extra structured fields
     IncludeProtectorCount          = $true
     IncludeKeyProtectorIds         = $true
 
-    # Robust protection boolean from manage-bde exit code. [web:21]
+    # Protection boolean derived from the manage-bde exit code.
     UseManageBdeProtectionExitCode = $true
   }
 }
@@ -226,10 +231,10 @@ function Import-JsonConfigOrDefault {
   try {
     if (-not (Test-Path -LiteralPath $Path)) { return $cfg }
 
-    $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
     if ([string]::IsNullOrWhiteSpace($raw)) { return $cfg }
 
-    # ConvertFrom-Json should be guarded via try/catch for invalid JSON. [web:56]
+    # ConvertFrom-Json should be guarded via try/catch for invalid JSON.
     $parsed = $raw | ConvertFrom-Json
 
     if ($null -ne $parsed.SummaryToHost)                   { $cfg.SummaryToHost                  = [bool]$parsed.SummaryToHost }
@@ -382,7 +387,7 @@ if ([string]::IsNullOrWhiteSpace($effectiveExportPath) -and $cfg.ExportEnabledDe
 $vol = $null
 $gbvErrorText = $null
 try {
-  $vol = Get-BitLockerVolume -MountPoint $mp  # Structured source. [web:26]
+  $vol = Get-BitLockerVolume -MountPoint $mp  # Structured source.
 } catch {
   $gbvErrorText = $_.Exception.Message
 }
@@ -410,7 +415,9 @@ if ($cfg.IncludeProtectorCount) {
 $manageBdeText = $null
 $manageBdeErrorText = $null
 try {
-  $manageBdeText = (& manage-bde -status $mp 2>&1 | Out-String).Trim()  # Documented. [web:21]
+  $manageBdeStatus = Invoke-NativeCommand -Command 'manage-bde.exe' -Arguments @('-status',$mp) -CaptureOutput -Quiet -TimeoutSeconds 60 -MaxOutputBytes 1048576
+  if ($null -eq $manageBdeStatus -or -not $manageBdeStatus.Success -or $manageBdeStatus.TimedOut -or $manageBdeStatus.OutputTruncated -or $manageBdeStatus.StderrTruncated) { throw 'manage-bde status timed out, failed, or produced truncated output.' }
+  $manageBdeText = $manageBdeStatus.Output.Trim()  # Documented.
 } catch {
   $manageBdeErrorText = $_.Exception.Message
   $manageBdeText = $null
@@ -420,15 +427,16 @@ if ($effectiveIncludeManageBdeText -and $null -ne $manageBdeText) {
   $manageBdeText = Truncate-Text -Text $manageBdeText -MaxChars $cfg.ManageBdeMaxChars
 }
 
-# manage-bde -status -protectionaserrorlevel: expected 0 (protected) or 1 (unprotected). [web:21]
+# manage-bde -status -protectionaserrorlevel: expected 0 (protected) or 1 (unprotected).
 $manageBdeProtectionExitCode = $null
 $manageBdeIsProtected = $null
 $manageBdeProtectionCheckError = $null
 
 if ($cfg.UseManageBdeProtectionExitCode) {
   try {
-    $null = & manage-bde -status $mp -protectionaserrorlevel 2>$null
-    $manageBdeProtectionExitCode = $LASTEXITCODE
+    $manageBdeProtection = Invoke-NativeCommand -Command 'manage-bde.exe' -Arguments @('-status',$mp,'-protectionaserrorlevel') -CaptureOutput -Quiet -TimeoutSeconds 60 -MaxOutputBytes 65536
+    if ($null -eq $manageBdeProtection -or $manageBdeProtection.TimedOut -or $manageBdeProtection.OutputTruncated -or $manageBdeProtection.StderrTruncated) { throw 'manage-bde protection check timed out or produced truncated output.' }
+    $manageBdeProtectionExitCode = $manageBdeProtection.ExitCode
 
     if ($manageBdeProtectionExitCode -eq 0) { $manageBdeIsProtected = $true }
     elseif ($manageBdeProtectionExitCode -eq 1) { $manageBdeIsProtected = $false }
@@ -525,7 +533,7 @@ if (-not [string]::IsNullOrWhiteSpace($effectiveExportPath)) {
 # Console summary (no pipeline pollution)
 # -------------------------
 if ($cfg.SummaryToHost) {
-  # Write-UiLine supports ForegroundColor/BackgroundColor for human-friendly output. [web:154]
+  # Write-UiLine supports ForegroundColor/BackgroundColor for console output.
   Write-SummaryToConsole -Result $result -EffectiveExportPath $effectiveExportPath -PrettyConsole $cfg.PrettyConsole
 }
 
@@ -534,4 +542,4 @@ $resultToken = if ($Strict -and $findings.Count -gt 0) { 'FAIL' } elseif ($findi
 $v2Result = Get-V2ResultObject -ScriptName '23-BitLocker-Operations-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $findings) -Summary $result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
-exit 0
+exit (Get-V2ExitCode -Result $resultToken)
