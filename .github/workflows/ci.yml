@@ -361,8 +361,26 @@ jobs:
           `$configuration.Output.CIFormat = 'GithubActions'
           `$configuration.TestResult.Enabled = `$true
           `$configuration.TestResult.OutputPath = 'testResults.xml'
+          if (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue) {
+            `$PSStyle.OutputRendering = 'PlainText'
+          }
           `$result = Invoke-Pester -Configuration `$configuration
-          exit [Math]::Min([int]`$result.FailedCount, 255)
+          if (`$null -eq `$result) {
+            throw 'Pester did not return a result.'
+          }
+          if (-not (Test-Path -LiteralPath 'testResults.xml' -PathType Leaf)) {
+            throw 'Pester did not create testResults.xml.'
+          }
+          try {
+            `$testResults = [xml](Get-Content -LiteralPath 'testResults.xml' -Raw -ErrorAction Stop)
+          } catch {
+            throw "Pester produced invalid testResults.xml: `$(`$_.Exception.Message)"
+          }
+          if (`$null -eq `$testResults.'test-results') {
+            throw 'Pester testResults.xml does not contain test-results.'
+          }
+          `$failedCount = [int]`$result.FailedCount
+          exit [Math]::Min([Math]::Max(`$failedCount, 0), 255)
           "@ | Set-Content -LiteralPath $runnerScript -Encoding utf8
 
           $administrators = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
@@ -370,9 +388,14 @@ jobs:
           $runner = [Security.Principal.WindowsIdentity]::GetCurrent().User
           $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
             [Security.AccessControl.InheritanceFlags]::ObjectInherit
-          $items = @(Get-ChildItem -LiteralPath $trustedRoot -Recurse -Force) |
+          $items = @(
+            Get-Item -LiteralPath $trustedRoot -Force
+            Get-Item -LiteralPath $trustedWorkspace -Force
+            Get-Item -LiteralPath $testTemp -Force
+            Get-Item -LiteralPath $runnerScript -Force
+            Get-ChildItem -LiteralPath $trustedRoot -Recurse -Force
+          ) |
             Sort-Object { $_.FullName.Length } -Descending
-          $items += Get-Item -LiteralPath $trustedRoot -Force
           foreach ($item in $items) {
             $isDirectory = $item -is [System.IO.DirectoryInfo]
             $security = if ($isDirectory) {
@@ -404,6 +427,75 @@ jobs:
             Set-Acl -LiteralPath $item.FullName -AclObject $security -ErrorAction Stop
           }
 
+          $trustedSids = @{
+            'S-1-5-18' = $true
+            'S-1-5-32-544' = $true
+            'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464' = $true
+          }
+          $writeCapabilities = @(
+            [Security.AccessControl.FileSystemRights]::WriteData
+            [Security.AccessControl.FileSystemRights]::AppendData
+            [Security.AccessControl.FileSystemRights]::WriteAttributes
+            [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes
+            [Security.AccessControl.FileSystemRights]::Delete
+            [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
+            [Security.AccessControl.FileSystemRights]::ChangePermissions
+            [Security.AccessControl.FileSystemRights]::TakeOwnership
+          )
+          $ancestorReplacementCapabilities = @(
+            [Security.AccessControl.FileSystemRights]::Delete
+            [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
+            [Security.AccessControl.FileSystemRights]::ChangePermissions
+            [Security.AccessControl.FileSystemRights]::TakeOwnership
+          )
+          function Assert-TrustedCiTaskPath {
+            param([Parameter(Mandatory)][string]$Path)
+
+            $current = (Get-Item -LiteralPath $Path -Force -ErrorAction Stop).FullName
+            $isProtectedItem = $true
+            while (-not [string]::IsNullOrWhiteSpace($current)) {
+              $currentItem = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+              if (($currentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Trusted CI task path contains a reparse point: $current"
+              }
+              $acl = Get-Acl -LiteralPath $currentItem.FullName -ErrorAction Stop
+              $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+              if (-not $trustedSids.ContainsKey($ownerSid)) {
+                throw "Trusted CI task path has an untrusted owner SID '$ownerSid': $current"
+              }
+              $effectiveCapabilities = if ($isProtectedItem) { $writeCapabilities } else { $ancestorReplacementCapabilities }
+              foreach ($rule in @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) {
+                if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+                if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+                $sid = [string]$rule.IdentityReference.Value
+                $hasDangerousRights = $false
+                foreach ($capability in $effectiveCapabilities) {
+                  if (([int64]$rule.FileSystemRights -band [int64]$capability) -eq [int64]$capability) {
+                    $hasDangerousRights = $true
+                    break
+                  }
+                }
+                if (-not $trustedSids.ContainsKey($sid) -and
+                    $hasDangerousRights) {
+                  Write-Host "Untrusted CI task ACL: SID '$sid'; identity '$($rule.IdentityReference)'; rights '$($rule.FileSystemRights)'; path '$current'."
+                  throw "Trusted CI task path grants write/replace rights to untrusted SID '$sid': $current"
+                }
+              }
+              if ($isProtectedItem -and -not $acl.AreAccessRulesProtected) {
+                throw "Trusted CI task path ACL inherits permissions: $current"
+              }
+              $parent = Split-Path -Parent $currentItem.FullName
+              if ([string]::IsNullOrWhiteSpace($parent) -or
+                  [string]::Equals($parent, $currentItem.FullName, [StringComparison]::OrdinalIgnoreCase)) { break }
+              $current = $parent
+              $isProtectedItem = $false
+            }
+          }
+          Assert-TrustedCiTaskPath -Path $trustedWorkspace
+          Assert-TrustedCiTaskPath -Path $runnerScript
+          Assert-TrustedCiTaskPath -Path $taskExecutable
+          Assert-TrustedCiTaskPath -Path $pesterDestination
+
           $action = New-ScheduledTaskAction -Execute $taskExecutable `
             -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runnerScript`""
           $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
@@ -429,6 +521,22 @@ jobs:
               Copy-Item -LiteralPath $resultPath -Destination (Join-Path $env:GITHUB_WORKSPACE 'testResults.xml') -Force
             }
             if ($taskInfo.LastTaskResult -ne 0) {
+              $copiedResultPath = Join-Path $env:GITHUB_WORKSPACE 'testResults.xml'
+              if (Test-Path -LiteralPath $copiedResultPath -PathType Leaf) {
+                try {
+                  $testResults = [xml](Get-Content -LiteralPath $copiedResultPath -Raw -ErrorAction Stop)
+                } catch {
+                  throw "The SYSTEM Pester task produced invalid testResults.xml: $($_.Exception.Message)"
+                }
+                if ($null -eq $testResults.'test-results') {
+                  throw 'The SYSTEM Pester task testResults.xml does not contain test-results.'
+                }
+                foreach ($testCase in @($testResults.SelectNodes('//test-case[@result="Failure"]'))) {
+                  $failureMessage = $testCase.SelectSingleNode('./failure/message')
+                  $message = if ($null -eq $failureMessage) { '(no failure message)' } else { $failureMessage.InnerText }
+                  Write-Host ("SYSTEM Pester failure: {0}`n{1}" -f $testCase.name, $message)
+                }
+              }
               throw "The SYSTEM Pester task failed with exit code $($taskInfo.LastTaskResult)."
             }
           } finally {
@@ -447,9 +555,11 @@ jobs:
         if: always()
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
           if (Test-Path testResults.xml) {
-            $xml = [xml](Get-Content testResults.xml)
+            $xml = [xml](Get-Content -LiteralPath testResults.xml -Raw -ErrorAction Stop)
             $root = $xml.'test-results'
+            if ($null -eq $root) { throw 'testResults.xml does not contain test-results.' }
             function Get-TestResultValue {
               param([string]$Name)
               $value = $root.$Name
@@ -501,7 +611,7 @@ jobs:
           mkdir -p "${install_root}"
           tar -xzf "${archive}" -C "${install_root}"
           chmod 0755 "${install_root}/pwsh"
-          actual_version="$("${install_root}/pwsh" -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')"
+          actual_version="$("${install_root}/pwsh" -NoLogo -NoProfile -Command "\$PSVersionTable.PSVersion.ToString()")"
           if [[ "${actual_version}" != "${POWERSHELL_VERSION}" ]]; then
             printf 'Expected PowerShell %s exactly, got %s.\n' "${POWERSHELL_VERSION}" "${actual_version}" >&2
             exit 1
@@ -552,7 +662,7 @@ jobs:
           mkdir -p "${install_root}"
           tar -xzf "${archive}" -C "${install_root}"
           chmod 0755 "${install_root}/pwsh"
-          actual_version="$("${install_root}/pwsh" -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')"
+          actual_version="$("${install_root}/pwsh" -NoLogo -NoProfile -Command "\$PSVersionTable.PSVersion.ToString()")"
           if [[ "${actual_version}" != "${POWERSHELL_VERSION}" ]]; then
             printf 'Expected PowerShell %s exactly, got %s.\n' "${POWERSHELL_VERSION}" "${actual_version}" >&2
             exit 1
@@ -574,7 +684,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual_version="$("${PWSH_BIN}" -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')"
+          actual_version="$("${PWSH_BIN}" -NoLogo -NoProfile -Command "\$PSVersionTable.PSVersion.ToString()")"
           if [[ "${actual_version}" != "${POWERSHELL_VERSION}" ]]; then
             printf 'Expected PowerShell %s exactly, got %s.\n' "${POWERSHELL_VERSION}" "${actual_version}" >&2
             exit 1

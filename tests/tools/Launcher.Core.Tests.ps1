@@ -10,6 +10,26 @@ Verifies tooling safeguards that protect maintainers and releases.
 
 BeforeAll {
   Import-Module (Join-Path $PSScriptRoot '../../tools/Launcher.Core.psm1') -Force
+
+  function New-LauncherTrustedFixture {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+      [Parameter(Mandatory)][string]$Root,
+      [string]$TargetName = '27-Test.ps1'
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($Root, 'Create trusted launcher test fixture')) { return }
+
+    $scripts = Join-Path $Root 'scripts'
+    $lib = Join-Path $Root 'lib'
+    New-Item -Path $scripts, $lib, (Join-Path $scripts '_lib') -ItemType Directory -Force | Out-Null
+    foreach ($name in @('00-Run-Local.ps1', '00-Run-Profile.ps1', '00-Validate-Profile.ps1', $TargetName) | Select-Object -Unique) {
+      'param()' | Set-Content -LiteralPath (Join-Path $scripts $name) -Encoding UTF8
+    }
+    'param()' | Set-Content -LiteralPath (Join-Path $scripts '_lib/Bootstrap.ps1') -Encoding UTF8
+    'function Test-Fixture { $true }' | Set-Content -LiteralPath (Join-Path $lib 'Validation.psm1') -Encoding UTF8
+    return [pscustomobject]@{ Root = $Root; Scripts = $scripts; Lib = $lib; Target = Join-Path $scripts $TargetName }
+  }
 }
 
 Describe 'Launcher argument policy' {
@@ -41,10 +61,7 @@ Describe 'Launcher argument policy' {
 Describe 'Launcher manifest and state policy' {
   It 'Rejects a reparse-point kit root rather than following it' {
     $targetRoot = Join-Path $TestDrive 'real-kit-root'
-    $scripts = Join-Path $targetRoot 'scripts'
-    New-Item -Path $scripts -ItemType Directory -Force | Out-Null
-    'param()' | Set-Content -LiteralPath (Join-Path $scripts '00-Run-Local.ps1') -Encoding UTF8
-    'param()' | Set-Content -LiteralPath (Join-Path $scripts '00-Run-Profile.ps1') -Encoding UTF8
+    $fixture = New-LauncherTrustedFixture -Root $targetRoot
     $reparseRoot = Join-Path $TestDrive 'reparse-kit-root'
     try {
       New-Item -ItemType SymbolicLink -Path $reparseRoot -Target $targetRoot -ErrorAction Stop | Out-Null
@@ -58,11 +75,8 @@ Describe 'Launcher manifest and state policy' {
 
   It 'keeps the complete root closure read-only until explicitly released' -Skip:($env:OS -ne 'Windows_NT') {
     $root = Join-Path $TestDrive 'locked-closure-root'
-    $scripts = Join-Path $root 'scripts'
-    New-Item -Path $scripts -ItemType Directory -Force | Out-Null
-    foreach ($name in @('00-Run-Local.ps1', '00-Run-Profile.ps1', '27-Test.ps1')) {
-      'param()' | Set-Content -LiteralPath (Join-Path $scripts $name) -Encoding UTF8
-    }
+    $fixture = New-LauncherTrustedFixture -Root $root
+    $scripts = $fixture.Scripts
     $closure = Enter-LauncherTrustedClosure -RootPath $root
     try {
       { Set-Content -LiteralPath (Join-Path $scripts '27-Test.ps1') -Value 'replaced' -ErrorAction Stop } | Should -Throw
@@ -74,15 +88,15 @@ Describe 'Launcher manifest and state policy' {
 
   It 'rejects a mutable user-owned kit root when Windows ACL enforcement is requested' -Skip:($env:OS -ne 'Windows_NT') {
     $root = Join-Path $TestDrive 'mutable-acl-root'
-    $scripts = Join-Path $root 'scripts'
-    $lib = Join-Path $root 'lib'
-    New-Item -Path (Join-Path $scripts '_lib') -ItemType Directory -Force | Out-Null
-    New-Item -Path $lib -ItemType Directory -Force | Out-Null
-    foreach ($name in @('00-Run-Local.ps1', '00-Run-Profile.ps1', '00-Validate-Profile.ps1', '27-Test.ps1')) {
-      'param()' | Set-Content -LiteralPath (Join-Path $scripts $name) -Encoding UTF8
-    }
-    'param()' | Set-Content -LiteralPath (Join-Path $scripts '_lib/Bootstrap.ps1') -Encoding UTF8
-    'function Test-Fixture { $true }' | Set-Content -LiteralPath (Join-Path $lib 'Validation.psm1') -Encoding UTF8
+    $fixture = New-LauncherTrustedFixture -Root $root
+    $scripts = $fixture.Scripts
+    $acl = Get-Acl -LiteralPath $root
+    $users = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')
+    [void]$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+          $users,
+          [Security.AccessControl.FileSystemRights]::Modify,
+          [Security.AccessControl.AccessControlType]::Allow)))
+    Set-Acl -LiteralPath $root -AclObject $acl -ErrorAction Stop
 
     {
       Enter-LauncherTrustedClosure `
@@ -417,8 +431,9 @@ Describe 'Launcher process-tree control' {
 
 Describe 'Launcher worker protocol' {
   It 'Captures output and preserves warning exit code' {
-    $scripts = Join-Path $TestDrive 'worker-root/scripts'
-    New-Item -Path $scripts -ItemType Directory -Force | Out-Null
+    $root = Join-Path $TestDrive 'worker-root'
+    $fixture = New-LauncherTrustedFixture -Root $root
+    $scripts = $fixture.Scripts
     @'
 param($ScriptName, $RootPath, [string[]]$ScriptArgs, $OutputFormat, $Confirm)
 Write-Output 'success-stream'
@@ -427,8 +442,7 @@ Write-Warning 'warning-stream'
 Write-Error 'error-stream' -ErrorAction Continue
 exit 2
 '@ | Set-Content -LiteralPath (Join-Path $scripts '00-Run-Local.ps1') -Encoding UTF8
-    'param()' | Set-Content -LiteralPath (Join-Path $scripts '00-Run-Profile.ps1') -Encoding UTF8
-    $manifest = ConvertTo-LauncherManifest -Operation run-script -Root (Split-Path -Parent $scripts) -Target '27-Test.ps1'
+    $manifest = ConvertTo-LauncherManifest -Operation run-script -Root $root -Target '27-Test.ps1'
     $manifestPath = Join-Path $TestDrive 'manifest.json'
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
@@ -445,11 +459,10 @@ exit 2
   It 'preserves success and failure exit codes' {
     foreach ($expectedExit in @(0, 1)) {
       $root = Join-Path $TestDrive "worker-exit-$expectedExit"
-      $scripts = Join-Path $root 'scripts'
-      New-Item -Path $scripts -ItemType Directory -Force | Out-Null
+      $fixture = New-LauncherTrustedFixture -Root $root
+      $scripts = $fixture.Scripts
       "param(`$ScriptName, `$RootPath, [string[]]`$ScriptArgs, `$OutputFormat, `$Confirm)`nWrite-Output 'exit-$expectedExit'`nexit $expectedExit" |
         Set-Content -LiteralPath (Join-Path $scripts '00-Run-Local.ps1') -Encoding UTF8
-      'param()' | Set-Content -LiteralPath (Join-Path $scripts '00-Run-Profile.ps1') -Encoding UTF8
       $manifest = ConvertTo-LauncherManifest -Operation run-script -Root $root -Target '27-Test.ps1'
       $manifestPath = Join-Path $root 'manifest.json'
       $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
@@ -462,14 +475,13 @@ exit 2
 
   It 'can terminate a long-running worker and map the request to Stopped' {
     $root = Join-Path $TestDrive 'worker-stop'
-    $scripts = Join-Path $root 'scripts'
-    New-Item -Path $scripts -ItemType Directory -Force | Out-Null
+    $fixture = New-LauncherTrustedFixture -Root $root
+    $scripts = $fixture.Scripts
     @'
 param($ScriptName, $RootPath, [string[]]$ScriptArgs, $OutputFormat, $Confirm)
 Start-Sleep -Seconds 30
 exit 0
 '@ | Set-Content -LiteralPath (Join-Path $scripts '00-Run-Local.ps1') -Encoding UTF8
-    'param()' | Set-Content -LiteralPath (Join-Path $scripts '00-Run-Profile.ps1') -Encoding UTF8
     $manifest = ConvertTo-LauncherManifest -Operation run-script -Root $root -Target '27-Test.ps1'
     $manifestPath = Join-Path $root 'manifest.json'
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8

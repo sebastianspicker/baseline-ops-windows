@@ -58,7 +58,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
 
       $profileSpec = @{
@@ -94,7 +94,7 @@ exit $ExitCode
     $tempRoot = Join-Path $TestDrive ("runprofile-validator-warning-{0}" -f [guid]::NewGuid().ToString('N'))
     $scriptsDir = Join-Path $tempRoot 'scripts'
     $profilePath = Join-Path $tempRoot 'profile.json'
-    New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
     $profileSpec = [ordered]@{
       ProfileName = 'validator-warning'
@@ -120,7 +120,7 @@ exit $ExitCode
     $scriptsDir = Join-Path $tempRoot 'scripts'
     $profilePath = Join-Path $tempRoot 'profile.json'
     $markerPath = Join-Path $tempRoot 'executed.txt'
-    New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $scriptsDir '01-NoRun.ps1') -Value (Get-TestStepScript -Result FAIL -Body "Set-Content -LiteralPath '$markerPath' -Value executed") -Encoding UTF8
     $profileSpec = [ordered]@{
       ProfileName = 'string-boolean'
@@ -144,7 +144,7 @@ exit $ExitCode
     $scriptsDir = Join-Path $tempRoot 'scripts'
     $profilePath = Join-Path $tempRoot 'profile.json'
     $markerPath = Join-Path $tempRoot 'child-invoked.txt'
-    New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+    New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $scriptsDir '01-NoRun.ps1') -Value (Get-TestStepScript -Result OK -Body "Set-Content -LiteralPath '$markerPath' -Value invoked") -Encoding UTF8
     [ordered]@{
       ProfileName = 'summary-json-path'
@@ -168,7 +168,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
 
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
       Set-Content -LiteralPath (Join-Path $scriptsDir '02-Fail.ps1') -Value (Get-TestStepScript -Result FAIL -ExitCode 0) -Encoding UTF8
@@ -208,7 +208,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Fail.ps1') -Value (Get-TestStepScript -Result FAIL -ExitCode 1) -Encoding UTF8
       Set-Content -LiteralPath (Join-Path $scriptsDir '02-NotRun.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
       Set-Content -LiteralPath (Join-Path $scriptsDir '03-NotRun.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
@@ -251,7 +251,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
 
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-A.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
       Set-Content -LiteralPath (Join-Path $scriptsDir '02-B.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
@@ -294,7 +294,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Warn.ps1') -Value (Get-TestStepScript -Result WARN -ExitCode 0) -Encoding UTF8
 
       $profileSpec = @{
@@ -331,7 +331,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-OkBadExit.ps1') -Value (Get-TestStepScript -Result OK -ExitCode 1) -Encoding UTF8
 
       $profileSpec = @{
@@ -374,7 +374,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       $findingExpression = "@([pscustomobject]@{ Code = 'CHILD-Fail'; Severity = 'High'; Message = 'child failed' })"
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-FailWithFinding.ps1') -Value (Get-TestStepScript -Result FAIL -ExitCode 0 -FindingsExpression $findingExpression) -Encoding UTF8
 
@@ -411,7 +411,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
       Set-Content -LiteralPath (Join-Path $scriptsDir '02-Unsupported.ps1') -Value (Get-TestStepScript -Result WARN -ExitCode 2 -SummaryExpression '[pscustomobject]@{ Supported = $false }' -MetadataExpression '@{ UnsupportedHost = $true }') -Encoding UTF8
 
@@ -450,7 +450,7 @@ exit $ExitCode
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       $badScript = @'
 param(
   [switch]$PassThru,
@@ -497,7 +497,7 @@ exit 0
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-PlainFail.ps1') -Value 'exit 1' -Encoding UTF8
 
       $profileSpec = @{
@@ -530,7 +530,7 @@ exit 0
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
 
       $modeScript = Get-TestStepScript -Result OK -Body "if (`$Mode -ne 'Remediate') { exit 1 }"
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Needs-Mode.ps1') -Value $modeScript -Encoding UTF8
@@ -564,7 +564,7 @@ exit 0
     $outputPath = Join-Path $tempRoot 'profile-output.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
 
       $profileSpec = @{
@@ -597,7 +597,7 @@ exit 0
     $outputPath = Join-Path $tempRoot 'profile-output.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
 
       $profileSpec = @{
@@ -630,7 +630,7 @@ exit 0
     $outputPath = Join-Path $tempRoot 'runner-output.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
 
       $profileSpec = @{
@@ -666,7 +666,7 @@ exit 0
     $modePath = Join-Path $tempRoot 'mode.txt'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
 
       $scriptContent = Get-TestStepScript -Result OK -Body "Set-Content -LiteralPath '$modePath' -Value `$Mode -Encoding UTF8"
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Capture-Mode.ps1') -Value $scriptContent -Encoding UTF8
@@ -700,7 +700,7 @@ exit 0
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
 
       $scriptContent = Get-TestStepScript -Result OK -Body "if (@(`$Remaining) -contains 'LEAKED') { exit 1 }"
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Blocked.ps1') -Value $scriptContent -Encoding UTF8
@@ -739,7 +739,7 @@ exit 0
     $modePath = Join-Path $tempRoot 'mode.txt'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
 
       $scriptContent = Get-TestStepScript -Result OK -Body "Set-Content -LiteralPath '$modePath' -Value `$Mode -Encoding UTF8"
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Mode-Blocked.ps1') -Value $scriptContent -Encoding UTF8
@@ -773,7 +773,7 @@ exit 0
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
 
       $scriptContent = Get-TestStepScript -Result OK -Body "if (-not `$Strict.IsPresent) { exit 1 }"
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Strict.ps1') -Value $scriptContent -Encoding UTF8
@@ -811,7 +811,7 @@ exit 0
       $scriptsDir = Join-Path $tempRoot 'scripts'
       $profilePath = Join-Path $tempRoot 'profile.json'
       try {
-        New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+        New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $scriptsDir '01-Warn.ps1') -Value (Get-TestStepScript -Result WARN -ExitCode 2) -Encoding UTF8
         @{
           ProfileName = "test-profile-strict-warn-$($case.Name)"
@@ -847,7 +847,7 @@ exit 0
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value (Get-TestStepScript -Result OK) -Encoding UTF8
 
       $profileSpec = @{
@@ -883,7 +883,7 @@ exit 0
     $profilePath = Join-Path $tempRoot 'profile.json'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       Set-Content -LiteralPath (Join-Path $scriptsDir '01-Ok.ps1') -Value 'exit 0' -Encoding UTF8
 
     $profileSpec = @{

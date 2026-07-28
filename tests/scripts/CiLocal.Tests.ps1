@@ -243,6 +243,55 @@ Describe 'PowerShell runtime and toolchain pins' {
     $script:ReleaseWorkflowSource | Should -Match 'Expected PowerShell %s exactly'
   }
 
+  It 'uses atomic write capabilities for the trusted CI task ACL assertion' {
+    $match = [regex]::Match(
+      $script:CiWorkflowSource,
+      '(?ms)^\s+\$trustedSids = @\{.*?^\s+Assert-TrustedCiTaskPath -Path \$pesterDestination'
+    )
+    $match.Success | Should -BeTrue
+    $assertion = $match.Value
+
+    $script:CiWorkflowSource | Should -Match 'FileSystemRights\]::ReadAndExecute'
+    $assertion | Should -Not -Match 'FileSystemRights\]::(Write|Modify|FullControl)\s*-bor'
+    $assertion | Should -Not -Match 'FileSystemRights\]::(ReadAndExecute|Synchronize)'
+    foreach ($capability in @(
+        'WriteData', 'AppendData', 'WriteAttributes', 'WriteExtendedAttributes',
+        'Delete', 'DeleteSubdirectoriesAndFiles', 'ChangePermissions', 'TakeOwnership'
+      )) {
+      $assertion | Should -Match ("FileSystemRights\]::{0}" -f $capability)
+    }
+    $assertion | Should -Match 'foreach \(\$capability in \$effectiveCapabilities\)'
+    $assertion | Should -Match '\$hasDangerousRights = \$true'
+
+    $readExecute = [int64]([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+      [Security.AccessControl.FileSystemRights]::Synchronize)
+    foreach ($name in @(
+        'WriteData', 'AppendData', 'WriteAttributes', 'WriteExtendedAttributes',
+        'Delete', 'DeleteSubdirectoriesAndFiles', 'ChangePermissions', 'TakeOwnership'
+      )) {
+      $capability = [int64][Security.AccessControl.FileSystemRights]::$name
+      (($readExecute -band $capability) -eq $capability) | Should -BeFalse
+      (($capability -band $capability) -eq $capability) | Should -BeTrue
+    }
+  }
+
+  It 'prints failed SYSTEM Pester test names and messages before reporting the task exit code' {
+    $taskFailure = [regex]::Match(
+      $script:CiWorkflowSource,
+      '(?ms)if \(\$taskInfo\.LastTaskResult -ne 0\) \{(?<body>.*?)throw "The SYSTEM Pester task failed with exit code'
+    )
+
+    $taskFailure.Success | Should -BeTrue
+    $body = $taskFailure.Groups['body'].Value
+    $body | Should -Match '\[xml\]\(Get-Content -LiteralPath \$copiedResultPath -Raw -ErrorAction Stop\)'
+    $body | Should -Match ([regex]::Escape('SelectNodes(''//test-case[@result="Failure"]'')'))
+    $body | Should -Match ([regex]::Escape('SelectSingleNode(''./failure/message'')'))
+    $body | Should -Match 'SYSTEM Pester failure:'
+    $body | Should -Match 'produced invalid testResults\.xml'
+    $taskFailure.Value.IndexOf('SYSTEM Pester failure:') |
+      Should -BeLessThan $taskFailure.Value.IndexOf('The SYSTEM Pester task failed with exit code')
+  }
+
   It 'Builds the fuzz image on a maintained digest-pinned Microsoft base with PowerShell 7.6.3' {
     $script:FuzzDockerfileSource | Should -Match 'mcr\.microsoft\.com/dotnet/runtime:10\.0-noble-amd64@sha256:567d204c2121716af76125c401f0684cfe06f8c6ba9a6783374464f625b79acb'
     $script:FuzzDockerfileSource | Should -Match 'releases/download/v7\.6\.3/powershell-7\.6\.3-linux-x64\.tar\.gz'

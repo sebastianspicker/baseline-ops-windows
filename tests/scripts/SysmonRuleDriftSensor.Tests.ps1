@@ -74,6 +74,7 @@ Describe '17-Sysmon-Rule-Drift-Sensor hardened input and mode contract' -Tag 'Sy
       $env:OS = 'Windows_NT'
       $catalogPath = Join-Path $TestDrive 'valid-optional-catalog.json'
       Set-Content -LiteralPath $catalogPath -Encoding UTF8 -Value '{"RatioFloor":0,"MinBaselineToCompare":0,"Rules":[{"Id":1,"MinPerWindow":null,"MessageRegex":null}]}'
+      Mock Get-SysmonStatePath { Join-Path $TestDrive 'rule-drift-sensor-state.json' }
 
       $output = & $script:SensorScript -CatalogPath $catalogPath -PassThru -OutputFormat None -Quiet -Confirm:$false 2>&1 3>&1 6>&1
       $result = @($output | Where-Object { $_ -and $_.PSObject.Properties.Name -contains 'Result' })[-1]
@@ -343,7 +344,7 @@ Describe '17-Sysmon-Rule-Drift-Sensor evidence and state integrity' -Tag 'Sysmon
     $source | Should -Not -Match 'Everyone\|Users\|Authenticated Users\|Guests'
   }
 
-  It 'ignores inherit-only state ACL templates but rejects an effective Users Modify ACE' -Skip:([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+  It 'allows effective Users ReadAndExecute but rejects an atomic Users WriteData ACE' -Skip:([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     $path = Join-Path $TestDrive 'trusted-state-acl'
     New-Item -Path $path -ItemType Directory -Force | Out-Null
     try {
@@ -370,6 +371,13 @@ Describe '17-Sysmon-Rule-Drift-Sensor evidence and state integrity' -Tag 'Sysmon
             $inheritance,
             [Security.AccessControl.PropagationFlags]::InheritOnly,
             [Security.AccessControl.AccessControlType]::Allow)))
+      [void]$security.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            $users,
+            ([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+              [Security.AccessControl.FileSystemRights]::Synchronize),
+            $inheritance,
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow)))
       Set-Acl -LiteralPath $path -AclObject $security -ErrorAction Stop
     } catch {
       Set-ItResult -Skipped -Because "The current Windows test identity cannot create the required ACL fixture: $($_.Exception.Message)"
@@ -380,7 +388,7 @@ Describe '17-Sysmon-Rule-Drift-Sensor evidence and state integrity' -Tag 'Sysmon
     $unsafe = Get-Acl -LiteralPath $path
     [void]$unsafe.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
           $users,
-          [Security.AccessControl.FileSystemRights]::Modify,
+          [Security.AccessControl.FileSystemRights]::WriteData,
           $inheritance,
           [Security.AccessControl.PropagationFlags]::None,
           [Security.AccessControl.AccessControlType]::Allow)))

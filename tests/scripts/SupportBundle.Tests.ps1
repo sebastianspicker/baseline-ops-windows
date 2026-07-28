@@ -67,6 +67,7 @@ Describe '09-SupportBundle record failure reporting' -Tag 'SupportBundle' -Skip:
 
         Mock -CommandName SB_WriteHealthEvent -MockWith { }
         Mock -CommandName SB_TestEventLogExists -MockWith { $false }
+        Mock -CommandName SB_GetDefaultTrustedOutputRoot -MockWith { $proofDir }
         Mock -CommandName SB_ExportKbStatus -MockWith {
           if (-not (Get-Variable -Name __SupportBundleKbFailure -Scope Global -ValueOnly)) {
             return (SB_NewRecord -Name 'KBFeed' -Ok $true -ArtifactPath $null -Note 'no pending KB data' -Error $null)

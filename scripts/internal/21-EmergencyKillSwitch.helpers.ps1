@@ -127,9 +127,14 @@ function Assert-KillSwitchLockParent {
   Assert-TrustedWindowsPathAcl -Path $Path -CheckAncestors | Out-Null
   $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
   $trustedSids = @{'S-1-5-32-544' = $true; 'S-1-5-18' = $true; 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464' = $true }
-  $writeMask = [System.Security.AccessControl.FileSystemRights]::Write -bor
-    [System.Security.AccessControl.FileSystemRights]::Modify -bor
-    [System.Security.AccessControl.FileSystemRights]::FullControl
+  $writeMask = [System.Security.AccessControl.FileSystemRights]::WriteData -bor
+    [System.Security.AccessControl.FileSystemRights]::AppendData -bor
+    [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+    [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+    [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+    [System.Security.AccessControl.FileSystemRights]::Delete -bor
+    [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+    [System.Security.AccessControl.FileSystemRights]::TakeOwnership
   foreach ($rule in @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
     if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
         ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0 -or

@@ -23,6 +23,7 @@ Describe 'tools/secret-scan.ps1' {
     $toolText | Should -Match 'TimeoutSeconds\s+30'
     $toolText | Should -Match 'OutputTruncated'
     $toolText | Should -Match 'ConvertTo-RootedGitFilePath'
+    $toolText | Should -Match 'Where-Object\s+\{\s*\$_\s+-ne\s+''''\s*\}'
     $toolText | Should -Not -Match '&\s*git\b'
   }
 

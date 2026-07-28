@@ -251,12 +251,46 @@ Describe 'Windows privileged-path ACL validation' {
       Should -Match 'PropagationFlags\]::InheritOnly'
   }
 
+  It 'uses the same atomic leaf write capabilities in every duplicated privileged-path guard' {
+    $guards = @(
+      @{ Source = (Get-Command Test-TrustedWindowsPathAcl).Definition; Terminator = '\$ancestorReplacementMask' },
+      @{ Source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/00-Run-Local.ps1') -Raw; Terminator = '\$ancestorReplacementMask' },
+      @{ Source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/00-Run-Batch.ps1') -Raw; Terminator = '\$ancestorReplacementMask' },
+      @{ Source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/00-Copy-Local.ps1') -Raw; Terminator = '\$replaceMask' },
+      @{ Source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/00-Run-Profile.ps1') -Raw; Terminator = '\$ancestorReplacementMask' },
+      @{ Source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/internal/16-Sysmon-Config-Updater.helpers.ps1') -Raw; Terminator = 'foreach \(\$accessRule' },
+      @{ Source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/internal/17-Sysmon-Rule-Drift-Sensor.helpers.ps1') -Raw; Terminator = 'foreach \(\$accessRule' },
+      @{ Source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/internal/21-EmergencyKillSwitch.helpers.ps1') -Raw; Terminator = 'foreach \(\$rule' }
+    )
+    $capabilities = @(
+      'WriteData', 'AppendData', 'WriteExtendedAttributes', 'WriteAttributes',
+      'DeleteSubdirectoriesAndFiles', 'Delete', 'ChangePermissions', 'TakeOwnership'
+    )
+
+    foreach ($guard in $guards) {
+      $match = [regex]::Match($guard.Source, ('(?s)\$writeMask\s*=\s*(.*?){0}' -f $guard.Terminator))
+      $match.Success | Should -BeTrue
+      $leafMask = $match.Groups[1].Value
+      $leafMask | Should -Not -Match 'FileSystemRights\]::(Write|Modify|FullControl)\s*-bor'
+      foreach ($capability in $capabilities) {
+        $leafMask | Should -Match ('FileSystemRights\]::{0}' -f $capability)
+        $rights = [int64][System.Security.AccessControl.FileSystemRights]::$capability
+        $readAndExecute = [int64](
+          [System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+          [System.Security.AccessControl.FileSystemRights]::Synchronize
+        )
+        ($readAndExecute -band $rights) | Should -Be 0
+        ($rights -band $rights) | Should -Be $rights
+      }
+    }
+  }
+
   It 'is a portable no-op on non-Windows hosts' -Skip:([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
     Test-TrustedWindowsPathAcl -Path $TestDrive | Should -BeTrue
     { Assert-TrustedWindowsPathAcl -Path $TestDrive | Out-Null } | Should -Not -Throw
   }
 
-  It 'ignores inherit-only templates but rejects an effective Users Modify ACE' -Skip:([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+  It 'allows effective Users ReadAndExecute but rejects an atomic Users WriteData ACE' -Skip:([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
     $path = Join-Path $TestDrive 'trusted-acl'
     New-Item -Path $path -ItemType Directory -Force | Out-Null
     try {
@@ -283,6 +317,13 @@ Describe 'Windows privileged-path ACL validation' {
             $inheritance,
             [System.Security.AccessControl.PropagationFlags]::InheritOnly,
             [System.Security.AccessControl.AccessControlType]::Allow)))
+      [void]$security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $users,
+            ([System.Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+              [System.Security.AccessControl.FileSystemRights]::Synchronize),
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)))
       Set-Acl -LiteralPath $path -AclObject $security -ErrorAction Stop
     } catch {
       Set-ItResult -Skipped -Because "The current Windows test identity cannot create the required ACL fixture: $($_.Exception.Message)"
@@ -293,7 +334,7 @@ Describe 'Windows privileged-path ACL validation' {
     $unsafe = Get-Acl -LiteralPath $path
     [void]$unsafe.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
           $users,
-          [System.Security.AccessControl.FileSystemRights]::Modify,
+          [System.Security.AccessControl.FileSystemRights]::WriteData,
           $inheritance,
           [System.Security.AccessControl.PropagationFlags]::None,
           [System.Security.AccessControl.AccessControlType]::Allow)))

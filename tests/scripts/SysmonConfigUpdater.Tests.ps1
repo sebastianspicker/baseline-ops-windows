@@ -42,6 +42,8 @@ Describe '16-Sysmon-Config-Updater channel failure reporting' -Tag 'Sysmon' -Ski
     Remove-Variable -Name OldOS -Scope Script -ErrorAction SilentlyContinue
     Remove-Variable -Name OldComputerName -Scope Script -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath Function:\Get-Service -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Function:\Test-TrustedSysmonExecutable -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Function:\Get-SysmonStatePath -ErrorAction SilentlyContinue
   }
 
   It 'adds a specific finding when wevtutil fails to enable the Sysmon channel' {
@@ -64,6 +66,10 @@ Describe '16-Sysmon-Config-Updater channel failure reporting' -Tag 'Sysmon' -Ski
     Mock -CommandName Test-IsAdmin -MockWith { $true }
     Mock -CommandName Ensure-EventSource -MockWith { $true }
     Mock -CommandName Write-HealthEvent -MockWith {}
+    function global:Test-TrustedSysmonExecutable { $true }
+    Mock -CommandName Test-TrustedSysmonExecutable -MockWith { $true }
+    function global:Get-SysmonStatePath { }
+    Mock -CommandName Get-SysmonStatePath -MockWith { $statePath }
     function global:Get-Service {
       param([string]$Name)
       [pscustomobject]@{ Name = $Name }
@@ -154,7 +160,7 @@ Describe '16-Sysmon-Config-Updater trust boundaries' -Tag 'Sysmon' {
     $source | Should -Not -Match 'Everyone\|Users\|Authenticated Users\|Guests'
   }
 
-  It 'ignores inherit-only updater state ACL templates but rejects an effective Users Modify ACE' -Skip:([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+  It 'allows effective Users ReadAndExecute but rejects an atomic Users WriteData ACE' -Skip:([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     . (Join-Path $PSScriptRoot '../../scripts/internal/16-Sysmon-Config-Updater.helpers.ps1')
     $path = Join-Path $TestDrive 'trusted-updater-state-acl'
     New-Item -Path $path -ItemType Directory -Force | Out-Null
@@ -182,6 +188,13 @@ Describe '16-Sysmon-Config-Updater trust boundaries' -Tag 'Sysmon' {
             $inheritance,
             [Security.AccessControl.PropagationFlags]::InheritOnly,
             [Security.AccessControl.AccessControlType]::Allow)))
+      [void]$security.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            $users,
+            ([Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+              [Security.AccessControl.FileSystemRights]::Synchronize),
+            $inheritance,
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow)))
       Set-Acl -LiteralPath $path -AclObject $security -ErrorAction Stop
     } catch {
       Set-ItResult -Skipped -Because "The current Windows test identity cannot create the required ACL fixture: $($_.Exception.Message)"
@@ -192,7 +205,7 @@ Describe '16-Sysmon-Config-Updater trust boundaries' -Tag 'Sysmon' {
     $unsafe = Get-Acl -LiteralPath $path
     [void]$unsafe.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
           $users,
-          [Security.AccessControl.FileSystemRights]::Modify,
+          [Security.AccessControl.FileSystemRights]::WriteData,
           $inheritance,
           [Security.AccessControl.PropagationFlags]::None,
           [Security.AccessControl.AccessControlType]::Allow)))
@@ -263,6 +276,12 @@ Describe '16-Sysmon-Config-Updater policy gates' -Tag 'Sysmon' -Skip:$script:Ski
     Mock -CommandName Test-IsAdmin -MockWith { $true }
     Mock -CommandName Ensure-EventSource -MockWith { $true }
     Mock -CommandName Write-HealthEvent -MockWith {}
+    function global:Test-TrustedSysmonExecutable { $true }
+    Mock -CommandName Test-TrustedSysmonExecutable -MockWith { $true }
+    function global:Get-SysmonStatePath { }
+    Mock -CommandName Get-SysmonStatePath -MockWith {
+      Join-Path $TestDrive 'config-updater-state.json'
+    }
     function global:Get-Service {
       param([string]$Name)
       [pscustomobject]@{ Name = $Name }
@@ -276,6 +295,8 @@ Describe '16-Sysmon-Config-Updater policy gates' -Tag 'Sysmon' -Skip:$script:Ski
     if ($null -eq $script:OldOS) { Remove-Item -LiteralPath Env:OS -ErrorAction SilentlyContinue } else { $env:OS = $script:OldOS }
     if ($null -eq $script:OldComputerName) { Remove-Item -LiteralPath Env:COMPUTERNAME -ErrorAction SilentlyContinue } else { $env:COMPUTERNAME = $script:OldComputerName }
     Remove-Item -LiteralPath Function:\Get-Service -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Function:\Test-TrustedSysmonExecutable -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Function:\Get-SysmonStatePath -ErrorAction SilentlyContinue
   }
 
   It 'does not launch Sysmon when the selected hash is not allowlisted' {
@@ -426,6 +447,7 @@ Describe '16-Sysmon-Config-Updater policy gates' -Tag 'Sysmon' -Skip:$script:Ski
   It 'does not launch an explicitly supplied untrusted executable during Audit' {
     $untrustedExe = Join-Path $TestDrive 'not-sysmon.exe'
     Set-Content -LiteralPath $untrustedExe -Value 'untrusted executable' -Encoding UTF8
+    Mock -CommandName Test-TrustedSysmonExecutable -MockWith { $false }
 
     $result = & $script:SysmonConfigUpdaterScript -ConfigPath $script:ConfigPath -SysmonExePath $untrustedExe -Mode Audit -OutputFormat None -PassThru -NoConsoleSummary -Quiet -NoColor -Confirm:$false
 

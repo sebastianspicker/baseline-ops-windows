@@ -114,7 +114,7 @@ Describe '10-SupportBundle-Parser archive validation' -Tag 'SupportBundle', 'Sec
       Test-NoReparsePointAncestor -Path $extractRoot
       { Assert-TrustedWindowsPathAcl -Path $extractRoot } | Should -Not -Throw
       Set-Content -LiteralPath $probe -Value 'protected read-write probe' -Encoding utf8 -ErrorAction Stop
-      Get-Content -LiteralPath $probe -Raw -ErrorAction Stop | Should -Be 'protected read-write probe'
+      (Get-Content -LiteralPath $probe -Raw -ErrorAction Stop).TrimEnd("`r", "`n") | Should -Be 'protected read-write probe'
     } finally {
       Remove-Item -LiteralPath $branch -Recurse -Force -ErrorAction Stop
     }

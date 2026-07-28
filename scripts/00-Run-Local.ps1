@@ -117,11 +117,12 @@ function Assert-RunLocalTrustedWindowsAcl {
     'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464' = $true
   }
   $writeMask =
-    [System.Security.AccessControl.FileSystemRights]::Write -bor
-    [System.Security.AccessControl.FileSystemRights]::Modify -bor
-    [System.Security.AccessControl.FileSystemRights]::FullControl -bor
-    [System.Security.AccessControl.FileSystemRights]::Delete -bor
+    [System.Security.AccessControl.FileSystemRights]::WriteData -bor
+    [System.Security.AccessControl.FileSystemRights]::AppendData -bor
+    [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+    [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
     [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+    [System.Security.AccessControl.FileSystemRights]::Delete -bor
     [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
     [System.Security.AccessControl.FileSystemRights]::TakeOwnership
   $ancestorReplacementMask =
@@ -318,7 +319,7 @@ function Add-RunLocalTrustedCodeClosureLocks {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string[]]$Roots,
-    [Parameter(Mandatory)][System.Collections.Generic.List[System.IO.FileStream]]$LockedStreams,
+    [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[System.IO.FileStream]]$LockedStreams,
     [ValidateRange(1, 8192)][int]$MaximumItems = 4096
   )
 

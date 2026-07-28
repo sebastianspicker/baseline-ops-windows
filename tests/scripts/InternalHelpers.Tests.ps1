@@ -472,6 +472,11 @@ Describe '12 SuspiciousArtifactGrabber parent behavior' -Tag 'SuspiciousArtifact
         $env:OS = 'Windows_NT'
         $env:COMPUTERNAME = 'TEST-HOST'
 
+        Mock -CommandName Get-ArtifactEvidenceRoot -MockWith {
+          Join-Path $TestDrive 'artifact-evidence'
+        }
+        Mock -CommandName Assert-TrustedWindowsPathAcl -MockWith { }
+
         $catalogPath = Join-Path $TestDrive ("grabber-catalog-{0}.json" -f [guid]::NewGuid().ToString('N'))
         $catalog = [ordered]@{
           OutputBase = $(if ($RemoteOutputBase) { '\\server\share\evidence' } else { Get-ArtifactEvidenceRoot })

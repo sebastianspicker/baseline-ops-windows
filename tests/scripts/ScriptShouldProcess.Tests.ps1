@@ -301,6 +301,22 @@ Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
     $script:WinGetSelfHealPath = Join-Path $PSScriptRoot '../../scripts/08-WinGet-SelfHeal.ps1'
     Import-Module (Join-Path $PSScriptRoot '../../lib/Common.psm1') -Force
 
+    $killSwitchHelperPath = Join-Path $PSScriptRoot '../../scripts/internal/21-EmergencyKillSwitch.helpers.ps1'
+    $tokens = $null
+    $parseErrors = $null
+    $helperAst = [System.Management.Automation.Language.Parser]::ParseFile(
+      (Resolve-Path $killSwitchHelperPath),
+      [ref]$tokens,
+      [ref]$parseErrors
+    )
+    $parseErrors | Should -BeNullOrEmpty
+    $lockFunction = @($helperAst.FindAll({
+          param($node)
+          $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Enter-KillSwitchRemediationLock'
+        }, $true))[0]
+    . ([scriptblock]::Create($lockFunction.Extent.Text))
+
     function global:Get-NetFirewallProfile { }
     function global:Set-NetFirewallProfile { }
     function global:Get-NetFirewallRule { }
@@ -357,11 +373,20 @@ Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
   It '21-EmergencyKillSwitch WhatIf in Remediate mode does not perform mutations' -Skip:$script:SkipNonSystemWindowsIntegration {
     $oldOS = $env:OS
     $oldTemp = $env:TEMP
+    $testLockStream = $null
     try {
       $env:OS = 'Windows_NT'
       $env:TEMP = $TestDrive
 
       Mock -CommandName Test-IsAdmin -MockWith { $true }
+      $testLockPath = Join-Path $TestDrive 'emergency-kill-switch-remediation.lock'
+      $testLockStream = [System.IO.File]::Open(
+        $testLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+      )
+      Mock -CommandName Enter-KillSwitchRemediationLock -MockWith { $testLockStream }
       Mock -CommandName Get-NetFirewallProfile -MockWith {
         [pscustomobject]@{
           Name                  = 'Domain'
@@ -382,6 +407,9 @@ Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
 
       $result = & $script:EmergencyKillSwitchPath -Mode Remediate -OutputFormat None -PassThru -Confirm:$false -WhatIf 2>&1 3>&1 6>&1
     } finally {
+      if ($null -ne $testLockStream) {
+        $testLockStream.Dispose()
+      }
       if ($null -eq $oldOS) {
         Remove-Item -LiteralPath Env:OS -ErrorAction SilentlyContinue
       } else {
@@ -396,6 +424,7 @@ Describe 'ShouldProcess runtime no-mutation behavior' -Tag 'ShouldProcess' {
 
     $result.Result | Should -Be 'WARN'
     $result.Summary.Actions.ConfirmDeclined | Should -BeTrue
+    Should -Invoke Enter-KillSwitchRemediationLock -Times 1 -Exactly
     Should -Invoke New-Item -Times 0
     Should -Invoke Set-ItemProperty -Times 0
     Should -Invoke Set-Content -Times 0

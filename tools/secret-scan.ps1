@@ -138,7 +138,8 @@ if (Test-CommandExists -Name 'git') {
       -not $gitRootCheck.StderrTruncated -and $gitRootCheck.Stdout.Trim() -eq 'true') {
     $gitFiles = Invoke-BoundedGitCommand -Arguments @('-C', $RootPath, 'ls-files', '-z', '--cached', '--others', '--exclude-standard')
     if ($gitFiles -and $gitFiles.Success -and -not $gitFiles.TimedOut -and -not $gitFiles.OutputTruncated -and -not $gitFiles.StderrTruncated) {
-      $files = @($gitFiles.Stdout.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries) |
+      $files = @($gitFiles.Stdout.Split([char]0) |
+        Where-Object { $_ -ne '' } |
         ForEach-Object { ConvertTo-RootedGitFilePath -RelativePath $_ -Root $RootPath })
     }
   }

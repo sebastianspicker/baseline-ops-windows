@@ -9,12 +9,15 @@ Verifies safe, repeatable operator behavior and evidence.
 
 $script:IsWindowsHost = ($env:OS -eq 'Windows_NT')
 $script:SkipNonSystemWindowsIntegration = $false
+$script:SkipSystemWindowsIntegration = $false
 if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
   try {
-    $script:SkipNonSystemWindowsIntegration =
-      [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18'
+    $currentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $script:SkipNonSystemWindowsIntegration = $currentUserSid -ne 'S-1-5-18'
+    $script:SkipSystemWindowsIntegration = $currentUserSid -eq 'S-1-5-18'
   } catch {
     $script:SkipNonSystemWindowsIntegration = $true
+    $script:SkipSystemWindowsIntegration = $true
   }
 }
 
@@ -165,7 +168,7 @@ Describe 'WinGet config baseline runner config input reporting' -Tag 'Config' {
     Remove-Variable -Name Findings -Scope Script -ErrorAction SilentlyContinue
   }
 
-  It 'reports invalid explicit summary JSON as WARN instead of clean OK' -Skip:((-not $script:IsWindowsHost) -or $script:SkipNonSystemWindowsIntegration) {
+  It 'reports invalid explicit summary JSON as WARN instead of clean OK' -Skip:((-not $script:IsWindowsHost) -or $script:SkipSystemWindowsIntegration) {
     $configPath = Join-Path $TestDrive 'baseline.dsc.yaml'
     Set-Content -LiteralPath $configPath -Value 'properties: {}' -Encoding UTF8
     $summaryJsonPath = Join-Path $TestDrive 'bad-summary.json'

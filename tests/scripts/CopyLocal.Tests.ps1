@@ -316,6 +316,14 @@ Describe '00-Copy-Local v2 terminal result contract' {
     $scriptPath = Join-Path $PSScriptRoot '../../scripts/00-Copy-Local.ps1'
     $hostPath = (Get-Process -Id $PID).Path
     $tempRoot = Join-Path '/private/tmp' ("copy-local-untrusted-repo-{0}" -f [guid]::NewGuid().ToString('N'))
+    if ([Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+      . (Get-CopyLocalFunctionBody -Name 'Assert-CopyLocalAclObjectTrust')
+      . (Get-CopyLocalFunctionBody -Name 'Assert-CopyLocalDestinationAclTrust')
+      . (Get-CopyLocalFunctionBody -Name 'Set-CopyLocalNewDestinationAcl')
+      $systemDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::System)
+      $trustedParent = Join-Path $systemDirectory 'config\systemprofile'
+      $tempRoot = Join-Path $trustedParent ("BaselineOpsForWindows-CopyLocalTests-{0}" -f [guid]::NewGuid().ToString('N'))
+    }
     $destination = Join-Path $tempRoot 'destination'
     $repoPath = Join-Path $tempRoot 'untrusted-existing-clone'
     $marker = Join-Path $repoPath 'must-remain.txt'
@@ -326,6 +334,10 @@ Describe '00-Copy-Local v2 terminal result contract' {
     $command = "`$env:TMPDIR = '$escapedTempRoot'; & '$escapedScriptPath' -RepoUrl 'https://invalid.example/repo.git' -DestinationRoot '$escapedDestination' -RepoPath '$escapedRepoPath' -OutputFormat None -PassThru -Confirm:`$false | ConvertTo-Json -Depth 10 -Compress"
 
     try {
+      if ([Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+        Set-CopyLocalNewDestinationAcl -Path $tempRoot -Confirm:$false
+      }
       New-Item -ItemType Directory -Path $repoPath -Force | Out-Null
       Set-Content -LiteralPath $marker -Value 'preserve this caller-owned path' -NoNewline
 

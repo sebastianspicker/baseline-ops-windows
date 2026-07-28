@@ -220,11 +220,69 @@ Describe '00-Run-Batch orchestration' {
     $script:BatchScript = Join-Path $script:ScriptsRoot '00-Run-Batch.ps1'
     $script:TempDir = Join-Path ([System.IO.Path]::GetTempPath()) "orch-batch-$(Get-Random)"
     New-Item -Path $script:TempDir -ItemType Directory -Force | Out-Null
+    $script:IsElevatedWindows = $false
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+      $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+      try {
+        $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+        $script:IsElevatedWindows = $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+      } finally {
+        $identity.Dispose()
+      }
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    $batchAst = [System.Management.Automation.Language.Parser]::ParseFile(
+      (Resolve-Path $script:BatchScript),
+      [ref]$tokens,
+      [ref]$parseErrors
+    )
+    $parseErrors | Should -BeNullOrEmpty
+    $setAclFunction = @($batchAst.FindAll({
+          param($node)
+          $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Set-BatchAdminSystemAcl'
+        }, $true))[0]
+    . ([scriptblock]::Create($setAclFunction.Extent.Text))
+
+    function New-RunBatchFixtureRoot {
+      [CmdletBinding(SupportsShouldProcess = $true)]
+      param([Parameter(Mandatory)][string]$Name)
+
+      if (-not $PSCmdlet.ShouldProcess($Name, 'Create protected Run-Batch fixture root')) { return $null }
+      if ($script:IsElevatedWindows) {
+        $systemDirectory = [System.Environment]::GetFolderPath(
+          [System.Environment+SpecialFolder]::System
+        )
+        $trustedParent = Join-Path $systemDirectory 'config\systemprofile'
+        return Join-Path $trustedParent ("BaselineOpsForWindows-OrchestrationTests-{0}-{1}" -f $Name, [guid]::NewGuid().ToString('N'))
+      }
+
+      return Join-Path $script:TempDir ("{0}-{1}" -f $Name, (Get-Random))
+    }
+
+    function Set-RunBatchFixtureTrustedAcl {
+      [CmdletBinding(SupportsShouldProcess = $true)]
+      param([Parameter(Mandatory)][string]$Path)
+
+      if (-not $script:IsElevatedWindows) { return }
+      if (-not $PSCmdlet.ShouldProcess($Path, 'Protect Run-Batch fixture ACL')) { return }
+
+      $items = @(
+        Get-ChildItem -LiteralPath $Path -Force -Recurse |
+          Sort-Object { $_.FullName.Length } -Descending
+      )
+      foreach ($item in $items) {
+        Set-BatchAdminSystemAcl -Path $item.FullName -Directory:$item.PSIsContainer
+      }
+      Set-BatchAdminSystemAcl -Path $Path -Directory
+    }
 
     function Get-GeneratedBatchProfile {
       param([Parameter(Mandatory)][string]$Category)
 
-      $tempRoot = Join-Path $script:TempDir "batch-profile-$(Get-Random)"
+      $tempRoot = New-RunBatchFixtureRoot -Name 'batch-profile'
       $tempScripts = Join-Path $tempRoot 'scripts'
       $tempLib = Join-Path $tempRoot 'lib'
 
@@ -268,6 +326,7 @@ exit 0
           }
 
         $tempBatchScript = Join-Path $tempScripts '00-Run-Batch.ps1'
+        Set-RunBatchFixtureTrustedAcl -Path $tempRoot
         $profileSpec = & $tempBatchScript -Category $Category -OutputFormat None -RootPath $tempRoot -PassThru -Confirm:$false
         $LASTEXITCODE | Should -Be 0
         $profileSpec | Should -Not -BeNullOrEmpty
@@ -352,6 +411,10 @@ exit 0
     $source = Get-Content -LiteralPath $script:BatchScript -Raw
 
     $source | Should -Match 'CommonApplicationData'
+    $source | Should -Match 'Join-Path \$programData ''Microsoft\\Windows'''
+    $source | Should -Match 'Assert-RunBatchTrustedWindowsAcl -Path \$trustedParent -CheckAncestors'
+    $source | Should -Match 'BaselineOpsForWindows-Batch-{0}'
+    $source | Should -Not -Match 'BaselineOpsForWindows-Batch''\)'
     $source | Should -Match 'Set-BatchAdminSystemAcl -Path \$tempProfile'
     $source | Should -Match '\[System\.IO\.FileShare\]::Read'
     $source.IndexOf('$profileLockStream = New-Object System.IO.FileStream') |
@@ -414,11 +477,11 @@ exit 0
   }
 
   It 'Propagates unsupported-host WARN children through batch orchestration' {
-    $tempRoot = Join-Path $script:TempDir "unsupported-batch-$(Get-Random)"
+    $tempRoot = New-RunBatchFixtureRoot -Name 'unsupported-batch'
     $scriptsDir = Join-Path $tempRoot 'scripts'
 
     try {
-      New-Item -Path $scriptsDir -ItemType Directory -Force | Out-Null
+      New-Item -Path $scriptsDir, (Join-Path $scriptsDir '_lib'), (Join-Path $scriptsDir 'internal'), (Join-Path $tempRoot 'lib') -ItemType Directory -Force | Out-Null
       $unsupportedScript = @'
 param(
   [ValidateSet('Audit','Remediate')]
@@ -446,6 +509,7 @@ exit 2
 '@
       Set-Content -LiteralPath (Join-Path $scriptsDir '09-SupportBundle.ps1') -Value $unsupportedScript -Encoding UTF8
 
+      Set-RunBatchFixtureTrustedAcl -Path $tempRoot
       $result = & $script:BatchScript -Category Collection -OutputFormat None -RootPath $tempRoot -PassThru -Confirm:$false
 
       $LASTEXITCODE | Should -Be 2

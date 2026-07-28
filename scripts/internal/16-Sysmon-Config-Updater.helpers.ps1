@@ -126,11 +126,12 @@ function Assert-TrustedStateAcl {
   $ownerSid = ConvertTo-TrustedStateSidValue -IdentityReference $acl.Owner
   if ($trustedSids -notcontains $ownerSid) { throw "Sysmon state path '$Path' has an untrusted owner SID '$ownerSid'." }
   if (-not $acl.AreAccessRulesProtected) { throw "Sysmon state path '$Path' must use a protected ACL." }
-  $writeMask = [Security.AccessControl.FileSystemRights]::Write -bor
-    [Security.AccessControl.FileSystemRights]::Modify -bor
-    [Security.AccessControl.FileSystemRights]::FullControl -bor
-    [Security.AccessControl.FileSystemRights]::Delete -bor
+  $writeMask = [Security.AccessControl.FileSystemRights]::WriteData -bor
+    [Security.AccessControl.FileSystemRights]::AppendData -bor
+    [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+    [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
     [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+    [Security.AccessControl.FileSystemRights]::Delete -bor
     [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
     [Security.AccessControl.FileSystemRights]::TakeOwnership
   foreach ($accessRule in @($acl.Access)) {

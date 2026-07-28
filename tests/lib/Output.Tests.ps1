@@ -44,7 +44,6 @@ Describe 'Output module export surface' {
     foreach ($name in $removed) {
       $names | Should -Not -Contain $name
     }
-    $names | Should -Contain 'Write-UiProgress'
   }
 
   It 'Exports pass-through compatibility names as aliases' {

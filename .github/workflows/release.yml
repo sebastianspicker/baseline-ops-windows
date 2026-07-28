@@ -45,8 +45,6 @@ jobs:
 
       - name: Resolve release tag
         id: release
-        env:
-          INPUT_TAG: ${{ inputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -116,7 +114,7 @@ jobs:
           mkdir -p "${install_root}"
           tar -xzf "${archive}" -C "${install_root}"
           chmod 0755 "${install_root}/pwsh"
-          actual_version="$("${install_root}/pwsh" -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')"
+          actual_version="$("${install_root}/pwsh" -NoLogo -NoProfile -Command "\$PSVersionTable.PSVersion.ToString()")"
           if [[ "${actual_version}" != "${POWERSHELL_VERSION}" ]]; then
             printf 'Expected PowerShell %s exactly, got %s.\n' "${POWERSHELL_VERSION}" "${actual_version}" >&2
             exit 1
@@ -191,7 +189,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual_version="$("${PWSH_BIN}" -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')"
+          actual_version="$("${PWSH_BIN}" -NoLogo -NoProfile -Command "\$PSVersionTable.PSVersion.ToString()")"
           if [[ "${actual_version}" != "${POWERSHELL_VERSION}" ]]; then
             printf 'Expected PowerShell %s exactly, got %s.\n' "${POWERSHELL_VERSION}" "${actual_version}" >&2
             exit 1
@@ -301,7 +299,7 @@ jobs:
           package_root="$(mktemp -d)"
           trap 'rm -rf "${package_root}"' EXIT
           unzip -q "dist/${RELEASE_ASSET}" -d "${package_root}"
-          actual_version="$(pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')"
+          actual_version="$(pwsh -NoLogo -NoProfile -Command "\$PSVersionTable.PSVersion.ToString()")"
           if [[ "${actual_version}" != "${POWERSHELL_VERSION}" ]]; then
             printf 'Expected PowerShell %s exactly, got %s.\n' "${POWERSHELL_VERSION}" "${actual_version}" >&2
             exit 1
@@ -436,7 +434,6 @@ jobs:
       - name: Download attestation bundle
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ASSET: ${{ steps.release.outputs.asset }}
         shell: bash
         run: |
           set -euo pipefail
@@ -526,8 +523,6 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ASSET: ${{ steps.release.outputs.asset }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -584,7 +579,7 @@ jobs:
           if [[ "${RELEASE_TAG}" == *-* ]]; then
             expected_prerelease=true
           fi
-          for attempt in 1 2 3 4 5; do
+          for _ in 1 2 3 4 5; do
             read -r is_draft is_immutable is_prerelease tag_name < <(
               gh release view "${RELEASE_TAG}" \
                 --repo "${GITHUB_REPOSITORY}" \
