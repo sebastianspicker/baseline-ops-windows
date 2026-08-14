@@ -18,22 +18,7 @@ BeforeAll {
   # target is deterministic instead of failing on an ambiguous module name.
   Get-Module -Name Output -All | Remove-Module -Force -ErrorAction SilentlyContinue
   Import-Module (Join-Path $PSScriptRoot '../../lib/Output.psm1') -Force
-
-  function Join-TestOutputText {
-    param([object[]]$Output)
-
-    ($Output | ForEach-Object {
-      if ($_.PSObject.Properties['MessageData']) {
-        if ($_.MessageData.PSObject.Properties['Message']) {
-          [string]$_.MessageData.Message
-        } else {
-          [string]$_.MessageData
-        }
-      } else {
-        [string]$_
-      }
-    }) -join "`n"
-  }
+  . (Join-Path $PSScriptRoot '../support/OutputAssertions.ps1')
 }
 
 Describe 'Output module export surface' {
@@ -58,6 +43,18 @@ Describe 'Output module export surface' {
       $command = Get-Command -Name $entry.Key -Module Output
       $command.CommandType | Should -Be 'Alias'
       $command.ResolvedCommandName | Should -Be $entry.Value
+    }
+  }
+
+  It 'keeps the shared status helper private and status writer signatures public' {
+    Get-Command -Name 'Write-StatusMessage' -Module Output -ErrorAction SilentlyContinue |
+      Should -BeNullOrEmpty
+
+    foreach ($name in @('Write-Info', 'Write-Warn', 'Write-ErrorLine', 'Write-Success')) {
+      $command = Get-Command -Name $name -Module Output
+      $command.CommandType | Should -Be 'Function'
+      $command.Parameters['Message'].ParameterType | Should -Be ([string])
+      $command.Parameters['NoPrefix'].ParameterType | Should -Be ([switch])
     }
   }
 }
@@ -169,35 +166,50 @@ Describe 'Write-BlankLine' {
   }
 }
 
-Describe 'Write-Info' {
-  It 'Outputs info-prefixed message' {
-    Mock Write-Information {} -ModuleName Output
-    Write-Info -Message 'Information text'
-    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -match 'INFO.*Information text' }
+Describe 'Legacy status writers' {
+  BeforeEach {
+    $script:StatusWriterCases = @(
+      [pscustomobject]@{ Command = 'Write-Info';      Style = 'Info';    Text = '[INFO] Information text' }
+      [pscustomobject]@{ Command = 'Write-Warn';      Style = 'Warn';    Text = '[WARN] Warning text' }
+      [pscustomobject]@{ Command = 'Write-ErrorLine'; Style = 'Error';   Text = '[FAIL] Error text' }
+      [pscustomobject]@{ Command = 'Write-Success';   Style = 'Success'; Text = '[OK]   Pass text' }
+    )
   }
-}
 
-Describe 'Write-Warn' {
-  It 'Outputs warn-prefixed message' {
-    Mock Write-Information {} -ModuleName Output
-    Write-Warn -Message 'Warning text'
-    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -match 'WARN.*Warning text' }
+  It 'preserves exact status tokens and styles' {
+    Mock Write-UiLine {} -ModuleName Output
+
+    foreach ($case in $script:StatusWriterCases) {
+      $message = $case.Text -replace '^\[[A-Z]+\]\s*', ''
+      & $case.Command -Message $message
+      Should -Invoke Write-UiLine -ModuleName Output -Times 1 -Exactly -ParameterFilter {
+        $Message -ceq $case.Text -and $Style -ceq $case.Style
+      }
+    }
   }
-}
 
-Describe 'Write-ErrorLine' {
-  It 'Outputs fail-prefixed message' {
-    Mock Write-Information {} -ModuleName Output
-    Write-ErrorLine -Message 'Error text'
-    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -match 'FAIL.*Error text' }
+  It 'preserves NoPrefix while retaining each style' {
+    Mock Write-UiLine {} -ModuleName Output
+
+    foreach ($case in $script:StatusWriterCases) {
+      $message = 'Unprefixed message'
+      & $case.Command -Message $message -NoPrefix
+      Should -Invoke Write-UiLine -ModuleName Output -Times 1 -Exactly -ParameterFilter {
+        $Message -ceq $message -and $Style -ceq $case.Style
+      }
+    }
   }
-}
 
-Describe 'Write-Success' {
-  It 'Outputs ok-prefixed message' {
+  It 'uses the information stream with Continue action' {
     Mock Write-Information {} -ModuleName Output
-    Write-Success -Message 'Pass text'
-    Should -Invoke Write-Information -ModuleName Output -Times 1 -ParameterFilter { $MessageData -match 'OK.*Pass text' }
+
+    foreach ($case in $script:StatusWriterCases) {
+      $message = $case.Text -replace '^\[[A-Z]+\]\s*', ''
+      & $case.Command -Message $message
+      Should -Invoke Write-Information -ModuleName Output -Times 1 -Exactly -ParameterFilter {
+        $MessageData -ceq $case.Text -and $InformationAction -eq 'Continue'
+      }
+    }
   }
 }
 

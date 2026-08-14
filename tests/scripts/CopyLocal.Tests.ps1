@@ -63,6 +63,10 @@ Describe '00-Copy-Local v2 terminal result contract' {
     $scriptText | Should -Match 'CURL_CA_BUNDLE'
     $scriptText | Should -Match 'Restore-CopyLocalGitEnvironment'
     $scriptText | Should -Match 'Fresh clone scripts/lib worktree is not clean'
+    $scriptText | Should -Match 'RepoRef is required and must be the full commit identifier from authenticated release provenance'
+    $scriptText | Should -Match 'RepoRef must be a full 40- or 64-character commit identifier'
+    $scriptText | Should -Match 'Resolved commit does not match the authenticated RepoRef'
+    $scriptText | Should -Not -Match 'origin/HEAD'
     $scriptText | Should -Match 'RepoPath already exists; refusing to reuse or remove an existing clone'
     $scriptText | Should -Match 'Test-RepoPathOverlapsDeploymentTarget'
     $scriptText | Should -Match 'Existing deployment target.*contains a reparse point'
@@ -178,6 +182,25 @@ Describe '00-Copy-Local v2 terminal result contract' {
     $result[0].Summary.Error | Should -Be $result[0].Findings[0].Message
   }
 
+  It 'rejects an omitted mutable repository reference before invoking git or changing the destination' -Skip:$script:SkipNonSystemWindowsIntegration {
+    $scriptPath = Join-Path $PSScriptRoot '../../scripts/00-Copy-Local.ps1'
+    $hostPath = (Get-Process -Id $PID).Path
+    $destination = Join-Path ([System.IO.Path]::GetTempPath()) ("copy-local-missing-ref-{0}" -f [guid]::NewGuid().ToString('N'))
+    $escapedScriptPath = $scriptPath.Replace("'", "''")
+    $escapedDestination = $destination.Replace("'", "''")
+    $command = "& '$escapedScriptPath' -RepoUrl 'https://invalid.example/repo.git' -DestinationRoot '$escapedDestination' -OutputFormat None -PassThru -Confirm:`$false | ConvertTo-Json -Depth 10 -Compress"
+
+    $json = & $hostPath -NoProfile -Command $command
+    $exitCode = $LASTEXITCODE
+    $result = @($json | ConvertFrom-Json)
+
+    $exitCode | Should -Be 1
+    $result.Count | Should -Be 1
+    $result[0].Result | Should -Be 'FAIL'
+    $result[0].Summary.Error | Should -Be 'RepoRef is required and must be the full commit identifier from authenticated release provenance.'
+    Test-Path -LiteralPath $destination | Should -BeFalse
+  }
+
   It 'returns WARN without touching the destination or invoking git under WhatIf' -Skip:$script:SkipNonSystemWindowsIntegration {
     $scriptPath = Join-Path $PSScriptRoot '../../scripts/00-Copy-Local.ps1'
     $destination = Join-Path ([System.IO.Path]::GetTempPath()) ("copy-local-whatif-{0}" -f [guid]::NewGuid().ToString('N'))
@@ -217,7 +240,7 @@ Describe '00-Copy-Local v2 terminal result contract' {
         [System.IO.FileMode]::OpenOrCreate,
         [System.IO.FileAccess]::ReadWrite,
         [System.IO.FileShare]::None)
-      $command = "`$env:TMPDIR = '$escapedTempRoot'; & '$escapedScriptPath' -RepoUrl 'https://invalid.example/repo.git' -DestinationRoot '$escapedDestination' -OutputFormat None -PassThru -Confirm:`$false | ConvertTo-Json -Depth 10 -Compress"
+      $command = "`$env:TMPDIR = '$escapedTempRoot'; & '$escapedScriptPath' -RepoUrl 'https://invalid.example/repo.git' -RepoRef 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' -DestinationRoot '$escapedDestination' -OutputFormat None -PassThru -Confirm:`$false | ConvertTo-Json -Depth 10 -Compress"
 
       $json = & $hostPath -NoProfile -Command $command
       $exitCode = $LASTEXITCODE
@@ -283,7 +306,7 @@ Describe '00-Copy-Local v2 terminal result contract' {
     $target = Join-Path $destination 'scripts'
     $escapedScriptPath = $scriptPath.Replace("'", "''")
     $escapedDestination = $destination.Replace("'", "''")
-    $command = "& '$escapedScriptPath' -RepoUrl 'https://invalid.example/repo.git' -DestinationRoot '$escapedDestination' -OutputFormat None -PassThru -Confirm:`$false | ConvertTo-Json -Depth 10 -Compress"
+    $command = "& '$escapedScriptPath' -RepoUrl 'https://invalid.example/repo.git' -RepoRef 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' -DestinationRoot '$escapedDestination' -OutputFormat None -PassThru -Confirm:`$false | ConvertTo-Json -Depth 10 -Compress"
 
     try {
       New-Item -ItemType Directory -Path $destination, $outside -Force | Out-Null
@@ -331,7 +354,7 @@ Describe '00-Copy-Local v2 terminal result contract' {
     $escapedDestination = $destination.Replace("'", "''")
     $escapedRepoPath = $repoPath.Replace("'", "''")
     $escapedTempRoot = ($tempRoot + [System.IO.Path]::DirectorySeparatorChar).Replace("'", "''")
-    $command = "`$env:TMPDIR = '$escapedTempRoot'; & '$escapedScriptPath' -RepoUrl 'https://invalid.example/repo.git' -DestinationRoot '$escapedDestination' -RepoPath '$escapedRepoPath' -OutputFormat None -PassThru -Confirm:`$false | ConvertTo-Json -Depth 10 -Compress"
+    $command = "`$env:TMPDIR = '$escapedTempRoot'; & '$escapedScriptPath' -RepoUrl 'https://invalid.example/repo.git' -RepoRef 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' -DestinationRoot '$escapedDestination' -RepoPath '$escapedRepoPath' -OutputFormat None -PassThru -Confirm:`$false | ConvertTo-Json -Depth 10 -Compress"
 
     try {
       if ([Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {

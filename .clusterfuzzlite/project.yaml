@@ -1,6 +1,6 @@
 # Declares the ClusterFuzzLite JavaScript target and security contact used by
 # the generated profile-validation fuzz entrypoint.
-homepage: https://github.com/sebastianspicker/win-mdm-security-hardening-kit
+homepage: https://github.com/sebastianspicker/baseline-ops
 language: javascript
 primary_contact: security@users.noreply.github.com
 fuzzing_engines:

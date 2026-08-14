@@ -18,23 +18,12 @@ BeforeAll {
   # Import the module
   $script:ConsoleModulePath = Join-Path $PSScriptRoot '../../lib/Console.psm1'
   $script:ConsoleModuleSource = Get-Content -LiteralPath $script:ConsoleModulePath -Raw
+  # Scripts exercised earlier in the full suite import Console into transient
+  # script scopes. Remove every stale module instance so Pester's ModuleName
+  # target is deterministic instead of failing on an ambiguous module name.
+  Get-Module -Name Console -All | Remove-Module -Force -ErrorAction SilentlyContinue
   Import-Module $script:ConsoleModulePath -Force
-
-  function Join-TestOutputText {
-    param([object[]]$Output)
-
-    ($Output | ForEach-Object {
-      if ($_.PSObject.Properties['MessageData']) {
-        if ($_.MessageData.PSObject.Properties['Message']) {
-          [string]$_.MessageData.Message
-        } else {
-          [string]$_.MessageData
-        }
-      } else {
-        [string]$_
-      }
-    }) -join "`n"
-  }
+  . (Join-Path $PSScriptRoot '../support/OutputAssertions.ps1')
 }
 
 Describe "Resolve-Severity" {

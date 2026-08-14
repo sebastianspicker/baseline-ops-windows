@@ -100,6 +100,7 @@ function Write-UiLine { param([string]$Message) Write-Host $Message }
     Add-VerifyFile -Root $root -RelativePath 'docs/README.md'
     Add-VerifyFile -Root $root -RelativePath 'docs/alpha-release.md'
     Add-VerifyFile -Root $root -RelativePath 'docs/launcher-gui.md'
+    Add-VerifyFile -Root $root -RelativePath 'docs/rust-v3.md'
     Add-VerifyFile -Root $root -RelativePath 'SECURITY.md'
 
     $output = & pwsh -NoProfile -File $script:VerifyTool -RootPath $root -SkipAnalyzer 2>&1

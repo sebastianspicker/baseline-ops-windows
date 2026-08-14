@@ -246,6 +246,17 @@ Describe '00-Run-Batch orchestration' {
         }, $true))[0]
     . ([scriptblock]::Create($setAclFunction.Extent.Text))
 
+    $pureBatchHelperNames = @('Get-BatchCategoryMap', 'Get-BatchSelectedScripts', 'New-BatchProfileDocument')
+    foreach ($helperName in $pureBatchHelperNames) {
+      $helperFunction = @($batchAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq $helperName
+          }, $true))[0]
+      $helperFunction | Should -Not -BeNullOrEmpty
+      . ([scriptblock]::Create($helperFunction.Extent.Text))
+    }
+
     function New-RunBatchFixtureRoot {
       [CmdletBinding(SupportsShouldProcess = $true)]
       param([Parameter(Mandatory)][string]$Name)
@@ -371,6 +382,53 @@ exit 0
     $scripts | Should -Contain '50-AMSI-Audit.ps1'
     $scripts | Should -Contain '51-AppLocker-Audit.ps1'
     $scripts | Should -Contain '52-DoH-Audit.ps1'
+  }
+
+  It 'selects category scripts in stable unique lexical order' {
+    $fixtureScripts = @(
+      '20-Storage-Audit.ps1',
+      '09-SupportBundle.ps1',
+      '12-Collection.ps1',
+      '10-Events.ps1',
+      '11-Network.ps1',
+      '09-Alternate.ps1',
+      '01-NotCollection.ps1'
+    )
+
+    $selected = @(Get-BatchSelectedScripts -Category Collection -ScriptNames $fixtureScripts)
+
+    $selected | Should -Be @(
+      '09-Alternate.ps1',
+      '09-SupportBundle.ps1',
+      '10-Events.ps1',
+      '11-Network.ps1',
+      '12-Collection.ps1',
+      '20-Storage-Audit.ps1'
+    )
+    @(Get-BatchSelectedScripts -Category All -ScriptNames $fixtureScripts) |
+      Should -Be @($fixtureScripts | Sort-Object)
+  }
+
+  It 'constructs the generated profile with the established v2 schema and step flags' {
+    $profile = New-BatchProfileDocument -Category Collection -Mode Remediate -Strict $true -RequireSigned $true -ContinueOnError $true -SelectedScripts @('09-SupportBundle.ps1', '10-Events.ps1')
+    $serialized = $profile | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+
+    @($serialized.PSObject.Properties.Name) | Should -Be @('ProfileName', 'Version', 'Defaults', 'Steps', 'Integrity')
+    $serialized.ProfileName | Should -Be 'batch-collection'
+    $serialized.Version | Should -Be '2.0'
+    $serialized.Defaults.Mode | Should -Be 'Remediate'
+    $serialized.Defaults.Strict | Should -BeTrue
+    $serialized.Defaults.OutputFormat | Should -Be 'Console'
+    $serialized.Defaults.OutputPath | Should -BeNullOrEmpty
+    $serialized.Integrity.RequireSigned | Should -BeTrue
+    @($serialized.Integrity.ExpectedHashes.PSObject.Properties).Count | Should -Be 0
+    @($serialized.Steps).Count | Should -Be 2
+    foreach ($step in @($serialized.Steps)) {
+      @($step.PSObject.Properties.Name) | Should -Be @('Script', 'Args', 'ContinueOnError', 'DependsOn')
+      $step.Args | Should -BeNullOrEmpty
+      $step.ContinueOnError | Should -BeTrue
+      $step.DependsOn | Should -BeNullOrEmpty
+    }
   }
 
   It 'Handles Remediation category with -WhatIf without crashing' {

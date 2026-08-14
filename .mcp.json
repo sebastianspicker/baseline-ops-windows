@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "repowise": {
+      "command": "repowise",
+      "args": [
+        "mcp",
+        "/Users/sebastian/Git/baseline-ops",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "OPENAI_API_KEY": "local-llama-server",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8080/v1",
+        "REPOWISE_EMBEDDING_MODEL": "repowise-qwen3-4b-q6",
+        "REPOWISE_EMBEDDING_DIMS": "2560",
+        "REPOWISE_EMBEDDING_TIMEOUT": "300"
+      },
+      "description": "repowise: codebase intelligence \u2014 docs, graph, git signals, dead code, decisions"
+    }
+  }
+}

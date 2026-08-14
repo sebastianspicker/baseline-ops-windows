@@ -75,7 +75,7 @@ Earlier PowerShell Core versions are not part of the repository's verified toolc
 Clone the repository for development and standard-user inspection:
 
 ```powershell
-git clone https://github.com/sebastianspicker/win-mdm-security-hardening-kit.git baselineops-windows
+git clone https://github.com/sebastianspicker/baseline-ops.git baselineops-windows
 Set-Location -LiteralPath .\baselineops-windows
 ```
 
@@ -279,13 +279,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for source, test, and documentation requi
 Run the complete PowerShell 7 gate from Bash or Git Bash:
 
 ```bash
-./scripts/ci-local.sh
+bash ./scripts/ci-local.sh
 ```
 
 The wrapper requires PowerShell Core 7.6.3, installs missing PSScriptAnalyzer 1.25.0 and Pester 5.8.0 in the current-user scope, runs the secret scan, runs static verification, and runs Pester. Set `PWSH_BIN` to an absolute PowerShell 7.6.3 executable path when it is not available as `pwsh`:
 
 ```bash
-PWSH_BIN='/absolute/path/to/pwsh' ./scripts/ci-local.sh
+PWSH_BIN='/absolute/path/to/pwsh' bash ./scripts/ci-local.sh
 ```
 
 Run gates separately from PowerShell:
@@ -319,6 +319,20 @@ Remove-Item -LiteralPath Env:PWSH_BIN
 ```
 
 `PWSH_BIN` must resolve to PowerShell 7.6.3 for the supported test contract. Standard-user test runs skip cases that require LocalSystem, protected workspace ownership, unavailable Windows features, or another operating system. CI contains separate Windows, Windows PowerShell 5.1, LocalSystem, Linux smoke, and Node lanes.
+
+## Local demonstration and GitHub Pages
+
+The safest local demonstration is repository validation plus a profile or batch
+preview with `-WhatIf`. A preview exercises orchestration and confirmation
+contracts without running endpoint child scripts; it does not inspect Windows
+state and intentionally returns exit code `2` because every step is skipped.
+
+The Windows Forms launcher and the Rust v3 native GUI require Windows. They have
+no browser build. GitHub Pages is therefore not a deployment target for this
+toolkit: a static site could document or simulate commands, but it could not run
+PowerShell, call Windows APIs, validate protected installation, elevate a worker,
+or prove endpoint behavior. The repository does not contain a Pages workflow or
+claim a hosted operational demo.
 
 ## Deployment and operation
 
@@ -384,6 +398,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## Documentation
 
 - [Documentation index](docs/README.md)
+- [Rust v3 implementation status](docs/rust-v3.md)
 - [Release and deployment guide](docs/alpha-release.md)
 - [Launcher guide](docs/launcher-gui.md)
 - [Script catalog](scripts/README.md)

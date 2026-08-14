@@ -153,3 +153,47 @@ node_modules/
 dist/
 build/
 out/
+
+# Shared local indexes and operator records
+.repowise/
+/.kilo/
+/AUDIT_LEDGER.md
+/remediation-ledger.md
+/plan.md
+
+# Public environment templates
+!.env.*.example
+
+# Local-only credentials
+secrets.local.*
+credentials.local.*
+*.local.pem
+*.local.key
+
+# Python caches and test reports
+.pyright/
+.hypothesis/
+.tox/
+.nox/
+coverage.xml
+htmlcov/
+playwright-report/
+blob-report/
+junit*.xml
+
+# Shared build output
+target/
+.build/
+DerivedData/
+xcuserdata/
+
+# Local database sidecars
+*.local.db
+*.local.sqlite
+*.local.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal

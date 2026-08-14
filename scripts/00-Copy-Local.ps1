@@ -1,7 +1,7 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-Pull latest repo version and copy "scripts" and "lib" to C:\install\mdm\ps1\.
+Copy an explicitly pinned repository commit into C:\install\mdm\ps1\.
 
 .DESCRIPTION
 Creates a fresh, policy-constrained clone and transactionally replaces the
@@ -19,25 +19,30 @@ Optional path within the fixed protected staging root. Existing paths are
 refused; a fresh clone is never reused or removed in place.
 
 .PARAMETER RepoRef
-Optional git ref (tag/branch/commit) to check out for deterministic deployments.
+Required for non-WhatIf synchronization: a full 40- or 64-character commit
+identifier obtained from authenticated release provenance. Branches, tags, and
+mutable remote defaults are refused.
 
 .PARAMETER GitPath
 Optional absolute path to a trusted Git executable. On Windows, the default is
 resolved only from the standard Program Files Git installation directories.
 
 .EXAMPLE
-.\00-Copy-Local.ps1
+$SourceCommit = '<verified 40-character release commit>'
+.\00-Copy-Local.ps1 -RepoRef $SourceCommit
 
 .EXAMPLE
-.\00-Copy-Local.ps1 -DestinationRoot D:\mdm\ps1
+$SourceCommit = '<verified 40-character release commit>'
+.\00-Copy-Local.ps1 -RepoRef $SourceCommit -DestinationRoot D:\mdm\ps1
 
 .EXAMPLE
-.\00-Copy-Local.ps1 -RepoUrl https://github.com/sebastianspicker/win-mdm-security-hardening-kit.git
+$SourceCommit = '<verified 40-character release commit>'
+.\00-Copy-Local.ps1 -RepoUrl https://github.com/sebastianspicker/baseline-ops.git -RepoRef $SourceCommit
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [string]$RepoUrl = 'https://github.com/sebastianspicker/win-mdm-security-hardening-kit.git',
+  [string]$RepoUrl = 'https://github.com/sebastianspicker/baseline-ops.git',
   [string]$DestinationRoot = 'C:\install\mdm\ps1',
   [string]$RepoPath,
   [string]$RepoRef,
@@ -150,6 +155,10 @@ if (-not [string]::IsNullOrWhiteSpace($RepoPath) -and $RepoPath -match '^\s*-') 
 }
 if (-not [string]::IsNullOrWhiteSpace($RepoRef) -and $RepoRef -match '^\s*-') {
   throw 'RepoRef must not start with "-" or leading whitespace (option injection prevention).'
+}
+if (-not [string]::IsNullOrWhiteSpace($RepoRef) -and
+    $RepoRef -notmatch '^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$') {
+  throw 'RepoRef must be a full 40- or 64-character commit identifier; branches and tags are not accepted.'
 }
 if (-not [string]::IsNullOrWhiteSpace($RepoRef) -and -not (Test-ValidGitRef -Ref $RepoRef)) {
   throw "RepoRef '$RepoRef' is not a valid git ref (contains invalid characters or patterns)."
@@ -525,6 +534,9 @@ if (-not $PSCmdlet.ShouldProcess($DestinationRoot, 'Synchronize repository conte
   if ($PassThru) { $v2Result }
   exit (Get-V2ExitCode -Result $resultToken)
 }
+if ([string]::IsNullOrWhiteSpace($RepoRef)) {
+  throw 'RepoRef is required and must be the full commit identifier from authenticated release provenance.'
+}
 # Reject an unsafe existing destination before creating staging or changing any
 # destination ACL. This is repeated under the destination lock below.
 if (Test-Path -LiteralPath $DestinationRoot) {
@@ -587,7 +599,6 @@ Enable-CopyLocalSafeGitEnvironment -Snapshot $gitEnvironmentSnapshot
 $hooksPath = Join-Path $stagingRoot ('.git-hooks-{0}' -f [guid]::NewGuid().ToString('N'))
 [void][System.IO.Directory]::CreateDirectory($hooksPath)
 $cloneArgs = @('clone', '--no-checkout')
-if (-not $RepoRef) { $cloneArgs += @('--depth','1') }
 $cloneArgs += @('--', $RepoUrl, $RepoPath)
 Invoke-GitCommand -GitArgs $cloneArgs | Out-Null
 $remoteResult = Invoke-GitCommand -GitArgs @('-C', $RepoPath, 'remote', 'get-url', 'origin')
@@ -595,14 +606,14 @@ $configuredRemote = $remoteResult.Stdout.Trim()
 if (-not [string]::Equals($configuredRemote, $RepoUrl.Trim(), [System.StringComparison]::Ordinal)) {
   throw 'Fresh clone origin does not exactly match RepoUrl.'
 }
-$requestedRef = if ($RepoRef) { $RepoRef } else { 'origin/HEAD' }
+$requestedRef = $RepoRef
 $commitResult = Invoke-GitCommand -GitArgs @('-C', $RepoPath, 'rev-parse', '--verify', ("{0}^{{commit}}" -f $requestedRef)) -AllowFailure
-if (-not $commitResult.Success -and $RepoRef) {
-  $commitResult = Invoke-GitCommand -GitArgs @('-C', $RepoPath, 'rev-parse', '--verify', ("origin/{0}^{{commit}}" -f $RepoRef)) -AllowFailure
-}
 if (-not $commitResult.Success) { throw "RepoRef could not be resolved to a commit: $requestedRef" }
 $resolvedCommit = $commitResult.Stdout.Trim()
 if ($resolvedCommit -notmatch '^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$') { throw 'Git did not resolve a valid commit object.' }
+if (-not [string]::Equals($resolvedCommit, $RepoRef, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Resolved commit does not match the authenticated RepoRef.'
+}
 Invoke-GitCommand -GitArgs @('-C', $RepoPath, 'checkout', '--force', '--detach', $resolvedCommit, '--') | Out-Null
 $statusResult = Invoke-GitCommand -GitArgs @('-C', $RepoPath, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--', 'scripts', 'lib')
 if (-not [string]::IsNullOrEmpty($statusResult.Stdout)) { throw 'Fresh clone scripts/lib worktree is not clean.' }

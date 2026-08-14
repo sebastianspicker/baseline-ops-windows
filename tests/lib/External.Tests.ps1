@@ -319,12 +319,51 @@ $state = if ([string]::IsNullOrEmpty($value)) { 'CLEARED' } else { 'LEAKED' }
 }
 
 Describe 'external tool wrapper structure' {
-  It 'Keeps common wrappers as thin Invoke-ExternalTool delegates' {
+  It 'Keeps common wrappers as thin fixed-native-tool delegates' {
     $moduleText = Get-Content -LiteralPath $script:ExternalModulePath -Raw -Encoding UTF8
 
     foreach ($name in @('Invoke-Schtasks','Invoke-Auditpol','Invoke-Wevtutil','Invoke-Wecutil','Invoke-RegExe')) {
-      $pattern = '(?s)function\s+{0}\b.*?Invoke-ExternalTool' -f [regex]::Escape($name)
+      $pattern = '(?s)function\s+{0}\b.*?Invoke-FixedNativeTool' -f [regex]::Escape($name)
       $moduleText | Should -Match $pattern
+    }
+  }
+
+  It 'delegates each common wrapper to its fixed tool with arguments and switches intact' {
+    InModuleScope External {
+      Mock Invoke-FixedNativeTool {
+        param(
+          [string]$Tool,
+          [string[]]$Arguments,
+          [switch]$ThrowOnError,
+          [switch]$CaptureOutput
+        )
+
+        $script:FixedNativeToolCall = [pscustomobject]@{
+          Tool          = $Tool
+          Arguments     = $Arguments
+          ThrowOnError  = $ThrowOnError.IsPresent
+          CaptureOutput = $CaptureOutput.IsPresent
+        }
+        return 'delegated'
+      }
+
+      $cases = @(
+        [pscustomobject]@{ Name = 'Invoke-Schtasks'; Tool = 'schtasks.exe'; Arguments = @('/query', '/fo', 'list') }
+        [pscustomobject]@{ Name = 'Invoke-Auditpol'; Tool = 'auditpol.exe'; Arguments = @('/get', '/category:*') }
+        [pscustomobject]@{ Name = 'Invoke-Wevtutil'; Tool = 'wevtutil.exe'; Arguments = @('gl', 'Application') }
+        [pscustomobject]@{ Name = 'Invoke-Wecutil'; Tool = 'wecutil.exe'; Arguments = @('es') }
+        [pscustomobject]@{ Name = 'Invoke-RegExe'; Tool = 'reg.exe'; Arguments = @('query', 'HKLM\\Software') }
+      )
+
+      foreach ($case in $cases) {
+        $script:FixedNativeToolCall = $null
+        (& $case.Name -Arguments $case.Arguments -ThrowOnError -CaptureOutput) | Should -Be 'delegated'
+
+        $script:FixedNativeToolCall.Tool | Should -Be $case.Tool
+        $script:FixedNativeToolCall.Arguments | Should -Be $case.Arguments
+        $script:FixedNativeToolCall.ThrowOnError | Should -BeTrue
+        $script:FixedNativeToolCall.CaptureOutput | Should -BeTrue
+      }
     }
   }
 

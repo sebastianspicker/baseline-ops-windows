@@ -69,9 +69,9 @@ if ($SourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
   throw 'SourceCommit must be a 40-character Git commit identifier.'
 }
 $ExpectedSha256 = [string](& gh attestation verify $Asset `
-  --repo sebastianspicker/win-mdm-security-hardening-kit `
+  --repo sebastianspicker/baseline-ops `
   --bundle "$Asset.intoto.jsonl" `
-  --signer-workflow github.com/sebastianspicker/win-mdm-security-hardening-kit/.github/workflows/release.yml `
+  --signer-workflow github.com/sebastianspicker/baseline-ops/.github/workflows/release.yml `
   --source-ref refs/tags/v2.3.0-alpha.1 `
   --source-digest $SourceCommit `
   --deny-self-hosted-runners `
@@ -147,7 +147,10 @@ Elevated runners and the launcher reject any kit root or ancestor that is owned
 or writable by an untrusted SID. A normal extraction below Downloads is useful
 for the standard-user checks above, but it is intentionally not a privileged
 execution root. `00-Copy-Local.ps1` also validates its own source before import
-and is not a bootstrap from an untrusted directory.
+and is not a bootstrap from an untrusted directory. When that synchronization
+tool is used, pass `-RepoRef` as the full source commit obtained from the
+verified release provenance; omitted, branch, and tag references are refused
+before synchronization. `-WhatIf` remains a no-mutation preview without a ref.
 
 After successful attestation verification, open a new elevated Windows
 PowerShell 5.1 session. In the block below, `$ZipPath` uses the current user's

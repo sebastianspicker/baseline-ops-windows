@@ -57,13 +57,13 @@ pwsh -NoProfile -File .\tools\new-script.ps1 `
 Run the complete PowerShell 7 gate from Bash or Git Bash:
 
 ```bash
-./scripts/ci-local.sh
+bash ./scripts/ci-local.sh
 ```
 
 The wrapper requires PowerShell Core 7.6.3. Set `PWSH_BIN` to an absolute executable path when necessary:
 
 ```bash
-PWSH_BIN='/absolute/path/to/pwsh' ./scripts/ci-local.sh
+PWSH_BIN='/absolute/path/to/pwsh' bash ./scripts/ci-local.sh
 ```
 
 Run individual PowerShell 7 checks:

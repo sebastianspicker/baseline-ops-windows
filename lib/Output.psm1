@@ -254,6 +254,26 @@ function Write-BlankLine {
 
 <#
 .SYNOPSIS
+  Writes one status-prefixed message using the specified presentation style.
+.DESCRIPTION
+  Keeps the legacy status writer surface consistent while preserving each
+  caller's canonical status token and UI style.
+#>
+function Write-StatusMessage {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Status,
+    [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
+    [Parameter(Mandatory)][string]$Style,
+    [switch]$NoPrefix
+  )
+
+  $text = if ($NoPrefix) { $Message } else { (Get-StatusPrefix -Status $Status) + $Message }
+  Write-UiLine -Message $text -Style $Style
+}
+
+<#
+.SYNOPSIS
   Writes an informational console message.
 .DESCRIPTION
   Applies the standard informational UI style.
@@ -264,8 +284,7 @@ function Write-Info {
     [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
     [switch]$NoPrefix
   )
-  $text = if ($NoPrefix) { $Message } else { (Get-StatusPrefix -Status 'Info') + $Message }
-  Write-UiLine -Message $text -Style 'Info'
+  Write-StatusMessage -Status 'Info' -Message $Message -Style 'Info' -NoPrefix:$NoPrefix
 }
 
 <#
@@ -280,8 +299,7 @@ function Write-Warn {
     [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
     [switch]$NoPrefix
   )
-  $text = if ($NoPrefix) { $Message } else { (Get-StatusPrefix -Status 'Warn') + $Message }
-  Write-UiLine -Message $text -Style 'Warn'
+  Write-StatusMessage -Status 'Warn' -Message $Message -Style 'Warn' -NoPrefix:$NoPrefix
 }
 
 <#
@@ -296,8 +314,7 @@ function Write-ErrorLine {
     [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
     [switch]$NoPrefix
   )
-  $text = if ($NoPrefix) { $Message } else { (Get-StatusPrefix -Status 'Fail') + $Message }
-  Write-UiLine -Message $text -Style 'Error'
+  Write-StatusMessage -Status 'Fail' -Message $Message -Style 'Error' -NoPrefix:$NoPrefix
 }
 
 <#
@@ -312,8 +329,7 @@ function Write-Success {
     [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
     [switch]$NoPrefix
   )
-  $text = if ($NoPrefix) { $Message } else { (Get-StatusPrefix -Status 'OK') + $Message }
-  Write-UiLine -Message $text -Style 'Success'
+  Write-StatusMessage -Status 'OK' -Message $Message -Style 'Success' -NoPrefix:$NoPrefix
 }
 
 <#

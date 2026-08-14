@@ -3,8 +3,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Private security report
-    url: https://github.com/sebastianspicker/win-mdm-security-hardening-kit/security/advisories/new
+    url: https://github.com/sebastianspicker/baseline-ops/security/advisories/new
     about: Report vulnerabilities privately instead of opening a public issue.
   - name: Security policy
-    url: https://github.com/sebastianspicker/win-mdm-security-hardening-kit/blob/main/SECURITY.md
+    url: https://github.com/sebastianspicker/baseline-ops/blob/main/SECURITY.md
     about: Read supported scope, reporting guidance, and the response process.

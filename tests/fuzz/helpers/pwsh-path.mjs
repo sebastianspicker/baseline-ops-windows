@@ -32,12 +32,12 @@ function getTrustedWindowsRoots(environment) {
   );
 }
 
-function findWindowsWhereExecutable(environment, executableExists) {
+function findWindowsWhereExecutable(environment, executableExists, executeWhere) {
   try {
     const windowsRoot = environment.SystemRoot || 'C:\\Windows';
     const whereExecutable = win32.join(windowsRoot, 'System32', 'where.exe');
     const trustedRoots = getTrustedWindowsRoots(environment);
-    return execFileSync(whereExecutable, ['pwsh'], { encoding: 'utf8', windowsHide: true })
+    return executeWhere(whereExecutable, ['pwsh'], { encoding: 'utf8', windowsHide: true })
       .split(/\r?\n/)
       .filter(Boolean)
       .filter((candidate) => win32.isAbsolute(candidate) && executableExists(candidate))
@@ -54,7 +54,8 @@ export function resolvePwshBinary({
   platform = process.platform,
   override = process.env.PWSH_BIN,
   environment = process.env,
-  executableExists = existsSync
+  executableExists = existsSync,
+  executeWhere = execFileSync
 } = {}) {
   if (override) {
     const path = platform === 'win32' ? win32 : posix;
@@ -67,7 +68,7 @@ export function resolvePwshBinary({
   let executable = getPlatformCandidates(platform, environment)
     .find((candidate) => executableExists(candidate));
   if (!executable && platform === 'win32') {
-    executable = findWindowsWhereExecutable(environment, executableExists);
+    executable = findWindowsWhereExecutable(environment, executableExists, executeWhere);
   }
   if (!executable) {
     throw new Error(

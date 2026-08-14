@@ -211,6 +211,7 @@ Describe 'PowerShell runtime and toolchain pins' {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
     $script:CiWorkflowSource = Get-Content -LiteralPath (Join-Path $repoRoot '.github/workflows/ci.yml') -Raw
     $script:ReleaseWorkflowSource = Get-Content -LiteralPath (Join-Path $repoRoot '.github/workflows/release.yml') -Raw
+    $script:PinnedPowerShellLinuxActionSource = Get-Content -LiteralPath (Join-Path $repoRoot '.github/actions/setup-pinned-pwsh-linux/action.yml') -Raw
     $script:CiLocalSource = Get-Content -LiteralPath (Join-Path $repoRoot 'scripts/ci-local.sh') -Raw
     $script:FuzzDockerfileSource = Get-Content -LiteralPath (Join-Path $repoRoot '.clusterfuzzlite/Dockerfile') -Raw
   }
@@ -231,16 +232,31 @@ Describe 'PowerShell runtime and toolchain pins' {
   It 'Verifies official PowerShell archives before exact-version execution' {
     $script:CiWorkflowSource | Should -Match 'PowerShell-\$env:POWERSHELL_VERSION-win-x64\.zip'
     $script:CiWorkflowSource | Should -Match '07ddb0d00b660459560ef82a9841da7705b27cd5dcca5a0d7b025a98eca29eca'
-    $script:CiWorkflowSource | Should -Match 'powershell-\$\{POWERSHELL_VERSION\}-linux-x64\.tar\.gz'
-    $script:CiWorkflowSource | Should -Match '856d0765d2332377f9d7a4aea76efdfde4de51446e7738dde2dfda41dba9e2a7'
     $script:CiWorkflowSource | Should -Match '(?m)^\s+check_name: Static checks$'
     $script:CiWorkflowSource | Should -Match '(?m)^\s+check_name: Pester \(Windows\)$'
     $script:CiWorkflowSource | Should -Match 'check_name: Static checks \(Windows PowerShell 5\.1\)'
     $script:CiWorkflowSource | Should -Match 'check_name: Pester \(Windows PowerShell 5\.1\)'
     $script:CiWorkflowSource | Should -Match "edition: Desktop"
     $script:CiWorkflowSource | Should -Match 'Expected PowerShell \$env:POWERSHELL_VERSION exactly'
-    $script:ReleaseWorkflowSource | Should -Match 'sha256sum -c -'
-    $script:ReleaseWorkflowSource | Should -Match 'Expected PowerShell %s exactly'
+
+    $script:PinnedPowerShellLinuxActionSource | Should -Match '(?m)^\s+version:\s*$'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match '(?m)^\s+linux-x64-sha256:\s*$'
+    ([regex]::Matches($script:PinnedPowerShellLinuxActionSource, '(?m)^\s+required: true\s*$')).Count | Should -Be 2
+    $script:PinnedPowerShellLinuxActionSource | Should -Match 'powershell-\$\{POWERSHELL_VERSION\}-linux-x64\.tar\.gz'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match 'curl --fail --show-error --location --retry 3'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match "--proto '=https' --proto-redir '=https'"
+    $script:PinnedPowerShellLinuxActionSource | Should -Match 'https://github\.com/PowerShell/PowerShell/releases/download/v\$\{POWERSHELL_VERSION\}/\$\{asset\}'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match 'POWERSHELL_LINUX_X64_SHA256.*sha256sum -c -'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match 'if \[\[ "\$\{actual_version\}" != "\$\{POWERSHELL_VERSION\}" \]\]; then'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match 'Expected PowerShell %s exactly'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match '"\$\{install_root\}" >> "\$\{GITHUB_PATH\}"'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match 'POWERSHELL_EXE=%s/pwsh\\n.*GITHUB_ENV'
+    $script:PinnedPowerShellLinuxActionSource | Should -Match 'PWSH_BIN=%s/pwsh\\n.*GITHUB_ENV'
+
+    $callerPattern = '(?ms)^\s+uses: \./\.github/actions/setup-pinned-pwsh-linux\s*$\s+with:\s*^\s+version: \$\{\{ env\.POWERSHELL_VERSION \}\}\s*$\s+linux-x64-sha256: \$\{\{ env\.POWERSHELL_LINUX_X64_SHA256 \}\}\s*$'
+    ([regex]::Matches($script:CiWorkflowSource, $callerPattern)).Count | Should -Be 2
+    ([regex]::Matches($script:ReleaseWorkflowSource, $callerPattern)).Count | Should -Be 1
+    ([regex]::Matches("$script:CiWorkflowSource`n$script:ReleaseWorkflowSource", '(?m)^\s+uses: \./\.github/actions/setup-pinned-pwsh-linux\s*$')).Count | Should -Be 3
   }
 
   It 'uses atomic write capabilities for the trusted CI task ACL assertion' {

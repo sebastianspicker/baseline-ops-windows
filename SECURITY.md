@@ -64,4 +64,4 @@ Include:
 - Redacted path, owner, ACL, and reparse-point context for trust-boundary reports
 - Suggested mitigation, if known
 
-[security-advisory]: https://github.com/sebastianspicker/win-mdm-security-hardening-kit/security/advisories/new
+[security-advisory]: https://github.com/sebastianspicker/baseline-ops/security/advisories/new

@@ -1023,15 +1023,17 @@ function Invoke-NativeCommand {
 
 <#
 .SYNOPSIS
-  Invokes an external tool through the native command boundary.
+  Invokes an approved fixed native tool through the native command boundary.
 .DESCRIPTION
-  Provides a compatibility wrapper around the validated native invocation path.
+  Restricts callers to the Windows tools exposed by the public compatibility
+  wrappers while keeping their native invocation semantics consistent.
 #>
-function Invoke-ExternalTool {
+function Invoke-FixedNativeTool {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]
-    [string]$Command,
+    [ValidateSet('schtasks.exe', 'auditpol.exe', 'wevtutil.exe', 'wecutil.exe', 'reg.exe')]
+    [string]$Tool,
 
     [Parameter(Mandatory)]
     [string[]]$Arguments,
@@ -1043,7 +1045,7 @@ function Invoke-ExternalTool {
     [ValidateRange(1024, 10485760)][int]$MaxOutputBytes = 1048576
   )
 
-  return (Invoke-NativeCommand -Command $Command -Arguments $Arguments `
+  return (Invoke-NativeCommand -Command $Tool -Arguments $Arguments `
       -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput -TimeoutSeconds $TimeoutSeconds -MaxOutputBytes $MaxOutputBytes)
 }
 
@@ -1062,7 +1064,7 @@ function Invoke-Schtasks {
     [switch]$CaptureOutput
   )
 
-  return (Invoke-ExternalTool -Command 'schtasks.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
+  return (Invoke-FixedNativeTool -Tool 'schtasks.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -1080,7 +1082,7 @@ function Invoke-Auditpol {
     [switch]$CaptureOutput
   )
 
-  return (Invoke-ExternalTool -Command 'auditpol.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
+  return (Invoke-FixedNativeTool -Tool 'auditpol.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -1098,7 +1100,7 @@ function Invoke-Wevtutil {
     [switch]$CaptureOutput
   )
 
-  return (Invoke-ExternalTool -Command 'wevtutil.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
+  return (Invoke-FixedNativeTool -Tool 'wevtutil.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -1116,7 +1118,7 @@ function Invoke-Wecutil {
     [switch]$CaptureOutput
   )
 
-  return (Invoke-ExternalTool -Command 'wecutil.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
+  return (Invoke-FixedNativeTool -Tool 'wecutil.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -1134,7 +1136,7 @@ function Invoke-RegExe {
     [switch]$CaptureOutput
   )
 
-  return (Invoke-ExternalTool -Command 'reg.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
+  return (Invoke-FixedNativeTool -Tool 'reg.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#

@@ -6,7 +6,7 @@ The `scripts/` directory contains operator entry points. Files under `scripts/in
 
 | Script | Function |
 | --- | --- |
-| `00-Copy-Local.ps1` | Copies a selected repository revision or local source into a destination root. |
+| `00-Copy-Local.ps1` | Copies an authenticated, explicitly pinned repository commit into a destination root. |
 | `00-Report-Aggregate.ps1` | Reads v2 JSON results from a directory and writes a combined report. |
 | `00-Run-Batch.ps1` | Builds a temporary profile for a curated category and delegates to the profile runner. |
 | `00-Run-Local.ps1` | Resolves and runs one numbered script with optional signature or hash verification. |

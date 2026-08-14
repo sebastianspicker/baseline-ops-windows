@@ -17,7 +17,7 @@ const testDirectory = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(testDirectory, '../..');
 const validator = join(repoRoot, 'scripts', '00-Validate-Profile.ps1');
 
-function runValidator(profile, pwshOptions) {
+function runValidator(profile, executable) {
   const previousCwd = process.cwd();
   const workDir = mkdtempSync(join(tmpdir(), 'profile-fuzz-'));
 
@@ -25,9 +25,8 @@ function runValidator(profile, pwshOptions) {
     process.chdir(workDir);
     writeFileSync('profile.json', JSON.stringify(profile), 'utf8');
 
-    const pwshBinary = resolvePwshBinary(pwshOptions);
     const result = spawnSync(
-      pwshBinary,
+      executable,
       [
         '-NoProfile',
         '-File',
@@ -47,7 +46,7 @@ function runValidator(profile, pwshOptions) {
     );
 
     if (result.error) {
-      throw new Error(`Failed to start PowerShell at "${pwshBinary}": ${result.error.message}`, {
+      throw new Error(`Failed to start PowerShell at "${executable}": ${result.error.message}`, {
         cause: result.error
       });
     }
@@ -126,16 +125,18 @@ test('validator reports spawn errors and restores the original working directory
   const originalCwd = process.cwd();
 
   assert.throws(
-    () => runValidator({}, { platform: 'linux', override: '/definitely-missing/pwsh' }),
+    () => runValidator({}, '/definitely-missing/pwsh'),
     /Failed to start PowerShell at "\/definitely-missing\/pwsh"/
   );
   assert.equal(process.cwd(), originalCwd);
 });
 
 test('generated valid profile JSON is accepted by the profile validator', () => {
+  const pwshBinary = resolvePwshBinary();
+
   fc.assert(
     fc.property(validProfileArbitrary, (profile) => {
-      const run = runValidator(profile);
+      const run = runValidator(profile, pwshBinary);
 
       assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
       assert.equal(run.result?.Result, 'OK');
@@ -146,9 +147,11 @@ test('generated valid profile JSON is accepted by the profile validator', () => 
 });
 
 test('generated unsafe profile/config JSON is rejected as a validation failure', () => {
+  const pwshBinary = resolvePwshBinary();
+
   fc.assert(
     fc.property(invalidProfileArbitrary, (profile) => {
-      const run = runValidator(profile);
+      const run = runValidator(profile, pwshBinary);
 
       assert.notEqual(run.status, 0, 'unsafe profile unexpectedly passed');
       assert.equal(run.result?.Result, 'FAIL');
