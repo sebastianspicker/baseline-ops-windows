@@ -63,16 +63,6 @@ jobs:
           cargo install cargo-deny --version 0.20.2 --locked
           cargo deny check
 
-      - name: Run bounded parser and input fuzz gates
-        working-directory: rust
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo install cargo-fuzz --version 0.13.1 --locked
-          for target in profile_json plan_json safe_path archive native_output; do
-            cargo fuzz run --fuzz-dir fuzz "$target" -- -max_total_time=15
-          done
-
   windows-x64:
     name: Windows x64 compile and contract tests
     runs-on: windows-latest

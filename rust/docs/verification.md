@@ -1,8 +1,7 @@
 # Verification and closure
 
 Portable gates cover formatting, Clippy with warnings denied, unit/integration/doc tests, strict
-schema snapshots, dependency policy, and fuzz targets for profiles, plans, paths, archives, and
-native output parsers. These gates prove domain behavior only.
+schema snapshots, and dependency policy. These gates prove domain behavior only.
 
 Release-blocking endpoint lanes require disposable Windows 11 Pro and Enterprise x64 environments
 for 24H2, 25H2, and 26H1. Standard-user audit and plan, UAC apply, LocalSystem, missing features,

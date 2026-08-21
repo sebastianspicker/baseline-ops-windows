@@ -6,6 +6,8 @@ use crate::{KnownService, observe_service};
 use baselineops_capabilities::RemoteSurfaceObservation;
 #[cfg(windows)]
 use baselineops_capabilities::{Observation, TcpListenerObservation};
+#[cfg(any(windows, test))]
+use std::mem::size_of;
 
 #[cfg(windows)]
 const REMOTE_PORTS: [u16; 5] = [5985, 5986, 22, 3389, 445];
@@ -44,9 +46,8 @@ mod platform {
 
     use super::{
         KnownService, Observation, REMOTE_PORTS, RemoteSurfaceObservation, TcpListenerObservation,
-        observe_service,
+        checked_table_rows, observe_service,
     };
-    use std::mem::size_of;
     use windows::Win32::Foundation::{
         ERROR_ACCESS_DENIED, ERROR_BUFFER_OVERFLOW, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS,
         WIN32_ERROR,
@@ -206,7 +207,12 @@ mod platform {
         }
     }
 
-    fn table_buffer(family: u32) -> Result<Vec<usize>, ()> {
+    struct TcpTableBuffer {
+        storage: Vec<usize>,
+        bytes: usize,
+    }
+
+    fn table_buffer(family: u32) -> Result<TcpTableBuffer, ()> {
         let mut bytes = 0_u32;
         let status = unsafe {
             GetExtendedTcpTable(
@@ -235,22 +241,41 @@ mod platform {
         if status != WIN32_ERROR(0).0 {
             return Err(());
         }
-        Ok(buffer)
+        Ok(TcpTableBuffer {
+            storage: buffer,
+            bytes: usize::try_from(bytes).map_err(|_| ())?,
+        })
     }
 
-    fn rows<T>(buffer: &[usize]) -> Result<&[T], ()> {
-        let bytes = buffer.len().checked_mul(size_of::<usize>()).ok_or(())?;
-        if bytes < 4 {
+    fn rows<T>(buffer: &TcpTableBuffer) -> Result<&[T], ()> {
+        let allocation = buffer
+            .storage
+            .len()
+            .checked_mul(size_of::<usize>())
+            .ok_or(())?;
+        if buffer.bytes > allocation || buffer.bytes < size_of::<u32>() {
             return Err(());
         }
-        let count = unsafe { *buffer.as_ptr().cast::<u32>() as usize };
-        let row_bytes = count.checked_mul(size_of::<T>()).ok_or(())?;
-        if row_bytes > bytes - 4 {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(buffer.storage.as_ptr().cast::<u8>(), buffer.bytes)
+        };
+        let count = u32::from_ne_bytes(bytes[..size_of::<u32>()].try_into().map_err(|_| ())?);
+        let rows = bytes.as_ptr().wrapping_add(size_of::<u32>());
+        let count = checked_table_rows(
+            count,
+            buffer.bytes,
+            size_of::<T>(),
+            std::mem::align_of::<T>(),
+            rows.addr(),
+        )
+        .ok_or(())?;
+        if count == 0 {
+            return Ok(&[]);
+        }
+        if rows.is_null() {
             return Err(());
         }
-        Ok(unsafe {
-            std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>().add(4).cast::<T>(), count)
-        })
+        Ok(unsafe { std::slice::from_raw_parts(rows.cast::<T>(), count) })
     }
 
     fn wide(value: &str) -> Vec<u16> {
@@ -258,8 +283,27 @@ mod platform {
     }
 }
 
+#[cfg(any(windows, test))]
+fn checked_table_rows(
+    count: u32,
+    bytes: usize,
+    row_size: usize,
+    row_alignment: usize,
+    row_address: usize,
+) -> Option<usize> {
+    let header = size_of::<u32>();
+    if bytes < header || row_alignment == 0 || !row_address.is_multiple_of(row_alignment) {
+        return None;
+    }
+    let count = usize::try_from(count).ok()?;
+    let row_bytes = count.checked_mul(row_size)?;
+    (row_bytes <= bytes.checked_sub(header)?).then_some(count)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::checked_table_rows;
+
     #[test]
     fn non_windows_remote_surface_observation_is_explicitly_unsupported() {
         #[cfg(not(windows))]
@@ -267,5 +311,12 @@ mod tests {
             super::audit_remote_surface(),
             Err(super::PlatformError::UnsupportedPlatform)
         ));
+    }
+
+    #[test]
+    fn tcp_table_layout_rejects_misaligned_and_oversized_row_claims() {
+        assert_eq!(checked_table_rows(2, 12, 4, 4, 4), Some(2));
+        assert_eq!(checked_table_rows(3, 12, 4, 4, 4), None);
+        assert_eq!(checked_table_rows(1, 8, 4, 8, 4), None);
     }
 }

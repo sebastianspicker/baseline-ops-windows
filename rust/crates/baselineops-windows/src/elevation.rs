@@ -232,6 +232,38 @@ mod platform {
         }
     }
 
+    struct OwnedProcess(Option<windows::Win32::Foundation::HANDLE>);
+
+    impl OwnedProcess {
+        fn from_shell(handle: windows::Win32::Foundation::HANDLE) -> Result<Self, PlatformError> {
+            if handle.is_invalid() {
+                return Err(PlatformError::TrustFailure(
+                    "ShellExecuteExW did not return a process handle".into(),
+                ));
+            }
+            Ok(Self(Some(handle)))
+        }
+
+        fn raw(&self) -> windows::Win32::Foundation::HANDLE {
+            self.0.expect("owned process handle is present until close")
+        }
+
+        fn close(mut self) -> Result<(), PlatformError> {
+            let handle = self.0.take().expect("owned process handle is present");
+            unsafe { CloseProcessHandle(handle) }.map_err(|error| {
+                PlatformError::TrustFailure(format!("CloseHandle failed: {error}"))
+            })
+        }
+    }
+
+    impl Drop for OwnedProcess {
+        fn drop(&mut self) {
+            if let Some(handle) = self.0.take() {
+                let _ = unsafe { CloseProcessHandle(handle) };
+            }
+        }
+    }
+
     pub fn launch(
         installation: &TrustedInstallation,
         policy: &ElevatedLaunchPolicy,
@@ -263,40 +295,34 @@ mod platform {
                 PlatformError::TrustFailure(format!("ShellExecuteExW failed: {error}"))
             }
         })?;
-        let process = execute.hProcess;
-        if process.is_invalid() {
-            return Err(PlatformError::TrustFailure(
-                "ShellExecuteExW did not return a process handle".into(),
-            ));
-        }
-        if let Err(error) = job.assign(process) {
-            terminate_process_and_wait(process)?;
-            close_process(process)?;
+        // `hProcess` is owned by this structure immediately after ShellExecuteExW.
+        // Its Drop implementation closes it on every early-return path exactly once.
+        let process = OwnedProcess::from_shell(execute.hProcess)?;
+        if let Err(error) = job.assign(process.raw()) {
+            terminate_process_and_wait(process.raw())?;
             return Err(error);
         }
         let milliseconds = u32::try_from(policy.timeout.as_millis()).unwrap_or(u32::MAX);
-        let wait = unsafe { WaitForSingleObject(process, milliseconds) };
+        let wait = unsafe { WaitForSingleObject(process.raw(), milliseconds) };
         let result = if wait == WAIT_TIMEOUT {
-            terminate_job_and_wait(&job, process)?;
+            terminate_job_and_wait(&job, process.raw())?;
             ElevatedLaunchStatus::TimedOut
         } else if wait == WAIT_OBJECT_0 {
             let mut exit_code = 0_u32;
-            if let Err(error) = unsafe { GetExitCodeProcess(process, &raw mut exit_code) } {
-                terminate_job_and_wait(&job, process)?;
-                close_process(process)?;
+            if let Err(error) = unsafe { GetExitCodeProcess(process.raw(), &raw mut exit_code) } {
+                terminate_job_and_wait(&job, process.raw())?;
                 return Err(PlatformError::TrustFailure(format!(
                     "GetExitCodeProcess failed: {error}"
                 )));
             }
             ElevatedLaunchStatus::Exited(i32::try_from(exit_code).unwrap_or(-1))
         } else {
-            terminate_job_and_wait(&job, process)?;
-            close_process(process)?;
+            terminate_job_and_wait(&job, process.raw())?;
             return Err(PlatformError::TrustFailure(
                 "unexpected elevated process wait state".into(),
             ));
         };
-        close_process(process)?;
+        process.close()?;
         Ok(ElevatedLaunchResult {
             executable: installation.executable().to_path_buf(),
             status: result,
@@ -328,11 +354,6 @@ mod platform {
             )),
             _ => Err(last_error("WaitForSingleObject cleanup")),
         }
-    }
-
-    fn close_process(process: windows::Win32::Foundation::HANDLE) -> Result<(), PlatformError> {
-        unsafe { CloseProcessHandle(process) }
-            .map_err(|error| PlatformError::TrustFailure(format!("CloseHandle failed: {error}")))
     }
 
     fn last_error(operation: &str) -> PlatformError {

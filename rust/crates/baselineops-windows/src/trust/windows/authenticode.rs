@@ -59,7 +59,6 @@ fn verify_identity(
         dwUIContext: WTD_UICONTEXT_EXECUTE,
         ..Default::default()
     };
-    // The state data is closed below on every successful verification path.
     let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
     let status = unsafe {
         WinVerifyTrust(
@@ -68,31 +67,41 @@ fn verify_identity(
             (&raw mut trust_data).cast(),
         )
     };
-    if status != 0 {
-        return Err(PlatformError::TrustFailure(format!(
+    let verification_result = if status != 0 {
+        Err(PlatformError::TrustFailure(format!(
             "WinVerifyTrust rejected the executable (0x{:08x})",
             status.cast_unsigned()
-        )));
-    }
-
-    let identity_result = unsafe {
-        signed_certificate(trust_data.hWVTStateData).and_then(
-            |context| match expected_spki_sha256 {
-                Some(expected_spki_sha256) => {
-                    verify_certificate_identity(context, expected_subject, expected_spki_sha256)
+        )))
+    } else {
+        unsafe {
+            signed_certificate(trust_data.hWVTStateData).and_then(|context| {
+                match expected_spki_sha256 {
+                    Some(expected_spki_sha256) => {
+                        verify_certificate_identity(context, expected_subject, expected_spki_sha256)
+                    }
+                    None => verify_subject_only(context, expected_subject),
                 }
-                None => verify_subject_only(context, expected_subject),
-            },
-        )
+            })
+        }
     };
+    // A VERIFY call must always be paired with exactly one CLOSE call, including
+    // a rejected verification whose state data cannot be inspected.
     let close_status = unsafe { close_state(&mut action, &mut trust_data) };
+    finish_verification(verification_result, close_status)
+}
+
+fn finish_verification(
+    verification_result: Result<(), PlatformError>,
+    close_status: i32,
+) -> Result<(), PlatformError> {
+    verification_result?;
     if close_status != 0 {
         return Err(PlatformError::TrustFailure(format!(
             "WinVerifyTrust state cleanup failed (0x{:08x})",
             close_status.cast_unsigned()
         )));
     }
-    identity_result
+    Ok(())
 }
 
 unsafe fn verify_subject_only(
@@ -170,5 +179,24 @@ mod tests {
     #[test]
     fn path_with_interior_nul_is_rejected() {
         assert!(wide_path(Path::new("C:\\bad\0.exe")).is_err());
+    }
+
+    #[test]
+    fn failed_verification_remains_primary_when_state_cleanup_also_fails() {
+        let primary = PlatformError::TrustFailure("primary verification failure".into());
+        let result = finish_verification(Err(primary), -1);
+        assert!(matches!(
+            result,
+            Err(PlatformError::TrustFailure(message)) if message == "primary verification failure"
+        ));
+    }
+
+    #[test]
+    fn state_cleanup_failure_is_reported_after_successful_verification() {
+        let result = finish_verification(Ok(()), -1);
+        assert!(matches!(
+            result,
+            Err(PlatformError::TrustFailure(message)) if message.contains("state cleanup failed")
+        ));
     }
 }

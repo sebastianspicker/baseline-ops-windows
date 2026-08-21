@@ -61,8 +61,6 @@ Development requirements:
 - PowerShell 7.6.3
 - PSScriptAnalyzer 1.25.0
 - Pester 5.8.0
-- Node.js for the property tests. CI uses Node 24 and the release workflow uses Node 22.
-- npm, using the committed `package-lock.json`
 - Bash for `scripts/ci-local.sh`
 - Windows PowerShell 5.1 for the compatibility gates
 
@@ -102,17 +100,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command `
   "Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force; & .\tools\verify.ps1 -RootPath ."
 ```
 
-The operator ZIP excludes `tests/`, `package.json`, `package-lock.json`, `.github/`, `.clusterfuzzlite/`, and `scripts/ci-local.sh`.
-
-### Full tag checkout
-
-Install the Node dependencies from a complete checkout:
-
-```powershell
-npm ci --ignore-scripts
-```
-
-No npm package is published. `package.json` is a private development harness at version `0.0.0`.
+The operator ZIP excludes `tests/`, `.github/`, and `scripts/ci-local.sh`.
 
 ## Configuration
 
@@ -241,7 +229,6 @@ The orchestration layer maps results to process exit codes:
 
 ```text
 .
-|-- .clusterfuzzlite/   ClusterFuzzLite build and target configuration
 |-- .github/            GitHub Actions, issue templates, and repository policy
 |-- docs/               Release, operation, and launcher documentation
 |-- examples/
@@ -251,9 +238,8 @@ The orchestration layer maps results to process exit codes:
 |-- scripts/
 |   |-- _lib/           Common script bootstrap
 |   `-- internal/       Script-specific helpers, not operator entry points
-|-- tests/              Pester and Node property tests
+|-- tests/              Focused Pester regression tests
 |-- tools/              Verification, scaffolding, secret scan, and launcher files
-|-- package.json        Private Node test harness
 `-- PSScriptAnalyzerSettings.psd1
 ```
 
@@ -308,17 +294,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `
   "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"
 ```
 
-Run the Node property tests:
-
-```powershell
-npm ci --ignore-scripts
-$env:PWSH_BIN = (Get-Command pwsh -CommandType Application -ErrorAction Stop |
-  Select-Object -First 1).Source
-npm test
-Remove-Item -LiteralPath Env:PWSH_BIN
-```
-
-`PWSH_BIN` must resolve to PowerShell 7.6.3 for the supported test contract. Standard-user test runs skip cases that require LocalSystem, protected workspace ownership, unavailable Windows features, or another operating system. CI contains separate Windows, Windows PowerShell 5.1, LocalSystem, Linux smoke, and Node lanes.
+`PWSH_BIN` must resolve to PowerShell 7.6.3 for the supported test contract. Standard-user test runs skip cases that require LocalSystem, protected workspace ownership, unavailable Windows features, or another operating system. CI contains separate Windows, Windows PowerShell 5.1, LocalSystem, and Linux smoke lanes.
 
 ## Local demonstration and GitHub Pages
 

@@ -3,8 +3,8 @@
 #![allow(unsafe_code)]
 
 use super::{
-    ContainmentState, NativeProcessPolicy, NativeProcessResult, NativeProcessSpec,
-    ValidatedRequest, read_capped,
+    ContainmentState, NativeExecutableTrust, NativeProcessPolicy, NativeProcessResult,
+    NativeProcessSpec, ValidatedRequest, read_capped,
 };
 use crate::PlatformError;
 #[path = "windows/api.rs"]
@@ -29,6 +29,15 @@ pub(super) fn run(
     policy: &NativeProcessPolicy,
     spec: &NativeProcessSpec,
 ) -> Result<NativeProcessResult, PlatformError> {
+    if matches!(
+        &policy.executable_trust,
+        NativeExecutableTrust::ExactDigest { .. }
+    ) {
+        return Err(PlatformError::ProcessRejected(
+            "ExactDigest launch is disabled until execution can retain the verified file identity"
+                .into(),
+        ));
+    }
     let mut child = ContainedProcess::create(validated, policy, spec)?;
     child.resume()?;
     let stdout = match child.take_stdout() {

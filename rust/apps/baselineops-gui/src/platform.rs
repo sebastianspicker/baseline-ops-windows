@@ -3,7 +3,9 @@
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use std::{
+    cell::{Cell, RefCell},
     path::Path,
+    ptr::NonNull,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -49,6 +51,60 @@ struct App {
     receiver: Option<Receiver<AuditReport>>,
     cancellation: Option<Arc<AtomicBool>>,
     artifact: Option<std::path::PathBuf>,
+}
+
+/// Heap-owned state retained by the window while callbacks are active.
+///
+/// The HWND stores only this allocation's raw pointer. Individual callbacks
+/// obtain mutable application access through `RefCell::try_borrow_mut`, so a
+/// synchronously reentered `WndProc` cannot manufacture a second `&mut App`.
+struct CallbackState<T> {
+    app: RefCell<T>,
+    callback_depth: Cell<usize>,
+    destroying: Cell<bool>,
+}
+
+impl<T> CallbackState<T> {
+    fn new(app: T) -> Self {
+        Self {
+            app: RefCell::new(app),
+            callback_depth: Cell::new(0),
+            destroying: Cell::new(false),
+        }
+    }
+
+    fn enter(&self) -> bool {
+        if self.destroying.get() {
+            return false;
+        }
+        let Some(depth) = self.callback_depth.get().checked_add(1) else {
+            return false;
+        };
+        self.callback_depth.set(depth);
+        true
+    }
+
+    fn leave(&self) -> bool {
+        let depth = self
+            .callback_depth
+            .get()
+            .checked_sub(1)
+            .expect("callback depth is balanced");
+        self.callback_depth.set(depth);
+        depth == 0 && self.destroying.get()
+    }
+
+    fn begin_destroy(&self) -> bool {
+        !self.destroying.replace(true)
+    }
+
+    fn with_app<R>(&self, callback: impl FnOnce(&mut T) -> R) -> Option<R> {
+        if self.destroying.get() {
+            return None;
+        }
+        let mut app = self.app.try_borrow_mut().ok()?;
+        Some(callback(&mut app))
+    }
 }
 
 /// Runs the single-window, standard-control native audit interface.
@@ -123,9 +179,7 @@ unsafe extern "system" fn window_proc(
     match message {
         WM_CREATE => create_app(window),
         WM_SIZE => {
-            if let Some(app) = app(window) {
-                layout(window, app);
-            }
+            with_app(window, |app| unsafe { layout(window, app) });
             LRESULT(0)
         }
         WM_DPICHANGED => {
@@ -139,9 +193,7 @@ unsafe extern "system" fn window_proc(
                 recommended.bottom - recommended.top,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            if let Some(app) = app(window) {
-                layout(window, app);
-            }
+            with_app(window, |app| unsafe { layout(window, app) });
             LRESULT(0)
         }
         WM_COMMAND => command(window, wparam),
@@ -156,7 +208,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_DESTROY => {
             KillTimer(Some(window), POLL_TIMER).ok();
-            drop_app(window);
+            destroy_callback_state(window);
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -169,14 +221,14 @@ unsafe fn create_app(window: HWND) -> LRESULT {
     let Ok(controls) = view::create(window, &items) else {
         return LRESULT(-1);
     };
-    let app = Box::new(App {
+    let app = App {
         controls,
         items,
         selected: 0,
         receiver: None,
         cancellation: None,
         artifact: None,
-    });
+    };
     if app.items.is_empty() {
         return LRESULT(-1);
     }
@@ -187,11 +239,11 @@ unsafe fn create_app(window: HWND) -> LRESULT {
         return LRESULT(-1);
     }
     view::set_artifact_visible(app.controls, false);
-    let pointer = Box::into_raw(app);
+    let pointer = Box::into_raw(Box::new(CallbackState::new(app)));
     SetWindowLongPtrW(window, GWLP_USERDATA, pointer as isize);
     if SetTimer(Some(window), POLL_TIMER, POLL_INTERVAL_MS, None) == 0 {
-        drop(Box::from_raw(pointer));
         SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        drop(Box::from_raw(pointer));
         return LRESULT(-1);
     }
     LRESULT(0)
@@ -203,17 +255,18 @@ unsafe fn command(window: HWND, wparam: WPARAM) -> LRESULT {
         u16::try_from((wparam.0 >> 16) & 0xffff).expect("WM_COMMAND notification is 16-bit");
     match id {
         CAPABILITY_LIST if notification == 1 => {
-            if let Some(app) = app(window)
-                && let Some(selected) = view::selected_index(app.controls)
-                && let Some(item) = app.items.get(selected).copied()
-            {
-                app.selected = selected;
-                let _ = view::set_selection(app.controls, &controller::selection_summary(item));
-            }
+            with_app(window, |app| {
+                if let Some(selected) = view::selected_index(app.controls)
+                    && let Some(item) = app.items.get(selected).copied()
+                {
+                    app.selected = selected;
+                    let _ = view::set_selection(app.controls, &controller::selection_summary(item));
+                }
+            });
             LRESULT(0)
         }
         AUDIT_BUTTON => {
-            start_audit(window);
+            with_app(window, |app| unsafe { start_audit(app) });
             LRESULT(0)
         }
         CANCEL_BUTTON => {
@@ -221,7 +274,7 @@ unsafe fn command(window: HWND, wparam: WPARAM) -> LRESULT {
             LRESULT(0)
         }
         OPEN_ARTIFACT_BUTTON => {
-            open_artifact(window);
+            with_app(window, |app| unsafe { open_artifact(app) });
             LRESULT(0)
         }
         _ => DefWindowProcW(window, WM_COMMAND, wparam, LPARAM(0)),
@@ -237,10 +290,7 @@ unsafe fn keyboard(window: HWND, wparam: WPARAM) -> LRESULT {
     DefWindowProcW(window, WM_KEYDOWN, wparam, LPARAM(0))
 }
 
-unsafe fn start_audit(window: HWND) {
-    let Some(app) = app(window) else {
-        return;
-    };
+unsafe fn start_audit(app: &mut App) {
     if app.receiver.is_some() {
         return;
     }
@@ -281,9 +331,10 @@ unsafe fn start_audit(window: HWND) {
 }
 
 unsafe fn request_cancellation(window: HWND) {
-    let Some(app) = app(window) else {
-        return;
-    };
+    with_app(window, |app| unsafe { request_cancellation_app(app) });
+}
+
+unsafe fn request_cancellation_app(app: &mut App) {
     let Some(cancellation) = &app.cancellation else {
         return;
     };
@@ -293,9 +344,10 @@ unsafe fn request_cancellation(window: HWND) {
 }
 
 unsafe fn poll_worker(window: HWND) {
-    let Some(app) = app(window) else {
-        return;
-    };
+    with_app(window, |app| unsafe { poll_worker_app(app) });
+}
+
+unsafe fn poll_worker_app(app: &mut App) {
     let Some(receiver) = &app.receiver else {
         return;
     };
@@ -318,10 +370,7 @@ unsafe fn poll_worker(window: HWND) {
     let _ = view::set_report(app.controls, &report);
 }
 
-unsafe fn open_artifact(window: HWND) {
-    let Some(app) = app(window) else {
-        return;
-    };
+unsafe fn open_artifact(app: &mut App) {
     let Some(path) = app.artifact.as_deref() else {
         return;
     };
@@ -371,19 +420,101 @@ unsafe fn layout(window: HWND, app: &App) {
     }
 }
 
-unsafe fn app(window: HWND) -> Option<&'static mut App> {
-    use windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW;
-
-    let pointer = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut App;
-    pointer.as_mut()
+/// Keeps the callback allocation alive until the current `WndProc` unwinds.
+///
+/// `GWLP_USERDATA` may be cleared by a nested `WM_DESTROY`, but an outer
+/// callback can still be running. The guard therefore owns the final-free
+/// decision rather than `WM_DESTROY` freeing the pointer directly.
+struct CallbackGuard {
+    state: NonNull<CallbackState<App>>,
 }
 
-unsafe fn drop_app(window: HWND) {
+impl CallbackGuard {
+    unsafe fn enter(state: NonNull<CallbackState<App>>) -> Option<Self> {
+        unsafe { state.as_ref() }.enter().then_some(Self { state })
+    }
+}
+
+impl Drop for CallbackGuard {
+    fn drop(&mut self) {
+        let release = unsafe { self.state.as_ref() }.leave();
+        if release {
+            unsafe { drop(Box::from_raw(self.state.as_ptr())) };
+        }
+    }
+}
+
+/// Calls a callback while retaining the state referenced by the HWND.
+///
+/// The closure cannot return a borrow, keeping all access to the raw pointer
+/// scoped to the callback guard.
+unsafe fn with_callback_state(window: HWND, callback: impl FnOnce(&CallbackState<App>)) {
     use windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW;
 
-    let pointer = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut App;
-    if !pointer.is_null() {
-        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-        drop(Box::from_raw(pointer));
+    let Some(state) =
+        NonNull::new(GetWindowLongPtrW(window, GWLP_USERDATA) as *mut CallbackState<App>)
+    else {
+        return;
+    };
+    let Some(guard) = (unsafe { CallbackGuard::enter(state) }) else {
+        return;
+    };
+    callback(unsafe { state.as_ref() });
+    drop(guard);
+}
+
+unsafe fn with_app(window: HWND, callback: impl FnOnce(&mut App)) {
+    unsafe {
+        with_callback_state(window, |state| {
+            let _ = state.with_app(callback);
+        });
+    }
+}
+
+unsafe fn destroy_callback_state(window: HWND) {
+    unsafe {
+        with_callback_state(window, |state| {
+            if state.begin_destroy() {
+                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CallbackState;
+
+    #[test]
+    fn synchronous_reentry_cannot_alias_mutable_app_access() {
+        let state = CallbackState::new(0_u8);
+        assert!(state.enter());
+
+        assert_eq!(
+            state.with_app(|app| {
+                *app = 1;
+                assert!(state.enter());
+                assert!(state.with_app(|nested| *nested = 2).is_none());
+                assert!(!state.leave());
+            }),
+            Some(())
+        );
+
+        assert!(!state.leave());
+        assert_eq!(state.callback_depth.get(), 0);
+        assert_eq!(*state.app.borrow(), 1);
+    }
+
+    #[test]
+    fn destruction_during_nested_dispatch_defers_release_to_outer_callback() {
+        let state = CallbackState::new(());
+        assert!(state.enter());
+        assert!(state.enter());
+
+        assert!(state.begin_destroy());
+        assert!(!state.begin_destroy());
+        assert!(state.with_app(|()| ()).is_none());
+        assert!(!state.leave());
+        assert!(state.leave());
     }
 }

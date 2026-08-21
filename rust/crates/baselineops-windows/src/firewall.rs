@@ -48,16 +48,21 @@ mod platform {
             .into_iter()
             .map(|(profile, _, path)| (profile, logging_observation(path)))
             .collect::<BTreeMap<_, _>>();
-        let policy = ComApartment::initialize().and_then(|apartment| {
-            let result = unsafe {
+        let policy = (|| {
+            let apartment = ComApartment::initialize()?;
+            let policy = unsafe {
                 CoCreateInstance::<_, INetFwPolicy2>(&NetFwPolicy2, None, CLSCTX_SERVER)
                     .map_err(|error| error.to_string())
             };
+            let policy = policy?;
+            let observation = complete_from_policy(&policy, &logging);
+            // COM interfaces must be released while their apartment remains initialized.
+            drop(policy);
             drop(apartment);
-            result
-        });
+            Ok::<_, String>(observation)
+        })();
         match policy {
-            Ok(policy) => complete_from_policy(&policy, &logging),
+            Ok(observation) => observation,
             Err(_) => FirewallObservation {
                 profiles: fixed_profiles()
                     .into_iter()

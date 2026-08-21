@@ -15,9 +15,7 @@ The operator ZIP contains:
 - the Windows Forms launcher
 - public project, contribution, security, changelog, and operator documentation
 
-The ZIP excludes `.github/`, `.clusterfuzzlite/`, `node_modules/`, `package.json`, `package-lock.json`, `tests/`, private directories, and `scripts/ci-local.sh`.
-
-`package.json` remains private at version `0.0.0` because it is only a Node test harness. The release job uses Node 22 for that harness. Node is not an operator runtime dependency.
+The ZIP excludes `.github/`, `tests/`, private directories, and `scripts/ci-local.sh`.
 
 ## Release verification
 
@@ -25,7 +23,7 @@ Before packaging, `.github/workflows/release.yml` performs these checks against 
 
 - Installs the official PowerShell 7.6.3 Linux archive after checking its pinned SHA-256 digest.
 - Loads PSScriptAnalyzer 1.25.0 and Pester 5.8.0.
-- Runs the secret scan, documentation check, static verifier, complete Pester suite, and Node tests.
+- Runs the secret scan, documentation check, static verifier, and focused Pester suite.
 - Builds the ZIP with `git archive` from the resolved release commit.
 - Verifies the package inventory and expected counts.
 - Runs profile validation, profile smoke, secret, documentation, and static checks against an extracted ZIP.
@@ -130,7 +128,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module PSScriptAnalyzer
 `verify.ps1 -SkipAnalyzer` is a partial parse-only check, not a substitute for
 the complete gate. Pester, Node, and `scripts/ci-local.sh` require a full checkout
 of the release tag. The operator ZIP deliberately excludes `scripts/ci-local.sh`,
-`tests/`, `package.json`, and `package-lock.json`.
+`tests/`.
 
 An extracted ZIP has no Git metadata, so the verifier and secret scan use their
 recursive package fallback. In a Windows checkout, those two tools accept bare

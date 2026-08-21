@@ -48,7 +48,7 @@ mod platform {
     };
     use windows::Win32::NetworkManagement::NetManagement::{
         LOCALGROUP_MEMBERS_INFO_2, MAX_PREFERRED_LENGTH, NERR_GroupNotFound, NERR_Success,
-        NetApiBufferFree, NetLocalGroupGetMembers,
+        NetApiBufferFree, NetApiBufferSize, NetLocalGroupGetMembers,
     };
     use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
     use windows::Win32::Security::{LookupAccountSidW, PSID, SID_NAME_USE};
@@ -56,6 +56,7 @@ mod platform {
 
     const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
     const MAX_DIRECT_MEMBERS: usize = 4_096;
+    const MAX_MEMBER_BUFFER_BYTES: usize = 4 * 1024 * 1024;
     const MAX_ACCOUNT_NAME_UNITS: u32 = 2_048;
 
     pub(super) fn audit_local_admins() -> LocalAdminsObservation {
@@ -165,11 +166,14 @@ mod platform {
             let allocation = NetApiAllocation(buffer.cast());
             let remaining = MAX_DIRECT_MEMBERS.saturating_sub(members.len());
             let read = usize::try_from(read).unwrap_or(MAX_DIRECT_MEMBERS + 1);
-            if read > remaining {
-                append_members(&mut members, buffer, remaining);
+            let Some(appended_all) =
+                append_members_from_buffer(&mut members, buffer, read, remaining)
+            else {
+                return (Observation::Unparsed, false);
+            };
+            if !appended_all {
                 return (Observation::Present(members), false);
             }
-            append_members(&mut members, buffer, read);
             drop(allocation);
             if status == NERR_Success {
                 return (Observation::Present(members), true);
@@ -177,19 +181,53 @@ mod platform {
             if status != ERROR_MORE_DATA.0 || read == 0 {
                 return (state(status), false);
             }
-            if members.len() == MAX_DIRECT_MEMBERS || total as usize > MAX_DIRECT_MEMBERS {
+            if members.len() == MAX_DIRECT_MEMBERS
+                || usize::try_from(total).unwrap_or(MAX_DIRECT_MEMBERS + 1) > MAX_DIRECT_MEMBERS
+            {
                 return (Observation::Present(members), false);
             }
         }
     }
 
-    #[allow(clippy::cast_ptr_alignment)]
-    fn append_members(members: &mut Vec<LocalAdministratorMember>, buffer: *mut u8, count: usize) {
-        if count == 0 || buffer.is_null() {
-            return;
+    fn append_members_from_buffer(
+        members: &mut Vec<LocalAdministratorMember>,
+        buffer: *mut u8,
+        count: usize,
+        limit: usize,
+    ) -> Option<bool> {
+        if count == 0 {
+            return Some(true);
         }
+        if buffer.is_null()
+            || !buffer
+                .addr()
+                .is_multiple_of(std::mem::align_of::<LOCALGROUP_MEMBERS_INFO_2>())
+        {
+            return None;
+        }
+        let mut allocation_bytes = 0_u32;
+        if unsafe { NetApiBufferSize(buffer.cast(), &raw mut allocation_bytes) } != NERR_Success {
+            return None;
+        }
+        let allocation_bytes = usize::try_from(allocation_bytes).ok()?;
+        let entry_bytes = count.checked_mul(size_of::<LOCALGROUP_MEMBERS_INFO_2>())?;
+        if allocation_bytes > MAX_MEMBER_BUFFER_BYTES || entry_bytes > allocation_bytes {
+            return None;
+        }
+        // SAFETY: alignment, checked count × element size, and NetAPI's reported
+        // allocation extent were validated above while `allocation` remains live.
+        #[allow(clippy::cast_ptr_alignment)]
         let entries =
             unsafe { slice::from_raw_parts(buffer.cast::<LOCALGROUP_MEMBERS_INFO_2>(), count) };
+        let retained = count.min(limit);
+        append_members(members, &entries[..retained]);
+        Some(retained == count)
+    }
+
+    fn append_members(
+        members: &mut Vec<LocalAdministratorMember>,
+        entries: &[LOCALGROUP_MEMBERS_INFO_2],
+    ) {
         members.extend(entries.iter().map(|entry| LocalAdministratorMember {
             sid: sid_text(entry.lgrmi2_sid),
             account_name: pwstr_text(entry.lgrmi2_domainandname),

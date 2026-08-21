@@ -31,7 +31,6 @@ Target version or release note: <!-- Use "none" when not applicable. -->
 - [ ] `pwsh -NoProfile -File .\tools\secret-scan.ps1 -RootPath .`
 - [ ] `pwsh -NoProfile -File .\tools\Test-Documentation.ps1 -RootPath .`
 - [ ] `pwsh -NoProfile -Command "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"`
-- [ ] `npm ci --ignore-scripts && npm test`
 - [ ] Native Windows validation completed where behavior requires it
 
 ### Skipped checks and reason
@@ -46,4 +45,3 @@ Target version or release note: <!-- Use "none" when not applicable. -->
       confirmation controls
 - [ ] Generated evidence, logs, local audit notes, and secrets are not committed
 - [ ] Public docs or examples were updated when behavior changed
-- [ ] Screenshots show the current UI, are redacted, and have useful alt text

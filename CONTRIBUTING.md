@@ -7,12 +7,10 @@ Changes to endpoint audit and remediation code can affect privileged Windows sta
 - PowerShell 7.6.3
 - PSScriptAnalyzer 1.25.0
 - Pester 5.8.0
-- Node.js and npm for `tests/fuzz/*.test.mjs`
 - Bash for `scripts/ci-local.sh`
 - Windows PowerShell 5.1 for compatibility checks
 - A disposable Windows test device for changes that depend on endpoint features or remediation
 
-CI uses Node 24 for property tests. The release workflow uses Node 22. The Node package is a private test harness and is not part of the operator ZIP.
 
 ## Change workflow
 
@@ -86,19 +84,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `
   "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"
 ```
 
-Run Node property tests:
-
-```powershell
-npm ci --ignore-scripts
-$env:PWSH_BIN = (Get-Command pwsh -CommandType Application -ErrorAction Stop |
-  Select-Object -First 1).Source
-npm test
-Remove-Item -LiteralPath Env:PWSH_BIN
-```
-
 Standard-user Pester runs skip tests that require LocalSystem, a protected workspace, another operating system, or unavailable Windows features. Do not convert those expected environmental skips into weaker assertions.
 
-The operator release ZIP excludes the test suite and Node harness. Package checks are documented in the [release guide](docs/alpha-release.md#check-the-extracted-operator-package).
+The operator release ZIP excludes the test suite. Package checks are documented in the [release guide](docs/alpha-release.md#check-the-extracted-operator-package).
 
 ## Pull request content
 

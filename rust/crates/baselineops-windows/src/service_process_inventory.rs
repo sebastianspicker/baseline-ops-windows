@@ -213,10 +213,14 @@ mod platform {
                 "SCM returned an invalid service enumeration size".into(),
             ));
         }
-        let word_count = (needed as usize).div_ceil(size_of::<usize>());
+        let allocation = usize::try_from(needed).map_err(|_| {
+            PlatformError::TrustFailure(
+                "SCM returned an unrepresentable service buffer size".into(),
+            )
+        })?;
+        let word_count = allocation.div_ceil(size_of::<usize>());
         let mut buffer = vec![0_usize; word_count];
-        let bytes =
-            std::slice::from_raw_parts_mut(buffer.as_mut_ptr().cast::<u8>(), needed as usize);
+        let bytes = std::slice::from_raw_parts_mut(buffer.as_mut_ptr().cast::<u8>(), allocation);
         returned = 0;
         let result = EnumServicesStatusExW(
             manager,
@@ -233,10 +237,9 @@ mod platform {
             let _ = CloseServiceHandle(manager);
             return Err(PlatformError::TrustFailure(error.to_string()));
         }
-        let rows = std::slice::from_raw_parts(
-            buffer.as_ptr().cast::<ENUM_SERVICE_STATUS_PROCESSW>(),
-            returned as usize,
-        );
+        let rows = service_rows(bytes, returned).ok_or_else(|| {
+            PlatformError::TrustFailure("SCM returned malformed service records".into())
+        })?;
         let complete = rows.len() <= MAX_RECORDS;
         let records = rows
             .iter()
@@ -278,6 +281,28 @@ mod platform {
             Observation::AccessDenied => Observation::AccessDenied,
             _ => Observation::Unparsed,
         }
+    }
+
+    fn service_rows(buffer: &[u8], count: u32) -> Option<&[ENUM_SERVICE_STATUS_PROCESSW]> {
+        let count = usize::try_from(count).ok()?;
+        let bytes = count.checked_mul(size_of::<ENUM_SERVICE_STATUS_PROCESSW>())?;
+        if bytes > buffer.len()
+            || !buffer
+                .as_ptr()
+                .addr()
+                .is_multiple_of(std::mem::align_of::<ENUM_SERVICE_STATUS_PROCESSW>())
+        {
+            return None;
+        }
+        // SAFETY: the checked record byte count fits the caller-owned buffer and
+        // the alignment predicate above holds for the typed slice.
+        #[allow(clippy::cast_ptr_alignment)]
+        Some(unsafe {
+            std::slice::from_raw_parts(
+                buffer.as_ptr().cast::<ENUM_SERVICE_STATUS_PROCESSW>(),
+                count,
+            )
+        })
     }
 
     unsafe fn service_configuration(

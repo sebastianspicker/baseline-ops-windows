@@ -13,14 +13,29 @@ use windows::Win32::Storage::FileSystem::{
 use windows::core::PCWSTR;
 
 pub(super) struct OpenedPath {
-    handle: HANDLE,
+    handle: PendingHandle,
     final_path: PathBuf,
     information: BY_HANDLE_FILE_INFORMATION,
 }
 
+struct PendingHandle(HANDLE);
+
+impl PendingHandle {
+    fn raw(&self) -> HANDLE {
+        self.0
+    }
+}
+
+impl Drop for PendingHandle {
+    fn drop(&mut self) {
+        // Closing a handle cannot make a failed trust check succeed.
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
 impl OpenedPath {
     pub(super) fn handle(&self) -> HANDLE {
-        self.handle
+        self.handle.raw()
     }
 
     pub(super) fn final_path(&self) -> &Path {
@@ -29,13 +44,6 @@ impl OpenedPath {
 
     fn information(&self) -> &BY_HANDLE_FILE_INFORMATION {
         &self.information
-    }
-}
-
-impl Drop for OpenedPath {
-    fn drop(&mut self) {
-        // Closing a handle cannot make a failed trust check succeed.
-        let _ = unsafe { CloseHandle(self.handle) };
     }
 }
 
@@ -103,26 +111,27 @@ fn open_no_reparse(path: &Path, directory: bool) -> Result<OpenedPath, PlatformE
     if directory {
         flags |= FILE_FLAG_BACKUP_SEMANTICS;
     }
-    let handle = unsafe {
-        CreateFileW(
-            PCWSTR(wide.as_ptr()),
-            (FILE_READ_ATTRIBUTES | READ_CONTROL).0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            None,
-            OPEN_EXISTING,
-            flags,
-            None,
-        )
-    }
-    .map_err(|error| {
-        PlatformError::TrustFailure(format!("could not open protected path: {error}"))
-    })?;
-    let information = file_information(handle)?;
+    let handle = PendingHandle(
+        unsafe {
+            CreateFileW(
+                PCWSTR(wide.as_ptr()),
+                (FILE_READ_ATTRIBUTES | READ_CONTROL).0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                flags,
+                None,
+            )
+        }
+        .map_err(|error| {
+            PlatformError::TrustFailure(format!("could not open protected path: {error}"))
+        })?,
+    );
+    let information = file_information(handle.raw())?;
     if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-        let _ = unsafe { CloseHandle(handle) };
         return Err(untrusted(path, "reparse points are forbidden"));
     }
-    let final_path = final_path(handle)?;
+    let final_path = final_path(handle.raw())?;
     Ok(OpenedPath {
         handle,
         final_path,

@@ -1,5 +1,4 @@
-# Schedules bounded weekly updates for the two dependency surfaces used by the
-# repository: pinned GitHub Actions and the Node-based fuzz harness.
+# Schedules bounded weekly updates for pinned GitHub Actions.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -13,14 +12,3 @@ updates:
     labels:
       - dependencies
       - github-actions
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-      time: "05:15"
-      timezone: Europe/Berlin
-    open-pull-requests-limit: 5
-    labels:
-      - dependencies
-      - npm

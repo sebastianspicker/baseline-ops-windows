@@ -165,7 +165,9 @@ $findings = New-Object System.Collections.Generic.List[object]
 
 foreach ($p in $patterns) {
   if (-not $filtered -or @($filtered).Count -eq 0) { break }
-  $patternMatches = Select-String -Path $filtered -Pattern $p.Regex -AllMatches -ErrorAction SilentlyContinue
+  # Git paths are data, not wildcard expressions. LiteralPath keeps hostile
+  # untracked names in scope instead of silently skipping them.
+  $patternMatches = Select-String -LiteralPath $filtered -Pattern $p.Regex -AllMatches -ErrorAction SilentlyContinue
   foreach ($m in $patternMatches) {
     $findings.Add([pscustomobject]@{
       File     = $m.Path

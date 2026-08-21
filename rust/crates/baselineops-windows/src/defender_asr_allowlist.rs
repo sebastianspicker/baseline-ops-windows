@@ -22,6 +22,12 @@ const MAX_ASR_ONLY_EXCLUSIONS: usize = 10_000;
 /// provider and property failures remain typed incomplete evidence so the policy
 /// evaluator fails closed.
 pub fn audit_defender_asr_allowlist() -> Result<DefenderAsrAllowlistObservation, PlatformError> {
+    #[cfg(windows)]
+    {
+        Ok(platform::audit_defender_asr_allowlist())
+    }
+
+    #[cfg(not(windows))]
     platform::audit_defender_asr_allowlist()
 }
 
@@ -39,10 +45,7 @@ mod platform {
 #[cfg(windows)]
 #[allow(unsafe_code)] // Windows COM/WMI APIs require tightly scoped unsafe calls below.
 mod platform {
-    use super::{
-        DefenderAsrAllowlistObservation, MAX_ASR_ONLY_EXCLUSIONS, MAX_ASR_RULE_ACTIONS,
-        PlatformError,
-    };
+    use super::{DefenderAsrAllowlistObservation, MAX_ASR_ONLY_EXCLUSIONS, MAX_ASR_RULE_ACTIONS};
     use baselineops_capabilities::{AsrRuleActionCounts, Observation};
     use windows::Win32::Foundation::{E_ACCESSDENIED, RPC_E_TOO_LATE};
     use windows::Win32::System::Com::{
@@ -68,10 +71,9 @@ mod platform {
     const RPC_C_AUTHN_WINNT: u32 = 10;
     const RPC_C_AUTHZ_NONE: u32 = 0;
 
-    pub(super) fn audit_defender_asr_allowlist()
-    -> Result<DefenderAsrAllowlistObservation, PlatformError> {
+    pub(super) fn audit_defender_asr_allowlist() -> DefenderAsrAllowlistObservation {
         let provider = provider_evidence();
-        Ok(match provider {
+        match provider {
             Ok(provider) => DefenderAsrAllowlistObservation {
                 asr_only_exclusion_count: provider.asr_only_exclusion_count,
                 asr_rule_actions: provider.asr_rule_actions,
@@ -80,7 +82,7 @@ mod platform {
                 asr_only_exclusion_count: incomplete(&error),
                 asr_rule_actions: incomplete(&error),
             },
-        })
+        }
     }
 
     struct ProviderEvidence {
@@ -221,13 +223,13 @@ mod platform {
                 return property_error(&error);
             }
             let body = variant_body(&value);
-            let result = action_counts_from_variant(body);
+            let result = action_counts_from_variant(&body);
             let _ = VariantClear(&raw mut value);
             result
         }
     }
 
-    unsafe fn action_counts_from_variant(value: VARIANT_0_0) -> Observation<AsrRuleActionCounts> {
+    unsafe fn action_counts_from_variant(value: &VARIANT_0_0) -> Observation<AsrRuleActionCounts> {
         // SAFETY: each branch validates the SAFEARRAY element VARTYPE before
         // copying one value at a time within its reported bounds.
         unsafe {

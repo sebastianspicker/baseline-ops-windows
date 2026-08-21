@@ -33,9 +33,8 @@ Target alpha: `v2.3.0-alpha.1`.
   public `docs/` content is restricted to an explicit reviewed allowlist.
 - Documentation lint now checks tracked and untracked non-ignored Markdown for
   missing or mis-cased local targets, root escapes, and empty image alt text.
-- Local validation instructions now use Pester's `-CI` failure semantics and
-  include the Node property/fuzz suite. Script mode and profile-schema docs now
-  match the current runner contracts.
+- Local validation instructions now use Pester's `-CI` failure semantics. Script
+  mode and profile-schema docs match the current runner contracts.
 - Script-specific helpers live under `scripts/internal/`, with focused helper
   and sanitization tests under `tests/`.
 - Release packaging now resolves a strict semantic version tag, verifies the

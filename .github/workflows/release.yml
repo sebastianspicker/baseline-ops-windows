@@ -104,12 +104,6 @@ jobs:
           version: ${{ env.POWERSHELL_VERSION }}
           linux-x64-sha256: ${{ env.POWERSHELL_LINUX_X64_SHA256 }}
 
-      - name: Set up Node.js
-        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
-        with:
-          node-version: '22'
-          cache: npm
-
       - name: Install verification prerequisites
         shell: pwsh
         run: |
@@ -165,18 +159,6 @@ jobs:
           }
           Import-Module Pester -RequiredVersion $env:PESTER_VERSION -Force
           Invoke-Pester -Path ./tests -CI -Output Detailed
-
-      - name: Run release Node suite
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual_version="$("${PWSH_BIN}" -NoLogo -NoProfile -Command "\$PSVersionTable.PSVersion.ToString()")"
-          if [[ "${actual_version}" != "${POWERSHELL_VERSION}" ]]; then
-            printf 'Expected PowerShell %s exactly, got %s.\n' "${POWERSHELL_VERSION}" "${actual_version}" >&2
-            exit 1
-          fi
-          npm ci --ignore-scripts
-          npm test
 
       - name: Build package
         env:

@@ -1,9 +1,0 @@
-# Declares the ClusterFuzzLite JavaScript target and security contact used by
-# the generated profile-validation fuzz entrypoint.
-homepage: https://github.com/sebastianspicker/baseline-ops
-language: javascript
-primary_contact: security@users.noreply.github.com
-fuzzing_engines:
-  - libfuzzer
-sanitizers:
-  - address

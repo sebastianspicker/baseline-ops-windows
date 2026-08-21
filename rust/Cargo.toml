@@ -10,7 +10,6 @@ members = [
   "crates/baselineops-windows",
   "xtask",
 ]
-exclude = ["fuzz"]
 
 [workspace.package]
 version = "3.0.0-alpha.1"
@@ -45,7 +44,6 @@ zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

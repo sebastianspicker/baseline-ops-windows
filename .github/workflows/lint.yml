@@ -47,8 +47,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/ci-local.sh .clusterfuzzlite/build.sh
-          shellcheck scripts/ci-local.sh .clusterfuzzlite/build.sh
+          bash -n scripts/ci-local.sh
+          shellcheck scripts/ci-local.sh
 
       - name: YAML and Actions metadata
         shell: bash
