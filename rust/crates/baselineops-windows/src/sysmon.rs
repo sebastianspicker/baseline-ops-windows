@@ -32,7 +32,8 @@ const MICROSOFT_SUBJECT: &str =
 ///
 /// Returns [`PlatformError::UnsupportedPlatform`] outside Windows. Missing,
 /// denied, malformed, oversized, untrusted, and truncated evidence is retained
-/// in [`Observation`] values whenever it can be represented safely.
+/// in [`baselineops_capabilities::Observation`] values whenever it can be
+/// represented safely.
 pub fn audit_sysmon(include_operational_events: bool) -> Result<SysmonObservation, PlatformError> {
     #[cfg(windows)]
     {

@@ -194,6 +194,10 @@ function Test-PublicSurfacePath {
     return 'environment, credential, key, or certificate file'
   }
 
+  if ($fileName -match '\.local(?:\..*)?$|\.(db|sqlite|sqlite3|keystore)$') {
+    return 'local secret, database, or keystore file'
+  }
+
   $documentationExtensions = @('.md', '.txt', '.json', '.jsonl', '.yaml', '.yml')
   $isWorkspaceDocument = (
     $documentationExtensions -contains [System.IO.Path]::GetExtension($fileName) -and
@@ -210,6 +214,8 @@ function Test-PublicSurfacePath {
   $reviewedPublicDocs = @(
     'docs/readme.md',
     'docs/alpha-release.md',
+    'docs/architecture.md',
+    'docs/decisions/0001-single-runtime.md',
     'docs/launcher-gui.md',
     'docs/rust-v3.md'
   )

@@ -2,7 +2,7 @@
 
 BaselineOps for Windows is a collection of PowerShell scripts for auditing Windows endpoint configuration, collecting diagnostic evidence, detecting drift, and applying selected configuration changes. It is intended for endpoint administrators and security engineers working with Windows devices, including devices managed through MDM.
 
-The repository contains individual endpoint scripts, profile and batch runners, shared PowerShell modules, example JSON inputs, a Windows Forms launcher, verification tools, and automated tests. It does not install or run a background service.
+The repository contains individual endpoint scripts, profile and batch runners, shared PowerShell modules, example JSON inputs, a Windows Forms launcher, verification tools, and automated tests. It also contains the separate, unreleased Rust v3 workspace described in [docs/rust-v3.md](docs/rust-v3.md). The Rust workspace does not replace or run inside the supported PowerShell application. The PowerShell application does not install or run a background service.
 
 ## Project scope
 
@@ -26,7 +26,7 @@ Current capabilities:
 - Profile validation, dependency ordering, strict result handling, signature checks, and SHA-256, SHA-384, or SHA-512 hash checks
 - Seven example profiles and four script-specific configuration examples
 - A Windows Forms launcher for individual scripts and profiles
-- PowerShell parsing, PSScriptAnalyzer, Pester, documentation, secret-scan, and Node property-test automation
+- PowerShell parsing, PSScriptAnalyzer, Pester, documentation, and secret-scan automation
 
 Limitations:
 
@@ -63,6 +63,7 @@ Development requirements:
 - Pester 5.8.0
 - Bash for `scripts/ci-local.sh`
 - Windows PowerShell 5.1 for the compatibility gates
+- A recent Rust toolchain for the Rust v3 workspace
 
 Earlier PowerShell Core versions are not part of the repository's verified toolchain.
 
@@ -235,6 +236,7 @@ The orchestration layer maps results to process exit codes:
 |   |-- configs/        Script-specific JSON examples
 |   `-- profiles/       Orchestration profiles
 |-- lib/                Shared PowerShell modules
+|-- rust/               Separate, unreleased Rust v3 workspace
 |-- scripts/
 |   |-- _lib/           Common script bootstrap
 |   `-- internal/       Script-specific helpers, not operator entry points
@@ -296,19 +298,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `
 
 `PWSH_BIN` must resolve to PowerShell 7.6.3 for the supported test contract. Standard-user test runs skip cases that require LocalSystem, protected workspace ownership, unavailable Windows features, or another operating system. CI contains separate Windows, Windows PowerShell 5.1, LocalSystem, and Linux smoke lanes.
 
-## Local demonstration and GitHub Pages
+Run the Rust v3 workspace gates separately:
 
-The safest local demonstration is repository validation plus a profile or batch
-preview with `-WhatIf`. A preview exercises orchestration and confirmation
-contracts without running endpoint child scripts; it does not inspect Windows
-state and intentionally returns exit code `2` because every step is skipped.
+```bash
+cd rust
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo run -p xtask -- verify
+```
 
-The Windows Forms launcher and the Rust v3 native GUI require Windows. They have
-no browser build. GitHub Pages is therefore not a deployment target for this
-toolkit: a static site could document or simulate commands, but it could not run
-PowerShell, call Windows APIs, validate protected installation, elevate a worker,
-or prove endpoint behavior. The repository does not contain a Pages workflow or
-claim a hosted operational demo.
+These gates validate the prototype workspace. They do not establish capability
+parity or release qualification; see [Rust v3 implementation status](docs/rust-v3.md).
 
 ## Deployment and operation
 
@@ -328,7 +329,7 @@ For operation:
 
 `PowerShell runtime drift`
 
-: Use PowerShell 7.6.3. If it is installed outside `PATH`, set `PWSH_BIN` to its absolute executable path for `scripts/ci-local.sh` and Node tests.
+: Use PowerShell 7.6.3. If it is installed outside `PATH`, set `PWSH_BIN` to its absolute executable path for `scripts/ci-local.sh`.
 
 `PSScriptAnalyzer 1.25.0 is unavailable`
 
@@ -374,6 +375,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## Documentation
 
 - [Documentation index](docs/README.md)
+- [Architecture](docs/architecture.md)
 - [Rust v3 implementation status](docs/rust-v3.md)
 - [Release and deployment guide](docs/alpha-release.md)
 - [Launcher guide](docs/launcher-gui.md)

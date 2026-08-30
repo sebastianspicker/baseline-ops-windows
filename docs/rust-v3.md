@@ -1,7 +1,7 @@
 # Rust v3 implementation
 
 The self-contained Rust rewrite is developed under [`rust/`](../rust/README.md). It is additive:
-the existing PowerShell product remains unchanged as the behavioral oracle and legacy release line.
+the existing PowerShell product remains the supported behavioral oracle and release line.
 
 Rust releases use separate `rust-v*` tags and separate CI/release workflows. Registry presence does
 not mean native parity. The checked-in [capability ledger](../rust/ledger/capability-parity.md) records

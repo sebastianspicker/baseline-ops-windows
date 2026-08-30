@@ -25,6 +25,13 @@ Target alpha: `v2.3.0-alpha.1`.
 
 ### Changed
 
+- Restored the unreleased parallel Rust v3 prototype, its separate build and
+  release pipelines, capability ledger, schemas, and native application
+  workspace while keeping the PowerShell product as the supported release line.
+- Documented one dependency direction for orchestration, capabilities, shared
+  application services, and the private Windows/native-process boundary.
+- WinGet remediation now accepts installer and source authority only from
+  explicit operator parameters; audit mode never refreshes or adds sources.
 - The source distribution, release artifacts, and local runtime identifiers
   use the BaselineOps for Windows name.
 - PowerShell verification now parses tool modules (`tools/*.psm1`) as well as

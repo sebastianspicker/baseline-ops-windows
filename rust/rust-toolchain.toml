@@ -3,4 +3,3 @@ channel = "1.96.0"
 components = ["clippy", "rustfmt"]
 profile = "minimal"
 targets = ["x86_64-pc-windows-msvc"]
-
