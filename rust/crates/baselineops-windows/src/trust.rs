@@ -100,10 +100,21 @@ pub struct InstallationTrustPolicy {
 /// Proof that the current worker executable passed protected-install checks.
 ///
 /// The fields are private so callers cannot manufacture execution authority.
-#[derive(Debug)]
 pub struct TrustedInstallation {
     executable: PathBuf,
     root: PathBuf,
+    #[cfg(windows)]
+    _retained_paths: windows::VerifiedInstallPaths,
+}
+
+impl std::fmt::Debug for TrustedInstallation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TrustedInstallation")
+            .field("executable", &self.executable)
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TrustedInstallation {
@@ -147,16 +158,22 @@ pub fn verify_file_digest(
         hash.update(&buffer[..count]);
     }
     let actual = hash.finalize();
-    let mut difference = 0_u8;
-    for (left, right) in actual.iter().zip(expected.0) {
-        difference |= left ^ right;
-    }
-    if difference != 0 {
+    if !digest_matches(actual.as_slice(), &expected.0) {
         return Err(PlatformError::TrustFailure(
             "file SHA-256 does not match the trusted manifest".into(),
         ));
     }
     Ok(())
+}
+
+fn digest_matches(actual: &[u8], expected: &[u8; 32]) -> bool {
+    actual
+        .iter()
+        .zip(expected)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 /// Verify an executable's Authenticode chain and exact canonical X.500 subject.
@@ -226,12 +243,7 @@ pub fn verify_detached_manifest_signature(
     signature_bytes: &[u8],
     expected_subject: &str,
 ) -> Result<(), PlatformError> {
-    validate_subject(expected_subject)?;
-    if manifest_bytes.is_empty() || signature_bytes.is_empty() {
-        return Err(PlatformError::TrustFailure(
-            "detached manifest bytes and signature must be non-empty".into(),
-        ));
-    }
+    prepare_detached_verification(manifest_bytes, signature_bytes, expected_subject)?;
     #[cfg(windows)]
     {
         detached::verify_subject(manifest_bytes, signature_bytes, expected_subject)
@@ -257,12 +269,7 @@ pub fn verify_detached_manifest(
     expected_subject: &str,
     expected_spki_sha256: &SignerSpkiSha256,
 ) -> Result<(), PlatformError> {
-    validate_subject(expected_subject)?;
-    if manifest_bytes.is_empty() || signature_bytes.is_empty() {
-        return Err(PlatformError::TrustFailure(
-            "detached manifest bytes and signature must be non-empty".into(),
-        ));
-    }
+    prepare_detached_verification(manifest_bytes, signature_bytes, expected_subject)?;
     #[cfg(windows)]
     {
         detached::verify(
@@ -296,9 +303,12 @@ pub fn verify_protected_install(
     #[cfg(windows)]
     {
         let verified = windows::verify_protected_install(policy, executable.as_ref())?;
+        let executable = verified.executable().to_path_buf();
+        let root = verified.root().to_path_buf();
         Ok(TrustedInstallation {
-            executable: verified.executable,
-            root: verified.root,
+            executable,
+            root,
+            _retained_paths: verified,
         })
     }
     #[cfg(not(windows))]
@@ -337,15 +347,21 @@ pub(crate) fn resolve_regular_executable(path: &Path) -> Result<PathBuf, Platfor
     }
 }
 
+#[cfg(windows)]
+pub(crate) use windows::{ProtectedRunDirectory, ProtectedRunLease};
+
+#[cfg(windows)]
+pub(crate) use windows::read_protected_run_artifacts;
+
+#[cfg(windows)]
+pub(crate) fn create_protected_run_directory(
+    run_id: baselineops_domain::RunId,
+) -> Result<ProtectedRunDirectory, PlatformError> {
+    windows::create_protected_run_directory(run_id)
+}
+
 pub(crate) fn windows_system32_file(file_name: &str) -> Result<PathBuf, PlatformError> {
-    if file_name.is_empty()
-        || !file_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-        || !file_name
-            .get(file_name.len().saturating_sub(4)..)
-            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".exe"))
-    {
+    if !is_simple_executable_name(file_name) {
         return Err(PlatformError::ProcessRejected(
             "System32 executable name is not a simple .exe file name".into(),
         ));
@@ -360,10 +376,69 @@ pub(crate) fn windows_system32_file(file_name: &str) -> Result<PathBuf, Platform
     }
 }
 
+fn is_simple_executable_name(file_name: &str) -> bool {
+    !file_name.is_empty()
+        && file_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        && file_name
+            .get(file_name.len().saturating_sub(4)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".exe"))
+}
+
 fn validate_subject(subject: &str) -> Result<(), PlatformError> {
     if subject.trim().is_empty() || subject.contains('\0') {
         return Err(PlatformError::TrustFailure(
             "a non-empty canonical X.500 signer subject is required".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn is_forbidden_protected_path_namespace(path: &Path) -> bool {
+    let value = path.as_os_str().to_string_lossy();
+    let bytes = value.as_bytes();
+    if value.starts_with("//") {
+        return true;
+    }
+    if !value.starts_with("\\\\") {
+        return false;
+    }
+    // GetFinalPathNameByHandleW returns local drive paths as `\\?\C:\...`.
+    // Accept only that extended local form; UNC, device, volume-GUID, and
+    // GLOBALROOT namespaces remain outside protected-install policy.
+    !(bytes.len() >= 7
+        && bytes[..4] == *b"\\\\?\\"
+        && bytes[4].is_ascii_alphabetic()
+        && bytes[5] == b':'
+        && matches!(bytes[6], b'\\' | b'/'))
+}
+
+#[cfg(any(windows, test))]
+fn protected_descendant_directories(root: &Path, executable: &Path) -> Option<Vec<PathBuf>> {
+    let relative_parent = executable.strip_prefix(root).ok()?.parent()?;
+    let mut current = root.to_path_buf();
+    let mut directories = Vec::new();
+    for component in relative_parent.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return None;
+        }
+        current.push(component.as_os_str());
+        directories.push(current.clone());
+    }
+    Some(directories)
+}
+
+fn prepare_detached_verification(
+    manifest_bytes: &[u8],
+    signature_bytes: &[u8],
+    expected_subject: &str,
+) -> Result<(), PlatformError> {
+    validate_subject(expected_subject)?;
+    if manifest_bytes.is_empty() || signature_bytes.is_empty() {
+        return Err(PlatformError::TrustFailure(
+            "detached manifest bytes and signature must be non-empty".into(),
         ));
     }
     Ok(())
@@ -398,6 +473,48 @@ mod tests {
         let pin = SignerSpkiSha256::from_hex(&"00".repeat(32)).expect("pin");
         assert!(pin.matches_digest(&[0; 32]));
         assert!(!pin.matches_digest(&[1; 32]));
+    }
+
+    #[test]
+    fn protected_path_namespace_accepts_final_local_drive_paths_only() {
+        assert!(!is_forbidden_protected_path_namespace(Path::new(
+            r"\\?\C:\Program Files\BaselineOps"
+        )));
+        assert!(is_forbidden_protected_path_namespace(Path::new(
+            r"\\?\UNC\server\share\BaselineOps"
+        )));
+        assert!(is_forbidden_protected_path_namespace(Path::new(
+            r"\\.\GLOBALROOT\Device\HarddiskVolumeShadowCopy1"
+        )));
+        assert!(is_forbidden_protected_path_namespace(Path::new(
+            r"\\server\share\BaselineOps"
+        )));
+    }
+
+    #[test]
+    fn protected_directory_walk_includes_executable_parent() {
+        let root = Path::new("/protected/BaselineOps");
+        assert_eq!(
+            protected_descendant_directories(root, &root.join("bin/worker.exe")),
+            Some(vec![root.join("bin")])
+        );
+        assert_eq!(
+            protected_descendant_directories(root, &root.join("worker.exe")),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn protected_directory_walk_includes_every_nested_acl_candidate() {
+        let root = Path::new("/protected/BaselineOps");
+        assert_eq!(
+            protected_descendant_directories(root, &root.join("bin/writable/worker.exe")),
+            Some(vec![root.join("bin"), root.join("bin/writable")])
+        );
+        assert_eq!(
+            protected_descendant_directories(root, Path::new("/elsewhere/worker.exe")),
+            None
+        );
     }
 
     #[test]

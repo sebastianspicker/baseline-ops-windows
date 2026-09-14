@@ -60,6 +60,11 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Initialize-Capability45Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
@@ -68,16 +73,18 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability45Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
@@ -86,16 +93,18 @@ if (-not $isWindowsHost) {
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
   $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
-  $result = Get-V2ResultObject -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
-  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
+  $RunState.result = Get-V2ResultObject -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $RunState.result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $RunState.result }
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # ----------------------------
 # Defaults (used if JSON is missing/invalid)
 # ----------------------------
-$Defaults = @{
+function Initialize-WefAuditState {
+  param([hashtable]$RunState)
+$RunState.Defaults = @{
   RegistrySubscriptionManagerKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\EventForwarding\SubscriptionManager'
   ExportEncoding                 = 'UTF8'  # Windows PowerShell 5.1 typically writes UTF-8 with BOM via Export-Csv.
   ExportDelimiter                = ','
@@ -111,6 +120,8 @@ $script:Findings = Get-FindingsList
 $script:ConfigUsedDefaults = $true
 $script:ConfigLoadError = $null
 $script:Config = $null
+}
+. Initialize-WefAuditState -RunState $RunState
 
 function Ensure-ExportDirectory {
   [CmdletBinding()]
@@ -230,172 +241,214 @@ function Get-FindingCounts {
   return $counts
 }
 
-function Write-PrettySummary {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][ValidateNotNull()][psobject]$Result
-  )
+function Write-PrettySummarySection01 {
+  param([hashtable]$RunState)
+$counts = Get-FindingCounts -Findings $RunState.Result.Findings
 
-  $counts = Get-FindingCounts -Findings $Result.Findings
-
-  $headlineStyle = if ($Result.Summary.FindingsCount -gt 0) { 'Warning' } else { 'Success' }
+  $headlineStyle = if ($RunState.Result.Summary.FindingsCount -gt 0) { 'Warning' } else { 'Success' }
 
   Write-ConsoleLine ''
   Write-ConsoleLine '============================================================' -Style 'Muted'
   Write-ConsoleLine 'WEF Client Forwarding Readiness Audit' -Style 'Header'
   Write-ConsoleLine '============================================================' -Style 'Muted'
 
-  Write-ConsoleLine ("ComputerName : {0}" -f $Result.Summary.ComputerName) -Style 'Info'
-  Write-ConsoleLine ("Timestamp    : {0}" -f $Result.Summary.Timestamp) -Style 'Info'
+  Write-ConsoleLine ("ComputerName : {0}" -f $RunState.Result.Summary.ComputerName) -Style 'Info'
+  Write-ConsoleLine ("Timestamp    : {0}" -f $RunState.Result.Summary.Timestamp) -Style 'Info'
 
-  Write-ConsoleLine ("Result       : Findings={0} (High={1}, Medium={2}, Low={3})" -f $Result.Summary.FindingsCount, $counts.High, $counts.Medium, $counts.Low) -Style $headlineStyle
+  Write-ConsoleLine ("Result       : Findings={0} (High={1}, Medium={2}, Low={3})" -f $RunState.Result.Summary.FindingsCount, $counts.High, $counts.Medium, $counts.Low) -Style $headlineStyle
   Write-ConsoleLine ''
 
-  $winrmOk = ($Result.Indicators.WinRM_ServiceStatus -eq 'Running' -and $Result.Indicators.WinRM_StartMode -ne 'Disabled')
+  $winrmOk = ($RunState.Result.Indicators.WinRM_ServiceStatus -eq 'Running' -and $RunState.Result.Indicators.WinRM_StartMode -ne 'Disabled')
   if ($winrmOk) {
-    Write-ConsoleLine ("WinRM        : OK (Status={0}, StartMode={1})" -f $Result.Indicators.WinRM_ServiceStatus, $Result.Indicators.WinRM_StartMode) -Style 'Success'
+    Write-ConsoleLine ("WinRM        : OK (Status={0}, StartMode={1})" -f $RunState.Result.Indicators.WinRM_ServiceStatus, $RunState.Result.Indicators.WinRM_StartMode) -Style 'Success'
   }
   else {
-    Write-ConsoleLine ("WinRM        : NOT OK (Status={0}, StartMode={1})" -f $Result.Indicators.WinRM_ServiceStatus, $Result.Indicators.WinRM_StartMode) -Style 'Error'
+    Write-ConsoleLine ("WinRM        : NOT OK (Status={0}, StartMode={1})" -f $RunState.Result.Indicators.WinRM_ServiceStatus, $RunState.Result.Indicators.WinRM_StartMode) -Style 'Error'
   }
 
-  if ($Result.Indicators.SubscriptionManagerPolicy) {
-    Write-ConsoleLine ("SubMgrPolicy : Present ({0} value(s))" -f $Result.Indicators.SubscriptionManagerValueCount) -Style 'Success'
+  if ($RunState.Result.Indicators.SubscriptionManagerPolicy) {
+    Write-ConsoleLine ("SubMgrPolicy : Present ({0} value(s))" -f $RunState.Result.Indicators.SubscriptionManagerValueCount) -Style 'Success'
   }
   else {
     Write-ConsoleLine 'SubMgrPolicy : Missing' -Style 'Warning'
   }
 
-  if ($Result.Indicators.UsedDefaultConfig) {
-    Write-ConsoleLine ("Config       : Defaults in use (ConfigPath='{0}')" -f $Result.Indicators.ConfigPath) -Style 'Muted'
+  if ($RunState.Result.Indicators.UsedDefaultConfig) {
+    Write-ConsoleLine ("Config       : Defaults in use (ConfigPath='{0}')" -f $RunState.Result.Indicators.ConfigPath) -Style 'Muted'
   }
   else {
-    Write-ConsoleLine ("Config       : Loaded (ConfigPath='{0}')" -f $Result.Indicators.ConfigPath) -Style 'Muted'
+    Write-ConsoleLine ("Config       : Loaded (ConfigPath='{0}')" -f $RunState.Result.Indicators.ConfigPath) -Style 'Muted'
+  }
+}
+
+function Write-PrettySummarySection02 {
+  param([hashtable]$RunState)
+if ($RunState.Result.Indicators.ConfigLoadError) {
+    Write-ConsoleLine ("ConfigError  : {0}" -f $RunState.Result.Indicators.ConfigLoadError) -Style 'Warning'
   }
 
-  if ($Result.Indicators.ConfigLoadError) {
-    Write-ConsoleLine ("ConfigError  : {0}" -f $Result.Indicators.ConfigLoadError) -Style 'Warning'
-  }
-
-  if ($Result.Indicators.WecutilQcOutput) {
+  if ($RunState.Result.Indicators.WecutilQcOutput) {
     Write-ConsoleLine 'WecutilQc    : Collected (see Indicators.WecutilQcOutput)' -Style 'Muted'
   }
+}
 
-  if ($Result.Findings.Count -gt 0) {
-    Write-ConsoleLine ''
+function Write-PrettySummarySection03Stage01 {
+Write-ConsoleLine ''
     Write-ConsoleLine 'Top findings:' -Style 'Header'
+}
 
-    $Result.Findings |
+function Write-PrettySummarySection03Stage02 {
+  param([hashtable]$RunState)
+$RunState.Result.Findings |
       Sort-Object @{Expression={ switch ($_.Severity) { 'High' {0} 'Medium' {1} 'Low' {2} default {9} } }}, Code |
       Select-Object -First 10 |
       ForEach-Object {
         $style = switch ($_.Severity) { 'High' {'Error'} 'Medium' {'Warning'} 'Low' {'Info'} default {'Default'} }
         Write-ConsoleLine ("- [{0}] {1}: {2}" -f $_.Severity, $_.Code, $_.Message) -Style $style
       }
-  }
+}
 
-  Write-ConsoleLine ''
+function Write-PrettySummarySection03 {
+  param([hashtable]$RunState)
+if ($RunState.Result.Findings.Count -gt 0) {
+    . Write-PrettySummarySection03Stage01
+. Write-PrettySummarySection03Stage02 -RunState $RunState
+  }
+}
+
+function Write-PrettySummarySection04 {
+Write-ConsoleLine ''
   Write-ConsoleLine 'Tip: Use -PassThru for separate pipeline objects, or pipe the default Result to ConvertTo-Json.' -Style 'Muted'
   Write-ConsoleLine ''
+}
+
+function Write-PrettySummary {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][ValidateNotNull()][psobject]$Result
+  , [hashtable]$RunState)
+  $RunState.Result = $Result
+
+    . Write-PrettySummarySection01 -RunState $RunState
+    . Write-PrettySummarySection02 -RunState $RunState
+    . Write-PrettySummarySection03 -RunState $RunState
+    . Write-PrettySummarySection04
 }
 
 # ----------------------------
 # Main
 # ----------------------------
-$cfgResult = Read-ConfigWithDefaults -Path $ConfigPath -Defaults $Defaults
-$script:Config = $cfgResult.Config
-$script:ConfigUsedDefaults = [bool]$cfgResult.Meta.UsedDefaults
-$script:ConfigLoadError = $cfgResult.Meta.Error
+function Invoke-Capability45MainPhase01 {
+  param([hashtable]$RunState)
+  $cfgResult = Read-ConfigWithDefaults -Path $ConfigPath -Defaults $RunState.Defaults
+  $script:Config = $cfgResult.Config
+  $script:ConfigUsedDefaults = [bool]$cfgResult.Meta.UsedDefaults
+  $script:ConfigLoadError = $cfgResult.Meta.Error
 
-if ($script:ConfigLoadError) {
-  $null = Add-Finding -FindingList $script:Findings -Code 'WEF-ConfigLoadFailed' -Severity 'Low' -Message ("Config JSON could not be loaded; using defaults. Error: {0}" -f $script:ConfigLoadError)
-}
-
-$winrmState = Get-WinRmState
-$subMgrInfo = Get-SubscriptionManagerPolicy -RegistryKeyPath ([string]$script:Config.RegistrySubscriptionManagerKey)
-
-$wecutilQcOutput = $null
-if ($IncludeWecutilCheck) {
-  $wecutilQcOutput = Invoke-WecutilQc
-}
-
-$winrmServiceStatus = if ($winrmState.PSObject.Properties.Name -contains 'Status') { $winrmState.Status } else { $null }
-$winrmStartMode = if ($winrmState.PSObject.Properties.Name -contains 'StartMode') { $winrmState.StartMode } else { $null }
-
-$indicators = [pscustomobject]@{
-  ComputerName                  = $env:COMPUTERNAME
-  Timestamp                     = Get-Date
-  WinRM_ServiceStatus           = $winrmServiceStatus
-  WinRM_StartMode               = $winrmStartMode
-  SubscriptionManagerPolicy     = $subMgrInfo.ValueJoined
-  SubscriptionManagerValueCount = $subMgrInfo.ValueCount
-  SubscriptionManagerValues     = $subMgrInfo.Values
-  WecutilQcOutput               = $wecutilQcOutput
-  ConfigPath                    = $ConfigPath
-  UsedDefaultConfig             = [bool]$script:ConfigUsedDefaults
-  ConfigLoadError               = $script:ConfigLoadError
-}
-
-$summary = [pscustomobject]@{
-  ComputerName  = $env:COMPUTERNAME
-  FindingsCount = $script:Findings.Count
-  Timestamp     = Get-Date
-}
-
-$result = [pscustomobject]@{
-  Summary    = $summary
-  Findings   = $script:Findings.ToArray()
-  Indicators = $indicators
-}
-
-# Export (optional)
-if ($ExportPath) {
-  try {
-    Ensure-ExportDirectory -Path $ExportPath
-
-    $summaryPath    = $ExportPath
-    $findingsPath   = Get-SuffixedPath -BasePath $ExportPath -Suffix '-findings.csv'
-    $indicatorsPath = Get-SuffixedPath -BasePath $ExportPath -Suffix '-indicators.csv'
-
-    $delimiter = [string]$script:Config.ExportDelimiter
-    $encoding  = [string]$script:Config.ExportEncoding
-
-    $result.Summary | Export-Csv -Path $summaryPath -NoTypeInformation -Encoding $encoding -Delimiter $delimiter
-
-    $rowTimestamp = if ($script:Config.ExportIncludeTimestampInRows) { Get-Date } else { $null }
-
-    ($result.Findings | ForEach-Object {
-      [pscustomobject]@{
-        ComputerName = $env:COMPUTERNAME
-        Timestamp    = $rowTimestamp
-        Code         = $_.Code
-        Severity     = $_.Severity
-        Message      = $_.Message
-      }
-    }) | Export-Csv -Path $findingsPath -NoTypeInformation -Encoding $encoding -Delimiter $delimiter
-
-    $result.Indicators | Export-Csv -Path $indicatorsPath -NoTypeInformation -Encoding $encoding -Delimiter $delimiter
+  if ($script:ConfigLoadError) {
+    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-ConfigLoadFailed' -Severity 'Low' -Message ("Config JSON could not be loaded; using defaults. Error: {0}" -f $script:ConfigLoadError)
   }
-  catch {
-    $null = Add-Finding -FindingList $script:Findings -Code 'WEF-ExportFailed' -Severity 'Low' -Message ("CSV export failed: {0}" -f $_.Exception.Message)
 
-    # Refresh result after adding export failure finding
-    $result = [pscustomobject]@{
-      Summary    = [pscustomobject]@{ ComputerName=$env:COMPUTERNAME; FindingsCount=$script:Findings.Count; Timestamp=Get-Date }
-      Findings   = $script:Findings.ToArray()
-      Indicators = $indicators
+  $winrmState = Get-WinRmState
+  $subMgrInfo = Get-SubscriptionManagerPolicy -RegistryKeyPath ([string]$script:Config.RegistrySubscriptionManagerKey)
+
+  $wecutilQcOutput = $null
+  if ($IncludeWecutilCheck) {
+    $wecutilQcOutput = Invoke-WecutilQc
+  }
+
+  $winrmServiceStatus = if ($winrmState.PSObject.Properties.Name -contains 'Status') { $winrmState.Status } else { $null }
+  $winrmStartMode = if ($winrmState.PSObject.Properties.Name -contains 'StartMode') { $winrmState.StartMode } else { $null }
+
+  $indicators = [pscustomobject]@{
+    ComputerName                  = $env:COMPUTERNAME
+    Timestamp                     = Get-Date
+    WinRM_ServiceStatus           = $winrmServiceStatus
+    WinRM_StartMode               = $winrmStartMode
+    SubscriptionManagerPolicy     = $subMgrInfo.ValueJoined
+    SubscriptionManagerValueCount = $subMgrInfo.ValueCount
+    SubscriptionManagerValues     = $subMgrInfo.Values
+    WecutilQcOutput               = $wecutilQcOutput
+    ConfigPath                    = $ConfigPath
+    UsedDefaultConfig             = [bool]$script:ConfigUsedDefaults
+    ConfigLoadError               = $script:ConfigLoadError
+  }
+
+  $summary = [pscustomobject]@{
+    ComputerName  = $env:COMPUTERNAME
+    FindingsCount = $script:Findings.Count
+    Timestamp     = Get-Date
+  }
+
+  $RunState.result = [pscustomobject]@{
+    Summary    = $summary
+    Findings   = $script:Findings.ToArray()
+    Indicators = $indicators
+  }
+}
+function Invoke-Capability45MainPhase02 {
+  param([hashtable]$RunState)
+  if ($ExportPath) {
+    try {
+      Ensure-ExportDirectory -Path $ExportPath
+
+      $summaryPath    = $ExportPath
+      $findingsPath   = Get-SuffixedPath -BasePath $ExportPath -Suffix '-findings.csv'
+      $indicatorsPath = Get-SuffixedPath -BasePath $ExportPath -Suffix '-indicators.csv'
+
+      $delimiter = [string]$script:Config.ExportDelimiter
+      $encoding  = [string]$script:Config.ExportEncoding
+
+      $RunState.result.Summary | Export-Csv -Path $summaryPath -NoTypeInformation -Encoding $encoding -Delimiter $delimiter
+
+      $rowTimestamp = if ($script:Config.ExportIncludeTimestampInRows) { Get-Date } else { $null }
+
+      ($RunState.result.Findings | ForEach-Object {
+        [pscustomobject]@{
+          ComputerName = $env:COMPUTERNAME
+          Timestamp    = $rowTimestamp
+          Code         = $_.Code
+          Severity     = $_.Severity
+          Message      = $_.Message
+        }
+      }) | Export-Csv -Path $findingsPath -NoTypeInformation -Encoding $encoding -Delimiter $delimiter
+
+      $RunState.result.Indicators | Export-Csv -Path $indicatorsPath -NoTypeInformation -Encoding $encoding -Delimiter $delimiter
+    }
+    catch {
+      $null = Add-Finding -FindingList $script:Findings -Code 'WEF-ExportFailed' -Severity 'Low' -Message ("CSV export failed: {0}" -f $_.Exception.Message)
+
+      # Refresh result after adding export failure finding
+      $RunState.result = [pscustomobject]@{
+        Summary    = [pscustomobject]@{ ComputerName=$env:COMPUTERNAME; FindingsCount=$script:Findings.Count; Timestamp=Get-Date }
+        Findings   = $script:Findings.ToArray()
+        Indicators = $indicators
+      }
     }
   }
-}
 
-# Console summary (host/information stream only)
-if ($script:Config.ConsoleSummary) {
-  Write-PrettySummary -Result $result
+  # Console summary (host/information stream only)
+  if ($script:Config.ConsoleSummary) {
+    Write-PrettySummary -Result $RunState.result -RunState $RunState
+  }
 }
+function Invoke-Capability45Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability45MainPhase01 -RunState $RunState
+  . Invoke-Capability45MainPhase02 -RunState $RunState
+}
+. Invoke-Capability45Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # V2 output contract
-$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $result.Summary -Metadata @{ Indicators = $result.Indicators }
+function Get-Capability45ResultToken {
+  $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability45ResultToken
+$v2Result = Get-V2ResultObject -ScriptName '45-WEF-Client-Forwarding-Readiness-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $RunState.result.Summary -Metadata @{ Indicators = $RunState.result.Indicators }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

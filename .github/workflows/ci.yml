@@ -164,6 +164,21 @@ jobs:
             -File .\tools\secret-scan.ps1 -RootPath $env:GITHUB_WORKSPACE
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Cache quality analyzer dependencies
+        if: matrix.edition == 'Core'
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: .cache/quality
+          key: quality-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runtime_id }}-${{ hashFiles('tools/quality/tool-versions.psd1', 'tools/quality/requirements-lizard.txt', 'tools/quality/jscpd/package-lock.json') }}
+
+      - name: PowerShell complexity and duplication
+        if: matrix.edition == 'Core'
+        shell: powershell
+        run: |
+          & $env:POWERSHELL_EXE -NoLogo -NoProfile -ExecutionPolicy Bypass `
+            -File ./tools/quality/Test-CodeQuality.ps1 -ReleaseLine PowerShell -SkipAnalyzer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Static checks
         shell: powershell
         run: |

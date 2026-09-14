@@ -3,13 +3,10 @@
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use std::{
-    cell::{Cell, RefCell},
-    path::Path,
-    ptr::NonNull,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, TryRecvError, channel},
+        mpsc::{Receiver, channel},
     },
     thread,
 };
@@ -37,9 +34,23 @@ use windows::{
 };
 
 use crate::{
-    controller::{self, AuditReport, AuditState, CatalogItem},
-    view::{self, AUDIT_BUTTON, CANCEL_BUTTON, CAPABILITY_LIST, OPEN_ARTIFACT_BUTTON},
+    controller::{
+        self, AuditReport, AuditState, AuthenticatedArtifact, CatalogItem, WorkerMessage,
+        WorkerUpdate,
+    },
+    view::{
+        self, AUDIT_BUTTON, AUDIT_PROFILE_BUTTON, CANCEL_BUTTON, CAPABILITY_LIST,
+        OPEN_ARTIFACT_BUTTON, REVIEW_PROFILE_BUTTON, VALIDATE_PROFILE_BUTTON,
+    },
 };
+
+mod callback;
+
+use callback::CallbackState;
+
+unsafe fn with_app(window: HWND, callback: impl FnOnce(&mut App)) {
+    unsafe { callback::with_app::<App>(window, callback) };
+}
 
 const POLL_TIMER: usize = 1;
 const POLL_INTERVAL_MS: u32 = 75;
@@ -48,63 +59,9 @@ struct App {
     controls: view::Controls,
     items: Vec<CatalogItem>,
     selected: usize,
-    receiver: Option<Receiver<AuditReport>>,
+    receiver: Option<Receiver<WorkerMessage>>,
     cancellation: Option<Arc<AtomicBool>>,
-    artifact: Option<std::path::PathBuf>,
-}
-
-/// Heap-owned state retained by the window while callbacks are active.
-///
-/// The HWND stores only this allocation's raw pointer. Individual callbacks
-/// obtain mutable application access through `RefCell::try_borrow_mut`, so a
-/// synchronously reentered `WndProc` cannot manufacture a second `&mut App`.
-struct CallbackState<T> {
-    app: RefCell<T>,
-    callback_depth: Cell<usize>,
-    destroying: Cell<bool>,
-}
-
-impl<T> CallbackState<T> {
-    fn new(app: T) -> Self {
-        Self {
-            app: RefCell::new(app),
-            callback_depth: Cell::new(0),
-            destroying: Cell::new(false),
-        }
-    }
-
-    fn enter(&self) -> bool {
-        if self.destroying.get() {
-            return false;
-        }
-        let Some(depth) = self.callback_depth.get().checked_add(1) else {
-            return false;
-        };
-        self.callback_depth.set(depth);
-        true
-    }
-
-    fn leave(&self) -> bool {
-        let depth = self
-            .callback_depth
-            .get()
-            .checked_sub(1)
-            .expect("callback depth is balanced");
-        self.callback_depth.set(depth);
-        depth == 0 && self.destroying.get()
-    }
-
-    fn begin_destroy(&self) -> bool {
-        !self.destroying.replace(true)
-    }
-
-    fn with_app<R>(&self, callback: impl FnOnce(&mut T) -> R) -> Option<R> {
-        if self.destroying.get() {
-            return None;
-        }
-        let mut app = self.app.try_borrow_mut().ok()?;
-        Some(callback(&mut app))
-    }
+    artifact: Option<AuthenticatedArtifact>,
 }
 
 /// Runs the single-window, standard-control native audit interface.
@@ -208,7 +165,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_DESTROY => {
             KillTimer(Some(window), POLL_TIMER).ok();
-            destroy_callback_state(window);
+            callback::destroy_callback_state::<App>(window);
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -269,6 +226,18 @@ unsafe fn command(window: HWND, wparam: WPARAM) -> LRESULT {
             with_app(window, |app| unsafe { start_audit(app) });
             LRESULT(0)
         }
+        VALIDATE_PROFILE_BUTTON => {
+            with_app(window, |app| unsafe { validate_profile(app) });
+            LRESULT(0)
+        }
+        REVIEW_PROFILE_BUTTON => {
+            with_app(window, |app| unsafe { review_profile(app) });
+            LRESULT(0)
+        }
+        AUDIT_PROFILE_BUTTON => {
+            with_app(window, |app| unsafe { start_profile_audit(app) });
+            LRESULT(0)
+        }
         CANCEL_BUTTON => {
             request_cancellation(window);
             LRESULT(0)
@@ -304,7 +273,10 @@ unsafe fn start_audit(app: &mut App) {
     let spawn = thread::Builder::new()
         .name("baselineops-native-audit".into())
         .spawn(move || {
-            let _ = sender.send(controller::audit(&capability_id, &worker_cancellation));
+            let _ = sender.send(WorkerMessage::Finished(controller::audit(
+                &capability_id,
+                &worker_cancellation,
+            )));
         });
     match spawn {
         Ok(_) => {
@@ -330,6 +302,85 @@ unsafe fn start_audit(app: &mut App) {
     }
 }
 
+unsafe fn validate_profile(app: &mut App) {
+    let report = profile_path(app).map_or_else(invalid_profile_path_report, |path| {
+        controller::validate_profile(&path)
+    });
+    app.artifact = None;
+    view::set_artifact_visible(app.controls, false);
+    let _ = view::set_report(app.controls, &report);
+}
+
+unsafe fn review_profile(app: &mut App) {
+    start_profile_operation(app, true);
+}
+
+unsafe fn start_profile_audit(app: &mut App) {
+    start_profile_operation(app, false);
+}
+
+unsafe fn start_profile_operation(app: &mut App, review: bool) {
+    if app.receiver.is_some() {
+        return;
+    }
+    let Some(profile_path) = profile_path(app) else {
+        let _ = view::set_report(app.controls, &invalid_profile_path_report());
+        return;
+    };
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let worker_cancellation = Arc::clone(&cancellation);
+    let (sender, receiver) = channel();
+    let spawn = thread::Builder::new()
+        .name("baselineops-profile-audit".into())
+        .spawn(move || {
+            let progress_sender = sender.clone();
+            let report = if review {
+                controller::review_profile_native(&profile_path, &worker_cancellation)
+            } else {
+                controller::audit_profile(&profile_path, &worker_cancellation, |progress| {
+                    let _ = progress_sender.send(WorkerMessage::Progress(progress));
+                })
+            };
+            let _ = sender.send(WorkerMessage::Finished(report));
+        });
+    match spawn {
+        Ok(_) => {
+            app.receiver = Some(receiver);
+            app.cancellation = Some(cancellation);
+            app.artifact = None;
+            view::set_running(app.controls, true);
+            view::set_artifact_visible(app.controls, false);
+            let _ = view::set_report(app.controls, &AuditReport::running());
+        }
+        Err(error) => {
+            let report = AuditReport {
+                state: AuditState::Failed,
+                status: "The profile-audit worker could not start.".into(),
+                result: String::new(),
+                error: Some(error.to_string()),
+                artifact: None,
+            };
+            let _ = view::set_report(app.controls, &report);
+        }
+    }
+}
+
+unsafe fn profile_path(app: &App) -> Option<std::path::PathBuf> {
+    let text = view::profile_path(app.controls)?;
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| std::path::PathBuf::from(trimmed))
+}
+
+fn invalid_profile_path_report() -> AuditReport {
+    AuditReport {
+        state: AuditState::Unsupported,
+        status: "Profile validation failed before any native operation started.".into(),
+        result: String::new(),
+        error: Some("enter a profile JSON path shorter than 32,768 characters".into()),
+        artifact: None,
+    }
+}
+
 unsafe fn request_cancellation(window: HWND) {
     with_app(window, |app| unsafe { request_cancellation_app(app) });
 }
@@ -351,10 +402,14 @@ unsafe fn poll_worker_app(app: &mut App) {
     let Some(receiver) = &app.receiver else {
         return;
     };
-    let report = match receiver.try_recv() {
-        Ok(report) => report,
-        Err(TryRecvError::Empty) => return,
-        Err(TryRecvError::Disconnected) => AuditReport {
+    let report = match controller::drain_worker_messages(receiver) {
+        WorkerUpdate::Idle => return,
+        WorkerUpdate::Progress(report) => {
+            let _ = view::set_report(app.controls, &report);
+            return;
+        }
+        WorkerUpdate::Finished(report) => report,
+        WorkerUpdate::Disconnected => AuditReport {
             state: AuditState::Failed,
             status: "The native audit worker exited without a result.".into(),
             result: String::new(),
@@ -371,40 +426,40 @@ unsafe fn poll_worker_app(app: &mut App) {
 }
 
 unsafe fn open_artifact(app: &mut App) {
-    let Some(path) = app.artifact.as_deref() else {
+    let Some(artifact) = app.artifact.as_ref() else {
         return;
     };
-    let report = read_artifact(path);
+    let report = read_artifact(artifact);
     let _ = view::set_report(app.controls, &report);
 }
 
-fn read_artifact(path: &Path) -> AuditReport {
+fn read_artifact(artifact: &AuthenticatedArtifact) -> AuditReport {
     const MAX_ARTIFACT_BYTES: u64 = 256 * 1024;
 
-    let content = std::fs::metadata(path)
-        .map_err(|error| format!("cannot read artifact metadata: {error}"))
-        .and_then(|metadata| {
-            (metadata.is_file() && metadata.len() <= MAX_ARTIFACT_BYTES)
-                .then_some(())
-                .ok_or_else(|| {
-                    "artifact is not a regular file or exceeds the 256 KiB viewer limit".into()
-                })
-        })
-        .and_then(|()| std::fs::read_to_string(path).map_err(|error| error.to_string()));
+    let content =
+        baselineops_windows::read_bounded_utf8_no_follow(&artifact.path, MAX_ARTIFACT_BYTES)
+            .map_err(|error| format!("cannot safely read artifact: {error}"))
+            .and_then(|content| {
+                (baselineops_domain::Sha256Digest::of_bytes(content.as_bytes()) == artifact.digest)
+                    .then_some(content)
+                    .ok_or_else(|| {
+                        "artifact digest no longer matches the authenticated audit result".into()
+                    })
+            });
     match content {
         Ok(content) => AuditReport {
             state: AuditState::Completed,
             status: "Opened a retained artifact in the read-only viewer.".into(),
             result: content,
             error: None,
-            artifact: Some(path.to_path_buf()),
+            artifact: Some(artifact.clone()),
         },
         Err(error) => AuditReport {
             state: AuditState::Failed,
             status: "The retained artifact could not be opened.".into(),
             result: String::new(),
             error: Some(error),
-            artifact: Some(path.to_path_buf()),
+            artifact: Some(artifact.clone()),
         },
     }
 }
@@ -420,101 +475,6 @@ unsafe fn layout(window: HWND, app: &App) {
     }
 }
 
-/// Keeps the callback allocation alive until the current `WndProc` unwinds.
-///
-/// `GWLP_USERDATA` may be cleared by a nested `WM_DESTROY`, but an outer
-/// callback can still be running. The guard therefore owns the final-free
-/// decision rather than `WM_DESTROY` freeing the pointer directly.
-struct CallbackGuard {
-    state: NonNull<CallbackState<App>>,
-}
-
-impl CallbackGuard {
-    unsafe fn enter(state: NonNull<CallbackState<App>>) -> Option<Self> {
-        unsafe { state.as_ref() }.enter().then_some(Self { state })
-    }
-}
-
-impl Drop for CallbackGuard {
-    fn drop(&mut self) {
-        let release = unsafe { self.state.as_ref() }.leave();
-        if release {
-            unsafe { drop(Box::from_raw(self.state.as_ptr())) };
-        }
-    }
-}
-
-/// Calls a callback while retaining the state referenced by the HWND.
-///
-/// The closure cannot return a borrow, keeping all access to the raw pointer
-/// scoped to the callback guard.
-unsafe fn with_callback_state(window: HWND, callback: impl FnOnce(&CallbackState<App>)) {
-    use windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW;
-
-    let Some(state) =
-        NonNull::new(GetWindowLongPtrW(window, GWLP_USERDATA) as *mut CallbackState<App>)
-    else {
-        return;
-    };
-    let Some(guard) = (unsafe { CallbackGuard::enter(state) }) else {
-        return;
-    };
-    callback(unsafe { state.as_ref() });
-    drop(guard);
-}
-
-unsafe fn with_app(window: HWND, callback: impl FnOnce(&mut App)) {
-    unsafe {
-        with_callback_state(window, |state| {
-            let _ = state.with_app(callback);
-        });
-    }
-}
-
-unsafe fn destroy_callback_state(window: HWND) {
-    unsafe {
-        with_callback_state(window, |state| {
-            if state.begin_destroy() {
-                SetWindowLongPtrW(window, GWLP_USERDATA, 0);
-            }
-        });
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::CallbackState;
-
-    #[test]
-    fn synchronous_reentry_cannot_alias_mutable_app_access() {
-        let state = CallbackState::new(0_u8);
-        assert!(state.enter());
-
-        assert_eq!(
-            state.with_app(|app| {
-                *app = 1;
-                assert!(state.enter());
-                assert!(state.with_app(|nested| *nested = 2).is_none());
-                assert!(!state.leave());
-            }),
-            Some(())
-        );
-
-        assert!(!state.leave());
-        assert_eq!(state.callback_depth.get(), 0);
-        assert_eq!(*state.app.borrow(), 1);
-    }
-
-    #[test]
-    fn destruction_during_nested_dispatch_defers_release_to_outer_callback() {
-        let state = CallbackState::new(());
-        assert!(state.enter());
-        assert!(state.enter());
-
-        assert!(state.begin_destroy());
-        assert!(!state.begin_destroy());
-        assert!(state.with_app(|()| ()).is_none());
-        assert!(!state.leave());
-        assert!(state.leave());
-    }
-}
+#[path = "platform_tests.rs"]
+mod tests;

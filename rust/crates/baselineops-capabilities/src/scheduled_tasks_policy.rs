@@ -23,7 +23,7 @@ pub struct ScheduledTasksParameters {}
 
 /// One exact legacy critical task accepted by the native foundation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScheduledTask {
     /// `\\Microsoft\\Windows\\WindowsUpdate\\Scheduled Start`.
     WindowsUpdateScheduledStart,
@@ -64,7 +64,7 @@ pub const FIXED_SCHEDULED_TASKS: [ScheduledTask; 4] = [
 
 /// Scheduler runtime state exposed by Task Scheduler COM.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScheduledTaskState {
     /// The scheduler reports no reliable current state.
     Unknown,
@@ -79,8 +79,8 @@ pub enum ScheduledTaskState {
 }
 
 /// Non-secret metadata read from one exact task.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ScheduledTaskSnapshot {
     /// The task's enabled property, without changing it.
     pub enabled: Observation<bool>,
@@ -89,8 +89,8 @@ pub struct ScheduledTaskSnapshot {
 }
 
 /// Native evidence for each fixed task.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ScheduledTasksObservation {
     /// Observations keyed only by compile-time task identities.
     pub tasks: BTreeMap<ScheduledTask, Observation<ScheduledTaskSnapshot>>,

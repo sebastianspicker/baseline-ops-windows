@@ -1,6 +1,6 @@
 # Summary
 
-<!-- Briefly describe the change. -->
+<!-- Explain the problem and what a user or contributor will see after this change. -->
 
 ## Scope and risk
 
@@ -11,7 +11,7 @@
 
 ## Release impact
 
-- [ ] No release-facing behavior or documentation changes
+- [ ] No changes to shipped behavior or documentation
 - [ ] User-visible behavior, examples, or limitations changed
 - [ ] Packaging, provenance, or GitHub release automation changed
 
@@ -31,15 +31,16 @@ Target version or release note: <!-- Use "none" when not applicable. -->
 - [ ] `pwsh -NoProfile -File .\tools\secret-scan.ps1 -RootPath .`
 - [ ] `pwsh -NoProfile -File .\tools\Test-Documentation.ps1 -RootPath .`
 - [ ] `pwsh -NoProfile -Command "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"`
+- [ ] Relevant code-quality and Rust checks from `CONTRIBUTING.md`
 - [ ] Native Windows validation completed where behavior requires it
 
 ### Skipped checks and reason
 
-<!-- State each skipped check and why it was not run. -->
+<!-- List checks you could not run and why, including any Windows-only checks. -->
 
 ## Safety checklist
 
-- [ ] Script changes keep audit-first defaults where possible
+- [ ] Script changes keep Audit as the default where possible
 - [ ] State-changing paths use `SupportsShouldProcess`, `-WhatIf`, and `-Confirm`
 - [ ] Profile input cannot override runner-owned path, integrity, or
       confirmation controls

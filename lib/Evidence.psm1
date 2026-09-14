@@ -53,6 +53,82 @@ function Get-FileSha256 {
 
 <#
 .SYNOPSIS
+  Tests source and destination paths for traversal after expansion.
+#>
+function Test-EvidencePathSafety {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$SourcePath,
+    [Parameter(Mandatory)][string]$EvidenceBaseDir
+  )
+
+  $expandedSource = [Environment]::ExpandEnvironmentVariables($SourcePath)
+  $expandedBase = [Environment]::ExpandEnvironmentVariables($EvidenceBaseDir)
+  $expandedUnsafe = (Validation\Test-PathTraversal -Path $expandedSource) -or
+    (Validation\Test-PathTraversal -Path $expandedBase)
+  $originalUnsafe = (Validation\Test-PathTraversal -Path $SourcePath) -or
+    (Validation\Test-PathTraversal -Path $EvidenceBaseDir)
+  return -not ($expandedUnsafe -or $originalUnsafe)
+}
+
+<#
+.SYNOPSIS
+  Gets a copyable evidence file or its rejection reason.
+#>
+function Get-EvidenceFileItem {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$SourcePath)
+
+  if (-not (Test-Path -LiteralPath $SourcePath)) { return $null, 'missing' }
+  $item = Get-Item -LiteralPath $SourcePath -ErrorAction Stop
+  if ($item.PSIsContainer) { return $null, 'is-directory' }
+  return $item, $null
+}
+
+<#
+.SYNOPSIS
+  Enforces evidence size limits and updates a permitted running total.
+#>
+function Test-EvidenceSizeLimits {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][int64]$SizeBytes,
+    [int]$MaxFileSizeMB,
+    [int]$MaxTotalMB,
+    [ref]$RunningTotalBytes
+  )
+
+  if ($MaxFileSizeMB -gt 0 -and $SizeBytes -gt ([int64]$MaxFileSizeMB * 1MB)) { return 'file-too-large' }
+  if (-not $RunningTotalBytes -or $MaxTotalMB -le 0) { return $null }
+  $newTotal = $RunningTotalBytes.Value + $SizeBytes
+  if ($newTotal -gt ([int64]$MaxTotalMB * 1MB)) { return 'quota-exceeded' }
+  $RunningTotalBytes.Value = $newTotal
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Creates the safe evidence destination path.
+#>
+function New-EvidenceDestination {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$SourcePath,
+    [Parameter(Mandatory)][string]$EvidenceBaseDir
+  )
+
+  $expandedSource = [Environment]::ExpandEnvironmentVariables($SourcePath)
+  $safeName = $expandedSource.Replace(':', '').TrimStart('\') -replace '[\\/:*?"<>|]', '_'
+  $destinationPath = Join-Path $EvidenceBaseDir $safeName
+  $destinationDirectory = Split-Path -Parent $destinationPath
+  if (-not [string]::IsNullOrWhiteSpace($destinationDirectory) -and -not (Test-Path -LiteralPath $destinationDirectory)) {
+    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+  }
+  return $destinationPath
+}
+
+<#
+.SYNOPSIS
   Copies a file to an evidence directory with optional size limits.
 .PARAMETER SourcePath
   Path to the source file.
@@ -76,37 +152,16 @@ function Copy-ToEvidence {
     [int]$MaxTotalMB = 0,
     [ref]$RunningTotalBytes
   )
-  # S15 fix: expand environment variables before traversal check so that paths
-  # like %TEMP%\..\..\..\Windows are correctly detected after expansion
-  $expandedSource = [System.Environment]::ExpandEnvironmentVariables($SourcePath)
-  $expandedBase   = [System.Environment]::ExpandEnvironmentVariables($EvidenceBaseDir)
-  if ((Validation\Test-PathTraversal -Path $expandedSource) -or (Validation\Test-PathTraversal -Path $expandedBase)) {
-    return $false, 'path-traversal-not-allowed'
-  }
-  if ((Validation\Test-PathTraversal -Path $SourcePath) -or (Validation\Test-PathTraversal -Path $EvidenceBaseDir)) {
+  if (-not (Test-EvidencePathSafety -SourcePath $SourcePath -EvidenceBaseDir $EvidenceBaseDir)) {
     return $false, 'path-traversal-not-allowed'
   }
   try {
-    if (-not (Test-Path -LiteralPath $SourcePath)) { return $false, 'missing' }
-    $item = Get-Item -LiteralPath $SourcePath -ErrorAction Stop
-    if ($item.PSIsContainer) { return $false, 'is-directory' }
-
-    $sizeBytes = [int64]$item.Length
-    if ($MaxFileSizeMB -gt 0 -and $sizeBytes -gt ([int64]$MaxFileSizeMB * 1MB)) {
-      return $false, 'file-too-large'
-    }
-    if ($RunningTotalBytes -and $MaxTotalMB -gt 0) {
-      $newTotal = $RunningTotalBytes.Value + $sizeBytes
-      if ($newTotal -gt ([int64]$MaxTotalMB * 1MB)) { return $false, 'quota-exceeded' }
-      $RunningTotalBytes.Value = $newTotal
-    }
-
-    $safeName = $expandedSource.Replace(':', '').TrimStart('\') -replace '[\\/:*?"<>|]', '_'
-    $destPath = Join-Path $EvidenceBaseDir $safeName
-    $destDir = Split-Path -Parent $destPath
-    if (-not [string]::IsNullOrWhiteSpace($destDir) -and -not (Test-Path -LiteralPath $destDir)) {
-      New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-    }
+    $item, $itemError = Get-EvidenceFileItem -SourcePath $SourcePath
+    if ($itemError) { return $false, $itemError }
+    $sizeError = Test-EvidenceSizeLimits -SizeBytes ([int64]$item.Length) -MaxFileSizeMB $MaxFileSizeMB `
+      -MaxTotalMB $MaxTotalMB -RunningTotalBytes $RunningTotalBytes
+    if ($sizeError) { return $false, $sizeError }
+    $destPath = New-EvidenceDestination -SourcePath $SourcePath -EvidenceBaseDir $EvidenceBaseDir
     Copy-Item -LiteralPath $SourcePath -Destination $destPath -Force -ErrorAction Stop
     return $true, $destPath
   } catch {

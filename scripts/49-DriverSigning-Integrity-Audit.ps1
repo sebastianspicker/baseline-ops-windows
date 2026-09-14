@@ -85,10 +85,8 @@ Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChe
 Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
@@ -113,138 +111,174 @@ if (-not $isWindowsHost) {
 # Main
 # ----------------------------
 
-$script:Findings = Get-FindingsList
+function Invoke-Capability49MainPhase01 {
+  param([hashtable]$RunState)
+  $script:Findings = Get-FindingsList
 
-$testSigning       = $null
-$noIntegrityChecks = $null
-$hvciEnabled       = $null
-$hvciRunning       = $null
-$bcdeditRaw        = $null
+  $RunState.testSigning       = $null
+  $RunState.noIntegrityChecks = $null
+  $RunState.hvciEnabled       = $null
+  $RunState.hvciRunning       = $null
+  $RunState.bcdeditRaw        = $null
+}
+function Invoke-Capability49MainPhase02Step01 {
+  param([hashtable]$RunState)
+$bcdedit = Invoke-NativeCommand -Command 'bcdedit.exe' -Arguments @('/enum','{current}') -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 262144
+    if ($null -eq $bcdedit -or -not $bcdedit.Success -or $bcdedit.TimedOut -or $bcdedit.OutputTruncated -or $bcdedit.StderrTruncated) { throw 'bcdedit query timed out, failed, or produced truncated output.' }
+    $bcdeditOutput = $bcdedit.Output.Trim()
+    $RunState.bcdeditRaw = $bcdeditOutput
+}
 
-# 1. Check bcdedit flags (TESTSIGNING, NOINTEGRITYCHECKS)
-try {
-  $bcdedit = Invoke-NativeCommand -Command 'bcdedit.exe' -Arguments @('/enum','{current}') -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 262144
-  if ($null -eq $bcdedit -or -not $bcdedit.Success -or $bcdedit.TimedOut -or $bcdedit.OutputTruncated -or $bcdedit.StderrTruncated) { throw 'bcdedit query timed out, failed, or produced truncated output.' }
-  $bcdeditOutput = $bcdedit.Output.Trim()
-  $bcdeditRaw = $bcdeditOutput
-
-  # Parse testsigning
-  if ($bcdeditOutput -match '(?mi)^\s*testsigning\s+(Yes|No)\s*$') {
-    $testSigning = $Matches[1]
-    if ($testSigning -eq 'Yes') {
-      Add-Finding -FindingList $script:Findings -Code 'DS-TestSigningEnabled' -Severity 'High' `
-        -Message 'TESTSIGNING is enabled. Unsigned or test-signed drivers can load, which conflicts with a hardened driver-signing baseline.'
+function Invoke-Capability49MainPhase02Step02 {
+  param([hashtable]$RunState)
+if ($bcdeditOutput -match '(?mi)^\s*testsigning\s+(Yes|No)\s*$') {
+      $RunState.testSigning = $Matches[1]
+      if ($RunState.testSigning -eq 'Yes') {
+        Add-Finding -FindingList $script:Findings -Code 'DS-TestSigningEnabled' -Severity 'High' `
+          -Message 'TESTSIGNING is enabled. Unsigned or test-signed drivers can load, which conflicts with a hardened driver-signing baseline.'
+      } else {
+        Add-Finding -FindingList $script:Findings -Code 'DS-TestSigningOff' -Severity 'Low' `
+          -Message 'TESTSIGNING is disabled (expected baseline).'
+      }
     } else {
-      Add-Finding -FindingList $script:Findings -Code 'DS-TestSigningOff' -Severity 'Low' `
-        -Message 'TESTSIGNING is disabled (expected baseline).'
+      # If testsigning is not listed, it defaults to No
+      $RunState.testSigning = 'No'
+      Add-Finding -FindingList $script:Findings -Code 'DS-TestSigningDefault' -Severity 'Low' `
+        -Message 'TESTSIGNING not explicitly set in BCD (defaults to No/disabled).'
     }
-  } else {
-    # If testsigning is not listed, it defaults to No
-    $testSigning = 'No'
-    Add-Finding -FindingList $script:Findings -Code 'DS-TestSigningDefault' -Severity 'Low' `
-      -Message 'TESTSIGNING not explicitly set in BCD (defaults to No/disabled).'
+
+    # Parse nointegritychecks
+    if ($bcdeditOutput -match '(?mi)^\s*nointegritychecks\s+(Yes|No)\s*$') {
+      $RunState.noIntegrityChecks = $Matches[1]
+      if ($RunState.noIntegrityChecks -eq 'Yes') {
+        Add-Finding -FindingList $script:Findings -Code 'DS-NoIntegrityChecks' -Severity 'High' `
+          -Message 'NOINTEGRITYCHECKS is enabled. Driver signature verification is disabled. Critical security risk.'
+      } else {
+        Add-Finding -FindingList $script:Findings -Code 'DS-IntegrityChecksOn' -Severity 'Low' `
+          -Message 'NOINTEGRITYCHECKS is disabled (integrity checks active).'
+      }
+    } else {
+      # If not listed, defaults to No (integrity checks on)
+      $RunState.noIntegrityChecks = 'No'
+      Add-Finding -FindingList $script:Findings -Code 'DS-IntegrityChecksDefault' -Severity 'Low' `
+        -Message 'NOINTEGRITYCHECKS not explicitly set in BCD (defaults to No/enabled).'
+    }
+}
+
+function Invoke-Capability49MainPhase02 {
+  param([hashtable]$RunState)
+  try {
+    . Invoke-Capability49MainPhase02Step01 -RunState $RunState
+. Invoke-Capability49MainPhase02Step02 -RunState $RunState
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'DS-BcdeditFailed' -Severity 'Medium' `
+      -Message ("bcdedit query failed (may require elevation): {0}" -f $_.Exception.Message)
+  }
+}
+function Invoke-Capability49MainPhase03 {
+  param([hashtable]$RunState)
+  $hvciRegPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+  try {
+    $hvciValue = Get-RegValue -Path $hvciRegPath -Name 'Enabled'
+    if ($null -ne $hvciValue) {
+      $RunState.hvciEnabled = ([int]$hvciValue -eq 1)
+      if ($RunState.hvciEnabled) {
+        Add-Finding -FindingList $script:Findings -Code 'DS-HVCIEnabled' -Severity 'Low' `
+          -Message 'Memory integrity (HVCI) is enabled via registry.'
+      } else {
+        Add-Finding -FindingList $script:Findings -Code 'DS-HVCIDisabled' -Severity 'Medium' `
+          -Message ("Memory integrity (HVCI) is not enabled (Enabled={0})." -f $hvciValue)
+      }
+    } else {
+      Add-Finding -FindingList $script:Findings -Code 'DS-HVCINotConfigured' -Severity 'Medium' `
+        -Message 'HVCI registry key exists but Enabled value not found. Memory integrity may not be configured.'
+    }
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'DS-HVCIRegMissing' -Severity 'Medium' `
+      -Message 'HVCI registry path not found. Memory integrity (Core Isolation) is not configured on this system.'
+  }
+}
+function Invoke-Capability49MainPhase04 {
+  param([hashtable]$RunState)
+  try {
+    $dgStatus = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard' -ErrorAction Stop
+    if ($null -ne $dgStatus) {
+      $runningServices = @()
+      if ($null -ne $dgStatus.SecurityServicesRunning) {
+        $runningServices = @($dgStatus.SecurityServicesRunning)
+      }
+      # SecurityServicesRunning: 1 = Credential Guard, 2 = HVCI
+      $RunState.hvciRunning = ($runningServices -contains 2)
+      if ($RunState.hvciRunning) {
+        Add-Finding -FindingList $script:Findings -Code 'DS-HVCIRunning' -Severity 'Low' `
+          -Message 'HVCI is actively running (confirmed via DeviceGuard WMI).'
+      } else {
+        Add-Finding -FindingList $script:Findings -Code 'DS-HVCINotRunning' -Severity 'Medium' `
+          -Message 'HVCI is not in the running security services list.'
+      }
+    }
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'DS-DeviceGuardQueryFailed' -Severity 'Low' `
+      -Message ("DeviceGuard WMI query failed: {0}" -f $_.Exception.Message)
   }
 
-  # Parse nointegritychecks
-  if ($bcdeditOutput -match '(?mi)^\s*nointegritychecks\s+(Yes|No)\s*$') {
-    $noIntegrityChecks = $Matches[1]
-    if ($noIntegrityChecks -eq 'Yes') {
-      Add-Finding -FindingList $script:Findings -Code 'DS-NoIntegrityChecks' -Severity 'High' `
-        -Message 'NOINTEGRITYCHECKS is enabled. Driver signature verification is disabled. Critical security risk.'
-    } else {
-      Add-Finding -FindingList $script:Findings -Code 'DS-IntegrityChecksOn' -Severity 'Low' `
-        -Message 'NOINTEGRITYCHECKS is disabled (integrity checks active).'
-    }
-  } else {
-    # If not listed, defaults to No (integrity checks on)
-    $noIntegrityChecks = 'No'
-    Add-Finding -FindingList $script:Findings -Code 'DS-IntegrityChecksDefault' -Severity 'Low' `
-      -Message 'NOINTEGRITYCHECKS not explicitly set in BCD (defaults to No/enabled).'
+  # ----------------------------
+  # Build summary & result
+  # ----------------------------
+
+  $Findings      = @($script:Findings.ToArray())
+  $findingsCount = @($Findings).Count
+
+  $RunState.summary = [pscustomobject]@{
+    ComputerName       = $env:COMPUTERNAME
+    Timestamp          = Get-Date
+    TestSigning        = $RunState.testSigning
+    NoIntegrityChecks  = $RunState.noIntegrityChecks
+    HVCIEnabled        = $RunState.hvciEnabled
+    HVCIRunning        = $RunState.hvciRunning
+    FindingsCount      = $findingsCount
   }
-} catch {
-  Add-Finding -FindingList $script:Findings -Code 'DS-BcdeditFailed' -Severity 'Medium' `
-    -Message ("bcdedit query failed (may require elevation): {0}" -f $_.Exception.Message)
 }
-
-# 2. Memory integrity (Core Isolation) via registry - HVCI
-$hvciRegPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
-try {
-  $hvciValue = Get-RegValue -Path $hvciRegPath -Name 'Enabled'
-  if ($null -ne $hvciValue) {
-    $hvciEnabled = ([int]$hvciValue -eq 1)
-    if ($hvciEnabled) {
-      Add-Finding -FindingList $script:Findings -Code 'DS-HVCIEnabled' -Severity 'Low' `
-        -Message 'Memory integrity (HVCI) is enabled via registry.'
-    } else {
-      Add-Finding -FindingList $script:Findings -Code 'DS-HVCIDisabled' -Severity 'Medium' `
-        -Message ("Memory integrity (HVCI) is not enabled (Enabled={0})." -f $hvciValue)
-    }
-  } else {
-    Add-Finding -FindingList $script:Findings -Code 'DS-HVCINotConfigured' -Severity 'Medium' `
-      -Message 'HVCI registry key exists but Enabled value not found. Memory integrity may not be configured.'
+function Invoke-Capability49MainPhase05 {
+  param([hashtable]$RunState)
+  if (-not $Quiet -and $OutputFormat -eq 'Console') {
+    Write-Section -Title 'Driver Signing / Integrity Audit'
+    Write-KeyValue -Key 'TestSigning'       -Value ([string]$RunState.testSigning)
+    Write-KeyValue -Key 'NoIntegrityChecks' -Value ([string]$RunState.noIntegrityChecks)
+    Write-KeyValue -Key 'HVCI Enabled'      -Value ([string]$RunState.hvciEnabled)
+    Write-KeyValue -Key 'HVCI Running'      -Value ([string]$RunState.hvciRunning)
+    Write-KeyValue -Key 'Findings'          -Value ([string]$findingsCount)
   }
-} catch {
-  Add-Finding -FindingList $script:Findings -Code 'DS-HVCIRegMissing' -Severity 'Medium' `
-    -Message 'HVCI registry path not found. Memory integrity (Core Isolation) is not configured on this system.'
 }
+function Invoke-Capability49Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation)
+  $RunState = @{
 
-# 3. Check DeviceGuard status via CIM for running HVCI state
-try {
-  $dgStatus = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard' -ErrorAction Stop
-  if ($null -ne $dgStatus) {
-    $runningServices = @()
-    if ($null -ne $dgStatus.SecurityServicesRunning) {
-      $runningServices = @($dgStatus.SecurityServicesRunning)
-    }
-    # SecurityServicesRunning: 1 = Credential Guard, 2 = HVCI
-    $hvciRunning = ($runningServices -contains 2)
-    if ($hvciRunning) {
-      Add-Finding -FindingList $script:Findings -Code 'DS-HVCIRunning' -Severity 'Low' `
-        -Message 'HVCI is actively running (confirmed via DeviceGuard WMI).'
-    } else {
-      Add-Finding -FindingList $script:Findings -Code 'DS-HVCINotRunning' -Severity 'Medium' `
-        -Message 'HVCI is not in the running security services list.'
-    }
   }
-} catch {
-  Add-Finding -FindingList $script:Findings -Code 'DS-DeviceGuardQueryFailed' -Severity 'Low' `
-    -Message ("DeviceGuard WMI query failed: {0}" -f $_.Exception.Message)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability49MainPhase01 -RunState $RunState
+  . Invoke-Capability49MainPhase02 -RunState $RunState
+  . Invoke-Capability49MainPhase03 -RunState $RunState
+  . Invoke-Capability49MainPhase04 -RunState $RunState
+  . Invoke-Capability49MainPhase05 -RunState $RunState
+  $script:RunState = $RunState
 }
 
-# ----------------------------
-# Build summary & result
-# ----------------------------
+. Invoke-Capability49Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation
 
-$Findings      = @($script:Findings.ToArray())
-$findingsCount = @($Findings).Count
-
-$summary = [pscustomobject]@{
-  ComputerName       = $env:COMPUTERNAME
-  Timestamp          = Get-Date
-  TestSigning        = $testSigning
-  NoIntegrityChecks  = $noIntegrityChecks
-  HVCIEnabled        = $hvciEnabled
-  HVCIRunning        = $hvciRunning
-  FindingsCount      = $findingsCount
+function Get-Capability49ResultToken {
+  $resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' }
+    elseif (@($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'FAIL' }
+    elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARN' }
+    else { 'OK' }
+  return $resultToken
 }
-
-if (-not $Quiet -and $OutputFormat -eq 'Console') {
-  Write-Section -Title 'Driver Signing / Integrity Audit'
-  Write-KeyValue -Key 'TestSigning'       -Value ([string]$testSigning)
-  Write-KeyValue -Key 'NoIntegrityChecks' -Value ([string]$noIntegrityChecks)
-  Write-KeyValue -Key 'HVCI Enabled'      -Value ([string]$hvciEnabled)
-  Write-KeyValue -Key 'HVCI Running'      -Value ([string]$hvciRunning)
-  Write-KeyValue -Key 'Findings'          -Value ([string]$findingsCount)
-}
-
-$resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' }
-  elseif (@($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'FAIL' }
-  elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARN' }
-  else { 'OK' }
-
+$resultToken = Get-Capability49ResultToken
 $v2Result = Get-V2ResultObject -ScriptName '49-DriverSigning-Integrity-Audit.ps1' -Mode $Mode `
-  -Result $resultToken -Findings $Findings -Summary $summary `
-  -Metadata @{ BcdeditRaw = $bcdeditRaw }
+  -Result $resultToken -Findings $Findings -Summary $RunState.summary `
+  -Metadata @{ BcdeditRaw = $RunState.bcdeditRaw }
 
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }

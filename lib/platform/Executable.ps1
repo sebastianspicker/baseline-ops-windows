@@ -7,7 +7,9 @@
   Executable name to look up.
 #>
 function Test-CommandExists {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Public compatibility contract')]
   [CmdletBinding()]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [string]$Name
@@ -22,52 +24,116 @@ function Test-CommandExists {
 .DESCRIPTION
   Rejects non-file, non-rooted, and reparse-point paths before invocation.
 #>
-function Resolve-NativeExecutablePath {
-  [CmdletBinding()]
+function Test-NativeExecutableRequest {
+  [OutputType([bool])]
+  param([AllowNull()][string]$Name)
+
+  return -not ([string]::IsNullOrWhiteSpace($Name) -or $Name -match '[\x00-\x1F\x7F]')
+}
+
+<#
+.SYNOPSIS
+  Resolves an approved bare Windows executable name.
+.DESCRIPTION
+  Limits bare names to the fixed system, package, Git, or current-host policy.
+#>
+function Resolve-ApprovedWindowsExecutableName {
   [OutputType([string])]
   param([Parameter(Mandatory)][string]$Name)
 
-  if ([string]::IsNullOrWhiteSpace($Name) -or $Name -match '[\x00-\x1F\x7F]') { return $null }
-
-  $windowsHost = $script:IsWindowsHost
-  $leafName = [System.IO.Path]::GetFileName($Name)
-  $hasPathComponent = $leafName -ne $Name
   $systemExecutables = @(
     'auditpol.exe','bcdedit.exe','certutil.exe','cscript.exe','dism.exe','manage-bde.exe',
     'netstat.exe','reg.exe','sc.exe','schtasks.exe','taskkill.exe','vssadmin.exe',
     'wecutil.exe','wevtutil.exe','w32tm.exe'
   )
+  if ($systemExecutables -icontains $Name) { return Resolve-TrustedWindowsSystemFile -LeafName $Name }
+  if ($Name -ieq 'winget.exe' -or $Name -ieq 'winget') { return Resolve-TrustedWingetPath }
+  if ($Name -ieq 'git.exe' -or $Name -ieq 'git') { return Resolve-TrustedGitPath }
+  return Resolve-CurrentNativeHostPath -Name $Name
+}
 
-  if ($windowsHost -and -not $hasPathComponent) {
-    if ($systemExecutables -icontains $Name) { return (Resolve-TrustedWindowsSystemFile -LeafName $Name) }
-    if ($Name -ieq 'winget.exe' -or $Name -ieq 'winget') { return (Resolve-TrustedWingetPath) }
-    if ($Name -ieq 'git.exe' -or $Name -ieq 'git') { return (Resolve-TrustedGitPath) }
+<#
+.SYNOPSIS
+  Resolves the current PowerShell host only for a matching bare name.
+.DESCRIPTION
+  Allows controlled self-spawn without broadening the executable trust policy.
+#>
+function Resolve-CurrentNativeHostPath {
+  [OutputType([string])]
+  param([Parameter(Mandatory)][string]$Name)
 
-    # The current PowerShell host is already executing and therefore has a
-    # stable identity; permit only that exact host for bare-name self-spawns.
-    $hostPath = try { (Get-Process -Id $PID -ErrorAction Stop).Path } catch { $null }
-    $requestedHostLeaf = if ([IO.Path]::HasExtension($Name)) { $Name } else { "$Name.exe" }
-    if (-not [string]::IsNullOrWhiteSpace($hostPath) -and [IO.Path]::GetFileName($hostPath) -ieq $requestedHostLeaf) {
-      return [IO.Path]::GetFullPath($hostPath)
-    }
-    return $null
-  }
+  $hostPath = try { (Get-Process -Id $PID -ErrorAction Stop).Path } catch { $null }
+  $requestedLeaf = if ([IO.Path]::HasExtension($Name)) { $Name } else { "$Name.exe" }
+  if ([string]::IsNullOrWhiteSpace($hostPath)) { return $null }
+  if ([IO.Path]::GetFileName($hostPath) -ine $requestedLeaf) { return $null }
+  return [IO.Path]::GetFullPath($hostPath)
+}
+
+<#
+.SYNOPSIS
+  Resolves a non-policy native executable candidate.
+.DESCRIPTION
+  Canonicalizes either a supplied path or an application discovered from PATH.
+#>
+function Resolve-UnrestrictedNativeExecutablePath {
+  [OutputType([string])]
+  param(
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][bool]$HasPathComponent
+  )
 
   try {
-    if ($hasPathComponent) {
+    if ($HasPathComponent) {
       $providerPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Name)
-      $candidate = (Resolve-Path -LiteralPath $providerPath -ErrorAction Stop).ProviderPath
-    } else {
-      $application = Get-Command -Name $Name -CommandType Application -ErrorAction Stop | Select-Object -First 1
-      if ($null -eq $application -or [string]::IsNullOrWhiteSpace([string]$application.Source)) { return $null }
-      $candidate = (Resolve-Path -LiteralPath $application.Source -ErrorAction Stop).ProviderPath
+      return (Resolve-Path -LiteralPath $providerPath -ErrorAction Stop).ProviderPath
     }
+    $application = Get-Command -Name $Name -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    if ($null -eq $application -or [string]::IsNullOrWhiteSpace([string]$application.Source)) { return $null }
+    return (Resolve-Path -LiteralPath $application.Source -ErrorAction Stop).ProviderPath
   } catch {
     return $null
   }
-  if (-not [System.IO.Path]::IsPathRooted($candidate) -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $null }
-  $volumeRoot = [System.IO.Path]::GetPathRoot($candidate)
-  if (Test-PathContainsReparsePoint -Path $candidate -Root $volumeRoot) { return $null }
+}
+
+<#
+.SYNOPSIS
+  Validates a canonical native executable path.
+.DESCRIPTION
+  Rejects non-rooted leaves and paths that cross reparse points.
+#>
+function Test-TrustedNativeExecutablePath {
+  [OutputType([bool])]
+  param([AllowNull()][string]$Path)
+
+  if (-not [System.IO.Path]::IsPathRooted($Path)) { return $false }
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+  $volumeRoot = [System.IO.Path]::GetPathRoot($Path)
+  return -not (Test-PathContainsReparsePoint -Path $Path -Root $volumeRoot)
+}
+
+<#
+.SYNOPSIS
+  Resolves a trusted absolute path for a native executable.
+.DESCRIPTION
+  Rejects non-file, non-rooted, and reparse-point paths before invocation.
+#>
+function Resolve-NativeExecutablePath {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param([Parameter(Mandatory)][string]$Name)
+
+  if (-not (Test-NativeExecutableRequest -Name $Name)) { return $null }
+
+  $windowsHost = $script:IsWindowsHost
+  $leafName = [System.IO.Path]::GetFileName($Name)
+  $hasPathComponent = $leafName -ne $Name
+
+  if ($windowsHost -and -not $hasPathComponent) {
+    return Resolve-ApprovedWindowsExecutableName -Name $Name
+  }
+
+  $candidate = Resolve-UnrestrictedNativeExecutablePath -Name $Name -HasPathComponent $hasPathComponent
+  if (-not (Test-TrustedNativeExecutablePath -Path $candidate)) { return $null }
   return $candidate
 }
 
@@ -100,6 +166,51 @@ function Resolve-TrustedWindowsSystemFile {
 .DESCRIPTION
   Searches trusted locations and rejects paths that cross reparse points.
 #>
+function Get-TrustedWingetCandidatePaths {
+  [OutputType([string[]])]
+  param([Parameter(Mandatory)][string]$WindowsAppsRoot)
+
+  $candidates = New-Object System.Collections.Generic.List[string]
+  try {
+    foreach ($directory in @(Get-ChildItem -LiteralPath $WindowsAppsRoot -Directory -Filter 'Microsoft.DesktopAppInstaller_*__8wekyb3d8bbwe' -ErrorAction Stop | Sort-Object Name -Descending)) {
+      [void]$candidates.Add((Join-Path $directory.FullName 'winget.exe'))
+    }
+  } catch {
+    Write-Verbose "Trusted WindowsApps enumeration failed: $($_.Exception.Message)"
+  }
+  return $candidates.ToArray()
+}
+
+<#
+.SYNOPSIS
+  Resolves a trusted candidate below an approved root.
+.DESCRIPTION
+  Rejects absent, escaped, and reparse-point candidate paths.
+#>
+function Resolve-TrustedExecutableCandidate {
+  [OutputType([string])]
+  param(
+    [Parameter(Mandatory)][string]$Candidate,
+    [AllowNull()][string]$ResolvedRoot
+  )
+
+  try {
+    if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) { return $null }
+    $resolved = (Resolve-Path -LiteralPath $Candidate -ErrorAction Stop).ProviderPath
+    if (-not (Test-PathUnderRoot -Path $resolved -Root $ResolvedRoot)) { return $null }
+    if (Test-PathContainsReparsePoint -Path $resolved -Root $ResolvedRoot) { return $null }
+    return $resolved
+  } catch {
+    return $null
+  }
+}
+
+<#
+.SYNOPSIS
+  Resolves an approved WinGet executable path.
+.DESCRIPTION
+  Searches trusted locations and rejects paths that cross reparse points.
+#>
 function Resolve-TrustedWingetPath {
   [CmdletBinding()]
   [OutputType([string])]
@@ -111,22 +222,50 @@ function Resolve-TrustedWingetPath {
   $windowsAppsRoot = Join-Path $programFiles 'WindowsApps'
   if (-not (Test-Path -LiteralPath $windowsAppsRoot -PathType Container)) { return $null }
 
-  $candidates = New-Object System.Collections.Generic.List[string]
-  try {
-    foreach ($directory in @(Get-ChildItem -LiteralPath $windowsAppsRoot -Directory -Filter 'Microsoft.DesktopAppInstaller_*__8wekyb3d8bbwe' -ErrorAction Stop | Sort-Object Name -Descending)) {
-      [void]$candidates.Add((Join-Path $directory.FullName 'winget.exe'))
-    }
-  } catch { Write-Verbose "Trusted WindowsApps enumeration failed: $($_.Exception.Message)" }
-
   $resolvedRoot = (Resolve-Path -LiteralPath $windowsAppsRoot -ErrorAction SilentlyContinue).ProviderPath
-  foreach ($candidate in $candidates) {
-    try {
-      if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
-      $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).ProviderPath
-      if (-not (Test-PathUnderRoot -Path $resolved -Root $resolvedRoot)) { continue }
-      if (Test-PathContainsReparsePoint -Path $resolved -Root $resolvedRoot) { continue }
-      return $resolved
-    } catch { continue }
+  foreach ($candidate in @(Get-TrustedWingetCandidatePaths -WindowsAppsRoot $windowsAppsRoot)) {
+    $resolved = Resolve-TrustedExecutableCandidate -Candidate $candidate -ResolvedRoot $resolvedRoot
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) { return $resolved }
+  }
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Resolves an approved Git executable path.
+.DESCRIPTION
+  Limits discovery to validated native executable locations.
+#>
+function Resolve-TrustedPosixGitPath {
+  [OutputType([string])]
+  param()
+
+  try {
+    $application = Get-Command -Name git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    if ($null -eq $application -or [string]::IsNullOrWhiteSpace([string]$application.Source)) { return $null }
+    $resolved = (Resolve-Path -LiteralPath $application.Source -ErrorAction Stop).ProviderPath
+    $volumeRoot = [IO.Path]::GetPathRoot($resolved)
+    if (Test-PathContainsReparsePoint -Path $resolved -Root $volumeRoot) { return $null }
+    return $resolved
+  } catch {
+    return $null
+  }
+}
+
+<#
+.SYNOPSIS
+  Resolves a trusted Git executable below one approved root.
+.DESCRIPTION
+  Tries the supported Git installation layouts in a deterministic order.
+#>
+function Resolve-TrustedGitPathFromRoot {
+  [OutputType([string])]
+  param([Parameter(Mandatory)][string]$Root)
+
+  foreach ($relativePath in @('Git\cmd\git.exe', 'Git\bin\git.exe')) {
+    $candidate = Join-Path $Root $relativePath
+    $resolved = Resolve-TrustedExecutableCandidate -Candidate $candidate -ResolvedRoot $Root
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) { return $resolved }
   }
   return $null
 }
@@ -143,14 +282,7 @@ function Resolve-TrustedGitPath {
   param()
 
   if (-not $script:IsWindowsHost) {
-    try {
-      $application = Get-Command -Name git -CommandType Application -ErrorAction Stop | Select-Object -First 1
-      if ($null -eq $application -or [string]::IsNullOrWhiteSpace([string]$application.Source)) { return $null }
-      $resolved = (Resolve-Path -LiteralPath $application.Source -ErrorAction Stop).ProviderPath
-      $volumeRoot = [IO.Path]::GetPathRoot($resolved)
-      if (Test-PathContainsReparsePoint -Path $resolved -Root $volumeRoot) { return $null }
-      return $resolved
-    } catch { return $null }
+    return Resolve-TrustedPosixGitPath
   }
 
   $roots = @(
@@ -158,16 +290,8 @@ function Resolve-TrustedGitPath {
     [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
   ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
   foreach ($root in $roots) {
-    foreach ($relativePath in @('Git\cmd\git.exe', 'Git\bin\git.exe')) {
-      try {
-        $candidate = Join-Path $root $relativePath
-        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
-        $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).ProviderPath
-        if (-not (Test-PathUnderRoot -Path $resolved -Root $root)) { continue }
-        if (Test-PathContainsReparsePoint -Path $resolved -Root $root) { continue }
-        return $resolved
-      } catch { continue }
-    }
+    $resolved = Resolve-TrustedGitPathFromRoot -Root $root
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) { return $resolved }
   }
   return $null
 }
@@ -181,7 +305,9 @@ function Resolve-TrustedGitPath {
   Custom error message on failure.
 #>
 function Ensure-Cmdlet {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseApprovedVerbs', '', Justification = 'Public compatibility contract')]
   [CmdletBinding()]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [string]$Name,
@@ -202,7 +328,9 @@ function Ensure-Cmdlet {
   Custom error message on failure.
 #>
 function Ensure-Exe {
+  [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseApprovedVerbs', '', Justification = 'Public compatibility contract')]
   [CmdletBinding()]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [string]$Name,

@@ -97,6 +97,27 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
+function Initialize-Capability24Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+    ExportPath = $ExportPath
+    IncludeExpired = $IncludeExpired
+    RequirePrivateKey = $RequirePrivateKey
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
@@ -106,16 +127,18 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability24Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
@@ -124,9 +147,9 @@ if (-not $isWindowsHost) {
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
   $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
-  $result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
-  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
+  $RunState.result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $RunState.result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $RunState.result }
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
@@ -262,10 +285,9 @@ function Get-HealthStatus {
 }
 
 
-function Show-ConsoleSummary {
-  param([Parameter(Mandatory)]$ResultObject)
-
-  $status = Get-HealthStatus -ResultObject $ResultObject
+function Show-ConsoleSummarySection01 {
+  param([hashtable]$RunState)
+$status = Get-HealthStatus -ResultObject $RunState.ResultObject
 
   $statusColor = 'Green'
   if ($status -eq 'Warning') { $statusColor = 'Yellow' }
@@ -280,34 +302,37 @@ function Show-ConsoleSummary {
   Write-UiLine $line -ForegroundColor DarkGray
 
   Write-KeyValue -Label 'Status' -Value $status -LabelColor Gray -ValueColor $statusColor
-  Write-KeyValue -Label 'ComputerName' -Value $ResultObject.ComputerName -LabelColor Gray -ValueColor White
-  Write-KeyValue -Label 'Timestamp' -Value ([string]$ResultObject.Timestamp) -LabelColor Gray -ValueColor White
+  Write-KeyValue -Label 'ComputerName' -Value $RunState.ResultObject.ComputerName -LabelColor Gray -ValueColor White
+  Write-KeyValue -Label 'Timestamp' -Value ([string]$RunState.ResultObject.Timestamp) -LabelColor Gray -ValueColor White
 
   Write-UiLine ""
   Write-UiLine "Configuration" -ForegroundColor Cyan
   Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
   $cfgLoadedColor = 'Warning'
-  if ($ResultObject.ConfigLoaded) { $cfgLoadedColor = 'Green' }
-  Write-KeyValue -Label 'ConfigLoaded' -Value ([string]$ResultObject.ConfigLoaded) -ValueColor $cfgLoadedColor
+  if ($RunState.ResultObject.ConfigLoaded) { $cfgLoadedColor = 'Green' }
+  Write-KeyValue -Label 'ConfigLoaded' -Value ([string]$RunState.ResultObject.ConfigLoaded) -ValueColor $cfgLoadedColor
 
-  if ($ResultObject.ConfigPath) {
-    Write-KeyValue -Label 'ConfigPath' -Value $ResultObject.ConfigPath -ValueColor DarkGray
+  if ($RunState.ResultObject.ConfigPath) {
+    Write-KeyValue -Label 'ConfigPath' -Value $RunState.ResultObject.ConfigPath -ValueColor DarkGray
   }
 
   Write-UiLine ""
   Write-UiLine "AutoEnrollment" -ForegroundColor Cyan
   Write-UiLine ('-' * 40) -ForegroundColor DarkGray
+}
 
-  if ($ResultObject.NoPulse) {
+function Show-ConsoleSummarySection02 {
+  param([hashtable]$RunState)
+if ($RunState.ResultObject.NoPulse) {
     Write-KeyValue -Label 'Pulse' -Value 'Skipped (NoPulse)' -ValueColor DarkGray
   } else {
     $pulseColor = 'Red'
-    if ($ResultObject.AutoEnrollmentTriggered) { $pulseColor = 'Green' }
-    Write-KeyValue -Label 'PulseTriggered' -Value ([string]$ResultObject.AutoEnrollmentTriggered) -ValueColor $pulseColor
+    if ($RunState.ResultObject.AutoEnrollmentTriggered) { $pulseColor = 'Green' }
+    Write-KeyValue -Label 'PulseTriggered' -Value ([string]$RunState.ResultObject.AutoEnrollmentTriggered) -ValueColor $pulseColor
 
-    if ($ResultObject.AutoEnrollmentError) {
-      Write-KeyValue -Label 'PulseError' -Value $ResultObject.AutoEnrollmentError -ValueColor Red
+    if ($RunState.ResultObject.AutoEnrollmentError) {
+      Write-KeyValue -Label 'PulseError' -Value $RunState.ResultObject.AutoEnrollmentError -ValueColor Red
     }
   }
 
@@ -316,44 +341,48 @@ function Show-ConsoleSummary {
   Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
   $modeColor = 'Warning'
-  if ($ResultObject.EventQueryMode -eq 'Operational') { $modeColor = 'Green' }
-  if ($ResultObject.EventQueryMode -eq 'None') { $modeColor = 'Red' }
-  Write-KeyValue -Label 'QueryMode' -Value $ResultObject.EventQueryMode -ValueColor $modeColor
+  if ($RunState.ResultObject.EventQueryMode -eq 'Operational') { $modeColor = 'Green' }
+  if ($RunState.ResultObject.EventQueryMode -eq 'None') { $modeColor = 'Red' }
+  Write-KeyValue -Label 'QueryMode' -Value $RunState.ResultObject.EventQueryMode -ValueColor $modeColor
 
-  Write-KeyValue -Label 'LogNameUsed' -Value ([string]$ResultObject.LogNameUsed) -ValueColor White
-  Write-KeyValue -Label 'HoursBack' -Value ([string]$ResultObject.HoursBack) -ValueColor White
+  Write-KeyValue -Label 'LogNameUsed' -Value ([string]$RunState.ResultObject.LogNameUsed) -ValueColor White
+  Write-KeyValue -Label 'HoursBack' -Value ([string]$RunState.ResultObject.HoursBack) -ValueColor White
 
-  $eventsColor = 'Gray'
-  if ($ResultObject.EventsFound -gt 0) { $eventsColor = 'Warning' }
-  Write-KeyValue -Label 'EventsFound' -Value ([string]$ResultObject.EventsFound) -ValueColor $eventsColor
+  $RunState.eventsColor = 'Gray'
+}
 
-  if ($ResultObject.EventQueryError) {
-    Write-KeyValue -Label 'EventQueryError' -Value $ResultObject.EventQueryError -ValueColor DarkYellow
+function Show-ConsoleSummarySection03 {
+  param([hashtable]$RunState)
+if ($RunState.ResultObject.EventsFound -gt 0) { $RunState.eventsColor = 'Warning' }
+  Write-KeyValue -Label 'EventsFound' -Value ([string]$RunState.ResultObject.EventsFound) -ValueColor $RunState.eventsColor
+
+  if ($RunState.ResultObject.EventQueryError) {
+    Write-KeyValue -Label 'EventQueryError' -Value $RunState.ResultObject.EventQueryError -ValueColor DarkYellow
   }
 
   Write-UiLine ""
   Write-UiLine "Certificates (LocalMachine\\My)" -ForegroundColor Cyan
   Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
-  Write-KeyValue -Label 'WarnDays' -Value ([string]$ResultObject.WarnDays) -ValueColor White
-  Write-KeyValue -Label 'IncludeExpired' -Value ([string]$ResultObject.IncludeExpired) -ValueColor White
-  Write-KeyValue -Label 'RequirePrivateKey' -Value ([string]$ResultObject.RequirePrivateKey) -ValueColor White
+  Write-KeyValue -Label 'WarnDays' -Value ([string]$RunState.ResultObject.WarnDays) -ValueColor White
+  Write-KeyValue -Label 'IncludeExpired' -Value ([string]$RunState.ResultObject.IncludeExpired) -ValueColor White
+  Write-KeyValue -Label 'RequirePrivateKey' -Value ([string]$RunState.ResultObject.RequirePrivateKey) -ValueColor White
 
   $expColor = 'Green'
-  if ($ResultObject.ExpiringCertsFound -gt 0) { $expColor = 'Yellow' }
-  Write-KeyValue -Label 'ExpiringCertsFound' -Value ([string]$ResultObject.ExpiringCertsFound) -ValueColor $expColor
+  if ($RunState.ResultObject.ExpiringCertsFound -gt 0) { $expColor = 'Yellow' }
+  Write-KeyValue -Label 'ExpiringCertsFound' -Value ([string]$RunState.ResultObject.ExpiringCertsFound) -ValueColor $expColor
 
-  if ($ResultObject.CertificateReadError) {
-    Write-KeyValue -Label 'CertificateReadError' -Value $ResultObject.CertificateReadError -ValueColor Red
+  if ($RunState.ResultObject.CertificateReadError) {
+    Write-KeyValue -Label 'CertificateReadError' -Value $RunState.ResultObject.CertificateReadError -ValueColor Red
   }
 
   Write-UiLine ""
   Write-UiLine "Export" -ForegroundColor Cyan
   Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
-  if ($ResultObject.ExportBasePath) {
+  if ($RunState.ResultObject.ExportBasePath) {
     Write-KeyValue -Label 'CSV Export' -Value 'Enabled' -ValueColor Green
-    Write-KeyValue -Label 'ExportBasePath' -Value $ResultObject.ExportBasePath -ValueColor White
+    Write-KeyValue -Label 'ExportBasePath' -Value $RunState.ResultObject.ExportBasePath -ValueColor White
   } else {
     Write-KeyValue -Label 'CSV Export' -Value 'Disabled' -ValueColor DarkGray
   }
@@ -362,181 +391,218 @@ function Show-ConsoleSummary {
   Write-UiLine ""
 }
 
+function Show-ConsoleSummary {
+  param([Parameter(Mandatory)]$ResultObject, [hashtable]$RunState)
+  $RunState.ResultObject = $ResultObject
+
+    . Show-ConsoleSummarySection01 -RunState $RunState
+    . Show-ConsoleSummarySection02 -RunState $RunState
+    . Show-ConsoleSummarySection03 -RunState $RunState
+}
+
 # Defaults + optional JSON config
-$defaults = [pscustomobject]@{
-  WarnDays          = 30
-  HoursBack         = 24
-  RequirePrivateKey = $true
-  IncludeExpired    = $false
-  ExportPath        = $null
-  LogName           = 'Microsoft-Windows-CertificateServicesClient-AutoEnrollment/Operational'
+function Invoke-Capability24MainPhase01 {
+  param([hashtable]$RunState)
+  $defaults = [pscustomobject]@{
+    WarnDays          = 30
+    HoursBack         = 24
+    RequirePrivateKey = $true
+    IncludeExpired    = $false
+    ExportPath        = $null
+    LogName           = 'Microsoft-Windows-CertificateServicesClient-AutoEnrollment/Operational'
+  }
+
+  $configObj = Read-JsonFileSafe -Path $ConfigPath
+
+  $WarnDays  = Get-ConfigValueInt -ConfigObject $configObj -Name 'WarnDays'  -DefaultValue $WarnDays  -Min 1 -Max 3650
+  $HoursBack = Get-ConfigValueInt -ConfigObject $configObj -Name 'HoursBack' -DefaultValue $HoursBack -Min 1 -Max 168
+
+  if (-not $script:__EntryBoundParameters.ContainsKey('RequirePrivateKey')) {
+    $RunState.RequirePrivateKey = Get-ConfigValueBool -ConfigObject $configObj -Name 'RequirePrivateKey' -DefaultValue $defaults.RequirePrivateKey
+  }
+  if (-not $script:__EntryBoundParameters.ContainsKey('IncludeExpired')) {
+    $RunState.IncludeExpired = Get-ConfigValueBool -ConfigObject $configObj -Name 'IncludeExpired' -DefaultValue $defaults.IncludeExpired
+  }
+  if (-not $script:__EntryBoundParameters.ContainsKey('ExportPath')) {
+    $RunState.ExportPath = Get-ConfigValueString -ConfigObject $configObj -Name 'ExportPath' -DefaultValue $defaults.ExportPath
+  }
+
+  $RunState.logName = Get-ConfigValueString -ConfigObject $configObj -Name 'LogName' -DefaultValue $defaults.LogName
+
+  # Preconditions
+  Require-Admin
+
+  if (-not (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
+    $msg = "Cert: drive is not available. The Microsoft.PowerShell.Security provider/module may be missing."
+    Write-Warning $msg
+    $v2Result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $msg } -Metadata @{}
+    Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+    if ($PassThru) { $v2Result }
+    exit (Get-V2ExitCode -Result 'FAIL')
+  }
+
+  # 1) Trigger autoenrollment (optional)
+  $RunState.autoEnrollTriggered = $false
+  $RunState.autoEnrollError     = $null
 }
-
-$configObj = Read-JsonFileSafe -Path $ConfigPath
-
-$WarnDays  = Get-ConfigValueInt -ConfigObject $configObj -Name 'WarnDays'  -DefaultValue $WarnDays  -Min 1 -Max 3650
-$HoursBack = Get-ConfigValueInt -ConfigObject $configObj -Name 'HoursBack' -DefaultValue $HoursBack -Min 1 -Max 168
-
-if (-not $PSBoundParameters.ContainsKey('RequirePrivateKey')) {
-  $RequirePrivateKey = Get-ConfigValueBool -ConfigObject $configObj -Name 'RequirePrivateKey' -DefaultValue $defaults.RequirePrivateKey
+function Invoke-Capability24MainPhase02 {
+  param([hashtable]$RunState)
+  if ($NoPulse) {
+    $RunState.autoEnrollTriggered = $false
+    $RunState.autoEnrollError = "Skipped (NoPulse)."
+  } else {
+    try {
+      $pulse = Invoke-NativeCommand -Command 'certutil.exe' -Arguments @('-pulse') -CaptureOutput -Quiet -TimeoutSeconds 120 -MaxOutputBytes 262144
+      if ((Test-AnyCondition -Conditions @({ $null -eq $pulse }, { -not $pulse.Success })) -or $pulse.TimedOut -or $pulse.OutputTruncated -or $pulse.StderrTruncated) { throw 'certutil -pulse timed out, failed, or produced truncated output.' }
+      $RunState.autoEnrollTriggered = $true
+    } catch {
+      $RunState.autoEnrollTriggered = $false
+      $RunState.autoEnrollError     = $_.Exception.Message
+    }
+  }
 }
-if (-not $PSBoundParameters.ContainsKey('IncludeExpired')) {
-  $IncludeExpired = Get-ConfigValueBool -ConfigObject $configObj -Name 'IncludeExpired' -DefaultValue $defaults.IncludeExpired
-}
-if (-not $PSBoundParameters.ContainsKey('ExportPath')) {
-  $ExportPath = Get-ConfigValueString -ConfigObject $configObj -Name 'ExportPath' -DefaultValue $defaults.ExportPath
-}
+function Invoke-Capability24MainPhase03 {
+  param([hashtable]$RunState)
+  $startTime = (Get-Date).AddHours(-1 * $HoursBack)
 
-$logName = Get-ConfigValueString -ConfigObject $configObj -Name 'LogName' -DefaultValue $defaults.LogName
+  $eventQuery = Get-AutoEnrollEvents -StartTime $startTime -OperationalLogName $RunState.logName
 
-# Preconditions
-Require-Admin
+  $eventsRaw = @($eventQuery.Events)
+  $RunState.eventOut = $eventsRaw | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message
 
-if (-not (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
-  $msg = "Cert: drive is not available. The Microsoft.PowerShell.Security provider/module may be missing."
-  Write-Warning $msg
-  $v2Result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result 'FAIL' -Findings @() -Summary @{ Error = $msg } -Metadata @{}
-  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $v2Result }
-  exit (Get-V2ExitCode -Result 'FAIL')
-}
+  # 3) Expiring machine certificates
+  $now      = Get-Date
+  $deadline = (Get-Date).AddDays($WarnDays)
 
-# 1) Trigger autoenrollment (optional)
-$autoEnrollTriggered = $false
-$autoEnrollError     = $null
+  $RunState.certReadError = $null
+  $RunState.certOut = @()
 
-if ($NoPulse) {
-  $autoEnrollTriggered = $false
-  $autoEnrollError = "Skipped (NoPulse)."
-} else {
   try {
-    $pulse = Invoke-NativeCommand -Command 'certutil.exe' -Arguments @('-pulse') -CaptureOutput -Quiet -TimeoutSeconds 120 -MaxOutputBytes 262144
-    if ($null -eq $pulse -or -not $pulse.Success -or $pulse.TimedOut -or $pulse.OutputTruncated -or $pulse.StderrTruncated) { throw 'certutil -pulse timed out, failed, or produced truncated output.' }
-    $autoEnrollTriggered = $true
+    $certCandidates = Get-ChildItem -Path 'Cert:\LocalMachine\My' -ErrorAction Stop
+
+    if ($RunState.RequirePrivateKey) {
+      $certCandidates = $certCandidates | Where-Object { $_.HasPrivateKey }
+    }
+
+    $certCandidates = $certCandidates | Where-Object {
+      if ($RunState.IncludeExpired) { $_.NotAfter -le $deadline }
+      else { ($_.NotAfter -ge $now) -and ($_.NotAfter -le $deadline) }
+    }
+
+    $RunState.certOut = $certCandidates | Select-Object Subject, Thumbprint, NotAfter, Issuer, FriendlyName, HasPrivateKey
   } catch {
-    $autoEnrollTriggered = $false
-    $autoEnrollError     = $_.Exception.Message
+    $RunState.certOut = @()
+    $RunState.certReadError = $_.Exception.Message
   }
 }
+function Invoke-Capability24MainPhase04 {
+  param([hashtable]$RunState)
+  $RunState.result = [pscustomobject]@{
+    ComputerName              = $env:COMPUTERNAME
+    Timestamp                 = Get-Date
 
-# 2) Query events
-$startTime = (Get-Date).AddHours(-1 * $HoursBack)
+    WarnDays                  = $WarnDays
+    HoursBack                 = $HoursBack
+    IncludeExpired            = [bool]$RunState.IncludeExpired
+    RequirePrivateKey         = [bool]$RunState.RequirePrivateKey
+    NoPulse                   = [bool]$NoPulse
 
-$eventQuery = Get-AutoEnrollEvents -StartTime $startTime -OperationalLogName $logName
+    ConfigPath                = $ConfigPath
+    ConfigLoaded              = ($null -ne $configObj)
 
-$eventsRaw = @($eventQuery.Events)
-$eventOut = $eventsRaw | Select-Object TimeCreated, Id, LevelDisplayName, ProviderName, Message
+    AutoEnrollmentTriggered   = $RunState.autoEnrollTriggered
+    AutoEnrollmentError       = $RunState.autoEnrollError
 
-# 3) Expiring machine certificates
-$now      = Get-Date
-$deadline = (Get-Date).AddDays($WarnDays)
+    EventQueryMode            = $eventQuery.Mode
+    AutoEnrollmentLogName     = $RunState.logName
+    LogNameUsed               = $eventQuery.LogNameUsed
+    OperationalLogAvailable   = [bool]$eventQuery.OperationalAvailable
+    EventQueryError           = $eventQuery.Error
+    EventsFound               = @($RunState.eventOut).Count
 
-$certReadError = $null
-$certOut = @()
+    ExpiringCertsFound        = @($RunState.certOut).Count
+    CertificateReadError      = $RunState.certReadError
 
-try {
-  $certCandidates = Get-ChildItem -Path 'Cert:\LocalMachine\My' -ErrorAction Stop
+    ExportBasePath            = $RunState.ExportPath
 
-  if ($RequirePrivateKey) {
-    $certCandidates = $certCandidates | Where-Object { $_.HasPrivateKey }
+    Events                    = $RunState.eventOut
+    ExpiringCertificates      = $RunState.certOut
   }
 
-  $certCandidates = $certCandidates | Where-Object {
-    if ($IncludeExpired) { $_.NotAfter -le $deadline }
-    else { ($_.NotAfter -ge $now) -and ($_.NotAfter -le $deadline) }
+  if ($RunState.certReadError) {
+    Add-Finding -FindingList $script:Findings -Code 'CERT-ReadError' -Severity 'High' `
+      -Message ("Certificate read error: {0}" -f $RunState.certReadError)
+  }
+  if ($eventQuery.Mode -eq 'None') {
+    Add-Finding -FindingList $script:Findings -Code 'CERT-EventQueryFailed' -Severity 'Medium' `
+      -Message ("Event log query failed: {0}" -f $eventQuery.Error)
+  }
+  if (-not $NoPulse -and -not $RunState.autoEnrollTriggered) {
+    Add-Finding -FindingList $script:Findings -Code 'CERT-PulseFailed' -Severity 'Medium' `
+      -Message ("AutoEnrollment pulse failed: {0}" -f $RunState.autoEnrollError)
+  }
+}
+function Invoke-Capability24MainPhase05 {
+  param([hashtable]$RunState)
+  foreach ($cert in @($RunState.certOut)) {
+    $daysLeft = [math]::Round(($cert.NotAfter - (Get-Date)).TotalDays, 0)
+    $sev = if ($daysLeft -le 7) { 'High' } elseif ($daysLeft -le 14) { 'Medium' } else { 'Low' }
+    Add-Finding -FindingList $script:Findings -Code 'CERT-Expiring' -Severity $sev `
+      -Message ("Certificate expiring in {0} days: {1} (Thumbprint: {2})" -f $daysLeft, $cert.Subject, $cert.Thumbprint) `
+      -Extra @{ Subject = $cert.Subject; Thumbprint = $cert.Thumbprint; NotAfter = $cert.NotAfter; DaysLeft = $daysLeft }
   }
 
-  $certOut = $certCandidates | Select-Object Subject, Thumbprint, NotAfter, Issuer, FriendlyName, HasPrivateKey
-} catch {
-  $certOut = @()
-  $certReadError = $_.Exception.Message
+  # 5) Optional CSV export
+  if ($RunState.ExportPath) {
+    $folder = Split-Path -Path $RunState.ExportPath -Parent
+    if (-not $folder) { $folder = (Get-Location).Path }
+    [void](Ensure-Directory -Path $folder)
+
+    $base = [IO.Path]::GetFileNameWithoutExtension($RunState.ExportPath)
+
+    $summaryPath = Join-Path $folder ($base + "_summary.csv")
+    $eventsPath  = Join-Path $folder ($base + "_events.csv")
+    $certsPath   = Join-Path $folder ($base + "_expiring.csv")
+
+    $RunState.result |
+      Select-Object ComputerName, Timestamp, WarnDays, HoursBack, IncludeExpired, RequirePrivateKey, NoPulse,
+                    ConfigPath, ConfigLoaded,
+                    AutoEnrollmentTriggered, AutoEnrollmentError,
+                    EventQueryMode, AutoEnrollmentLogName, LogNameUsed, OperationalLogAvailable, EventQueryError, EventsFound,
+                    ExpiringCertsFound, CertificateReadError, ExportBasePath |
+      Export-Csv -Path $summaryPath -NoTypeInformation -Encoding UTF8
+
+    $RunState.eventOut | Export-Csv -Path $eventsPath -NoTypeInformation -Encoding UTF8
+    $RunState.certOut  | Export-Csv -Path $certsPath  -NoTypeInformation -Encoding UTF8
+  }
 }
-
-# 4) Unified result object
-$result = [pscustomobject]@{
-  ComputerName              = $env:COMPUTERNAME
-  Timestamp                 = Get-Date
-
-  WarnDays                  = $WarnDays
-  HoursBack                 = $HoursBack
-  IncludeExpired            = [bool]$IncludeExpired
-  RequirePrivateKey         = [bool]$RequirePrivateKey
-  NoPulse                   = [bool]$NoPulse
-
-  ConfigPath                = $ConfigPath
-  ConfigLoaded              = ($null -ne $configObj)
-
-  AutoEnrollmentTriggered   = $autoEnrollTriggered
-  AutoEnrollmentError       = $autoEnrollError
-
-  EventQueryMode            = $eventQuery.Mode
-  AutoEnrollmentLogName     = $logName
-  LogNameUsed               = $eventQuery.LogNameUsed
-  OperationalLogAvailable   = [bool]$eventQuery.OperationalAvailable
-  EventQueryError           = $eventQuery.Error
-  EventsFound               = @($eventOut).Count
-
-  ExpiringCertsFound        = @($certOut).Count
-  CertificateReadError      = $certReadError
-
-  ExportBasePath            = $ExportPath
-
-  Events                    = $eventOut
-  ExpiringCertificates      = $certOut
+function Invoke-Capability24MainPhase06 {
+  param([hashtable]$RunState)
+  if (-not $NoConsoleSummary) {
+    Show-ConsoleSummary -ResultObject $RunState.result -RunState $RunState
+  }
 }
-
-if ($certReadError) {
-  Add-Finding -FindingList $script:Findings -Code 'CERT-ReadError' -Severity 'High' `
-    -Message ("Certificate read error: {0}" -f $certReadError)
+function Invoke-Capability24Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability24MainPhase01 -RunState $RunState
+  . Invoke-Capability24MainPhase02 -RunState $RunState
+  . Invoke-Capability24MainPhase03 -RunState $RunState
+  . Invoke-Capability24MainPhase04 -RunState $RunState
+  . Invoke-Capability24MainPhase05 -RunState $RunState
+  . Invoke-Capability24MainPhase06 -RunState $RunState
 }
-if ($eventQuery.Mode -eq 'None') {
-  Add-Finding -FindingList $script:Findings -Code 'CERT-EventQueryFailed' -Severity 'Medium' `
-    -Message ("Event log query failed: {0}" -f $eventQuery.Error)
-}
-if (-not $NoPulse -and -not $autoEnrollTriggered) {
-  Add-Finding -FindingList $script:Findings -Code 'CERT-PulseFailed' -Severity 'Medium' `
-    -Message ("AutoEnrollment pulse failed: {0}" -f $autoEnrollError)
-}
-foreach ($cert in @($certOut)) {
-  $daysLeft = [math]::Round(($cert.NotAfter - (Get-Date)).TotalDays, 0)
-  $sev = if ($daysLeft -le 7) { 'High' } elseif ($daysLeft -le 14) { 'Medium' } else { 'Low' }
-  Add-Finding -FindingList $script:Findings -Code 'CERT-Expiring' -Severity $sev `
-    -Message ("Certificate expiring in {0} days: {1} (Thumbprint: {2})" -f $daysLeft, $cert.Subject, $cert.Thumbprint) `
-    -Extra @{ Subject = $cert.Subject; Thumbprint = $cert.Thumbprint; NotAfter = $cert.NotAfter; DaysLeft = $daysLeft }
-}
-
-# 5) Optional CSV export
-if ($ExportPath) {
-  $folder = Split-Path -Path $ExportPath -Parent
-  if (-not $folder) { $folder = (Get-Location).Path }
-  [void](Ensure-Directory -Path $folder)
-
-  $base = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
-
-  $summaryPath = Join-Path $folder ($base + "_summary.csv")
-  $eventsPath  = Join-Path $folder ($base + "_events.csv")
-  $certsPath   = Join-Path $folder ($base + "_expiring.csv")
-
-  $result |
-    Select-Object ComputerName, Timestamp, WarnDays, HoursBack, IncludeExpired, RequirePrivateKey, NoPulse,
-                  ConfigPath, ConfigLoaded,
-                  AutoEnrollmentTriggered, AutoEnrollmentError,
-                  EventQueryMode, AutoEnrollmentLogName, LogNameUsed, OperationalLogAvailable, EventQueryError, EventsFound,
-                  ExpiringCertsFound, CertificateReadError, ExportBasePath |
-    Export-Csv -Path $summaryPath -NoTypeInformation -Encoding UTF8
-
-  $eventOut | Export-Csv -Path $eventsPath -NoTypeInformation -Encoding UTF8
-  $certOut  | Export-Csv -Path $certsPath  -NoTypeInformation -Encoding UTF8
-}
-
-# Console summary (host-only)
-if (-not $NoConsoleSummary) {
-  Show-ConsoleSummary -ResultObject $result
-}
+. Invoke-Capability24Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # V2 output contract
-$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
+function Get-Capability24ResultToken {
+  $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability24ResultToken
+$v2Result = Get-V2ResultObject -ScriptName '24-Cert-AutoEnrollment-Health.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $RunState.result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

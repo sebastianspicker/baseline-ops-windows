@@ -142,9 +142,9 @@ param(
   [switch]$Strict,
   [string]$ConfigPath
 
-,
-  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
-  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  ,
+  [ValidateSet('Audit', 'Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console', 'Json', 'Csv', 'None')][string]$OutputFormat = 'Console',
   [string]$OutputPath,
   [switch]$PassThru,
   [switch]$Quiet,
@@ -152,44 +152,76 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
-Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Evidence.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
-Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
-Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+function Import-ArtifactServices {
+  Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
+  Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
+  Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
+  Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+  Import-Module (Join-Path $script:LibPath 'Evidence.psm1') -Force
+  Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
+  Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
+  Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
+  Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
+
+}
+. Import-ArtifactServices
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
-if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+function Get-ArtifactV2Context {
+  param($BoundParameters)
+  return Initialize-V2Context -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -BoundParameters $BoundParameters `
+    -Values @{ Mode = $Mode
+    ConfigPath = $ConfigPath
+    OutputFormat = $OutputFormat
+    OutputPath = $OutputPath
+    PassThru = $PassThru
+    Strict = $Strict
+    Quiet = $Quiet
+    NoColor = $NoColor
+    DeriveRemediate = $false
+  }
+}
+$script:__V2Context = Get-ArtifactV2Context -BoundParameters $PSBoundParameters
+if ($script:__V2Context.Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+function Write-ArtifactUnsupportedResult {
+  param([string]$UnsupportedResult)
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
-    Timestamp    = Get-Date
-    Mode         = $Mode
-    Supported    = $false
-    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+    Timestamp = Get-Date
+    Mode = $Mode
+    Supported = $false
+    Notes = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
   $result = Get-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
+  if ($PassThru) {
+    $result
+  }
+}
+
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $unsupportedResult = if ($Strict) {
+    'FAIL'
+  }
+  else {
+    'WARN'
+  }
+  Write-ArtifactUnsupportedResult -UnsupportedResult $unsupportedResult
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
 # Make Write-Information visible for humans; it is controlled by InformationPreference.
-if (-not $Quiet) { $InformationPreference = 'Continue' }
+if (-not $Quiet) {
+  $InformationPreference = 'Continue'
+}
 
 # -------------------------
 # Globals
@@ -220,221 +252,47 @@ $ScriptVersion = '2025.12.22-ps51'
 
 . (Join-Path $PSScriptRoot 'internal/12-Suspicious-Artifact-Grabber.helpers.ps1')
 
-function Reset-Trigger {
-  [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
-  param($cat)
-  try {
-    $rk = [string]$cat.Trigger.Registry
-    if ($rk -and (Test-Path -LiteralPath $rk)) {
-      if (-not $PSCmdlet.ShouldProcess($rk, 'Reset artifact grabber trigger registry flag')) {
-        return
-      }
-      New-ItemProperty -Path $rk -Name 'Request' -PropertyType DWord -Value 0 -Force | Out-Null
-    }
-  } catch {
-    Write-Verbose ("Artifact grabber trigger registry reset failed: {0}" -f $_.Exception.Message)
-  }
-}
-
-
 # -------------------------
 # MAIN
 # -------------------------
 $script:Findings = Get-FindingsList
 
-$errors   = New-Object System.Collections.Generic.List[string]
-$hasFindings = $false
-$ok       = $true
-$summary  = $null
-$catalogNote = $null
-
-try {
-  Write-Information ("IR Grabber starting (v{0})" -f $ScriptVersion)
-
-  $cat = Load-Catalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath -CatalogLoadNote ([ref]$catalogNote)
-  if (-not $cat) { $cat = Get-BaseClone $DefaultCatalog }
-  Initialize-ArtifactRegexRules -Catalog $cat
-  if (-not (Ensure-EventSource)) { Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable." }
-
-  $base = Assert-ArtifactEvidenceOutputBase -OutputBase ([string]$cat.OutputBase)
-
-  $tr = Read-Trigger -cat $cat -Force:$Force -CollectSamples:$CollectSamples
-  if (-not $tr.Want) {
-    $msg = "IR Grabber: no trigger set (registry/fileflag), aborted. Hint: run with -Force."
-    Write-HealthEvent 10021 $msg 'Warning'
-
-    $summary = [ordered]@{
-      Host    = $env:COMPUTERNAME
-      Time    = (Get-Date).ToString('s')
-      Reason  = $tr.Reason
-      Trigger = @{
-        Registry = [string]$cat.Trigger.Registry
-        FileFlag = [string]$cat.Trigger.FileFlag
-        Force    = [bool]$Force
-      }
-      Output  = @{ WorkDir = $null; Zip = $null }
-      Counts  = @{}
-      Errors  = @()
-      Notes   = @()
-      Samples = @()
-    }
-
-  } else {
-    $ts = Get-RunId
-
-  $work = Join-Path $base $ts
-  $zip  = Join-Path $base ("Grabber-{0}-{1}.zip" -f $env:COMPUTERNAME,$ts)
-
-  [void](Ensure-Directory $work)
-
-  $summary = [ordered]@{
-    Host    = $env:COMPUTERNAME
-    Time    = (Get-Date).ToString('s')
-    Reason  = $tr.Reason
-    Trigger = @{
-      Registry = [string]$cat.Trigger.Registry
-      FileFlag = [string]$cat.Trigger.FileFlag
-      Force    = [bool]$Force
-    }
-    Output  = @{ WorkDir = $work; Zip = $zip }
-    Counts  = @{}
-    Errors  = @()
-    Notes   = @()
-    Samples = @()
+function New-ArtifactInvocationState {
+  return New-ArtifactRunState -Inputs @{ ScriptVersion = $ScriptVersion
+    CatalogPath = $CatalogPath
+    ConfigPath = $ConfigPath
+    Force = $Force
+    CollectSamples = $CollectSamples
+    HashAllProcesses = $HashAllProcesses
+    Strict = $Strict
   }
+}
+$RunState = New-ArtifactInvocationState
+Invoke-ArtifactCollection -RunState $RunState
 
-  # Processes
-  $pDir = Join-Path $work 'process'
-  $pRes = Collect-Processes -outDir $pDir -cat $cat -hashAll:$HashAllProcesses
-  $summary.Counts.Processes = Safe-ToInt $pRes.Counts.Count 0
-  if ($pRes.Errors.Count -gt 0) { $pRes.Errors | ForEach-Object { [void]$errors.Add($_) } }
-
-  # Network
-  $nDir = Join-Path $work 'network'
-  $nRes = Collect-Network -outDir $nDir
-  $summary.Counts.Network = $nRes.Counts
-  if ($nRes.Errors.Count -gt 0) { $nRes.Errors | ForEach-Object { [void]$errors.Add($_) } }
-  if ($nRes.Notes.Count -gt 0) { $summary.Notes += @($nRes.Notes) }
-
-  # Tasks
-  $tDir = Join-Path $work 'tasks'
-  $tRes = Collect-Tasks -outDir $tDir -cat $cat
-  $summary.Counts.Tasks = $tRes.Counts
-  if ($tRes.Errors.Count -gt 0) { $tRes.Errors | ForEach-Object { [void]$errors.Add($_) } }
-  if (Safe-ToInt $tRes.Counts.Suspicious 0 -gt 0) { $hasFindings = $true }
-
-  # WMI persistence
-  $wDir = Join-Path $work 'wmi'
-  $wRes = Collect-WmiPersistence -outDir $wDir
-  $summary.Counts.WMI = $wRes.Counts
-  if ($wRes.Errors.Count -gt 0) { $wRes.Errors | ForEach-Object { [void]$errors.Add($_) } }
-
-  $wmiTotal = (Safe-ToInt $wRes.Counts.Filters 0) + (Safe-ToInt $wRes.Counts.Bindings 0) + (Safe-ToInt $wRes.Counts.Cmd 0) + (Safe-ToInt $wRes.Counts.ActiveScript 0) + (Safe-ToInt $wRes.Counts.NTEventLog 0) + (Safe-ToInt $wRes.Counts.LogFile 0)
-  if ($wmiTotal -gt 0) { $hasFindings = $true }
-
-  # Autoruns
-  $aDir = Join-Path $work 'autoruns'
-  $aRes = Export-Autoruns -outDir $aDir
-  $summary.Counts.Autoruns = $aRes.Counts
-  if ($aRes.Errors.Count -gt 0) { $aRes.Errors | ForEach-Object { [void]$errors.Add($_) } }
-
-  # Samples (optional)
-  if ($tr.Samples -or (Safe-ToBool $cat.Samples.Enable $false)) {
-    $sDir = Join-Path $work 'samples'
-    [void](Ensure-Directory $sDir)
-
-    $maxFileMB  = Safe-ToInt $tr.MaxFileMB (Safe-ToInt $cat.Samples.MaxFileSizeMB 20)
-    $maxTotalMB = Safe-ToInt $tr.MaxTotalMB (Safe-ToInt $cat.Samples.MaxTotalMB 100)
-    $totalBytes = [ref]([int64]0)
-
-    $procCsv = Join-Path $pDir 'processes.csv'
-    if (Test-Path -LiteralPath $procCsv) {
-      $procList = Import-Csv -Path $procCsv
-      foreach ($row in $procList) {
-        $path = [string]$row.Path
-        if (-not $path) { continue }
-        if (-not (Test-Path -LiteralPath $path)) { continue }
-
-        $pick = $false
-        foreach ($rx in @($cat.Samples.__PathIncludeRegex)) { if ($rx.IsMatch($path)) { $pick = $true; break } }
-        if (-not $pick) { continue }
-
-        if (Safe-ToBool $cat.Samples.OnlyUnsignedOrUnknown $true) {
-          if ($row.Signed -eq 'True') { continue }
-        }
-
-        $okc, $dstOrWhy = Copy-ToEvidence -SourcePath $path -EvidenceBaseDir $sDir -MaxFileSizeMB $maxFileMB -MaxTotalMB $maxTotalMB -RunningTotalBytes $totalBytes
-        $sha = $null
-        if ($okc) { 
-            $sha = Get-FileSha256 -Path $dstOrWhy
-            [void](Add-Finding -FindingList $script:Findings -Code 'Grabber-SampleCollected' -Severity 'Low' -Message "Suspicious sample collected: $path" -Extra @{ Path = $path; Sha256 = $sha; Evidence = $dstOrWhy })
-        }
-
-        $summary.Samples += [pscustomobject]@{
-          Source = $path
-          Copied = [bool]$okc
-          Info   = $dstOrWhy
-          Sha256 = $sha
-        }
-      }
-    } else {
-      [void]$errors.Add("samples: processes.csv missing")
-    }
-
-    $copiedCount = @($summary.Samples | Where-Object { $_.Copied }).Count
-    $summary.Counts.Samples = @{
-      Copied     = $copiedCount
-      MaxFileMB  = $maxFileMB
-      MaxTotalMB = $maxTotalMB
-    }
-    if ($copiedCount -gt 0) { $hasFindings = $true }
+function Get-ArtifactResultToken {
+  param($RunState)
+  return if ($RunState.errors.Count -gt 0) {
+    'FAIL'
   }
-
-  if ($errors.Count -gt 0) { $summary.Errors = @($errors) }
-  Save-Json -InputObject $summary -Path (Join-Path $work 'Summary.json') -Depth 30
-
-  try {
-    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
-    Compress-Archive -Path (Join-Path $work '*') -DestinationPath $zip -Force
-  } catch {
-    [void]$errors.Add("zip: " + $_.Exception.Message)
-    $ok = $false
+  elseif ($RunState.hasFindings -or $script:Findings.Count -gt 0) {
+    'WARN'
   }
-
-  $msg = "IR Grabber: bundle created -> " + $zip
-  if ($errors.Count -gt 0) { $msg = $msg + " | Errors: " + (@($errors) -join " | ") }
-
-  $warn = ($errors.Count -gt 0) -or [bool]$Strict -or $hasFindings -or (-not $ok)
-  $eventId = 10020
-  $level = 'Information'
-  if ($warn) { $eventId = 10021; $level = 'Warning' }
-
-  Write-HealthEvent $eventId $msg $level
-  Reset-Trigger -cat $cat
+  else {
+    'OK'
   }
+}
 
-} catch {
-  $isRegexTimeout = $_.Exception -is [System.Text.RegularExpressions.RegexMatchTimeoutException] -or $_.Exception.InnerException -is [System.Text.RegularExpressions.RegexMatchTimeoutException]
-  $prefix = if ($isRegexTimeout) { 'IR Grabber incomplete evidence: regex match timed out: ' } else { 'IR Grabber fatal: ' }
-  $errMsg = $prefix + $_.Exception.Message
-  [void]$errors.Add($errMsg)
-  if ($null -eq $summary) { $summary = [ordered]@{ Errors = @($errors); IncompleteEvidence = $isRegexTimeout } }
-  elseif ($isRegexTimeout) { $summary['IncompleteEvidence'] = $true }
-  Write-HealthEvent 10021 $errMsg 'Error'
-} finally {
-  if ($null -ne $summary) {
-    if ($errors.Count -gt 0) { $summary.Errors = @($errors) }
-    try { Print-ConsoleSummary -Summary $summary -Errors $errors -Findings $hasFindings -CatalogLoadNote $catalogNote } catch {
-      Write-Verbose ("IR grabber console summary failed: {0}" -f $_.Exception.Message)
-    }
-  } else {
-    Write-UiStatus -Label 'IR Grabber' -State 'FAIL' -Text "No summary object created."
+function Write-ArtifactV2Result {
+  param($RunState, [string]$ResultToken)
+  $v2Result = Get-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result $resultToken -Findings $script:Findings.ToArray() -Summary $RunState.summary -Metadata @{}
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) {
+    $v2Result
   }
-} # end script try
+}
 
 # V2 output contract
-$resultToken = if ($errors.Count -gt 0) { 'FAIL' } elseif ($hasFindings -or $script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '12-Suspicious-Artifact-Grabber.ps1' -Mode $Mode -Result $resultToken -Findings $script:Findings.ToArray() -Summary $summary -Metadata @{}
-Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-if ($PassThru) { $v2Result }
+$resultToken = Get-ArtifactResultToken -RunState $RunState
+Write-ArtifactV2Result -RunState $RunState -ResultToken $resultToken
 exit (Get-V2ExitCode -Result $resultToken)

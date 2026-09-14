@@ -90,6 +90,63 @@ mod platform {
         view: SoftwareRegistryView,
         wow: REG_SAM_FLAGS,
     ) -> Result<(Vec<Observation<SoftwareInventoryRecord>>, bool), PlatformError> {
+        let Some(root) = open_uninstall_view(wow)? else {
+            return Ok((vec![Observation::AccessDenied], true));
+        };
+        let mut records = Vec::new();
+        let mut complete = true;
+        for index in 0..u32::try_from(MAX_SOFTWARE_RECORDS).expect("software bound fits u32") {
+            let key_name = match uninstall_key_name(root.0, index) {
+                Ok(Some(name)) => name,
+                Ok(None) => break,
+                Err(observation) => {
+                    records.push(observation);
+                    continue;
+                }
+            };
+            records.push(read_entry(root.0, &key_name, view));
+            if index + 1 == u32::try_from(MAX_SOFTWARE_RECORDS).expect("software bound fits u32") {
+                complete = false;
+            }
+        }
+        Ok((records, complete))
+    }
+
+    unsafe fn uninstall_key_name(
+        root: HKEY,
+        index: u32,
+    ) -> Result<Option<String>, Observation<SoftwareInventoryRecord>> {
+        let mut name = vec![0_u16; 512];
+        let mut length = u32::try_from(name.len()).expect("key buffer fits u32");
+        let status = RegEnumKeyExW(
+            root,
+            index,
+            Some(PWSTR(name.as_mut_ptr())),
+            &raw mut length,
+            None,
+            None,
+            None,
+            None,
+        );
+        if status == ERROR_NO_MORE_ITEMS {
+            return Ok(None);
+        }
+        if status == ERROR_MORE_DATA {
+            return Err(Observation::Truncated);
+        }
+        if status == ERROR_ACCESS_DENIED {
+            return Err(Observation::AccessDenied);
+        }
+        if status != ERROR_SUCCESS {
+            return Err(Observation::Unparsed);
+        }
+        let Ok(key_name) = String::from_utf16(&name[..usize::try_from(length).unwrap_or(0)]) else {
+            return Err(Observation::Unparsed);
+        };
+        Ok(Some(key_name))
+    }
+
+    unsafe fn open_uninstall_view(wow: REG_SAM_FLAGS) -> Result<Option<OwnedKey>, PlatformError> {
         let path = wide(UNINSTALL);
         let mut root = HKEY::default();
         let status = RegOpenKeyExW(
@@ -100,7 +157,7 @@ mod platform {
             &raw mut root,
         );
         if status == ERROR_ACCESS_DENIED {
-            return Ok((vec![Observation::AccessDenied], true));
+            return Ok(None);
         }
         if status != ERROR_SUCCESS {
             return Err(PlatformError::TrustFailure(format!(
@@ -108,48 +165,7 @@ mod platform {
                 status.0
             )));
         }
-        let root = OwnedKey(root);
-        let mut records = Vec::new();
-        let mut complete = true;
-        for index in 0..u32::try_from(MAX_SOFTWARE_RECORDS).expect("software bound fits u32") {
-            let mut name = vec![0_u16; 512];
-            let mut length = u32::try_from(name.len()).expect("key buffer fits u32");
-            let status = RegEnumKeyExW(
-                root.0,
-                index,
-                Some(PWSTR(name.as_mut_ptr())),
-                &raw mut length,
-                None,
-                None,
-                None,
-                None,
-            );
-            if status == ERROR_NO_MORE_ITEMS {
-                break;
-            }
-            if status == ERROR_MORE_DATA {
-                records.push(Observation::Truncated);
-                continue;
-            }
-            if status == ERROR_ACCESS_DENIED {
-                records.push(Observation::AccessDenied);
-                continue;
-            }
-            if status != ERROR_SUCCESS {
-                records.push(Observation::Unparsed);
-                continue;
-            }
-            let Ok(key_name) = String::from_utf16(&name[..usize::try_from(length).unwrap_or(0)])
-            else {
-                records.push(Observation::Unparsed);
-                continue;
-            };
-            records.push(read_entry(root.0, &key_name, view));
-            if index + 1 == u32::try_from(MAX_SOFTWARE_RECORDS).expect("software bound fits u32") {
-                complete = false;
-            }
-        }
-        Ok((records, complete))
+        Ok(Some(OwnedKey(root)))
     }
 
     unsafe fn read_entry(
@@ -189,14 +205,8 @@ mod platform {
             None,
             Some(&raw mut bytes),
         );
-        if status == ERROR_FILE_NOT_FOUND {
-            return Observation::Missing;
-        }
-        if status == ERROR_ACCESS_DENIED {
-            return Observation::AccessDenied;
-        }
-        if status != ERROR_SUCCESS {
-            return Observation::Unparsed;
+        if let Some(observation) = registry_string_status(status) {
+            return observation;
         }
         if kind != REG_SZ || bytes == 0 {
             return Observation::Missing;
@@ -204,6 +214,15 @@ mod platform {
         if bytes > MAX_VALUE_BYTES || !bytes.is_multiple_of(2) {
             return Observation::Truncated;
         }
+        read_string_value(key, &name, kind, bytes)
+    }
+
+    unsafe fn read_string_value(
+        key: HKEY,
+        name: &[u16],
+        mut kind: REG_VALUE_TYPE,
+        mut bytes: u32,
+    ) -> Observation<String> {
         let mut value = vec![0_u16; bytes as usize / 2];
         let capacity = bytes;
         let status = RegQueryValueExW(
@@ -227,6 +246,21 @@ mod platform {
         String::from_utf16(&value[..length]).map_or(Observation::Unparsed, Observation::Present)
     }
 
+    fn registry_string_status(
+        status: windows::Win32::Foundation::WIN32_ERROR,
+    ) -> Option<Observation<String>> {
+        if status == ERROR_FILE_NOT_FOUND {
+            return Some(Observation::Missing);
+        }
+        if status == ERROR_ACCESS_DENIED {
+            return Some(Observation::AccessDenied);
+        }
+        if status != ERROR_SUCCESS {
+            return Some(Observation::Unparsed);
+        }
+        None
+    }
+
     unsafe fn update_history() -> Result<Observation<Vec<String>>, PlatformError> {
         let session: IUpdateSession = CoCreateInstance(&UpdateSession, None, CLSCTX_INPROC_SERVER)
             .map_err(|error| com_error(&error))?;
@@ -245,8 +279,17 @@ mod platform {
         let history = searcher
             .QueryHistory(0, i32::try_from(retained).expect("KB bound fits i32"))
             .map_err(|error| com_error(&error))?;
+        collect_history_kbs(
+            &history,
+            retained == usize::try_from(total).unwrap_or(usize::MAX),
+        )
+    }
+
+    unsafe fn collect_history_kbs(
+        history: &windows::Win32::System::UpdateAgent::IUpdateHistoryEntryCollection,
+        mut complete: bool,
+    ) -> Result<Observation<Vec<String>>, PlatformError> {
         let mut kbs = BTreeSet::new();
-        let mut complete = retained == usize::try_from(total).unwrap_or(usize::MAX);
         for index in 0..history.Count().map_err(|error| com_error(&error))? {
             match history.get_Item(index).and_then(|entry| entry.Title()) {
                 Ok(title) => {

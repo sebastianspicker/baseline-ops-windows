@@ -87,7 +87,7 @@ pub fn validate_advanced_audit_policy(policy: &AdvancedAuditPolicy) -> Result<()
 /// Parse the fixed six-column `auditpol /get /category:* /r` report shape.
 #[must_use]
 pub fn parse_auditpol_csv(text: &str) -> Observation<Vec<AuditSubcategoryObservation>> {
-    if text.is_empty() || text.len() > 1024 * 1024 {
+    if !auditpol_input_is_bounded(text) {
         return Observation::Unparsed;
     }
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -109,27 +109,36 @@ pub fn parse_auditpol_csv(text: &str) -> Observation<Vec<AuditSubcategoryObserva
         if row.len() != 6 || rows.len() == MAX_AUDIT_SUBCATEGORIES {
             return Observation::Truncated;
         }
-        let Some(guid) = normalize_guid(&row[3]) else {
+        let Some(parsed) = parse_auditpol_row(&row, &mut guids) else {
             return Observation::Unparsed;
         };
-        let Some((success, failure)) = parse_setting(&row[4]) else {
-            return Observation::Unparsed;
-        };
-        if row[2].trim().is_empty() || !guids.insert(guid.clone()) {
-            return Observation::Unparsed;
-        }
-        rows.push(AuditSubcategoryObservation {
-            display_name: row[2].trim().into(),
-            guid,
-            success,
-            failure,
-        });
+        rows.push(parsed);
     }
     if rows.len() < 10 {
         Observation::Unparsed
     } else {
         Observation::Present(rows)
     }
+}
+
+const fn auditpol_input_is_bounded(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 1024 * 1024
+}
+
+fn parse_auditpol_row(
+    row: &csv::StringRecord,
+    guids: &mut BTreeSet<String>,
+) -> Option<AuditSubcategoryObservation> {
+    let guid = normalize_guid(&row[3])?;
+    let (success, failure) = parse_setting(&row[4])?;
+    (!row[2].trim().is_empty() && guids.insert(guid.clone())).then_some(
+        AuditSubcategoryObservation {
+            display_name: row[2].trim().into(),
+            guid,
+            success,
+            failure,
+        },
+    )
 }
 
 /// Evaluate current evidence against caller-supplied or built-in GUID policy.

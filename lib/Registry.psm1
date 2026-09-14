@@ -106,6 +106,19 @@ function Set-RegDword {
   return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType DWord -DisplayType 'REG_DWORD' -AllowedPrefixes $AllowedPrefixes)
 }
 
+function Set-RegStringLikeValue {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$Value,
+    [Parameter(Mandatory)][string]$PropertyType,
+    [Parameter(Mandatory)][string]$DisplayType,
+    [string[]]$AllowedPrefixes
+  )
+
+  return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType $PropertyType -DisplayType $DisplayType -AllowedPrefixes $AllowedPrefixes)
+}
+
 <#
 .SYNOPSIS
   Sets a REG_SZ registry value, creating the key if needed.
@@ -125,7 +138,7 @@ function Set-RegString {
     [string[]]$AllowedPrefixes
   )
 
-  return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType String -DisplayType 'REG_SZ' -AllowedPrefixes $AllowedPrefixes)
+  return (Set-RegStringLikeValue -Path $Path -Name $Name -Value $Value -PropertyType String -DisplayType 'REG_SZ' -AllowedPrefixes $AllowedPrefixes)
 }
 
 <#
@@ -136,6 +149,19 @@ function Set-RegString {
 .PARAMETER Name
   Value name to remove.
 #>
+function Get-RegistryPropertyLookup {
+  param([Parameter(Mandatory)][string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return [pscustomobject]@{ Properties = $null; Error = $null }
+  }
+  try {
+    return [pscustomobject]@{ Properties = (Get-ItemProperty -LiteralPath $Path -ErrorAction Stop); Error = $null }
+  } catch {
+    return [pscustomobject]@{ Properties = $null; Error = $_.Exception }
+  }
+}
+
 function Remove-RegValueIfExists {
   [CmdletBinding(SupportsShouldProcess = $true)]
   param(
@@ -143,17 +169,17 @@ function Remove-RegValueIfExists {
     [Parameter(Mandatory)][string]$Name
   )
 
-  if (-not (Test-Path -LiteralPath $Path)) { return $false }
+  $lookup = Get-RegistryPropertyLookup -Path $Path
+  if ($null -ne $lookup.Error) {
+    Write-Error "Failed to remove registry value '$Name' at '$Path': $($lookup.Error.Message)"
+    return $false
+  }
+  if ($null -eq $lookup.Properties.PSObject.Properties[$Name]) { return $false }
+  if (-not $PSCmdlet.ShouldProcess("$Path\$Name", 'Remove registry value')) { return $false }
 
   try {
-    $props = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
-    if ($null -ne $props.PSObject.Properties[$Name]) {
-      if (-not $PSCmdlet.ShouldProcess("$Path\$Name", 'Remove registry value')) {
-        return $false
-      }
-        Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop
-        return $true
-    }
+    Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop
+    return $true
   } catch {
     Write-Error "Failed to remove registry value '$Name' at '$Path': $($_.Exception.Message)"
   }
@@ -202,7 +228,7 @@ function Set-RegExpandString {
     [string[]]$AllowedPrefixes
   )
 
-  return (Set-RegTypedValue -Path $Path -Name $Name -Value $Value -PropertyType ExpandString -DisplayType 'REG_EXPAND_SZ' -AllowedPrefixes $AllowedPrefixes)
+  return (Set-RegStringLikeValue -Path $Path -Name $Name -Value $Value -PropertyType ExpandString -DisplayType 'REG_EXPAND_SZ' -AllowedPrefixes $AllowedPrefixes)
 }
 
 <#
@@ -279,14 +305,8 @@ function Get-RegValueExists {
     [Parameter(Mandatory)][string]$Name
   )
 
-  if (-not (Test-Path -LiteralPath $Path)) { return $false }
-
-  try {
-    $props = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
-    return ($null -ne $props.PSObject.Properties[$Name])
-  } catch {
-    return $false
-  }
+  $lookup = Get-RegistryPropertyLookup -Path $Path
+  return $null -eq $lookup.Error -and $null -ne $lookup.Properties.PSObject.Properties[$Name]
 }
 
 <#

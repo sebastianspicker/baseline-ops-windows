@@ -8,9 +8,8 @@ use baselineops_windows::{PlatformError, audit_remote_surface, audit_wdag_readin
 
 /// Native Windows executor for capabilities 37 and 47.
 ///
-/// Both descriptors remain `in_development` until the legacy script oracle,
-/// representative Windows VM/edition evidence, and native-tool trust binding
-/// have independent retained proof.
+/// Both descriptors are `code_complete`; representative Windows VM/edition
+/// evidence and native-tool trust binding remain open release gates.
 pub struct WaveRemoteWdagWindowsExecutor;
 
 impl CapabilityExecutor for WaveRemoteWdagWindowsExecutor {

@@ -66,16 +66,21 @@ pub fn validate_patch_feed(feed: PatchFeed) -> Result<PatchFeed, String> {
     }
     let mut seen = BTreeSet::new();
     for entry in &feed.entries {
-        let kb = canonical_kb(&entry.kb)
-            .ok_or_else(|| "feed KB must be KB followed by 1 through 12 digits".to_owned())?;
-        if entry.title.trim().is_empty() || entry.title.len() > 512 {
-            return Err("feed title must contain 1 through 512 characters".into());
-        }
+        let kb = validate_patch_entry(entry)?;
         if !seen.insert(kb) {
             return Err("feed KB values must be unique".into());
         }
     }
     Ok(feed)
+}
+
+fn validate_patch_entry(entry: &PatchFeedEntry) -> Result<String, String> {
+    let kb = canonical_kb(&entry.kb)
+        .ok_or_else(|| "feed KB must be KB followed by 1 through 12 digits".to_owned())?;
+    if entry.title.trim().is_empty() || entry.title.len() > 512 {
+        return Err("feed title must contain 1 through 512 characters".into());
+    }
+    Ok(kb)
 }
 
 /// Evaluate supplied feed and installed-KB evidence without Windows I/O.
@@ -107,6 +112,18 @@ pub fn evaluate_missing_patches(observation: MissingPatchObservation) -> Missing
         };
     };
     let installed: BTreeSet<_> = installed.iter().filter_map(|kb| canonical_kb(kb)).collect();
+    add_missing_patch_findings(feed, &installed, &mut findings);
+    MissingPatchAudit {
+        observation,
+        findings,
+    }
+}
+
+fn add_missing_patch_findings(
+    feed: &PatchFeed,
+    installed: &BTreeSet<String>,
+    findings: &mut Vec<PolicyFinding>,
+) {
     for entry in feed.entries.iter().take(MAX_PATCH_FEED_ENTRIES) {
         let Some(kb) = canonical_kb(&entry.kb) else {
             continue;
@@ -130,10 +147,6 @@ pub fn evaluate_missing_patches(observation: MissingPatchObservation) -> Missing
                 ]),
             });
         }
-    }
-    MissingPatchAudit {
-        observation,
-        findings,
     }
 }
 

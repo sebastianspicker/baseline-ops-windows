@@ -153,6 +153,25 @@ param(
   [switch]$NoColor
 )
 
+function Get-GuardrailUnsupportedSummary {
+  param([string]$Mode)
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  return $summary
+}
+
+function Get-GuardrailTerminalToken {
+  param($Result, [switch]$Strict)
+  $resultToken = if ($Result.DriftDetected) { 'WARN' } else { 'OK' }
+  if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
+  return $resultToken
+}
+
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
@@ -164,25 +183,16 @@ Import-Module (Join-Path $script:LibPath 'Validation.psm1')
 $script:Quiet = [bool]$Quiet
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '03-LocalAdmins-Guardrail.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $true }
 $Remediate = [bool]$script:__V2Context.Remediate
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $null = $NoPipelineOutput
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
-  $summary = [pscustomobject]@{
-    ComputerName = $env:COMPUTERNAME
-    Timestamp    = Get-Date
-    Mode         = $Mode
-    Supported    = $false
-    Notes        = @('Skipped: this script is only supported on Windows hosts.')
-  }
+if ($env:OS -ne 'Windows_NT') {
+  $summary = Get-GuardrailUnsupportedSummary -Mode $Mode
   $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
   $result = Get-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
@@ -192,6 +202,7 @@ if (-not $isWindowsHost) {
 
 # ---------------- Constants / Defaults ----------------
 
+function Initialize-GuardrailDefaults {
 $script:EventSource            = 'LocalAdmins-Guardrail'
 $script:EventLogName           = 'Application'
 $script:AdministratorsGroupSid = 'S-1-5-32-544'   # Builtin\Administrators (language-neutral)
@@ -200,512 +211,19 @@ $script:AdministratorsGroupSid = 'S-1-5-32-544'   # Builtin\Administrators (lang
 # An empty allow-list means: no removals (fail-safe), adds only possible via ExtraAllow + Remediate mode.
 $script:DefaultAllowList = @()
 
+}
+Initialize-GuardrailDefaults
+
 # ---------------- Helper Functions ----------------
 
 
-function Try-ReadJsonFile {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)] [string]$Path)
-
-  try {
-    if ($Path -and (Test-Path -LiteralPath $Path)) {
-      return (Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576 | ConvertFrom-Json)
-    }
-  } catch {
-    Write-Verbose ("JSON read failed for '{0}': {1}" -f $Path,$_.Exception.Message)
-  }
-
-  return $null
-}
-
-function Get-Config {
-  [CmdletBinding()]
-  param([string]$Path)
-
-  $cfg = $null
-  if ($Path) { $cfg = Try-ReadJsonFile -Path $Path }
-  if ($cfg) { return $cfg }
-  return $null
-}
-
-function Read-AllowListFromJson {
-  [CmdletBinding()]
-  param([object]$Json)
-
-  $all = New-Object System.Collections.Generic.List[string]
-
-  try {
-    if ($Json -and $Json.LocalAdmins -and $Json.LocalAdmins.Allowed) {
-      foreach ($x in @($Json.LocalAdmins.Allowed)) { if ($null -ne $x) { [void]$all.Add($x.ToString()) } }
-    } elseif ($Json -and $Json.Allowed) {
-      foreach ($x in @($Json.Allowed)) { if ($null -ne $x) { [void]$all.Add($x.ToString()) } }
-    }
-  } catch {
-    Write-Verbose ("Allow-list JSON parsing failed: {0}" -f $_.Exception.Message)
-  }
-
-  return $all.ToArray()
-}
-
-function Read-AllowList {
-  [CmdletBinding()]
-  param(
-    [string]$AllowListPath,
-    [string[]]$Extra
-  )
-
-  $all = New-Object System.Collections.Generic.List[string]
-
-  if ($AllowListPath) {
-    $j = Try-ReadJsonFile -Path $AllowListPath
-    if ($j) {
-      foreach ($x in (Read-AllowListFromJson -Json $j)) { [void]$all.Add($x) }
-    }
-  }
-
-  if ($Extra) {
-    foreach ($x in $Extra) {
-      if ($null -ne $x) { [void]$all.Add($x.ToString()) }
-    }
-  }
-
-  # Return strings only
-  return @(
-    $all.ToArray() |
-      ForEach-Object { $_.Trim() } |
-      Where-Object { $_ -ne '' } |
-      Sort-Object -Unique
-  )
-}
-
-function Resolve-ToSid {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)] [string]$IdOrName)
-
-  # SID string input?
-  try {
-    if ($IdOrName -match '^S-\d-\d+-.+$') {
-      return (New-Object System.Security.Principal.SecurityIdentifier($IdOrName)).Value
-    }
-  } catch {
-    Write-Verbose ("SID literal resolution failed for '{0}': {1}" -f $IdOrName,$_.Exception.Message)
-    return $null
-  }
-
-  # NTAccount -> SID
-  try {
-    $nt  = New-Object System.Security.Principal.NTAccount($IdOrName)
-    $sid = $nt.Translate([System.Security.Principal.SecurityIdentifier])
-    return $sid.Value
-  } catch {
-    # Local shorthand ".\Name"
-    try {
-      if ($IdOrName -match '^[.\\]+') {
-        $name = $IdOrName -replace '^[.\\]+',''
-        $lu = Get-LocalUser -Name $name -ErrorAction Stop
-        return $lu.SID.Value
-      }
-    } catch {
-      Write-Verbose ("Local user shorthand resolution failed for '{0}': {1}" -f $IdOrName,$_.Exception.Message)
-    }
-  }
-
-  return $null
-}
-
-function Get-BuiltinAdministratorSid {
-  [CmdletBinding()]
-  param()
-
-  # RID 500 -> SID ends with -500
-  try {
-    $adm = Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' } | Select-Object -First 1
-    if ($adm) { return $adm.SID.Value }
-  } catch {
-    Write-Verbose ("Builtin Administrator SID lookup failed: {0}" -f $_.Exception.Message)
-  }
-
-  return $null
-}
-
-function Get-AdministratorsGroupName {
-  [CmdletBinding()]
-  param()
-
-  $sidObj = New-Object System.Security.Principal.SecurityIdentifier($script:AdministratorsGroupSid)
-  $nt = $sidObj.Translate([System.Security.Principal.NTAccount]).Value
-  return ($nt -split '\\',2)[1]
-}
-
-function ConvertTo-AdminMemberRecord {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)] $RawMember,
-    [Parameter(Mandatory)] [string]$GroupName,
-    [Parameter(Mandatory)] [ValidateSet('LocalAccounts','ADSI')] [string]$Provider
-  )
-
-  $sidString = $null
-  try { if ($RawMember.SID -and $RawMember.SID.Value) { $sidString = [string]$RawMember.SID.Value } } catch {
-    Write-Verbose ("Member SID.Value read failed: {0}" -f $_.Exception.Message)
-  }
-  if (-not $sidString) { try { if ($RawMember.SID) { $sidString = [string]$RawMember.SID } } catch {
-    Write-Verbose ("Member SID fallback read failed: {0}" -f $_.Exception.Message)
-  } }
-
-  $name = $null
-  try { $name = [string]$RawMember.Name } catch {
-    Write-Verbose ("Member Name read failed: {0}" -f $_.Exception.Message)
-  }
-  if ([string]::IsNullOrWhiteSpace($name)) { try { $name = [string]$RawMember.ToString() } catch {
-    Write-Verbose ("Member ToString fallback failed: {0}" -f $_.Exception.Message)
-  } }
-
-  $principalSource = $null
-  try { $principalSource = [string]$RawMember.PrincipalSource } catch {
-    Write-Verbose ("Member PrincipalSource read failed: {0}" -f $_.Exception.Message)
-  }
-
-  $objectClass = $null
-  try { $objectClass = [string]$RawMember.ObjectClass } catch {
-    Write-Verbose ("Member ObjectClass read failed: {0}" -f $_.Exception.Message)
-  }
-
-  [pscustomobject]@{
-    PSTypeName      = 'LocalAdmins.Guardrail.Member'
-    GroupName       = $GroupName
-    Provider        = $Provider
-    Name            = $name
-    SID             = $sidString
-    PrincipalSource = $principalSource
-    ObjectClass     = $objectClass
-  }
-}
-
-function Get-AdministratorsGroupMembers {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)] [string]$GroupName)
-
-  # Prefer LocalAccounts for best fidelity.
-  try {
-    $raw = Get-LocalGroupMember -Group $GroupName -ErrorAction Stop
-    foreach ($m in $raw) {
-      ConvertTo-AdminMemberRecord -RawMember $m -GroupName $GroupName -Provider 'LocalAccounts'
-    }
-    return
-  } catch {
-    # ADSI fallback enumeration
-    $grp = [ADSI]"WinNT://$env:COMPUTERNAME/$GroupName,group"
-    $grp.Invoke("Members") | ForEach-Object {
-      $path = $_.GetType().InvokeMember("ADsPath",'GetProperty',$null,$_,$null)
-      $name = $path -replace '^WinNT://','' -replace '/','\'
-
-      $sid = $null
-      try {
-        $nt = New-Object System.Security.Principal.NTAccount($name)
-        $sid = ($nt.Translate([System.Security.Principal.SecurityIdentifier])).Value
-      } catch {
-        Write-Verbose ("ADSI member SID translation failed for '{0}': {1}" -f $name,$_.Exception.Message)
-      }
-
-      $src =
-        if ($name -match '^AzureAD\\') { 'Microsoft Entra group' }
-        elseif ($name -match '^MicrosoftAccount\\') { 'Microsoft Account' }
-        elseif ($name -match "^[^\\]+\\") { 'Active Directory' }
-        else { 'Local' }
-
-      ConvertTo-AdminMemberRecord -RawMember ([pscustomobject]@{
-        Name            = $name
-        ObjectClass     = 'UserOrGroup'
-        PrincipalSource = $src
-        SID             = $sid
-      }) -GroupName $GroupName -Provider 'ADSI'
-    }
-  }
-}
-
-function Is-DomainLikePrincipal {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)] $MemberRecord)
-
-  # PrincipalSource may be blank on older OS; treat blank as domain-like (fail-safe).
-  $src = [string]$MemberRecord.PrincipalSource
-  if ([string]::IsNullOrWhiteSpace($src)) { return $true }
-
-  return ($src -in @(
-    'Active Directory',
-    'Microsoft Entra group',
-    'Microsoft Account',
-    'ActiveDirectory',
-    'MicrosoftAccount'
-  ))
-}
-
-function Get-GuardrailResult {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)] [string]$GroupName)
-
-  [pscustomobject]@{
-    PSTypeName              = 'LocalAdmins.Guardrail.Result'
-    Timestamp               = (Get-Date).ToString('o')
-    ComputerName            = $env:COMPUTERNAME
-    GroupName               = $GroupName
-
-    Remediate               = [bool]$Remediate
-    AllowDomainRemediation  = [bool]$AllowDomainRemediation
-
-    ConfigLoaded            = $false
-    AllowListPathUsed       = $null
-
-    AllowInput              = @()
-    AllowResolved           = @()  # objects: Input, SID
-    AllowSIDs               = @()
-    UnresolvedAllowInput    = @()
-
-    BuiltinAdminSid500      = $null
-    AlwaysKeepSIDs          = @()
-
-    FailSafeNoRemove        = $false
-    DriftDetected           = $false
-    PostCompliant           = $null
-
-    MembersBefore           = @()
-    MembersAfter            = @()
-
-    ToAddSIDs               = @()
-    ToRemove                = @()  # member records
-
-    AddedSIDs               = @()
-    RemovedIds              = @()
-
-    Errors                  = @()
-
-    EventId                 = $null
-    EventLevel              = $null
-    EventMessage            = $null
-  }
-}
-
-
-# ---------------- Main ----------------
-
-if (-not (Ensure-EventSource -Source $script:EventSource -LogName $script:EventLogName)) {
-  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
-}
-
-$result = $null
-
-try {
-  $adminGroupName = Get-AdministratorsGroupName
-  $result = Get-GuardrailResult -GroupName $adminGroupName
-
-  # Load config (optional)
-  $cfg = Get-Config -Path $ConfigPath
-  if ($cfg) {
-    $result.ConfigLoaded = $true
-    if (-not $AllowListPath -and $cfg.LocalAdmins -and $cfg.LocalAdmins.AllowListPath) {
-      $AllowListPath = [string]$cfg.LocalAdmins.AllowListPath
-    }
-  }
-  $result.AllowListPathUsed = $AllowListPath
-
-  # Read allow-list (optional) + defaults
-  $allowInput = @(Read-AllowList -AllowListPath $AllowListPath -Extra $ExtraAllow)
-  if (-not $allowInput -or $allowInput.Count -eq 0) { $allowInput = @($script:DefaultAllowList) }
-  $result.AllowInput = @($allowInput)
-
-  # Resolve allow-list entries -> SIDs
-  $allowResolved = @()
-  $unresolvedAllow = @()
-
-  foreach ($a in $allowInput) {
-    $sid = Resolve-ToSid -IdOrName $a
-    if ($sid) { $allowResolved += [pscustomobject]@{ Input = $a; SID = $sid } }
-    else      { $unresolvedAllow += $a }
-  }
-
-  $allowSIDs = @($allowResolved | Select-Object -ExpandProperty SID | Sort-Object -Unique)
-
-  $result.AllowResolved        = @($allowResolved)
-  $result.AllowSIDs            = @($allowSIDs)
-  $result.UnresolvedAllowInput = @($unresolvedAllow)
-
-  # Always keep built-in Administrator (RID 500)
-  $sid500 = Get-BuiltinAdministratorSid
-  $result.BuiltinAdminSid500 = $sid500
-  if ($sid500) { $result.AlwaysKeepSIDs = @($sid500) }
-
-  # Fail-safe removals:
-  # - unresolved allow entries OR no effective allow-list
-  $noEffectiveAllowList = (@($allowSIDs).Count -eq 0)
-  $result.FailSafeNoRemove = ((@($unresolvedAllow).Count -gt 0) -or $noEffectiveAllowList)
-
-  # Enumerate members (structured records)
-  $membersBefore = @(Get-AdministratorsGroupMembers -GroupName $adminGroupName)
-  $result.MembersBefore = $membersBefore
-
-  $currSIDs = @($membersBefore | Where-Object { $_.SID } | Select-Object -ExpandProperty SID | Sort-Object -Unique)
-
-  # Diff: Add
-  $toAddSIDs = @()
-  if (@($allowSIDs).Count -gt 0) {
-    $toAddSIDs = @($allowSIDs | Where-Object { $currSIDs -notcontains $_ })
-  }
-  $result.ToAddSIDs = $toAddSIDs
-
-  # Diff: Remove
-  $toRemove = @()
-  foreach ($m in $membersBefore) {
-    if (-not $m.SID) { continue }
-    if ($allowSIDs -contains $m.SID) { continue }
-    if ($result.AlwaysKeepSIDs -contains $m.SID) { continue }
-
-    $isDomainLike = Is-DomainLikePrincipal -MemberRecord $m
-    if (-not $AllowDomainRemediation -and $isDomainLike) { continue }
-
-    if (-not $result.FailSafeNoRemove) { $toRemove += $m }
-  }
-  $result.ToRemove = $toRemove
-
-  $result.DriftDetected = (
-    (@($unresolvedAllow).Count -gt 0) -or
-    (@($toAddSIDs).Count -gt 0) -or
-    (@($toRemove).Count -gt 0)
-  )
-
-  # Remediation
-  if ($Remediate) {
-
-    foreach ($sid in $toAddSIDs) {
-      try {
-        if ($PSCmdlet.ShouldProcess($adminGroupName, "Add SID $sid")) {
-          # Add by SID using -SID.
-          $sidObj = New-Object System.Security.Principal.SecurityIdentifier($sid)
-          Add-LocalGroupMember -Group $adminGroupName -SID $sidObj -ErrorAction Stop
-          $result.AddedSIDs += $sid
-        }
-      } catch {
-        $result.Errors += "Add $sid failed: $($_.Exception.Message)"
-      }
-    }
-
-    foreach ($m in $toRemove) {
-      try {
-        # Remove by name or SID string via -Member.
-        $memberId = $null
-        if ($m.SID) { $memberId = $m.SID } elseif ($m.Name) { $memberId = $m.Name }
-        if (-not $memberId) { throw "Cannot determine member identity for removal." }
-
-        if ($PSCmdlet.ShouldProcess($adminGroupName, "Remove $memberId")) {
-          Remove-LocalGroupMember -Group $adminGroupName -Member $memberId -ErrorAction Stop
-          $result.RemovedIds += $memberId
-        }
-      } catch {
-        $disp = if ($m.Name) { $m.Name } elseif ($m.SID) { $m.SID } else { "(unknown)" }
-        $result.Errors += "Remove $disp failed: $($_.Exception.Message)"
-      }
-    }
-
-    # Post-check (same rules)
-    $membersAfter = @(Get-AdministratorsGroupMembers -GroupName $adminGroupName)
-    $result.MembersAfter = $membersAfter
-
-    $currAfterSIDs = @($membersAfter | Where-Object { $_.SID } | Select-Object -ExpandProperty SID | Sort-Object -Unique)
-
-    $toAddAfter = @()
-    if (@($allowSIDs).Count -gt 0) {
-      $toAddAfter = @($allowSIDs | Where-Object { $currAfterSIDs -notcontains $_ })
-    }
-
-    $toRemoveAfter = @()
-    foreach ($m in $membersAfter) {
-      if (-not $m.SID) { continue }
-      if ($allowSIDs -contains $m.SID) { continue }
-      if ($result.AlwaysKeepSIDs -contains $m.SID) { continue }
-
-      $isDomainLike = Is-DomainLikePrincipal -MemberRecord $m
-      if (-not $AllowDomainRemediation -and $isDomainLike) { continue }
-
-      if (-not $result.FailSafeNoRemove) { $toRemoveAfter += $m }
-    }
-
-    $result.PostCompliant = (
-      (@($unresolvedAllow).Count -eq 0) -and
-      (@($toAddAfter).Count -eq 0) -and
-      (@($toRemoveAfter).Count -eq 0) -and
-      (@($result.Errors).Count -eq 0)
-    )
-  }
-
-  # Status + event
-  $ok = $true
-  if (@($result.Errors).Count -gt 0) { $ok = $false }
-  elseif ((-not $Remediate) -and $result.DriftDetected) { $ok = $false }
-  elseif ($Remediate -and ($result.PostCompliant -ne $true)) { $ok = $false }
-
-  if ($ok) {
-    $result.EventId    = 3500
-    $result.EventLevel = 'Information'
-  } else {
-    $result.EventId    = 3510
-    $result.EventLevel = 'Warning'
-  }
-
-  $result.EventMessage = @(
-    "Local Admins Guardrail"
-    ("Group={0}; Remediate={1}; AllowDomainRemediation={2}" -f $result.GroupName, $result.Remediate, $result.AllowDomainRemediation)
-    ("ConfigLoaded={0}; AllowListPath={1}" -f $result.ConfigLoaded, ($(if ($result.AllowListPathUsed) { $result.AllowListPathUsed } else { "(none)" })))
-    ("AllowResolvedSidCount={0}; UnresolvedAllowCount={1}; FailSafeNoRemove={2}" -f @($result.AllowSIDs).Count, @($result.UnresolvedAllowInput).Count, $result.FailSafeNoRemove)
-    ("MembersBefore={0}; ToAdd={1}; ToRemove={2}; Errors={3}" -f @($result.MembersBefore).Count, @($result.ToAddSIDs).Count, @($result.ToRemove).Count, @($result.Errors).Count)
-    ($(if ($result.Remediate) { "PostCompliant=$($result.PostCompliant)" } else { "DriftDetected=$($result.DriftDetected)" }))
-  ) -join "`r`n"
-
-  Write-HealthEvent -Id $result.EventId -Message $result.EventMessage -Level $result.EventLevel
-
-} catch {
-  $errMsg = $_.Exception.Message
-
-  if (-not $result) {
-    $groupNameFallback = '(unknown)'
-    try { $groupNameFallback = Get-AdministratorsGroupName } catch {
-      Write-Verbose ("Fallback administrators group name resolution failed: {0}" -f $_.Exception.Message)
-    }
-    $result = Get-GuardrailResult -GroupName $groupNameFallback
-  }
-
-  $result.Errors += ("Fatal error: " + $errMsg)
-  $result.EventId = 3510
-  $result.EventLevel = 'Error'
-  $result.EventMessage = "Local Admins Guardrail error: $errMsg"
-
-  Write-HealthEvent -Id 3510 -Message $result.EventMessage -Level 'Error'
-
-} finally {
-  if ($result -and -not $Quiet) {
-    $summaryObj = [pscustomobject]@{ ComputerName = $result.ComputerName; Timestamp = Get-Date }
-    Write-ConsoleSummary -Summary $summaryObj -Findings ([System.Collections.ArrayList]::new()) `
-      -CustomFields ([ordered]@{
-        Group            = $result.GroupName
-        Status           = ("{0} (EventId {1})" -f $result.EventLevel, $result.EventId)
-        Remediate        = [string]$result.Remediate
-        DriftDetected    = [string]$result.DriftDetected
-        ToAdd            = @($result.ToAddSIDs).Count
-        ToRemove         = @($result.ToRemove).Count
-        FailSafeNoRemove = [string]$result.FailSafeNoRemove
-        ConfigLoaded     = [string]$result.ConfigLoaded
-      })
-    if (@($result.Errors).Count -gt 0) {
-      Write-UiLine "Errors:" 'Red'
-      foreach ($e in $result.Errors) { Write-UiLine ("- {0}" -f $e) 'Red' }
-      Write-UiLine ""
-    }
-  }
-}
+. (Join-Path $PSScriptRoot 'internal/03-LocalAdmins-Guardrail.helpers.ps1')
+$runState = New-GuardrailRunState -Inputs @{ Remediate = $Remediate; AllowDomainRemediation = $AllowDomainRemediation; ConfigPath = $ConfigPath; AllowListPath = $AllowListPath; ExtraAllow = $ExtraAllow; Quiet = $Quiet }
+. Invoke-LocalAdminsGuardrail -RunState $runState -DecisionContext $PSCmdlet
 
 # V2 output contract
-$resultToken = if ($result.DriftDetected) { 'WARN' } else { 'OK' }
-if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
-$v2Result = Get-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $result -Metadata @{}
+$resultToken = Get-GuardrailTerminalToken -Result $runState.result -Strict:$Strict
+$v2Result = Get-V2ResultObject -ScriptName '03-LocalAdmins-Guardrail.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $runState.result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

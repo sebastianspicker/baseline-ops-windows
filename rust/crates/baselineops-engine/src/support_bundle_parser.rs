@@ -68,16 +68,40 @@ pub fn parse_support_bundle(
     parameters: &SupportBundleParserParameters,
     protected_extract_root: &Path,
 ) -> Result<SupportBundleParserAudit, PlatformError> {
+    let prepared = prepare_bundle(parameters, protected_extract_root)?;
+    let (extraction, paths) = extract_bundle(&prepared)?;
+    let observation = observe_bundle(&prepared, extraction.path(), &paths)?;
+    Ok(evaluate_support_bundle_parser(observation))
+}
+
+struct PreparedBundle {
+    bundle: PathBuf,
+    archive_bytes: u64,
+    extract_root: PathBuf,
+}
+
+fn prepare_bundle(
+    parameters: &SupportBundleParserParameters,
+    protected_extract_root: &Path,
+) -> Result<PreparedBundle, PlatformError> {
     let support_dir = canonical_directory(&parameters.support_dir, "support directory")?;
     let extract_root = canonical_directory(protected_extract_root, "protected extraction root")?;
-    let input_policy = PathPolicy::new(&support_dir)?;
-    let bundle = newest_bundle(&support_dir, &input_policy)?;
+    let bundle = newest_bundle(&support_dir, &PathPolicy::new(&support_dir)?)?;
     let archive_bytes = fs::metadata(&bundle)?.len();
     preflight_archive(&bundle, archive_bytes)?;
+    Ok(PreparedBundle {
+        bundle,
+        archive_bytes,
+        extract_root,
+    })
+}
 
+fn extract_bundle(
+    prepared: &PreparedBundle,
+) -> Result<(tempfile::TempDir, Vec<PathBuf>), PlatformError> {
     let extraction = tempfile::Builder::new()
         .prefix("support-bundle-")
-        .tempdir_in(&extract_root)
+        .tempdir_in(&prepared.extract_root)
         .map_err(PlatformError::Io)?;
     let policy = ArchivePolicy {
         max_files: MAX_ARCHIVE_ENTRIES,
@@ -85,26 +109,46 @@ pub fn parse_support_bundle(
         max_total_bytes: MAX_TOTAL_BYTES,
         max_depth: 16,
     };
-    let paths = extract_zip_safely(File::open(&bundle)?, extraction.path(), policy)?;
-    let extraction_policy = PathPolicy::new(extraction.path())?;
-    let summary_path = extraction_policy
+    let paths = extract_zip_safely(File::open(&prepared.bundle)?, extraction.path(), policy)?;
+    Ok((extraction, paths))
+}
+
+fn observe_bundle(
+    prepared: &PreparedBundle,
+    extraction_root: &Path,
+    paths: &[PathBuf],
+) -> Result<SupportBundleParserObservation, PlatformError> {
+    let summary = read_summary(extraction_root)?;
+    let members = retain_members(extraction_root, paths)?;
+    let kb_status = find_kb_status(extraction_root, &members)?;
+    bundle_observation(prepared, summary, &members, kb_status)
+}
+
+fn read_summary(extraction_root: &Path) -> Result<SupportBundleSummary, PlatformError> {
+    let summary_path = PathPolicy::new(extraction_root)?
         .existing_file("Summary.json")
         .map_err(|_| PlatformError::ArchiveRejected("archive lacks a root Summary.json".into()))?;
     let summary = parse_json::<SupportBundleSummary>(&summary_path, "Summary.json")?;
     validate_summary(&summary)?;
-    let members = retain_members(extraction.path(), &paths)?;
-    let kb_status = find_kb_status(extraction.path(), &members)?;
-    let observation = SupportBundleParserObservation {
-        bundle_name: bundle_name(&bundle)?,
-        bundle_path: bundle,
-        archive_bytes,
-        proofs: observe_proofs(&summary, &members),
-        event_logs: event_logs(&members),
-        artifacts: artifacts(&members),
+    Ok(summary)
+}
+
+fn bundle_observation(
+    prepared: &PreparedBundle,
+    summary: SupportBundleSummary,
+    members: &[BundleArtifact],
+    kb_status: Option<KbStatus>,
+) -> Result<SupportBundleParserObservation, PlatformError> {
+    Ok(SupportBundleParserObservation {
+        bundle_name: bundle_name(&prepared.bundle)?,
+        bundle_path: prepared.bundle.clone(),
+        archive_bytes: prepared.archive_bytes,
+        proofs: observe_proofs(&summary, members),
+        event_logs: event_logs(members),
+        artifacts: artifacts(members),
         kb_status,
         summary,
-    };
-    Ok(evaluate_support_bundle_parser(observation))
+    })
 }
 
 fn installed_extract_root() -> Result<PathBuf, PlatformError> {
@@ -154,20 +198,26 @@ const fn has_windows_reparse_attribute(_: &fs::Metadata) -> bool {
 }
 
 fn newest_bundle(root: &Path, policy: &PathPolicy) -> Result<PathBuf, PlatformError> {
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if is_bundle_name(&name) {
-            let file = policy.existing_file(entry.path())?;
-            candidates.push((fs::metadata(&file)?.modified()?, file));
-        }
-    }
+    let candidates = fs::read_dir(root)?
+        .map(|entry| bundle_candidate(&entry?, policy))
+        .collect::<Result<Vec<_>, _>>()?;
     candidates
         .into_iter()
+        .flatten()
         .max_by_key(|(modified, _)| *modified)
         .map(|(_, path)| path)
         .ok_or_else(|| PlatformError::TrustFailure("no SupportBundle-*.zip was found".into()))
+}
+
+fn bundle_candidate(
+    entry: &fs::DirEntry,
+    policy: &PathPolicy,
+) -> Result<Option<(std::time::SystemTime, PathBuf)>, PlatformError> {
+    if !is_bundle_name(&entry.file_name().to_string_lossy()) {
+        return Ok(None);
+    }
+    let file = policy.existing_file(entry.path())?;
+    Ok(Some((fs::metadata(&file)?.modified()?, file)))
 }
 
 fn is_bundle_name(name: &str) -> bool {
@@ -186,11 +236,7 @@ fn bundle_name(path: &Path) -> Result<String, PlatformError> {
 }
 
 fn preflight_archive(path: &Path, archive_bytes: u64) -> Result<(), PlatformError> {
-    if archive_bytes > MAX_ARCHIVE_BYTES {
-        return Err(PlatformError::ArchiveRejected(
-            "archive exceeds compressed-size quota".into(),
-        ));
-    }
+    check_archive_size(archive_bytes)?;
     let mut archive = zip::ZipArchive::new(File::open(path)?)
         .map_err(|error| PlatformError::ArchiveRejected(error.to_string()))?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
@@ -198,32 +244,69 @@ fn preflight_archive(path: &Path, archive_bytes: u64) -> Result<(), PlatformErro
             "archive has too many entries".into(),
         ));
     }
+    preflight_members(&mut archive)
+}
+
+fn preflight_members<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Result<(), PlatformError> {
     let mut total = 0_u64;
     for index in 0..archive.len() {
         let entry = archive
             .by_index(index)
             .map_err(|error| PlatformError::ArchiveRejected(error.to_string()))?;
-        if entry.size() > MAX_MEMBER_BYTES {
-            return Err(PlatformError::ArchiveRejected(
-                "archive member exceeds byte quota".into(),
-            ));
-        }
-        total = total
-            .checked_add(entry.size())
-            .ok_or_else(|| PlatformError::ArchiveRejected("archive size overflow".into()))?;
-        if total > MAX_TOTAL_BYTES {
-            return Err(PlatformError::ArchiveRejected(
-                "archive exceeds total byte quota".into(),
-            ));
-        }
-        if entry.size() > 0
-            && (entry.compressed_size() == 0
-                || entry.size() / entry.compressed_size().max(1) > MAX_COMPRESSION_RATIO)
-        {
-            return Err(PlatformError::ArchiveRejected(
-                "archive member exceeds compression-ratio quota".into(),
-            ));
-        }
+        total = preflight_member(&entry, total)?;
+    }
+    Ok(())
+}
+
+fn check_archive_size(archive_bytes: u64) -> Result<(), PlatformError> {
+    if archive_bytes > MAX_ARCHIVE_BYTES {
+        return Err(PlatformError::ArchiveRejected(
+            "archive exceeds compressed-size quota".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn preflight_member<R: std::io::Read>(
+    entry: &zip::read::ZipFile<'_, R>,
+    total: u64,
+) -> Result<u64, PlatformError> {
+    check_member_size(entry.size())?;
+    check_compression_ratio(entry.size(), entry.compressed_size())?;
+    checked_total(total, entry.size())
+}
+
+fn check_member_size(size: u64) -> Result<(), PlatformError> {
+    if size > MAX_MEMBER_BYTES {
+        return Err(PlatformError::ArchiveRejected(
+            "archive member exceeds byte quota".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn checked_total(total: u64, size: u64) -> Result<u64, PlatformError> {
+    let total = total
+        .checked_add(size)
+        .ok_or_else(|| PlatformError::ArchiveRejected("archive size overflow".into()))?;
+    if total > MAX_TOTAL_BYTES {
+        return Err(PlatformError::ArchiveRejected(
+            "archive exceeds total byte quota".into(),
+        ));
+    }
+    Ok(total)
+}
+
+fn check_compression_ratio(size: u64, compressed_size: u64) -> Result<(), PlatformError> {
+    if size == 0 {
+        return Ok(());
+    }
+    if compressed_size == 0 || size / compressed_size > MAX_COMPRESSION_RATIO {
+        return Err(PlatformError::ArchiveRejected(
+            "archive member exceeds compression-ratio quota".into(),
+        ));
     }
     Ok(())
 }
@@ -390,10 +473,16 @@ mod tests {
         )
     }
 
+    fn fixture_roots() -> (tempfile::TempDir, tempfile::TempDir) {
+        (
+            tempfile::tempdir().expect("source"),
+            tempfile::tempdir().expect("extract"),
+        )
+    }
+
     #[test]
     fn parses_only_archive_evidence_and_marks_missing_evidence() {
-        let source = tempfile::tempdir().expect("source");
-        let extract = tempfile::tempdir().expect("extract");
+        let (source, extract) = fixture_roots();
         bundle(
             source.path(),
             &[
@@ -420,13 +509,11 @@ mod tests {
             ("CON.json", b"{}".as_slice(), 0o100_644),
             ("link", b"target".as_slice(), 0o120_777),
         ] {
-            let source = tempfile::tempdir().expect("source");
-            let extract = tempfile::tempdir().expect("extract");
+            let (source, extract) = fixture_roots();
             bundle(source.path(), &[(name, content, mode)]);
             assert!(parse(source.path(), extract.path()).is_err(), "{name}");
         }
-        let source = tempfile::tempdir().expect("source");
-        let extract = tempfile::tempdir().expect("extract");
+        let (source, extract) = fixture_roots();
         bundle(
             source.path(),
             &[("Summary.json", br#"{"Unknown":true}"#, 0o100_644)],
@@ -436,8 +523,7 @@ mod tests {
 
     #[test]
     fn preflight_rejects_duplicates_case_collisions_and_limits() {
-        let source = tempfile::tempdir().expect("source");
-        let extract = tempfile::tempdir().expect("extract");
+        let (source, extract) = fixture_roots();
         bundle(
             source.path(),
             &[

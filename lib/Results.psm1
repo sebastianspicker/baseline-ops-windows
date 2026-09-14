@@ -53,10 +53,9 @@ function Get-FindingObject {
   }
 
   if ($TypeName) { $obj.PSTypeNames.Insert(0, $TypeName) }
-  if ($Extra) {
-    foreach ($k in $Extra.Keys) {
-      $obj | Add-Member -NotePropertyName $k -NotePropertyValue $Extra[$k] -Force
-    }
+  $extraFields = Copy-FindingExtraFields -Extra $Extra -ProfileName $null -TimeUtc $false -TimestampLocal $false
+  foreach ($key in $extraFields.Keys) {
+    $obj | Add-Member -NotePropertyName $key -NotePropertyValue $extraFields[$key] -Force
   }
 
   return $obj
@@ -64,7 +63,43 @@ function Get-FindingObject {
 
 <#
 .SYNOPSIS
-  Creates a finding and appends it to a findings list.
+  Resolves the supplied finding list or its compatible caller-scope fallback.
+#>
+function Resolve-FindingList {
+  [CmdletBinding()]
+  param([System.Collections.Generic.List[object]]$FindingList)
+
+  if ($null -ne $FindingList) { return , $FindingList }
+  $FindingList = Common\Get-CallerValue -Name 'Findings' -ScopeDepth 5
+  if ($null -eq $FindingList) { $FindingList = Common\Get-CallerValue -Name 'script:Findings' -ScopeDepth 5 }
+  if ($null -eq $FindingList) { throw 'FindingList not provided and no $Findings/$script:Findings found.' }
+  return , $FindingList
+}
+
+<#
+.SYNOPSIS
+  Copies optional finding metadata into a new property hashtable.
+#>
+function Copy-FindingExtraFields {
+  [CmdletBinding()]
+  param(
+    [hashtable]$Extra,
+    [string]$ProfileName,
+    [bool]$TimeUtc,
+    [bool]$TimestampLocal
+  )
+
+  $extraFields = @{}
+  if ($Extra) { foreach ($key in $Extra.Keys) { $extraFields[$key] = $Extra[$key] } }
+  if ($ProfileName) { $extraFields['Profile'] = $ProfileName }
+  if ($TimeUtc) { $extraFields['TimeUtc'] = (Get-Date).ToUniversalTime() }
+  if ($TimestampLocal) { $extraFields['Timestamp'] = (Get-Date) }
+  return $extraFields
+}
+
+<#
+.SYNOPSIS
+  Appends a newly built finding to the target list.
 .DESCRIPTION
   Mutates the supplied list without writing to the success stream unless
   PassThru is requested. This keeps script result pipelines reserved for their
@@ -72,17 +107,17 @@ function Get-FindingObject {
 .PARAMETER FindingList
   Target list. Falls back to caller-scope $Findings variable if not provided.
 .PARAMETER Code
-  Short identifier code for the finding.
+  Identifier stored on the appended finding.
 .PARAMETER Severity
-  Severity level string (e.g. OK, WARN, FAIL).
+  Valid severity value for the appended finding.
 .PARAMETER Message
-  Human-readable description of the finding.
+  Display text stored on the appended finding.
 .PARAMETER TypeName
-  Optional PS type name to insert into PSTypeNames.
+  Optional leading type name for the generated object.
 .PARAMETER ProfileName
-  Optional profile name added as a Profile property.
+  Optional value written to the generated Profile property.
 .PARAMETER Extra
-  Additional properties to attach to the finding object.
+  Extra fields copied to the generated object.
 .PARAMETER PassThru
   Returns the target findings list after appending. The default is no
   success-stream output.
@@ -91,39 +126,39 @@ function Add-Finding {
   [CmdletBinding()]
   param(
     [Alias('Findings','List')][System.Collections.Generic.List[object]]$FindingList,
-    [Parameter(Mandatory)][string]$Code,
+    [Parameter(Mandatory)][Alias('FindingCode')][System.String]$Code,
     [Parameter(Mandatory)]
     [ValidateSet('Critical','High','Medium','Low','Info','Warning','Warn','Error','OK','Pass','Fail','Skip','Skipped','Debug')]
     [string]$Severity,
     [Parameter(Mandatory)][string]$Message,
     [string]$TypeName,
     [string]$ProfileName,
-    [hashtable]$Extra,
-    [switch]$TimeUtc,
-    [switch]$TimestampLocal,
-    [switch]$PassThru
+    [hashtable]$Extra
   )
 
-  if ($null -eq $FindingList) {
-    $FindingList = Common\Get-CallerValue -Name 'Findings' -ScopeDepth 5
-    if ($null -eq $FindingList) { $FindingList = Common\Get-CallerValue -Name 'script:Findings' -ScopeDepth 5 }
-  }
-  if ($null -eq $FindingList) {
-    throw 'FindingList not provided and no $Findings/$script:Findings found.'
+  dynamicparam {
+    $dictionary = New-Object System.Management.Automation.RuntimeDefinedParameterDictionary
+    $attributes = New-Object 'System.Collections.ObjectModel.Collection[System.Attribute]'
+    [void]$attributes.Add((New-Object System.Management.Automation.ParameterAttribute))
+    $dictionary.Add('TimeUtc', (New-Object System.Management.Automation.RuntimeDefinedParameter('TimeUtc', [switch], $attributes)))
+    $dictionary.Add('TimestampLocal', (New-Object System.Management.Automation.RuntimeDefinedParameter('TimestampLocal', [switch], $attributes)))
+    $dictionary.Add('PassThru', (New-Object System.Management.Automation.RuntimeDefinedParameter('PassThru', [switch], $attributes)))
+    return $dictionary
   }
 
-  $extraFields = @{}
-  if ($Extra) {
-    foreach ($k in $Extra.Keys) { $extraFields[$k] = $Extra[$k] }
-  }
-  if ($ProfileName) { $extraFields['Profile'] = $ProfileName }
+  process {
+    $TimeUtc = [bool]$PSBoundParameters['TimeUtc']
+    $TimestampLocal = [bool]$PSBoundParameters['TimestampLocal']
+    $PassThru = [bool]$PSBoundParameters['PassThru']
 
-  if ($TimeUtc) { $extraFields['TimeUtc'] = (Get-Date).ToUniversalTime() }
-  if ($TimestampLocal) { $extraFields['Timestamp'] = (Get-Date) }
+    $FindingList = Resolve-FindingList -FindingList $FindingList
+    $extraFields = Copy-FindingExtraFields -Extra $Extra -ProfileName $ProfileName `
+      -TimeUtc $TimeUtc -TimestampLocal $TimestampLocal
 
   $obj = Get-FindingObject -Code $Code -Severity $Severity -Message $Message -TypeName $TypeName -Extra $extraFields
   $FindingList.Add($obj) | Out-Null
-  if ($PassThru) { return , $FindingList }
+    if ($PassThru) { return , $FindingList }
+  }
 }
 
 Export-ModuleMember -Function Get-FindingsList,Get-FindingObject,Add-Finding

@@ -11,9 +11,9 @@ use baselineops_windows::{
 
 /// Native Windows executor for capabilities 29 and 30.
 ///
-/// Both descriptors remain `in_development` until legacy-oracle comparison and
-/// Windows VM evidence are retained. This executor accepts only `{}` and never
-/// accepts a command, path, filter, export, or mutation parameter.
+/// Both descriptors are `code_complete`; legacy-oracle comparison and Windows
+/// VM evidence remain open release gates. This executor accepts only `{}` and
+/// never accepts a command, path, filter, export, or mutation parameter.
 pub struct WaveNetworkServicesWindowsExecutor;
 
 impl CapabilityExecutor for WaveNetworkServicesWindowsExecutor {

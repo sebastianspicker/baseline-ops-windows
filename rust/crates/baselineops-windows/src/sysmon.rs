@@ -75,7 +75,7 @@ mod platform {
     use super::{MAX_SYSMON_IMAGE_BYTES, MICROSOFT_SUBJECT};
     use crate::{PathPolicy, PlatformError, verify_authenticode_subject};
     use baselineops_capabilities::{
-        Observation, ServiceStartMode, ServiceState, SysmonBinaryEvidence, SysmonImageEvidence,
+        Observation, ServiceState, SysmonBinaryEvidence, SysmonImageEvidence,
         SysmonServiceIdentity, SysmonServiceObservation, SysmonSignatureEvidence,
     };
     use sha2::{Digest, Sha256};
@@ -91,9 +91,8 @@ mod platform {
             System::Services::{
                 CloseServiceHandle, OpenSCManagerW, OpenServiceW, QUERY_SERVICE_CONFIGW,
                 QueryServiceConfigW, QueryServiceStatusEx, SC_MANAGER_CONNECT,
-                SC_STATUS_PROCESS_INFO, SERVICE_AUTO_START, SERVICE_DEMAND_START, SERVICE_DISABLED,
-                SERVICE_QUERY_CONFIG, SERVICE_QUERY_STATUS, SERVICE_RUNNING,
-                SERVICE_STATUS_PROCESS,
+                SC_STATUS_PROCESS_INFO, SERVICE_QUERY_CONFIG, SERVICE_QUERY_STATUS,
+                SERVICE_RUNNING, SERVICE_STATUS_PROCESS,
             },
         },
         core::{PCWSTR, w},
@@ -139,35 +138,14 @@ mod platform {
         service: windows::Win32::System::Services::SC_HANDLE,
         identity: SysmonServiceIdentity,
     ) -> Result<Observation<SysmonServiceObservation>, PlatformError> {
-        let mut status = MaybeUninit::<SERVICE_STATUS_PROCESS>::zeroed();
-        let status_buffer = std::slice::from_raw_parts_mut(
-            status.as_mut_ptr().cast::<u8>(),
-            size_of::<SERVICE_STATUS_PROCESS>(),
-        );
-        let mut returned = 0_u32;
-        if let Err(error) = QueryServiceStatusEx(
-            service,
-            SC_STATUS_PROCESS_INFO,
-            Some(status_buffer),
-            &raw mut returned,
-        ) {
-            return map_open_error(&error);
-        }
-        let mut required = 0_u32;
-        let _ = QueryServiceConfigW(service, None, 0, &raw mut required);
-        if required == 0 || required > 64 * 1024 {
-            return Ok(Observation::Unparsed);
-        }
-        let words = usize::try_from(required)
-            .unwrap_or(0)
-            .div_ceil(size_of::<usize>());
-        let mut storage = vec![0_usize; words];
-        let config = storage.as_mut_ptr().cast::<QUERY_SERVICE_CONFIGW>();
-        if let Err(error) = QueryServiceConfigW(service, Some(config), required, &raw mut required)
-        {
-            return map_open_error(&error);
-        }
-        let status = status.assume_init();
+        let status = match service_status(service) {
+            Ok(value) => value,
+            Err(value) => return value,
+        };
+        let (_storage, config) = match service_config(service) {
+            Ok(value) => value,
+            Err(value) => return value,
+        };
         let config = &*config;
         let binary = config
             .lpBinaryPathName
@@ -188,6 +166,50 @@ mod platform {
             start_mode: start_mode(config.dwStartType.0),
             binary,
         }))
+    }
+
+    unsafe fn service_status(
+        service: windows::Win32::System::Services::SC_HANDLE,
+    ) -> Result<SERVICE_STATUS_PROCESS, Result<Observation<SysmonServiceObservation>, PlatformError>>
+    {
+        let mut status = MaybeUninit::<SERVICE_STATUS_PROCESS>::zeroed();
+        let buffer = std::slice::from_raw_parts_mut(
+            status.as_mut_ptr().cast::<u8>(),
+            size_of::<SERVICE_STATUS_PROCESS>(),
+        );
+        let mut returned = 0_u32;
+        if let Err(error) = QueryServiceStatusEx(
+            service,
+            SC_STATUS_PROCESS_INFO,
+            Some(buffer),
+            &raw mut returned,
+        ) {
+            return Err(map_open_error(&error));
+        }
+        Ok(status.assume_init())
+    }
+
+    type ServiceConfigBuffer = (Vec<usize>, *mut QUERY_SERVICE_CONFIGW);
+    type ServiceConfigFailure = Result<Observation<SysmonServiceObservation>, PlatformError>;
+
+    unsafe fn service_config(
+        service: windows::Win32::System::Services::SC_HANDLE,
+    ) -> Result<ServiceConfigBuffer, ServiceConfigFailure> {
+        let mut required = 0_u32;
+        let _ = QueryServiceConfigW(service, None, 0, &raw mut required);
+        if required == 0 || required > 64 * 1024 {
+            return Err(Ok(Observation::Unparsed));
+        }
+        let words = usize::try_from(required)
+            .unwrap_or(0)
+            .div_ceil(size_of::<usize>());
+        let mut storage = vec![0_usize; words];
+        let config = storage.as_mut_ptr().cast::<QUERY_SERVICE_CONFIGW>();
+        if let Err(error) = QueryServiceConfigW(service, Some(config), required, &raw mut required)
+        {
+            return Err(map_open_error(&error));
+        }
+        Ok((storage, config))
     }
 
     fn binary_evidence(
@@ -283,6 +305,19 @@ mod platform {
                 })?
         };
         let path = PathBuf::from(executable);
+        if !fixed_image_is_valid(executable, &path, identity) {
+            return Err(PlatformError::TrustFailure(
+                "Sysmon service image path violated the fixed read-only policy".into(),
+            ));
+        }
+        Ok(path)
+    }
+
+    fn fixed_image_is_valid(
+        executable: &str,
+        path: &Path,
+        identity: SysmonServiceIdentity,
+    ) -> bool {
         let expected = match identity {
             SysmonServiceIdentity::Sysmon64 => "sysmon64.exe",
             SysmonServiceIdentity::Sysmon => "sysmon.exe",
@@ -291,17 +326,11 @@ mod platform {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.eq_ignore_ascii_case(expected));
-        if executable.contains('\0')
-            || !path.is_absolute()
-            || executable.starts_with(r"\\")
-            || !valid_name
-            || path.components().any(|part| part == Component::ParentDir)
-        {
-            return Err(PlatformError::TrustFailure(
-                "Sysmon service image path violated the fixed read-only policy".into(),
-            ));
-        }
-        Ok(path)
+        !executable.contains('\0')
+            && path.is_absolute()
+            && !executable.starts_with(r"\\")
+            && valid_name
+            && !path.components().any(|part| part == Component::ParentDir)
     }
 
     fn shared_manager_error(
@@ -324,17 +353,7 @@ mod platform {
         }
     }
 
-    fn start_mode(value: u32) -> ServiceStartMode {
-        if value == SERVICE_AUTO_START.0 {
-            ServiceStartMode::Automatic
-        } else if value == SERVICE_DEMAND_START.0 {
-            ServiceStartMode::Manual
-        } else if value == SERVICE_DISABLED.0 {
-            ServiceStartMode::Disabled
-        } else {
-            ServiceStartMode::Other(value)
-        }
-    }
+    use crate::native_values::service_start_mode as start_mode;
 
     fn wide_name(identity: SysmonServiceIdentity) -> PCWSTR {
         match identity {

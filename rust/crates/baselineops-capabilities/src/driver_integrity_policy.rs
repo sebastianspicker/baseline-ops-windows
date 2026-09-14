@@ -45,7 +45,7 @@ pub struct DriverIntegrityAudit {
 /// Parse bounded English `bcdedit /enum {current}` output.
 #[must_use]
 pub fn parse_bcd_integrity(output: &str) -> Observation<BootIntegrityFlags> {
-    if output.is_empty() || output.len() > 256 * 1024 {
+    if !bcd_output_is_bounded(output) {
         return Observation::Unparsed;
     }
     let mut test_signing = None;
@@ -57,11 +57,7 @@ pub fn parse_bcd_integrity(output: &str) -> Observation<BootIntegrityFlags> {
         if fields.next().is_some() {
             continue;
         }
-        let parsed = match value.to_ascii_lowercase().as_str() {
-            "yes" => Some(true),
-            "no" => Some(false),
-            _ => None,
-        };
+        let parsed = bcd_boolean(value);
         match name.to_ascii_lowercase().as_str() {
             "testsigning" => test_signing = parsed,
             "nointegritychecks" => no_integrity_checks = parsed,
@@ -75,6 +71,18 @@ pub fn parse_bcd_integrity(output: &str) -> Observation<BootIntegrityFlags> {
             test_signing,
             no_integrity_checks,
         })
+    }
+}
+
+const fn bcd_output_is_bounded(output: &str) -> bool {
+    !output.is_empty() && output.len() <= 256 * 1024
+}
+
+fn bcd_boolean(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "yes" => Some(true),
+        "no" => Some(false),
+        _ => None,
     }
 }
 

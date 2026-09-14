@@ -3,9 +3,15 @@
 mod app_control;
 mod apply_authority;
 mod approval;
+#[cfg(test)]
+mod boundary_io_bench;
+mod committed_result;
 mod evidence;
 mod installed_package;
 mod journal;
+mod native_execution;
+mod native_intents;
+mod native_registry;
 mod orchestrator;
 mod package;
 mod planner;
@@ -24,6 +30,7 @@ mod wave_firewall_logging;
 mod wave_hardware_trust;
 mod wave_inventory;
 mod wave_laps_hygiene;
+mod wave_legacy_only_foundations;
 mod wave_local_admins;
 mod wave_network_services;
 mod wave_office_browser;
@@ -48,6 +55,9 @@ pub use apply_authority::{
     prepare_worker_apply, reobserve_profile,
 };
 pub use approval::{ApprovalError, VerifiedPlan};
+pub use committed_result::{
+    CommittedResultError, CommittedWorkerResult, read_committed_worker_result,
+};
 pub use evidence::{
     EvidenceError, EvidenceLimits, EvidenceManifest, EvidenceProtection, EvidenceStore,
     EvidenceWrite,
@@ -55,7 +65,15 @@ pub use evidence::{
 pub use installed_package::{
     InstalledPackageExpectation, InstalledPackageIdentity, verify_installed_package,
 };
-pub use journal::{Journal, JournalEvent, JournalRecord, JournalRecovery, JournalSnapshot};
+pub use journal::{
+    Journal, JournalError, JournalEvent, JournalLimits, JournalRecord, JournalRecovery,
+    JournalSnapshot,
+};
+pub use native_execution::{
+    NativeActionPhase, NativeActionProgress, NativeExecutionError, execute_approved_worker_apply,
+    execute_approved_worker_apply_with_progress,
+};
+pub use native_registry::{dispatch_native, has_native_handler};
 pub use orchestrator::{
     ApplyOutcome, ApplyService, AuditService, EngineOrchestrator, ExecutionDisposition,
     OrchestratorError, PlanService, aggregate_disposition,
@@ -86,6 +104,10 @@ pub use wave_firewall_logging::WaveFirewallLoggingWindowsExecutor;
 pub use wave_hardware_trust::WaveHardwareTrustWindowsExecutor;
 pub use wave_inventory::WaveInventoryWindowsExecutor;
 pub use wave_laps_hygiene::WaveLapsHygieneWindowsExecutor;
+pub use wave_legacy_only_foundations::{
+    WaveDefenderIocSweepWindowsExecutor, WaveEmergencyIsolationWindowsExecutor,
+    WaveIncidentArtifactGrabberWindowsExecutor, WaveSupportBundleCollectionWindowsExecutor,
+};
 pub use wave_local_admins::WaveLocalAdminsWindowsExecutor;
 pub use wave_network_services::WaveNetworkServicesWindowsExecutor;
 pub use wave_office_browser::WaveOfficeBrowserWindowsExecutor;
@@ -103,3 +125,6 @@ pub use wave_update_health::WaveUpdateHealthWindowsExecutor;
 pub use wave_wef_time::WaveWefTimeWindowsExecutor;
 pub use wave_windows_update::WaveWindowsUpdateWindowsExecutor;
 pub use wave_winget::WaveWingetWindowsExecutor;
+
+#[cfg(test)]
+mod test_support;

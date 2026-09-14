@@ -1,8 +1,11 @@
 # Shared PowerShell modules
 
-The modules in `lib/` provide common validation, execution, output, and Windows API wrappers. Numbered scripts load the repository module path through `scripts/_lib/Bootstrap.ps1` and import only the modules they need.
+The modules in `lib/` hold behavior shared by the numbered scripts, including
+validation, execution, output, and Windows API wrappers. A numbered script
+loads the repository module path through `scripts/_lib/Bootstrap.ps1`, then
+imports only the modules it needs.
 
-## Module Index
+## Module index
 
 | Module | Responsibility |
 | --- | --- |
@@ -16,6 +19,7 @@ The modules in `lib/` provide common validation, execution, output, and Windows 
 | `JsonInput.psm1` | Private bounded UTF-8 JSON read and parse primitive for shared adapters |
 | `JsonCatalog.psm1` | JSON catalog reads with status or data-only return values |
 | `Output.psm1` | Capture-friendly sections, key/value lines, warnings, and status output |
+| `ProfileExecutionLease.psm1` | Private runner lease registry and retained execution-closure handles |
 | `Registry.psm1` | Registry reads, writes, existence checks, and removal helpers |
 | `Results.psm1` | Finding collections and finding object construction |
 | `Serialization.psm1` | v2 results, exit codes, JSON and CSV serialization, and output path validation |
@@ -23,7 +27,7 @@ The modules in `lib/` provide common validation, execution, output, and Windows 
 
 ## Usage
 
-Load the bootstrap before importing repository modules from a numbered script:
+In a numbered script, load the bootstrap before importing repository modules:
 
 ```powershell
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
@@ -31,7 +35,7 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 ```
 
-Use these boundaries when adding shared behavior:
+When adding shared behavior, choose the module by responsibility:
 
 - Use `Output.psm1` for generic console text.
 - Use `Console.psm1` for finding summaries and severity presentation.
@@ -43,17 +47,29 @@ Use these boundaries when adding shared behavior:
 - `JsonInput.psm1` is the low-level bounded UTF-8 JSON primitive; keep caller-specific fallback and status behavior in its adapter.
 - Use `Config.psm1` or `JsonCatalog.psm1` instead of direct, repeated JSON-loading code.
 
-Do not add a second implementation of path validation, native process capture, result serialization, or finding creation inside an endpoint script.
+Do not reimplement path validation, native process capture, result
+serialization, or finding creation inside an endpoint script. Keeping these
+operations in one shared module preserves their validation and safety behavior.
 
-`External.psm1` keeps the public command contract in one place and dot-sources
-focused private implementations from `lib/platform/`: executable resolution and
-trust, the isolated native process boundary, fixed native-tool adapters, and
-event-log, scheduled-task, and registry operations. Import `External.psm1`,
-not an implementation file.
+Import `External.psm1` whenever shared code needs native execution or a Windows
+command wrapper. It keeps the public command contract in one place and
+dot-sources focused private implementations from `lib/platform/`. Those private
+files handle executable resolution and trust, the isolated native process
+boundary, fixed native-tool adapters, and event-log, scheduled-task, and
+registry operations. Do not import an implementation file directly.
+
+`ProfileExecutionLease.psm1` is private to the profile and local runners.
+Import it without `-Force` so child runners share the same live identity
+registry. The registry binds each lease to both canonical roots and the direct
+profile caller. A profile owns one lease until final serialization; matching
+capability runs borrow it, while direct local runs acquire and dispose their own.
+Lease objects must never come from profiles, configuration, or result metadata.
+The local runner still performs target-file and execution-policy checks for
+every capability run.
 
 ## v2 result object
 
-`Get-V2ResultObject` in `Serialization.psm1` creates the orchestration result:
+`Get-V2ResultObject` in `Serialization.psm1` creates this orchestration result:
 
 | Field | Value |
 | --- | --- |
@@ -67,11 +83,14 @@ not an implementation file.
 | `Summary` | Script-specific result summary |
 | `Metadata` | Script-specific metadata |
 
-`Get-V2ExitCode` maps `OK` to `0`, `FAIL` to `1`, and `WARN` to `2`. `Write-ResultObject` writes the selected `Console`, `Json`, `Csv`, or `None` format. `ConvertTo-V2Json` provides consistent JSON serialization.
+`Get-V2ExitCode` maps `OK` to `0`, `FAIL` to `1`, and `WARN` to `2`.
+`Write-ResultObject` writes the selected `Console`, `Json`, `Csv`, or `None`
+format. `ConvertTo-V2Json` provides consistent JSON serialization.
 
 ## Finding object
 
-The shared finding helpers create objects with at least `Code`, `Severity`, and `Message`:
+The shared finding helpers create objects with at least `Code`, `Severity`, and
+`Message`:
 
 ```json
 {
@@ -81,8 +100,13 @@ The shared finding helpers create objects with at least `Code`, `Severity`, and 
 }
 ```
 
-Scripts can attach additional fields through the finding helper's `-Extra` parameter.
+Scripts can attach additional fields through the finding helper's `-Extra`
+parameter.
 
-Finding codes use a domain prefix followed by a descriptive identifier, such as `DEF-`, `FW-`, `LAPS-`, `CG-`, `LSA-`, `WEF-`, or `APPLOCK-`. The complete set is defined by the scripts and is not a closed enum.
+Finding codes use a domain prefix followed by a descriptive identifier, such as
+`DEF-`, `FW-`, `LAPS-`, `CG-`, `LSA-`, `WEF-`, or `APPLOCK-`. Scripts define
+the complete set; it is not a closed enum.
 
-Severities used by the shared helpers include `Critical`, `High`, `Medium`, `Low`, `Info`, `OK`, and `Pass`. Consumers should use the top-level `Result` for process-level status and retain finding severity for detailed analysis.
+Shared helpers use severities including `Critical`, `High`, `Medium`, `Low`,
+`Info`, `OK`, and `Pass`. Consumers should use the top-level `Result` for
+process status and retain each finding's severity for detailed analysis.

@@ -6,17 +6,18 @@ labels: bug
 
 # Bug report
 
-Do not include secrets, private hostnames, user names, tenant IDs, full support
-bundles, or exploit details in public issues.
+Do not include secrets, private hostnames, user names, account identifiers, full
+support bundles, or exploit details in public issues. Report security issues
+by following the private process in the [security policy](https://github.com/sebastianspicker/baseline-ops/security/policy).
 
 ## Affected area
 
-Script, profile, module, workflow, or documentation path. Example:
+Name the script, profile, module, workflow, or document involved. For example:
 `scripts/18-Firewall-Baseline.ps1`.
 
 ## Release, tag, or commit
 
-Identify the published prerelease, Git tag, or commit you tested.
+Which published prerelease, Git tag, or commit did you test?
 
 ## Expected behavior
 
@@ -28,7 +29,8 @@ What actually happened?
 
 ## Steps to reproduce
 
-Provide commands and relevant configuration. Redact environment-specific values.
+List the steps and commands needed to reproduce the problem. Include relevant
+configuration with private values redacted.
 
 ## Invocation mode
 
@@ -37,11 +39,12 @@ output format, and whether the shell was elevated.
 
 ## Environment
 
-OS version, PowerShell version, elevation state, and any relevant tools.
+Include the Windows version, PowerShell version, and relevant tools. If you
+found the problem on another operating system, name it here.
 
 ## Logs or output
 
-Paste any errors or output (redact sensitive data).
+Paste the smallest relevant error or output excerpt. Redact sensitive data.
 
 ## Regression check
 

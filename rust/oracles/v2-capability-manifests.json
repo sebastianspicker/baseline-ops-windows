@@ -1,0 +1,946 @@
+{
+  "schema_version": 2,
+  "purpose": "Tracked v2 source closures and structural bindings for Rust v3 capability work. Behavioral proof is stored separately.",
+  "manifests": [
+    {
+      "number": 1,
+      "capability_id": "v3.defender.asr-allowlist",
+      "legacy_script": "scripts/01-ASR-Defender-Allowlist.ps1",
+      "source_sha256": "eebaf043116587729d9892dbc52397f23fa093050b6228a0d907dbaf227a74d4",
+      "source_files": [
+        {
+          "path": "scripts/01-ASR-Defender-Allowlist.ps1",
+          "sha256": "eebaf043116587729d9892dbc52397f23fa093050b6228a0d907dbaf227a74d4"
+        },
+        {
+          "path": "scripts/internal/01-ASR-Defender-Allowlist.helpers.ps1",
+          "sha256": "a627ab18699de4b2ce8b851a9f74cea1649edf7171b48d4738b03fb65b4becfe"
+        },
+        {
+          "path": "scripts/internal/01-ASR-Defender-Allowlist.runtime.ps1",
+          "sha256": "6d36131e6b42a8c3e7f590bde59fcb4a8732d9f7a88413868f60bc82f2ec85d1"
+        }
+      ],
+      "source_closure_sha256": "5d92a16683151d4d0c0907a82f4851a991a5bdb245f8ab3bd3e0dde4928daea6",
+      "fixture_id": "v3.defender.asr-allowlist.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 2,
+      "capability_id": "v3.laps.hygiene",
+      "legacy_script": "scripts/02-LAPS-Hygiene.ps1",
+      "source_sha256": "2170dda65aa68e7f597b914aeaf8fa8f0ab688f21bc9a6d752a713083edecaf0",
+      "source_files": [
+        {
+          "path": "scripts/02-LAPS-Hygiene.ps1",
+          "sha256": "2170dda65aa68e7f597b914aeaf8fa8f0ab688f21bc9a6d752a713083edecaf0"
+        },
+        {
+          "path": "scripts/internal/02-LAPS-Hygiene.helpers.ps1",
+          "sha256": "90a68adc5b3c22f88569b5a3cad4accf1bb779e2b7f6dee231f19599830a9473"
+        },
+        {
+          "path": "scripts/internal/02-LAPS-Hygiene.runtime.ps1",
+          "sha256": "2b1e17783049332bdebff86f30e281aaeec70248a3b0cbfe506b12996c49682c"
+        }
+      ],
+      "source_closure_sha256": "215483f253c0f6a9495fc75ca8b4962994851d9724c512e33d0f23a32571cba0",
+      "fixture_id": "v3.laps.hygiene.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 3,
+      "capability_id": "v3.local-admins.guardrail",
+      "legacy_script": "scripts/03-LocalAdmins-Guardrail.ps1",
+      "source_sha256": "a8a0c0b748f4fcc0b83ee531e87e6d8f3ac4290712893082d19f40c9edd4496a",
+      "source_files": [
+        {
+          "path": "scripts/03-LocalAdmins-Guardrail.ps1",
+          "sha256": "a8a0c0b748f4fcc0b83ee531e87e6d8f3ac4290712893082d19f40c9edd4496a"
+        },
+        {
+          "path": "scripts/internal/03-LocalAdmins-Guardrail.helpers.ps1",
+          "sha256": "5992d2410200b0b6d0664e0a5bdf30061f0cb4788191329397193b2654797ba2"
+        },
+        {
+          "path": "scripts/internal/03-LocalAdmins-Guardrail.runtime.ps1",
+          "sha256": "3faaa97452066da230e838e79bab8ae22605dd44d6df373dac2337178f2159da"
+        }
+      ],
+      "source_closure_sha256": "a9d0b97f84b63775f5c82a7147bee586ba152587acedc65e3e68d3d91d557abb",
+      "fixture_id": "v3.local-admins.guardrail.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 4,
+      "capability_id": "v3.office-browser.hardening",
+      "legacy_script": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
+      "source_sha256": "eefea24512779305921e8dcef40ad23b98d5c54f2a004d6c05d68206b7a1a488",
+      "source_files": [
+        {
+          "path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
+          "sha256": "eefea24512779305921e8dcef40ad23b98d5c54f2a004d6c05d68206b7a1a488"
+        },
+        {
+          "path": "scripts/internal/04-OfficeBrowser-Hardening-Proof.helpers.ps1",
+          "sha256": "801592404f2f31c90d48b60ec4c74548e8e9597c869181930b3fa521d31a306a"
+        },
+        {
+          "path": "scripts/internal/04-OfficeBrowser-Hardening-Proof.runtime.ps1",
+          "sha256": "5722030f1e3ac9b4fed341498a91a4d5e142e8a8536296f012e8dbd836ae797b"
+        }
+      ],
+      "source_closure_sha256": "53a101fe11d3f39db55e6852e7bdd0cd1325d35006b20425e08cdb1cfbcaa592",
+      "fixture_id": "v3.office-browser.hardening.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 5,
+      "capability_id": "v3.windows-update.policy",
+      "legacy_script": "scripts/05-WUFB-Proofing.ps1",
+      "source_sha256": "7d203d55ee63fe9a976823b5216adcef6bb8888fbaa370b9fa8e459d7771c78a",
+      "source_files": [
+        {
+          "path": "scripts/05-WUFB-Proofing.ps1",
+          "sha256": "7d203d55ee63fe9a976823b5216adcef6bb8888fbaa370b9fa8e459d7771c78a"
+        },
+        {
+          "path": "scripts/internal/05-WUFB-Proofing.helpers.ps1",
+          "sha256": "a9add8bfb8ea39976a97a9ed0027b935b285c339df560983f13e36891ca67312"
+        },
+        {
+          "path": "scripts/internal/05-WUFB-Proofing.runtime.ps1",
+          "sha256": "dcd9b5661c6b3707f3ff06eb37565f6bc432e988e964b6cab565d0eedf9b9952"
+        }
+      ],
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b",
+      "fixture_id": "v3.windows-update.policy.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 6,
+      "capability_id": "v3.update-health.ssu",
+      "legacy_script": "scripts/06-UpdateHealth-SSU-Proof.ps1",
+      "source_sha256": "a6bf284dc24f203eda705fc559cc4096a783fd2b01f2f5132d709690e8a546b0",
+      "source_files": [
+        {
+          "path": "scripts/06-UpdateHealth-SSU-Proof.ps1",
+          "sha256": "a6bf284dc24f203eda705fc559cc4096a783fd2b01f2f5132d709690e8a546b0"
+        },
+        {
+          "path": "scripts/internal/06-UpdateHealth-SSU-Proof.helpers.ps1",
+          "sha256": "1351d35aada1ffbdb73dd2a84d3587e26b60c99beb85d0e91ca0b6fd742ef6f6"
+        },
+        {
+          "path": "scripts/internal/06-UpdateHealth-SSU-Proof.runtime.ps1",
+          "sha256": "3b395f7406c079ddc70fb9843b8b69994a4798a6ab75fe89baff487c8f4f6531"
+        }
+      ],
+      "source_closure_sha256": "72cc6a80786dd973598e3069269855887080088570d09a8d7e9ff627f11e72ab",
+      "fixture_id": "v3.update-health.ssu.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 7,
+      "capability_id": "v3.scheduled-tasks.hygiene",
+      "legacy_script": "scripts/07-ScheduledTasks-Hygiene.ps1",
+      "source_sha256": "f43b0418c843c4a178bed1c3f4ed9fd1fb60572df43179abe45b3ca274b51357",
+      "source_files": [
+        {
+          "path": "scripts/07-ScheduledTasks-Hygiene.ps1",
+          "sha256": "f43b0418c843c4a178bed1c3f4ed9fd1fb60572df43179abe45b3ca274b51357"
+        },
+        {
+          "path": "scripts/internal/07-ScheduledTasks-Hygiene.helpers.ps1",
+          "sha256": "dbc912a4349e387268fdd3230d7642169ce39d5de743872124226ee1196b0001"
+        },
+        {
+          "path": "scripts/internal/07-ScheduledTasks-Hygiene.runtime.ps1",
+          "sha256": "47ff7a60a2e243a16fe7a1d6965614bf61f3aa5fed3106ebfb272291de7bf5b8"
+        }
+      ],
+      "source_closure_sha256": "752bc414ff4ec173039303e88f983e10a02bbc0f41a3f956b5a99c81a19243c1",
+      "fixture_id": "v3.scheduled-tasks.hygiene.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 8,
+      "capability_id": "v3.winget.self-heal",
+      "legacy_script": "scripts/08-WinGet-SelfHeal.ps1",
+      "source_sha256": "c1b76a4522e47270ba037a7b647fc5c5d222555509d2423e6aed4c3a7b8ac2a1",
+      "source_files": [
+        {
+          "path": "scripts/08-WinGet-SelfHeal.ps1",
+          "sha256": "c1b76a4522e47270ba037a7b647fc5c5d222555509d2423e6aed4c3a7b8ac2a1"
+        },
+        {
+          "path": "scripts/internal/08-WinGet-SelfHeal.runtime.ps1",
+          "sha256": "5d315cdfde5ae5fb4aa04668d4b891598182a4ee734ae8b49f3bcf07c5b39e8e"
+        }
+      ],
+      "source_closure_sha256": "728f0c68f8873487fe0c27933d75735a2adeb4f39511a684cbbcce0801badab6",
+      "fixture_id": "v3.winget.self-heal.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 9,
+      "capability_id": "v3.support-bundle.collect",
+      "legacy_script": "scripts/09-SupportBundle.ps1",
+      "source_sha256": "509a9ede1b2bdb240fbc782cf123ce627557c2b975bf042e9e39a8a4d65e5dc7",
+      "source_files": [
+        {
+          "path": "scripts/09-SupportBundle.ps1",
+          "sha256": "509a9ede1b2bdb240fbc782cf123ce627557c2b975bf042e9e39a8a4d65e5dc7"
+        },
+        {
+          "path": "scripts/internal/09-SupportBundle.helpers.ps1",
+          "sha256": "2dfdeb18449f6cd93e440aac3a45d4d82b771b45d71ef64cf9cb7f1410d75ae5"
+        },
+        {
+          "path": "scripts/internal/09-SupportBundle.runtime.ps1",
+          "sha256": "7435ac7bc02b582956ae9b55dc6330d72f61bec7dcffac81008e31b67df5e99b"
+        }
+      ],
+      "source_closure_sha256": "87abcc79214b84f8f98a9a62f96e7d4c827af0bcaa8fe80ad3df82b79cd49227",
+      "fixture_id": "v3.support-bundle.collect.neutral",
+      "rust_maturity": "in_development"
+    },
+    {
+      "number": 10,
+      "capability_id": "v3.support-bundle.parse",
+      "legacy_script": "scripts/10-SupportBundle-Parser.ps1",
+      "source_sha256": "0f322717769c5b4766228e796847b3b90958e4f2be667cfa526659232af653e8",
+      "source_files": [
+        {
+          "path": "scripts/10-SupportBundle-Parser.ps1",
+          "sha256": "0f322717769c5b4766228e796847b3b90958e4f2be667cfa526659232af653e8"
+        },
+        {
+          "path": "scripts/internal/10-SupportBundle-Parser.helpers.ps1",
+          "sha256": "922c4693e5bd57632119df80d80b916dc49d393a8e591ebbc5326e654a3ba601"
+        },
+        {
+          "path": "scripts/internal/10-SupportBundle-Parser.runtime.ps1",
+          "sha256": "9f80556f77b644207cc38b8dd8eae9d822d252bf5aa03b867f610d5410adffd2"
+        }
+      ],
+      "source_closure_sha256": "39c9568ed5926e474a5856c023b7519eb4a1645d5c3d61e24860ffdb0a52a1a8",
+      "fixture_id": "v3.support-bundle.parse.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 11,
+      "capability_id": "v3.defender.ioc-sweep",
+      "legacy_script": "scripts/11-IOC-Sweep-Defender.ps1",
+      "source_sha256": "d0350ee721eaca0bb3269ccbef9cf23bbbe13ddd6268025735cc8eeb975e56e6",
+      "source_files": [
+        {
+          "path": "scripts/11-IOC-Sweep-Defender.ps1",
+          "sha256": "d0350ee721eaca0bb3269ccbef9cf23bbbe13ddd6268025735cc8eeb975e56e6"
+        },
+        {
+          "path": "scripts/internal/11-IOC-Sweep-Defender.helpers.ps1",
+          "sha256": "78aaed0893c9902d4e30770b59d44410e6850345db4b699747ad839c4f2757bd"
+        }
+      ],
+      "source_closure_sha256": "5e15ca3772d4bf00a60826f5ed2ba10a008c09b9932362dbd05c488f061972e5",
+      "fixture_id": "v3.defender.ioc-sweep.neutral",
+      "rust_maturity": "in_development"
+    },
+    {
+      "number": 12,
+      "capability_id": "v3.ir.artifact-grabber",
+      "legacy_script": "scripts/12-Suspicious-Artifact-Grabber.ps1",
+      "source_sha256": "d10359566b0488ebdc6d9b95d3715c08ee9d003c464ef0760d277ad75acbced3",
+      "source_files": [
+        {
+          "path": "scripts/12-Suspicious-Artifact-Grabber.ps1",
+          "sha256": "d10359566b0488ebdc6d9b95d3715c08ee9d003c464ef0760d277ad75acbced3"
+        },
+        {
+          "path": "scripts/internal/12-Suspicious-Artifact-Grabber.helpers.ps1",
+          "sha256": "01a6c78bd47ad72d3a33453f596cc08618a11644591a1e0d31375199e33bc0db"
+        },
+        {
+          "path": "scripts/internal/12-Suspicious-Artifact-Grabber.runtime.ps1",
+          "sha256": "4ec3dd6c1d91126ef0dd6e65150ea99c14416e4938407d27df393ec903e57f71"
+        }
+      ],
+      "source_closure_sha256": "c63e733497bd80bc91264e5a3323ebf3b3da3a5247ad7d2c294e7087c5dd9c37",
+      "fixture_id": "v3.ir.artifact-grabber.neutral",
+      "rust_maturity": "in_development"
+    },
+    {
+      "number": 13,
+      "capability_id": "v3.lsass.vbs-hardening",
+      "legacy_script": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
+      "source_sha256": "f3c70540729326cb52fc2e2b3687ab44c4bf3697b14b51c4bd2964cdbfb94a19",
+      "source_files": [
+        {
+          "path": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
+          "sha256": "f3c70540729326cb52fc2e2b3687ab44c4bf3697b14b51c4bd2964cdbfb94a19"
+        },
+        {
+          "path": "scripts/internal/13-LSASS-CG-HVCI-VBS.helpers.ps1",
+          "sha256": "b4dbf43115d3cb4ff2d37121fdfcafeec7d55c9f26e4c0558d88bbc33e33f5b2"
+        },
+        {
+          "path": "scripts/internal/13-LSASS-CG-HVCI-VBS.runtime.ps1",
+          "sha256": "f98af31d365fd27256ce80b9f278037a517ef7d7079da50c0f99e458c5942746"
+        }
+      ],
+      "source_closure_sha256": "04c32cd22d2b638ee4cac9bc3c9f1ee77e4fe691b94bfb61bef64f1d38eef778",
+      "fixture_id": "v3.lsass.vbs-hardening.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 14,
+      "capability_id": "v3.remote-access.guardrails",
+      "legacy_script": "scripts/14-SecureRemoteAccessGuardrails.ps1",
+      "source_sha256": "2a42ade9bb9c41fdd147072f0d9a273cee1a4e08c61b513fc87a68c79ef66b9b",
+      "source_files": [
+        {
+          "path": "scripts/14-SecureRemoteAccessGuardrails.ps1",
+          "sha256": "2a42ade9bb9c41fdd147072f0d9a273cee1a4e08c61b513fc87a68c79ef66b9b"
+        },
+        {
+          "path": "scripts/internal/14-SecureRemoteAccessGuardrails.runtime.ps1",
+          "sha256": "1318d5cfdb3362eda4a8ef332e41c358e0ecbc321d5577c2e4a539bd1a7179a5"
+        }
+      ],
+      "source_closure_sha256": "b07c3efbf4b481114d418eb05b700b93a570d58575119d916cde955b4ff738bc",
+      "fixture_id": "v3.remote-access.guardrails.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 15,
+      "capability_id": "v3.hardware.tpm-posture",
+      "legacy_script": "scripts/15-HardwareTPM-Audit.ps1",
+      "source_sha256": "6c6189305070593a45bb649ba31f291d4fa8ef20317eddf3f4bb362bceb9f1bb",
+      "source_files": [
+        {
+          "path": "scripts/15-HardwareTPM-Audit.ps1",
+          "sha256": "6c6189305070593a45bb649ba31f291d4fa8ef20317eddf3f4bb362bceb9f1bb"
+        },
+        {
+          "path": "scripts/internal/15-HardwareTPM-Audit.helpers.ps1",
+          "sha256": "eeacbaf0f630a26d69ee9674c8920c94f40d9d1a9e3e737b449c2bbc3f257b18"
+        },
+        {
+          "path": "scripts/internal/15-HardwareTPM-Audit.runtime.ps1",
+          "sha256": "e047585031b47a60933986a1c5d547b992b24956d1f3985bbd20c8cd8a428650"
+        }
+      ],
+      "source_closure_sha256": "0ad9e95ba964f7a1271b93517435e3e397b20d3c8c1f81319a5f2e8ac36a294d",
+      "fixture_id": "v3.hardware.tpm-posture.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 16,
+      "capability_id": "v3.sysmon.config",
+      "legacy_script": "scripts/16-Sysmon-Config-Updater.ps1",
+      "source_sha256": "4273927c4658a088eb4e511063ce68fe6f8cfa3cb4a433238c5b35026e03887c",
+      "source_files": [
+        {
+          "path": "scripts/16-Sysmon-Config-Updater.ps1",
+          "sha256": "4273927c4658a088eb4e511063ce68fe6f8cfa3cb4a433238c5b35026e03887c"
+        },
+        {
+          "path": "scripts/internal/16-Sysmon-Config-Updater.helpers.ps1",
+          "sha256": "4fe1f0da4071a14b7a1490ff8690a8fa6d6ba92d677fde9ec8d9be86060dafa9"
+        },
+        {
+          "path": "scripts/internal/16-Sysmon-Config-Updater.runtime.ps1",
+          "sha256": "738de7bff38db874d69e1e3b41abf47d139bc9ca658c6bc3818edb158914e7c3"
+        }
+      ],
+      "source_closure_sha256": "8dadec60a117da153b8e64f000956f8c32a161d45105a0d5a228c490391f5f07",
+      "fixture_id": "v3.sysmon.config.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 17,
+      "capability_id": "v3.sysmon.rule-drift",
+      "legacy_script": "scripts/17-Sysmon-Rule-Drift-Sensor.ps1",
+      "source_sha256": "ee035a257c724b72850d21c6aaa84eb2f04d5daef75ba987f38c83942172a2f0",
+      "source_files": [
+        {
+          "path": "scripts/17-Sysmon-Rule-Drift-Sensor.ps1",
+          "sha256": "ee035a257c724b72850d21c6aaa84eb2f04d5daef75ba987f38c83942172a2f0"
+        },
+        {
+          "path": "scripts/internal/17-Sysmon-Rule-Drift-Sensor.helpers.ps1",
+          "sha256": "8dc007f413ecda3a040423bb09db792484d4fbc025f77663231a957fdc2f6896"
+        },
+        {
+          "path": "scripts/internal/17-Sysmon-Rule-Drift-Sensor.runtime.ps1",
+          "sha256": "72e3dedd1b91ab1b8b3ab77efae361292dcc51cd977bae332408e338987af945"
+        }
+      ],
+      "source_closure_sha256": "29a52c2f88db88cb84e484a22b8e3748ff233a615f5eae17ef3342da65e94895",
+      "fixture_id": "v3.sysmon.rule-drift.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 18,
+      "capability_id": "v3.firewall.baseline",
+      "legacy_script": "scripts/18-Firewall-Baseline.ps1",
+      "source_sha256": "9d62d21c4f44336c71f8eff58d80526d040ad631676a6607a41eebae17aeec25",
+      "source_files": [
+        {
+          "path": "scripts/18-Firewall-Baseline.ps1",
+          "sha256": "9d62d21c4f44336c71f8eff58d80526d040ad631676a6607a41eebae17aeec25"
+        },
+        {
+          "path": "scripts/internal/18-Firewall-Baseline.helpers.ps1",
+          "sha256": "76088fd2a250477b05322d273d47ed7bd18f0abecc06609c0b155ddbf9b12569"
+        }
+      ],
+      "source_closure_sha256": "6126e53babfbfd886389ae84acf3df390fd960d999f68afbd99e5458423f25d8",
+      "fixture_id": "v3.firewall.baseline.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 19,
+      "capability_id": "v3.software.inventory",
+      "legacy_script": "scripts/19-Software-Audit.ps1",
+      "source_sha256": "1a8b1c1986f63b8e6fbd0d9901fdf2ae1eca859ec0c0a4bde85ec97b5f0f22f3",
+      "source_files": [
+        {
+          "path": "scripts/19-Software-Audit.ps1",
+          "sha256": "1a8b1c1986f63b8e6fbd0d9901fdf2ae1eca859ec0c0a4bde85ec97b5f0f22f3"
+        },
+        {
+          "path": "scripts/internal/19-Software-Audit.helpers.ps1",
+          "sha256": "d7993aaaa1713d33d16e843d2580c07af10535d007d50ab5cd191409904a313b"
+        }
+      ],
+      "source_closure_sha256": "1a1fa662e9858ea442b49260e991b911075ee56449e0efe384350c3c049ce891",
+      "fixture_id": "v3.software.inventory.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 20,
+      "capability_id": "v3.patch.missing",
+      "legacy_script": "scripts/20-MissingPatch-Notification.ps1",
+      "source_sha256": "b8136ac87e354b0b4e251544f137178eeefe85150d3e839735cff4415f26d1ff",
+      "source_files": [
+        {
+          "path": "scripts/20-MissingPatch-Notification.ps1",
+          "sha256": "b8136ac87e354b0b4e251544f137178eeefe85150d3e839735cff4415f26d1ff"
+        }
+      ],
+      "source_closure_sha256": "02b10d218d9b58c1022e780d4f26c94f3d758e6903e74f2906916ed2d2c593ec",
+      "fixture_id": "v3.patch.missing.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 21,
+      "capability_id": "v3.network.emergency-isolation",
+      "legacy_script": "scripts/21-EmergencyKillSwitch.ps1",
+      "source_sha256": "4ae237579ba121f6a7b155436be96775f890524d1d2d39954b8024cfded4287d",
+      "source_files": [
+        {
+          "path": "scripts/21-EmergencyKillSwitch.ps1",
+          "sha256": "4ae237579ba121f6a7b155436be96775f890524d1d2d39954b8024cfded4287d"
+        },
+        {
+          "path": "scripts/internal/21-EmergencyKillSwitch.helpers.ps1",
+          "sha256": "6d04052677e8c4b14a8805bc0d5ee6d0d00ef8124b462f12b8041c745fe3c628"
+        },
+        {
+          "path": "scripts/internal/21-EmergencyKillSwitch.runtime.ps1",
+          "sha256": "26236247c694bb292c79b2f9201d7bdf9cca4cd9fb87489f92ae3437db9a5cba"
+        }
+      ],
+      "source_closure_sha256": "f75990cc6b7fc394cb8dd77a0289185851e54039cd4c31b616ded11c6ecfdff2",
+      "fixture_id": "v3.network.emergency-isolation.neutral",
+      "rust_maturity": "in_development"
+    },
+    {
+      "number": 22,
+      "capability_id": "v3.smb.encryption",
+      "legacy_script": "scripts/22-SMB-Encryption-Enforcer.ps1",
+      "source_sha256": "96569d1d2f71993ab3fc41ef5fc1c7348f3d37a0818e05875f4169c0d4fa98d5",
+      "source_files": [
+        {
+          "path": "scripts/22-SMB-Encryption-Enforcer.ps1",
+          "sha256": "96569d1d2f71993ab3fc41ef5fc1c7348f3d37a0818e05875f4169c0d4fa98d5"
+        }
+      ],
+      "source_closure_sha256": "8a36ebf05b3dafff3c6fb9a9ef313d8515272a6fceafdd4b6799e621475767aa",
+      "fixture_id": "v3.smb.encryption.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 23,
+      "capability_id": "v3.bitlocker.operations",
+      "legacy_script": "scripts/23-BitLocker-Operations-Audit.ps1",
+      "source_sha256": "5e05d03286c772faca77ebea3e2ba89d0f5a9177088270e63ff01d32cd5e8a30",
+      "source_files": [
+        {
+          "path": "scripts/23-BitLocker-Operations-Audit.ps1",
+          "sha256": "5e05d03286c772faca77ebea3e2ba89d0f5a9177088270e63ff01d32cd5e8a30"
+        }
+      ],
+      "source_closure_sha256": "bed584045fbf3737995d947f21e4d3bf1ac0329916ac0b43a534ef79d3c31ae0",
+      "fixture_id": "v3.bitlocker.operations.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 24,
+      "capability_id": "v3.cert.autoenrollment-health",
+      "legacy_script": "scripts/24-Cert-AutoEnrollment-Health.ps1",
+      "source_sha256": "b03e37987cbdd30da80dbc2f4079683ff13ef4c931192b64d000be0a9290ea1d",
+      "source_files": [
+        {
+          "path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
+          "sha256": "b03e37987cbdd30da80dbc2f4079683ff13ef4c931192b64d000be0a9290ea1d"
+        }
+      ],
+      "source_closure_sha256": "3af0427f45f7b0ea04fc9b233e02f127ddcae01f0679972cee45c77752ebe795",
+      "fixture_id": "v3.cert.autoenrollment-health.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 25,
+      "capability_id": "v3.winget.configuration",
+      "legacy_script": "scripts/25-WinGet-Config-Baseline-Runner.ps1",
+      "source_sha256": "8708f3132759d26abdbe827916ae2f3cb9822005be4128790f0ca7476c80a4cb",
+      "source_files": [
+        {
+          "path": "scripts/25-WinGet-Config-Baseline-Runner.ps1",
+          "sha256": "8708f3132759d26abdbe827916ae2f3cb9822005be4128790f0ca7476c80a4cb"
+        },
+        {
+          "path": "scripts/internal/25-WinGet-Config-Baseline-Runner.helpers.ps1",
+          "sha256": "5ddad241c1054f40b90e8dc551f269b0102c1b9c2f0813ba471db3a80e1c0b00"
+        }
+      ],
+      "source_closure_sha256": "1fa2f452c006d9decdd00fdb3bce08155892ef52fc77eae501bf931d860c66a9",
+      "fixture_id": "v3.winget.configuration.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 26,
+      "capability_id": "v3.eventlog.fast-triage",
+      "legacy_script": "scripts/26-Get-WinEvent-FastTriage.ps1",
+      "source_sha256": "c5c9d872144477d7f8a39b28caef78268f216985ecdc651560d026ca0c1b8362",
+      "source_files": [
+        {
+          "path": "scripts/26-Get-WinEvent-FastTriage.ps1",
+          "sha256": "c5c9d872144477d7f8a39b28caef78268f216985ecdc651560d026ca0c1b8362"
+        },
+        {
+          "path": "scripts/internal/26-Get-WinEvent-FastTriage.helpers.ps1",
+          "sha256": "64a7a1d805c63ca1863bfb8567f4044fa6180339835ffbf5c9cf46cd00473fdd"
+        }
+      ],
+      "source_closure_sha256": "a48ac99e45b9e5e5e23a591e6bd65b2022706dc46fd94e439b6dbf9b5599f41c",
+      "fixture_id": "v3.eventlog.fast-triage.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 27,
+      "capability_id": "v3.defender.health",
+      "legacy_script": "scripts/27-Defender-Health-Audit.ps1",
+      "source_sha256": "a5166b349545c9693049067ff2bbb2b2bb22af2043dd14df71357b131ed34624",
+      "source_files": [
+        {
+          "path": "scripts/27-Defender-Health-Audit.ps1",
+          "sha256": "a5166b349545c9693049067ff2bbb2b2bb22af2043dd14df71357b131ed34624"
+        }
+      ],
+      "source_closure_sha256": "0ba84316c4d6462920884929850831d8a68c204304aa3e43896222d36f97932a",
+      "fixture_id": "v3.defender.health.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 28,
+      "capability_id": "v3.identity.join",
+      "legacy_script": "scripts/28-Join-Identity-Audit.ps1",
+      "source_sha256": "d2e441ccf8b80ea6cc9af72897660241d55360972192cfe86a68982e03586b90",
+      "source_files": [
+        {
+          "path": "scripts/28-Join-Identity-Audit.ps1",
+          "sha256": "d2e441ccf8b80ea6cc9af72897660241d55360972192cfe86a68982e03586b90"
+        }
+      ],
+      "source_closure_sha256": "6e93fa1793435ff911101ad69023b9baf8f8f586fd4f9c7ef4f1305fcda74bae",
+      "fixture_id": "v3.identity.join.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 29,
+      "capability_id": "v3.network.configuration",
+      "legacy_script": "scripts/29-Network-Config-Audit.ps1",
+      "source_sha256": "ff247d4d77c4f7699b77744ef37c8d0c3950c8b89a290b100c7b5ac87def33d5",
+      "source_files": [
+        {
+          "path": "scripts/29-Network-Config-Audit.ps1",
+          "sha256": "ff247d4d77c4f7699b77744ef37c8d0c3950c8b89a290b100c7b5ac87def33d5"
+        }
+      ],
+      "source_closure_sha256": "d73d43e1a2292b0a2b46b29bc3ecbad81e7454657b4216f8b9a6dde863b663d1",
+      "fixture_id": "v3.network.configuration.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 30,
+      "capability_id": "v3.service-process.inventory",
+      "legacy_script": "scripts/30-Service-Process-Audit.ps1",
+      "source_sha256": "5ccd23d33b0cb5f5d70f22b8b13482b4004fd6d0e07950cce0a65dd120f255b2",
+      "source_files": [
+        {
+          "path": "scripts/30-Service-Process-Audit.ps1",
+          "sha256": "5ccd23d33b0cb5f5d70f22b8b13482b4004fd6d0e07950cce0a65dd120f255b2"
+        }
+      ],
+      "source_closure_sha256": "76b297f5be8c1048c5e4e29a0e0b614ee3317347c58227125a607326a082f27b",
+      "fixture_id": "v3.service-process.inventory.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 31,
+      "capability_id": "v3.powershell.logging",
+      "legacy_script": "scripts/31-PowerShell-Logging-Baseline.ps1",
+      "source_sha256": "5e0b2a3760abd91e4a6d027195699962579b8e644a9a939ca7a5f992c135cff6",
+      "source_files": [
+        {
+          "path": "scripts/31-PowerShell-Logging-Baseline.ps1",
+          "sha256": "5e0b2a3760abd91e4a6d027195699962579b8e644a9a939ca7a5f992c135cff6"
+        }
+      ],
+      "source_closure_sha256": "acbccb183c3e4aeb6aa5067c8eb40be334734d6774c90808d3b3e418b3e8142f",
+      "fixture_id": "v3.powershell.logging.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 32,
+      "capability_id": "v3.firewall.logging",
+      "legacy_script": "scripts/32-Firewall-Logging-Audit.ps1",
+      "source_sha256": "637129a73b654da810261978463da749d1fcd36f2a57e92c0a3651037f316903",
+      "source_files": [
+        {
+          "path": "scripts/32-Firewall-Logging-Audit.ps1",
+          "sha256": "637129a73b654da810261978463da749d1fcd36f2a57e92c0a3651037f316903"
+        }
+      ],
+      "source_closure_sha256": "431ead3070932f6cdadf41375f97bfc296316635d4eca8153a3d29adc4a74a0b",
+      "fixture_id": "v3.firewall.logging.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 33,
+      "capability_id": "v3.advanced-audit-policy",
+      "legacy_script": "scripts/33-AdvancedAuditPolicy-Audit.ps1",
+      "source_sha256": "8e2ad77cde680a3c386ab6171031ffdef828e7664781ea81979befa116c80135",
+      "source_files": [
+        {
+          "path": "scripts/33-AdvancedAuditPolicy-Audit.ps1",
+          "sha256": "8e2ad77cde680a3c386ab6171031ffdef828e7664781ea81979befa116c80135"
+        }
+      ],
+      "source_closure_sha256": "c3f840db201c451e2fe456fbfa67fc6e3ef613f771b4083a37162c6e8047094d",
+      "fixture_id": "v3.advanced-audit-policy.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 34,
+      "capability_id": "v3.time-sync.health",
+      "legacy_script": "scripts/34-TimeSync-Health.ps1",
+      "source_sha256": "4d02be420f63268b7bb10bac3715ad39709640f938c575f84669c3eb78ec5623",
+      "source_files": [
+        {
+          "path": "scripts/34-TimeSync-Health.ps1",
+          "sha256": "4d02be420f63268b7bb10bac3715ad39709640f938c575f84669c3eb78ec5623"
+        }
+      ],
+      "source_closure_sha256": "f18e63a939a56512eee1286de60c07620d290b0c5a51a78d2f16935beccfecc0",
+      "fixture_id": "v3.time-sync.health.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 35,
+      "capability_id": "v3.storage.reliability",
+      "legacy_script": "scripts/35-Storage-Reliability-Audit.ps1",
+      "source_sha256": "888e1e15720031beb5b4c7b4abeace40a0f9c84dff68ea0be98e89073896031e",
+      "source_files": [
+        {
+          "path": "scripts/35-Storage-Reliability-Audit.ps1",
+          "sha256": "888e1e15720031beb5b4c7b4abeace40a0f9c84dff68ea0be98e89073896031e"
+        }
+      ],
+      "source_closure_sha256": "849e8ad572839efb7f612368ab56a6d2d154e1ad3152671994bf55a4394beae9",
+      "fixture_id": "v3.storage.reliability.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 36,
+      "capability_id": "v3.backup.readiness",
+      "legacy_script": "scripts/36-Backup-Readiness-Audit.ps1",
+      "source_sha256": "f2d854548e77d6b5bb72f58b3a5d815fcac173ad7699a3c0ef890bcd44515067",
+      "source_files": [
+        {
+          "path": "scripts/36-Backup-Readiness-Audit.ps1",
+          "sha256": "f2d854548e77d6b5bb72f58b3a5d815fcac173ad7699a3c0ef890bcd44515067"
+        }
+      ],
+      "source_closure_sha256": "a789d56700cc502361c056df382c56b4c8a74f815f486d6bb28e800d43b8492c",
+      "fixture_id": "v3.backup.readiness.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 37,
+      "capability_id": "v3.remote-surface.audit",
+      "legacy_script": "scripts/37-Remote-Surface-Audit.ps1",
+      "source_sha256": "f409423219d5332b120d170046067621f7a53379c54c7f7a054f3f44222157bf",
+      "source_files": [
+        {
+          "path": "scripts/37-Remote-Surface-Audit.ps1",
+          "sha256": "f409423219d5332b120d170046067621f7a53379c54c7f7a054f3f44222157bf"
+        }
+      ],
+      "source_closure_sha256": "9d6d4d6b9407460f568f8fb350e639657e905d1a4634729262df1802d87ef649",
+      "fixture_id": "v3.remote-surface.audit.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 38,
+      "capability_id": "v3.security-options.drift",
+      "legacy_script": "scripts/38-SecurityOptions-Drift.ps1",
+      "source_sha256": "41a09201c01bcc95cdfaec230518e18463e36e1d5315fc2c299733f3f48ef575",
+      "source_files": [
+        {
+          "path": "scripts/38-SecurityOptions-Drift.ps1",
+          "sha256": "41a09201c01bcc95cdfaec230518e18463e36e1d5315fc2c299733f3f48ef575"
+        }
+      ],
+      "source_closure_sha256": "6867af6d43002f8a702cacf6c3229dd4b4c9d65db3e85b65eb341988a53766ed",
+      "fixture_id": "v3.security-options.drift.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 39,
+      "capability_id": "v3.credential-guard.vbs",
+      "legacy_script": "scripts/39-CredentialGuard-VBS-AuditRemediate.ps1",
+      "source_sha256": "76ceb5d1d73144c0b48c98c945a0f5fa5af8801becd9315c3b6022e51d33ca80",
+      "source_files": [
+        {
+          "path": "scripts/39-CredentialGuard-VBS-AuditRemediate.ps1",
+          "sha256": "76ceb5d1d73144c0b48c98c945a0f5fa5af8801becd9315c3b6022e51d33ca80"
+        }
+      ],
+      "source_closure_sha256": "ad9014c8f41ad4b0991a7c6001c15fcb640a78a0a3bb3441218783be8e86309a",
+      "fixture_id": "v3.credential-guard.vbs.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 40,
+      "capability_id": "v3.lsa.protection",
+      "legacy_script": "scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
+      "source_sha256": "f6eebf9472105edc54e55a032ef97e5fbc778a3bffd42e12a583ae9025361464",
+      "source_files": [
+        {
+          "path": "scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
+          "sha256": "f6eebf9472105edc54e55a032ef97e5fbc778a3bffd42e12a583ae9025361464"
+        },
+        {
+          "path": "scripts/internal/40-AddedLSAProtection-RunAsPPL-AuditRemediate.helpers.ps1",
+          "sha256": "8ce29d69900b5083f338d38bc086e1662d55f8bc67d4c6175ce6788a7a607fff"
+        }
+      ],
+      "source_closure_sha256": "bd7993f839d78b066cdf4408699be084f02998220990faa9f9e2be9c514cbd31",
+      "fixture_id": "v3.lsa.protection.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 41,
+      "capability_id": "v3.ntlm.client",
+      "legacy_script": "scripts/41-NTLM-Audit-Client.ps1",
+      "source_sha256": "4843397ced3871c3529e763b97525ee2029a8421743f9ba80a4c514725a4f6af",
+      "source_files": [
+        {
+          "path": "scripts/41-NTLM-Audit-Client.ps1",
+          "sha256": "4843397ced3871c3529e763b97525ee2029a8421743f9ba80a4c514725a4f6af"
+        }
+      ],
+      "source_closure_sha256": "519c1204c44b7e0c7cf52cbfa8a0a9b22503f0d7363165701bd781c7ca6826ba",
+      "fixture_id": "v3.ntlm.client.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 42,
+      "capability_id": "v3.client-security-baseline",
+      "legacy_script": "scripts/42-Client-SecurityBaseline-Report-IntuneRef.ps1",
+      "source_sha256": "aae4a35b409130da1cad3e3cf5939f3f744c76775dd8ffe84791afadba6d0c75",
+      "source_files": [
+        {
+          "path": "scripts/42-Client-SecurityBaseline-Report-IntuneRef.ps1",
+          "sha256": "aae4a35b409130da1cad3e3cf5939f3f744c76775dd8ffe84791afadba6d0c75"
+        },
+        {
+          "path": "scripts/internal/42-Client-SecurityBaseline-Report-IntuneRef.helpers.ps1",
+          "sha256": "6543e5bd8bf6bc52f9c1405d0080888a49db03dd6978fdf40dbe35979f19e0a8"
+        }
+      ],
+      "source_closure_sha256": "f4ac86824bfe8fe8816c1a4377c44417327a3df52d5eefa0fb96afbc8ed9f64f",
+      "fixture_id": "v3.client-security-baseline.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 43,
+      "capability_id": "v3.app-control.audit",
+      "legacy_script": "scripts/43-AppControlForBusiness-Audit.ps1",
+      "source_sha256": "96edeb625078983dfeef65f0fc233fa08ef3e709279f299b07dfa6b22e6e0a8a",
+      "source_files": [
+        {
+          "path": "scripts/43-AppControlForBusiness-Audit.ps1",
+          "sha256": "96edeb625078983dfeef65f0fc233fa08ef3e709279f299b07dfa6b22e6e0a8a"
+        },
+        {
+          "path": "scripts/internal/43-AppControlForBusiness-Audit.helpers.ps1",
+          "sha256": "3a146bf9df04bfdfdf2ae2109838f5bf6f123d6f9d2c5892abae5cebea20b011"
+        }
+      ],
+      "source_closure_sha256": "172573eb1998503a361455479a6cc5e6c171403788184ce3e2d2a1074fa2a446",
+      "fixture_id": "v3.app-control.audit.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 44,
+      "capability_id": "v3.defender.ransomware-network-protection",
+      "legacy_script": "scripts/44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1",
+      "source_sha256": "bacaf8a3aba0a27bda301ce0b56a2ca4955f2c85cabe3ea0b28eb8aeba63b253",
+      "source_files": [
+        {
+          "path": "scripts/44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1",
+          "sha256": "bacaf8a3aba0a27bda301ce0b56a2ca4955f2c85cabe3ea0b28eb8aeba63b253"
+        }
+      ],
+      "source_closure_sha256": "568c1dcd1097c1ffcd31184df3f8a1aede664725374a707ec7970ea6491df4f1",
+      "fixture_id": "v3.defender.ransomware-network-protection.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 45,
+      "capability_id": "v3.wef.client-readiness",
+      "legacy_script": "scripts/45-WEF-Client-Forwarding-Readiness-Audit.ps1",
+      "source_sha256": "d5e34f855bd66a55dfe955e38abb41e3a4df4cd7a0061905ea09cf46d89aa376",
+      "source_files": [
+        {
+          "path": "scripts/45-WEF-Client-Forwarding-Readiness-Audit.ps1",
+          "sha256": "d5e34f855bd66a55dfe955e38abb41e3a4df4cd7a0061905ea09cf46d89aa376"
+        }
+      ],
+      "source_closure_sha256": "fbdb471a5ff9a442c6fdba97ac881323c9a6da9900de3b737a09b26dc03d9adc",
+      "fixture_id": "v3.wef.client-readiness.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 46,
+      "capability_id": "v3.secure-boot.uefi",
+      "legacy_script": "scripts/46-SecureBoot-UEFI-Audit.ps1",
+      "source_sha256": "6446421253a7daa1da7647cf24d2ddae83b989a8ad5734af04269d9e0d07af7b",
+      "source_files": [
+        {
+          "path": "scripts/46-SecureBoot-UEFI-Audit.ps1",
+          "sha256": "6446421253a7daa1da7647cf24d2ddae83b989a8ad5734af04269d9e0d07af7b"
+        }
+      ],
+      "source_closure_sha256": "29d6d3472ff1c890573a08eb435a0c348f3af9d603e8c935c20a4b2d487e7aef",
+      "fixture_id": "v3.secure-boot.uefi.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 47,
+      "capability_id": "v3.wdag.readiness",
+      "legacy_script": "scripts/47-WDAG-Readiness-Audit.ps1",
+      "source_sha256": "a93876781566c28224010ce3cc175126f5a8fe1786ba380a243c57286dab2e4a",
+      "source_files": [
+        {
+          "path": "scripts/47-WDAG-Readiness-Audit.ps1",
+          "sha256": "a93876781566c28224010ce3cc175126f5a8fe1786ba380a243c57286dab2e4a"
+        }
+      ],
+      "source_closure_sha256": "f996fe41c3743c0b01f1a668d611a8cefa4635eb8659381adfa790f47e12a743",
+      "fixture_id": "v3.wdag.readiness.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 48,
+      "capability_id": "v3.exploit-protection.audit",
+      "legacy_script": "scripts/48-ExploitProtection-Audit.ps1",
+      "source_sha256": "14c872a572578ffb3a2016ee62ff5dfe4b8f1a52ec865e3c47852be1bffb847a",
+      "source_files": [
+        {
+          "path": "scripts/48-ExploitProtection-Audit.ps1",
+          "sha256": "14c872a572578ffb3a2016ee62ff5dfe4b8f1a52ec865e3c47852be1bffb847a"
+        }
+      ],
+      "source_closure_sha256": "737510d915f2303726345f5112583584f683cfb0247dae4ab5695678ceb7d76c",
+      "fixture_id": "v3.exploit-protection.audit.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 49,
+      "capability_id": "v3.driver-signing.integrity",
+      "legacy_script": "scripts/49-DriverSigning-Integrity-Audit.ps1",
+      "source_sha256": "8c7729679e9e926caad397f7f39426780df991ef74e72959840d6420a56cae4b",
+      "source_files": [
+        {
+          "path": "scripts/49-DriverSigning-Integrity-Audit.ps1",
+          "sha256": "8c7729679e9e926caad397f7f39426780df991ef74e72959840d6420a56cae4b"
+        }
+      ],
+      "source_closure_sha256": "a255562c04dad2edca72913775d7f1e8dd50034f7b2b3a938e347cc944e677e9",
+      "fixture_id": "v3.driver-signing.integrity.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 50,
+      "capability_id": "v3.amsi.audit",
+      "legacy_script": "scripts/50-AMSI-Audit.ps1",
+      "source_sha256": "59cbeefb44e415089b6591bcc3ce9d6b2cb0424a55e679ab762e5a74873858fd",
+      "source_files": [
+        {
+          "path": "scripts/50-AMSI-Audit.ps1",
+          "sha256": "59cbeefb44e415089b6591bcc3ce9d6b2cb0424a55e679ab762e5a74873858fd"
+        }
+      ],
+      "source_closure_sha256": "2098145b15f42437011edd5827106c0109de55929352260ab6beef700ddd5bbf",
+      "fixture_id": "v3.amsi.audit.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 51,
+      "capability_id": "v3.applocker.audit",
+      "legacy_script": "scripts/51-AppLocker-Audit.ps1",
+      "source_sha256": "613aa211f84c9c833e636adbdfcc69bbedb0496377f8416b835658bc43823977",
+      "source_files": [
+        {
+          "path": "scripts/51-AppLocker-Audit.ps1",
+          "sha256": "613aa211f84c9c833e636adbdfcc69bbedb0496377f8416b835658bc43823977"
+        }
+      ],
+      "source_closure_sha256": "501e5257d062647f2ed18c661c228f6f8e6ef2d640d9fd8494d5e20f62669628",
+      "fixture_id": "v3.applocker.audit.neutral",
+      "rust_maturity": "code_complete"
+    },
+    {
+      "number": 52,
+      "capability_id": "v3.doh.audit",
+      "legacy_script": "scripts/52-DoH-Audit.ps1",
+      "source_sha256": "28e1b3615e478aea6c45c45571f2029a0dcf20edb05312468f5e884437a64411",
+      "source_files": [
+        {
+          "path": "scripts/52-DoH-Audit.ps1",
+          "sha256": "28e1b3615e478aea6c45c45571f2029a0dcf20edb05312468f5e884437a64411"
+        }
+      ],
+      "source_closure_sha256": "d04f419681be2faedd5610e8c28754ee33feba542d73b53924b34204ce7b0c20",
+      "fixture_id": "v3.doh.audit.neutral",
+      "rust_maturity": "code_complete"
+    }
+  ]
+}

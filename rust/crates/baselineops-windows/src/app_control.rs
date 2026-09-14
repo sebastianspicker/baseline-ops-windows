@@ -67,15 +67,9 @@ mod platform {
         let path = PATH_PARTS
             .iter()
             .fold(windows.clone(), |path, part| path.join(part));
-        let path = match PathPolicy::new(&windows).and_then(|policy| policy.existing_file(&path)) {
+        let path = match trusted_policy_path(&windows, &path) {
             Ok(path) => path,
-            Err(PlatformError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-                return Observation::Missing;
-            }
-            Err(PlatformError::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied => {
-                return Observation::AccessDenied;
-            }
-            Err(_) => return Observation::Unparsed,
+            Err(value) => return value,
         };
         match fs::metadata(path) {
             Ok(metadata) if metadata.is_file() => Observation::Present(AppControlPolicyFile {
@@ -87,6 +81,23 @@ mod platform {
             }
             Ok(_) | Err(_) => Observation::Unparsed,
         }
+    }
+
+    fn trusted_policy_path(
+        windows: &std::path::Path,
+        path: &std::path::Path,
+    ) -> Result<PathBuf, Observation<AppControlPolicyFile>> {
+        PathPolicy::new(windows)
+            .and_then(|policy| policy.existing_file(path))
+            .map_err(|error| match error {
+                PlatformError::Io(error) if error.kind() == io::ErrorKind::NotFound => {
+                    Observation::Missing
+                }
+                PlatformError::Io(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    Observation::AccessDenied
+                }
+                _ => Observation::Unparsed,
+            })
     }
 
     fn windows_directory() -> Result<PathBuf, PlatformError> {

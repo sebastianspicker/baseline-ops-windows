@@ -1,0 +1,12 @@
+{
+  "name": "baselineops-demo-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs",
+    "screenshots": "node verify.mjs --screenshots"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

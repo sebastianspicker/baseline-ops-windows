@@ -16,13 +16,16 @@ mod catalog;
 mod cert_health_policy;
 mod client_baseline_policy;
 mod defender_asr_allowlist_policy;
+mod defender_ioc_sweep_policy;
 mod defender_ransomware_policy;
 mod driver_integrity_policy;
+mod emergency_isolation_policy;
 mod event_triage_policy;
 mod exploit_protection_policy;
 mod firewall_baseline_policy;
 mod firewall_logging_policy;
 mod hardware_trust_policy;
+mod incident_artifact_grabber_policy;
 mod laps_hygiene_policy;
 mod local_admins_policy;
 mod missing_patch_policy;
@@ -37,6 +40,7 @@ mod security_options_policy;
 mod smb_encryption_policy;
 mod software_inventory_policy;
 mod storage_reliability_policy;
+mod support_bundle_collection_policy;
 mod support_bundle_parser_policy;
 mod sysmon_policy;
 mod types;
@@ -87,6 +91,11 @@ pub use defender_asr_allowlist_policy::{
     DefenderAsrAllowlistPlan, DefenderAsrAllowlistPolicy, build_defender_asr_allowlist_plan,
     evaluate_defender_asr_allowlist,
 };
+pub use defender_ioc_sweep_policy::{
+    DefenderIocSweepAudit, DefenderIocSweepObservation, DefenderIocSweepPlan,
+    DefenderIocSweepPolicy, DefenderSweepScope, IocCatalogBinding, build_defender_ioc_sweep_plan,
+    evaluate_defender_ioc_sweep,
+};
 pub use defender_ransomware_policy::{
     ControlledFolderAccessState, DefenderRansomwareAudit, DefenderRansomwareDrift,
     DefenderRansomwareObservation, DefenderRansomwarePlan, DefenderRansomwarePolicy,
@@ -95,6 +104,13 @@ pub use defender_ransomware_policy::{
 pub use driver_integrity_policy::{
     BootIntegrityFlags, DriverIntegrityAudit, DriverIntegrityObservation, DriverIntegrityPolicy,
     evaluate_driver_integrity, parse_bcd_integrity,
+};
+pub use emergency_isolation_policy::{
+    EmergencyIsolationAction, EmergencyIsolationAudit, EmergencyIsolationObservation,
+    EmergencyIsolationPlan, EmergencyIsolationPlanBlocker, EmergencyIsolationPolicy,
+    IsolationDefaultAction, IsolationFirewallProfile, IsolationProfileSnapshot,
+    build_emergency_isolation_plan, evaluate_emergency_isolation,
+    validate_emergency_isolation_preflight,
 };
 pub use event_triage_policy::{
     EventLogObservation, EventLogQueryParameters, EventLogRecord, EventLogTriageAudit,
@@ -125,6 +141,12 @@ pub use hardware_trust_policy::{
     HardwareTpmObservation, HardwareTpmPolicy, SecureBootAudit, SecureBootObservation,
     SecureBootPolicy, TpmDeviceObservation, evaluate_bitlocker, evaluate_hardware_tpm,
     evaluate_secure_boot,
+};
+pub use incident_artifact_grabber_policy::{
+    IncidentArtifactGrabberAudit, IncidentArtifactGrabberObservation, IncidentArtifactGrabberPlan,
+    IncidentArtifactGrabberPolicy, IncidentArtifactObservation, IncidentArtifactResource,
+    IncidentBundleDigest, build_incident_artifact_grabber_plan, evaluate_incident_artifact_grabber,
+    selected_incident_artifact_resources,
 };
 pub use laps_hygiene_policy::{
     LapsHygieneAudit, LapsHygieneObservation, LapsHygieneParameters, LapsOperationalEvent,
@@ -193,6 +215,12 @@ pub use storage_reliability_policy::{
     PhysicalDiskObservation, ReliabilityCounters, StorageReliabilityAudit,
     StorageReliabilityObservation, StorageReliabilityPolicy, evaluate_storage_reliability,
 };
+pub use support_bundle_collection_policy::{
+    BundleDigest, SupportBundleCollectionAudit, SupportBundleCollectionObservation,
+    SupportBundleCollectionPlan, SupportBundleCollectionPolicy, SupportBundleResource,
+    SupportBundleResourceObservation, build_support_bundle_collection_plan,
+    evaluate_support_bundle_collection, selected_support_bundle_resources,
+};
 pub use support_bundle_parser_policy::{
     BundleArtifact, EXPECTED_PROOFS, KbStatus, MAX_JSON_BYTES, MAX_SUMMARY_ITEMS, ProofObservation,
     SummaryRecord, SupportBundleParserAudit, SupportBundleParserObservation,
@@ -205,9 +233,10 @@ pub use sysmon_policy::{
     build_sysmon_read_only_plan, evaluate_sysmon,
 };
 pub use types::{
-    Batch, Capability, CapabilityDescriptor, CapabilityExecutor, CapabilityOutcome,
-    CapabilityRequest, ExecutionEnvironment, ImplementationMaturity, Operation, Operations,
-    Privilege, Reboot, Reversibility, Risk, Unsupported,
+    ApplyEligibility, Batch, Capability, CapabilityDescriptor, CapabilityExecutor,
+    CapabilityOutcome, CapabilityRequest, ExecutionEnvironment, ImplementationMaturity,
+    NativeApplyHandler, NativeHandler, Operation, Operations, Privilege, Reboot, Reversibility,
+    Risk, Unsupported,
 };
 pub use update_health_policy::{
     FIXED_UPDATE_HEALTH_SERVICES, FIXED_UPDATE_HEALTH_TASKS, MAX_UPDATE_HISTORY_RECORDS,
@@ -242,3 +271,6 @@ pub use winget_policy::{
 
 #[cfg(test)]
 mod tests;
+
+mod semantic_plan;
+pub use semantic_plan::{SemanticPlan, plan_observed};

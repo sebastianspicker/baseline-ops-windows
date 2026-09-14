@@ -11,7 +11,7 @@ use serde_json::json;
 
 /// Finite Controlled Folder Access modes supported by Defender.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlledFolderAccessState {
     /// Controlled Folder Access is disabled.
     Disabled,
@@ -43,7 +43,7 @@ impl ControlledFolderAccessState {
 
 /// Finite Defender Network Protection modes.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum NetworkProtectionState {
     /// Network Protection is disabled.
     Disabled,
@@ -93,8 +93,8 @@ impl Default for DefenderRansomwarePolicy {
 }
 
 /// Fixed native evidence used by capability 44.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DefenderRansomwareObservation {
     /// `EnableControlledFolderAccess` from the local Defender WMI provider.
     pub controlled_folder_access: Observation<ControlledFolderAccessState>,
@@ -190,17 +190,18 @@ pub fn build_defender_ransomware_plan(
 ) -> DefenderRansomwarePlan {
     let audit = evaluate_defender_ransomware(observation, policy);
     let mut proposed_changes = Vec::new();
-    if matches!(&audit.observation.controlled_folder_access, Observation::Present(value) if *value != policy.controlled_folder_access)
-    {
-        proposed_changes.push(drift(
-            "EnableControlledFolderAccess",
-            policy.controlled_folder_access,
-        ));
-    }
-    if matches!(&audit.observation.network_protection, Observation::Present(value) if *value != policy.network_protection)
-    {
-        proposed_changes.push(drift("EnableNetworkProtection", policy.network_protection));
-    }
+    add_setting_drift(
+        &mut proposed_changes,
+        "EnableControlledFolderAccess",
+        &audit.observation.controlled_folder_access,
+        policy.controlled_folder_access,
+    );
+    add_setting_drift(
+        &mut proposed_changes,
+        "EnableNetworkProtection",
+        &audit.observation.network_protection,
+        policy.network_protection,
+    );
     if matches!(&audit.observation.is_server, Observation::Present(true)) {
         if policy.apply_network_protection_server_prereqs {
             if matches!(
@@ -229,6 +230,17 @@ pub fn build_defender_ransomware_plan(
         audit,
         proposed_changes,
         apply_available: false,
+    }
+}
+
+fn add_setting_drift<T: Copy + Eq + Serialize>(
+    changes: &mut Vec<DefenderRansomwareDrift>,
+    name: &'static str,
+    observed: &Observation<T>,
+    desired: T,
+) {
+    if matches!(observed, Observation::Present(value) if *value != desired) {
+        changes.push(drift(name, desired));
     }
 }
 

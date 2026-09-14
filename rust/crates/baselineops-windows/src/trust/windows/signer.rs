@@ -12,11 +12,7 @@ pub(in crate::trust) fn verify_certificate_identity(
     expected_subject: &str,
     expected_spki_sha256: &SignerSpkiSha256,
 ) -> Result<(), PlatformError> {
-    let certificate = unsafe { context.as_ref() }.ok_or_else(|| {
-        PlatformError::TrustFailure("signer certificate context is missing".into())
-    })?;
-    let info = unsafe { certificate.pCertInfo.as_ref() }
-        .ok_or_else(|| PlatformError::TrustFailure("signer certificate has no subject".into()))?;
+    let info = unsafe { &*certificate_info(context)? };
     if canonical_x500_subject(&info.Subject)? != expected_subject {
         return Err(PlatformError::TrustFailure(
             "signer subject does not exactly match the canonical policy subject".into(),
@@ -30,6 +26,17 @@ pub(in crate::trust) fn verify_certificate_identity(
         ));
     }
     Ok(())
+}
+
+fn certificate_info(
+    context: *const CERT_CONTEXT,
+) -> Result<*const windows::Win32::Security::Cryptography::CERT_INFO, PlatformError> {
+    let certificate = unsafe { context.as_ref() }.ok_or_else(|| {
+        PlatformError::TrustFailure("signer certificate context is missing".into())
+    })?;
+    (!certificate.pCertInfo.is_null())
+        .then_some(certificate.pCertInfo.cast_const())
+        .ok_or_else(|| PlatformError::TrustFailure("signer certificate has no subject".into()))
 }
 
 pub(in crate::trust) fn canonical_x500_subject(

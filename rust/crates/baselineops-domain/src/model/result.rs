@@ -4,7 +4,10 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{ActionId, CapabilityId, FindingId, PlanId, ProfileId, ResultId, RunId};
+use crate::{
+    ActionId, CapabilityId, DomainResult, FindingId, PlanId, ProfileId, ResultId, RunId,
+    Sha256Digest,
+};
 
 use super::{ArtifactV3, HostIdentityV3, JsonMap, Operation, SchemaVersion};
 
@@ -26,6 +29,22 @@ pub enum ActionStatus {
 
 /// Terminal status for one execution unit.
 pub type ExecutionStatus = ActionStatus;
+
+/// Durable receipt binding one worker action to its immediate pre/post state.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ActionReceiptV3 {
+    /// Action identity from the approved plan.
+    pub action_id: ActionId,
+    /// Capability executed by the sealed dispatcher.
+    pub capability: CapabilityId,
+    /// Digest of the action-specific observation taken immediately before dispatch.
+    pub pre_state_digest: Sha256Digest,
+    /// Digest of the post-action observation.
+    pub post_state_digest: Sha256Digest,
+    /// Terminal action status.
+    pub status: ActionStatus,
+}
 
 /// The outcome of one planned action.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -207,6 +226,48 @@ pub struct ResultV3 {
     /// Result metadata with no execution semantics.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: JsonMap,
+}
+
+/// Closed IPC payload returned only with the `plan.result` reply kind.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerResultV3 {
+    /// Version marker for strict decoding.
+    pub schema_version: SchemaVersion,
+    /// Exact plan identity bound by the broker envelope.
+    pub plan_id: PlanId,
+    /// Exact worker run identity reserved by the plan.
+    pub run_id: RunId,
+    /// Digest approved by the operator and revalidated by the worker.
+    pub plan_digest: Sha256Digest,
+    /// Independently anchored terminal journal hash, absent before any mutation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_terminal_hash: Option<Sha256Digest>,
+    /// Durable per-action receipts in execution order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receipts: Vec<ActionReceiptV3>,
+    /// Worker-owned relative artifact references.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_manifest: Vec<ArtifactV3>,
+    /// Final result classification.
+    pub final_status: ResultStatus,
+    /// Bounded operator-facing explanation when work did not complete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Stable process exit value, required to agree with `final_status`.
+    pub exit_code: i32,
+}
+
+impl WorkerResultV3 {
+    /// Validate status, exit, receipt, and mutation-artifact consistency.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when status and exit disagree or an unsupported result carries mutation
+    /// evidence.
+    pub fn validate(&self) -> DomainResult<()> {
+        crate::validate::validate_worker_result(self)
+    }
 }
 
 /// Short name for the versioned host identity contract.

@@ -58,6 +58,13 @@
       "description": "Profile this plan was derived from.",
       "$ref": "#/$defs/ProfileId"
     },
+    "resources": {
+      "description": "Digest-bound, path-free external resource closure.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ResourceBindingV3"
+      }
+    },
     "run_id": {
       "description": "Reserved worker run identity that a result must retain.",
       "$ref": "#/$defs/RunId"
@@ -192,6 +199,10 @@
         "digest",
         "size_bytes"
       ]
+    },
+    "LogicalResourceId": {
+      "description": "A bounded logical resource key that never contains a filesystem locator.",
+      "type": "string"
     },
     "ObservedStateV3": {
       "description": "Point-in-time state supplied to the planner by registered capabilities.",
@@ -554,6 +565,52 @@
           "description": "A reboot is required for the requested outcome.",
           "type": "string",
           "const": "required"
+        }
+      ]
+    },
+    "ResourceBindingV3": {
+      "description": "Path-free digest binding for one logical external resource.",
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "Digest of the file bytes or canonical directory manifest.",
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "kind": {
+          "description": "Whether the broker bound a file or a directory manifest.",
+          "$ref": "#/$defs/ResourceKind"
+        },
+        "logical_id": {
+          "description": "Logical identifier referenced by typed capability input.",
+          "$ref": "#/$defs/LogicalResourceId"
+        },
+        "size_bytes": {
+          "description": "Total bounded input bytes represented by this binding.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "logical_id",
+        "kind",
+        "digest",
+        "size_bytes"
+      ]
+    },
+    "ResourceKind": {
+      "description": "Shape of an operator-bound external resource.",
+      "oneOf": [
+        {
+          "description": "One bounded regular file.",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "A deterministic manifest of bounded regular files.",
+          "type": "string",
+          "const": "directory_manifest"
         }
       ]
     },

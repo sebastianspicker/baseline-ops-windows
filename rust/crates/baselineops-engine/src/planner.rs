@@ -1,10 +1,10 @@
 use baselineops_domain::{
-    ActionId, DomainError, ExecutionIntent, HostIdentityV3, InputIdentityV3, ObservedStateV3,
-    PlanId, PlanV3, PlannedActionV3, ProfileStepV3, ProfileV3, RunId, Sha256Digest,
-    SourceIdentityV3, ToolIdentityV3, canonical_json_digest,
+    ActionId, CapabilityId, DomainError, ExecutionIntent, HostIdentityV3, InputIdentityV3,
+    ObservedStateV3, PlanId, PlanV3, PlannedActionV3, ProfileStepV3, ProfileV3, ResourceBindingV3,
+    RunId, Sha256Digest, SourceIdentityV3, ToolIdentityV3, canonical_json_digest,
 };
 use chrono::{DateTime, Duration, Utc};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Worker-derived values needed to bind a plan to one host and input closure.
 #[derive(Clone, Debug)]
@@ -21,6 +21,8 @@ pub struct PlanBuildContext {
     pub source: SourceIdentityV3,
     /// Digest and size of all plan-affecting input.
     pub input: InputIdentityV3,
+    /// Standard-user-opened external resources reduced to path-free digests.
+    pub resources: Vec<ResourceBindingV3>,
     /// Capability observations used to derive actions.
     pub observed_state: ObservedStateV3,
     /// Maximum plan lifetime.
@@ -121,6 +123,46 @@ pub fn build_plan(
     deriver: &dyn TrustedActionDeriver,
     now: DateTime<Utc>,
 ) -> Result<WorkerPlan, PlanningError> {
+    let (order, expires_at) = validate_build_inputs(profile, &context, now)?;
+    let index = PlanningIndex::from_validated(profile);
+    let actions = derive_actions(profile, &index, &order, &context, deriver)?;
+    build_worker_plan(profile, context, now, expires_at, actions)
+}
+
+struct PlanningIndex {
+    capability_by_step: HashMap<ActionId, CapabilityId>,
+    steps_by_capability: HashMap<CapabilityId, HashMap<ActionId, usize>>,
+}
+
+impl PlanningIndex {
+    fn from_validated(profile: &ProfileV3) -> Self {
+        let mut capability_by_step = HashMap::with_capacity(profile.steps.len());
+        let mut steps_by_capability = HashMap::<_, HashMap<_, _>>::new();
+        for (position, step) in profile.steps.iter().enumerate() {
+            capability_by_step.insert(step.step_id, step.capability_id.clone());
+            steps_by_capability
+                .entry(step.capability_id.clone())
+                .or_default()
+                .insert(step.step_id, position);
+        }
+        Self {
+            capability_by_step,
+            steps_by_capability,
+        }
+    }
+
+    fn step<'a>(&self, profile: &'a ProfileV3, step_id: &ActionId) -> Option<&'a ProfileStepV3> {
+        let capability = self.capability_by_step.get(step_id)?;
+        let position = self.steps_by_capability.get(capability)?.get(step_id)?;
+        profile.steps.get(*position)
+    }
+}
+
+fn validate_build_inputs(
+    profile: &ProfileV3,
+    context: &PlanBuildContext,
+    now: DateTime<Utc>,
+) -> Result<(Vec<ActionId>, DateTime<Utc>), PlanningError> {
     let validation = profile.validate()?;
     context.host.validate()?;
     context.observed_state.validate()?;
@@ -130,20 +172,25 @@ pub fn build_plan(
     {
         return Err(PlanningError::ExpiredProfile);
     }
-    if context.lifetime < Duration::seconds(1) || context.lifetime > Duration::hours(24) {
+    if !(Duration::seconds(1)..=Duration::hours(24)).contains(&context.lifetime) {
         return Err(PlanningError::InvalidLifetime);
     }
-    let expires_at = now
-        .checked_add_signed(context.lifetime)
-        .ok_or(PlanningError::ExpiryOverflow)?;
-    let actions = derive_actions(
-        profile,
-        validation.topological_order.as_slice(),
-        &context,
-        deriver,
-    )?;
+    Ok((
+        validation.topological_order.as_slice().to_vec(),
+        now.checked_add_signed(context.lifetime)
+            .ok_or(PlanningError::ExpiryOverflow)?,
+    ))
+}
+
+fn build_worker_plan(
+    profile: &ProfileV3,
+    context: PlanBuildContext,
+    now: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    actions: Vec<PlannedActionV3>,
+) -> Result<WorkerPlan, PlanningError> {
     let plan = PlanV3 {
-        schema_version: profile.schema_version,
+        schema_version: baselineops_domain::PlanSchemaVersion::V4,
         id: PlanId::new(),
         run_id: RunId::new(),
         intent: context.intent,
@@ -154,6 +201,7 @@ pub fn build_plan(
         package_digest: context.package_digest,
         source: context.source,
         input: context.input,
+        resources: context.resources,
         observed_state: context.observed_state,
         issued_at: now,
         expires_at,
@@ -167,16 +215,15 @@ pub fn build_plan(
 
 fn derive_actions(
     profile: &ProfileV3,
+    index: &PlanningIndex,
     order: &[ActionId],
     context: &PlanBuildContext,
     deriver: &dyn TrustedActionDeriver,
 ) -> Result<Vec<PlannedActionV3>, PlanningError> {
     let mut actions = Vec::with_capacity(profile.steps.len());
     for step_id in order {
-        let step = profile
-            .steps
-            .iter()
-            .find(|candidate| candidate.step_id == *step_id)
+        let step = index
+            .step(profile, step_id)
             .ok_or(PlanningError::SourceStepMismatch)?;
         let action = deriver
             .derive(step, context.intent, &context.observed_state)
@@ -235,6 +282,7 @@ pub(crate) fn rebuild_reviewed_apply_plan(
         package_digest: fresh.package_digest,
         source: fresh.source,
         input: fresh.input,
+        resources: fresh.resources,
         observed_state: reviewed.observed_state.clone(),
         issued_at: reviewed.issued_at,
         expires_at: reviewed.expires_at,
@@ -249,250 +297,38 @@ pub(crate) fn rebuild_reviewed_apply_plan(
 }
 
 fn validate_reviewed_authority(reviewed: &PlanV3, fresh: &PlanV3) -> Result<(), PlanningError> {
-    if reviewed.expires_at > fresh.expires_at {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.profile_id != fresh.profile_id {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.profile_digest != fresh.profile_digest {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.host != fresh.host {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.tool != fresh.tool {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.package_digest != fresh.package_digest {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.source != fresh.source {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.input != fresh.input {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.observed_state.digest != fresh.observed_state.digest {
-        return Err(PlanningError::ReviewedEnvelopeMismatch);
-    }
-    if reviewed.actions != fresh.actions {
+    if reviewed.expires_at > fresh.expires_at || !same_reviewed_bindings(reviewed, fresh) {
         return Err(PlanningError::ReviewedEnvelopeMismatch);
     }
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use baselineops_domain::{
-        ActionId, CapabilityId, JsonMap, Operation, OsFamily, PlannedActionV3, PreconditionV3,
-        Privilege, ProfileDefaultsV3, ProfileId, ProfileStepV3, RebootRequirement, Reversibility,
-        RiskLevel, SchemaVersion, SourceKind,
-    };
-
-    fn capability() -> CapabilityId {
-        CapabilityId::new("v3.test.capability").expect("capability")
-    }
-
-    fn profile(expires_at: Option<DateTime<Utc>>) -> ProfileV3 {
-        ProfileV3 {
-            schema_version: SchemaVersion::V3,
-            id: ProfileId::new(),
-            name: "test profile".into(),
-            version: "1.0.0".into(),
-            description: None,
-            created_at: Utc::now() - Duration::minutes(1),
-            expires_at,
-            defaults: ProfileDefaultsV3::default(),
-            steps: vec![ProfileStepV3 {
-                step_id: ActionId::new(),
-                capability_id: capability(),
-                parameters: JsonMap::default(),
-                depends_on: Vec::new(),
-                continue_on_error: false,
-            }],
-            metadata: JsonMap::default(),
-        }
-    }
-
-    fn observed_state() -> ObservedStateV3 {
-        let mut values = BTreeMap::new();
-        values.insert(
-            capability(),
-            baselineops_domain::ObservedValueV3 {
-                observed_at: Utc::now(),
-                facts: BTreeMap::from([("enabled".into(), serde_json::json!(true))]),
-            },
-        );
-        let mut observed_state = ObservedStateV3 {
-            captured_at: Utc::now(),
-            digest: Sha256Digest::of_bytes(b"placeholder"),
-            values,
-        };
-        observed_state.digest = observed_state.calculated_digest().expect("facts digest");
-        observed_state
-    }
-
-    fn context(observed_state: ObservedStateV3) -> PlanBuildContext {
-        let package_digest = Sha256Digest::of_bytes(b"package");
-        let mut host = HostIdentityV3 {
-            host_id: "host".into(),
-            boot_id: "boot".into(),
-            session_id: "session".into(),
-            hostname: "endpoint".into(),
-            os_family: OsFamily::Windows,
-            os_version: "10.0".into(),
-            architecture: "x86_64".into(),
-            fingerprint: Sha256Digest::of_bytes(b"placeholder"),
-        };
-        host.fingerprint = host.calculated_fingerprint().expect("fingerprint");
-        PlanBuildContext {
-            intent: ExecutionIntent::Apply,
-            host,
-            tool: ToolIdentityV3 {
-                name: "baselineops".into(),
-                version: "3.0.0".into(),
-                build_digest: Some(package_digest),
-            },
-            package_digest,
-            source: SourceIdentityV3 {
-                kind: SourceKind::LocalFile,
-                locator: "profile.json".into(),
-                digest: Sha256Digest::of_bytes(b"profile"),
-            },
-            input: InputIdentityV3 {
-                digest: Sha256Digest::of_bytes(b"input"),
-                size_bytes: 5,
-            },
-            observed_state,
-            lifetime: Duration::minutes(5),
-        }
-    }
-
-    struct TestRegistry {
-        operation: Operation,
-    }
-
-    impl TrustedActionDeriver for TestRegistry {
-        fn derive(
-            &self,
-            step: &ProfileStepV3,
-            _intent: ExecutionIntent,
-            observed_state: &ObservedStateV3,
-        ) -> Result<PlannedActionV3, String> {
-            Ok(PlannedActionV3 {
-                id: step.step_id,
-                source_step: step.step_id,
-                capability: step.capability_id.clone(),
-                operation: self.operation,
-                parameters: step.parameters.clone(),
-                depends_on: step.depends_on.clone(),
-                continue_on_error: step.continue_on_error,
-                facts_digest: observed_state.digest,
-                preconditions: vec![PreconditionV3::Elevation { required: true }],
-                risk: RiskLevel::High,
-                reversibility: Reversibility::ConditionallyReversible,
-                reboot: RebootRequirement::Recommended,
-                privileges: vec![Privilege::Administrator],
-                metadata: BTreeMap::from([("registry".into(), serde_json::json!(true))]),
-            })
-        }
-    }
-
-    #[test]
-    fn trusted_registry_derives_worker_owned_safety_metadata() {
-        let state = observed_state();
-        let profile = profile(None);
-        let plan = build_plan(
-            &profile,
-            context(state.clone()),
-            &TestRegistry {
-                operation: Operation::Apply,
-            },
-            Utc::now(),
-        )
-        .expect("plan");
-        let action = &plan.proposal().actions[0];
-        assert_eq!(action.source_step, profile.steps[0].step_id);
-        assert_eq!(action.operation, Operation::Apply);
-        assert_eq!(action.risk, RiskLevel::High);
-        assert_eq!(action.facts_digest, state.digest);
-        assert_eq!(action.privileges, vec![Privilege::Administrator]);
-    }
-
-    #[test]
-    fn planner_rejects_expired_profiles_and_mismatched_intent() {
-        let now = Utc::now();
-        let expired = profile(Some(now - Duration::seconds(1)));
-        let error = build_plan(
-            &expired,
-            context(observed_state()),
-            &TestRegistry {
-                operation: Operation::Apply,
-            },
-            now,
-        )
-        .expect_err("expired profile");
-        assert!(matches!(error, PlanningError::ExpiredProfile));
-
-        let error = build_plan(
-            &profile(None),
-            context(observed_state()),
-            &TestRegistry {
-                operation: Operation::Audit,
-            },
-            Utc::now(),
-        )
-        .expect_err("registry action must match command intent");
-        assert!(matches!(error, PlanningError::IntentMismatch));
-    }
-
-    #[test]
-    fn reviewed_apply_envelope_keeps_digest_without_extending_expiry() {
-        let now = Utc::now();
-        let profile = profile(None);
-        let plan_context = context(observed_state());
-        let reviewed = build_plan(
-            &profile,
-            plan_context.clone(),
-            &TestRegistry {
-                operation: Operation::Apply,
-            },
-            now,
-        )
-        .expect("reviewed")
-        .proposal()
-        .clone();
-        let rebuilt = rebuild_reviewed_apply_plan(
-            &reviewed,
-            &profile,
-            plan_context,
-            &TestRegistry {
-                operation: Operation::Apply,
-            },
-            now + Duration::seconds(1),
-        )
-        .expect("rebuilt");
-        assert_eq!(
-            rebuilt.digest(),
-            canonical_json_digest(&reviewed).expect("digest")
-        );
-        assert_eq!(rebuilt.proposal().expires_at, reviewed.expires_at);
-
-        let mut extended = reviewed;
-        extended.expires_at += Duration::hours(1);
-        assert!(matches!(
-            rebuild_reviewed_apply_plan(
-                &extended,
-                &profile,
-                context(observed_state()),
-                &TestRegistry {
-                    operation: Operation::Apply,
-                },
-                now + Duration::seconds(1),
-            ),
-            Err(PlanningError::ReviewedEnvelopeMismatch)
-        ));
-    }
+fn same_reviewed_bindings(reviewed: &PlanV3, fresh: &PlanV3) -> bool {
+    (
+        reviewed.profile_id,
+        reviewed.profile_digest,
+        &reviewed.host,
+        &reviewed.tool,
+        reviewed.package_digest,
+        &reviewed.source,
+        &reviewed.input,
+        &reviewed.resources,
+        reviewed.observed_state.digest,
+        &reviewed.actions,
+    ) == (
+        fresh.profile_id,
+        fresh.profile_digest,
+        &fresh.host,
+        &fresh.tool,
+        fresh.package_digest,
+        &fresh.source,
+        &fresh.input,
+        &fresh.resources,
+        fresh.observed_state.digest,
+        &fresh.actions,
+    )
 }
+
+#[cfg(test)]
+#[path = "planner_tests.rs"]
+mod tests;

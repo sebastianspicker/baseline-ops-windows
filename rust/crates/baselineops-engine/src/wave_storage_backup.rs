@@ -9,9 +9,9 @@ use baselineops_windows::{PlatformError, audit_backup_readiness, audit_storage_r
 
 /// Native Windows executor for capabilities 35 and 36.
 ///
-/// Both descriptors remain `in_development` until retained comparison against
-/// the legacy scripts and Windows VM evidence cover real Storage providers,
-/// VSS writer states, and File History configurations.
+/// Both descriptors are `code_complete`; comparison against the legacy scripts
+/// and Windows VM evidence for real Storage providers, VSS writer states, and
+/// File History configurations remain open release gates.
 pub struct WaveStorageBackupWindowsExecutor;
 
 impl CapabilityExecutor for WaveStorageBackupWindowsExecutor {

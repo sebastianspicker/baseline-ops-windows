@@ -94,6 +94,14 @@ pub enum ApprovalError {
     /// The client approved different bytes than the current proposal.
     #[error("approved plan digest does not match the worker proposal")]
     DigestMismatch,
+    /// At least one action is not independently eligible for production mutation.
+    #[error("production Apply is locked for {capability_id}: {reason}")]
+    ApplyIneligible {
+        /// Capability whose worker-owned mutation evidence is not closed.
+        capability_id: String,
+        /// Stable operator-facing explanation.
+        reason: &'static str,
+    },
     /// A host, tool, source, input, expiry, or observation binding changed.
     #[error(transparent)]
     Domain(#[from] DomainError),

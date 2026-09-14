@@ -191,6 +191,28 @@ param(
   [switch]$NoColor
 )
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
+function Initialize-Capability17Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+    Alpha = $Alpha
+    MinBaselineToCompare = $MinBaselineToCompare
+    RatioFloor = $RatioFloor
+    RatioUpper = $RatioUpper
+  }
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
@@ -201,10 +223,8 @@ Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'internal/17-Sysmon-Rule-Drift-Sensor.helpers.ps1')
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
@@ -224,112 +244,242 @@ $script:MaxEventMessageLength  = 30000
 # -----------------------------
 # MAIN
 # -----------------------------
-if ($PSBoundParameters.ContainsKey('CatalogPath')) {
+if ($EntryBoundParameters.ContainsKey('CatalogPath')) {
   try {
-    $catalog = Get-ExplicitCatalog -Path $CatalogPath
-    $catalogSource = $CatalogPath
+    $RunState.catalog = Get-ExplicitCatalog -Path $CatalogPath -RunState $RunState
+    $RunState.catalogSource = $CatalogPath
   } catch {
     Write-CatalogFailureResult -Message $_.Exception.Message
   }
 } else {
-  $catalog = $null
-  $catalogSource = 'DEFAULT'
+  $RunState.catalog = $null
+  $RunState.catalogSource = 'DEFAULT'
 }
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
-  $summary = [pscustomobject]@{
-    ComputerName = $env:COMPUTERNAME
-    Timestamp    = Get-Date
-    Mode         = $Mode
-    Supported    = $false
-    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability17Runtime -EntryBoundParameters $PSBoundParameters
+function Get-Capability17UnsupportedState {
+  param([hashtable]$RunState)
+$summary = [pscustomobject]@{
+  ComputerName = $env:COMPUTERNAME
+  Timestamp    = Get-Date
+  Mode         = $Mode
+  Supported    = $false
+  Notes        = @('Skipped: this script is only supported on Windows hosts.')
+}
+$RunState.unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+$RunState.result = Get-V2ResultObject -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -Mode $Mode -Result $RunState.unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  [pscustomobject]@{ Result = $RunState.result; Token = $RunState.unsupportedResult }
+}
+function Set-Capability17UnsupportedState {
+  param([hashtable]$RunState)
+  $unsupportedState = Get-Capability17UnsupportedState -RunState $RunState
+  $RunState.result = $unsupportedState.Result
+  $RunState.unsupportedResult = $unsupportedState.Token
+}
+if (-not $RunState.isWindowsHost) {
+  . Set-Capability17UnsupportedState -RunState $RunState
+  Write-ResultObject -ResultObject $RunState.result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $RunState.result }
+  exit (Get-V2ExitCode -Result $RunState.unsupportedResult)
+}
+function Invoke-Capability17MainPhase01 {
+  param([hashtable]$RunState)
+  $StatePath = Get-SysmonStatePath -RequestedPath $StatePath -FileName 'rule-drift-sensor-state.json'
+  if (-not (Ensure-EventSource -SourceName $script:EventSourceName -LogName $script:EventLogName)) {
+    Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
   }
-  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
-  $result = Get-V2ResultObject -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
-  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
-  exit (Get-V2ExitCode -Result $unsupportedResult)
+  $channel = Get-SysmonChannelStatus
+  $channel = Enable-SysmonChannelIfRequested -ChannelStatus $channel
+  $defaultCatalog = Get-DefaultCatalog -DefaultWindowHours $WindowHours -DefaultAlpha $RunState.Alpha -DefaultRatioFloor $RunState.RatioFloor -DefaultRatioUpper $RunState.RatioUpper -DefaultMinBaselineToCompare $RunState.MinBaselineToCompare -WithBuiltInRules:$UseBuiltInDefaultRules
+  if ($null -eq $RunState.catalog) { $RunState.catalog = $defaultCatalog }
+  # Apply catalog settings only if caller did not override
+  if ($RunState.catalog.PSObject.Properties.Name -contains 'WindowHours' -and -not $script:__EntryBoundParameters.ContainsKey('WindowHours')) { $WindowHours = [int]$RunState.catalog.WindowHours }
 }
-$StatePath = Get-SysmonStatePath -RequestedPath $StatePath -FileName 'rule-drift-sensor-state.json'
-if (-not (Ensure-EventSource -SourceName $script:EventSourceName -LogName $script:EventLogName)) {
-  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+function Invoke-Capability17MainPhase02 {
+  param([hashtable]$RunState)
+  if ($RunState.catalog.PSObject.Properties.Name -contains 'Alpha' -and -not $script:__EntryBoundParameters.ContainsKey('Alpha')) { $RunState.Alpha = [double]$RunState.catalog.Alpha }
+  if ($RunState.catalog.PSObject.Properties.Name -contains 'RatioFloor' -and -not $script:__EntryBoundParameters.ContainsKey('RatioFloor')) { $RunState.RatioFloor = [double]$RunState.catalog.RatioFloor }
 }
-$channel = Get-SysmonChannelStatus
-$channel = Enable-SysmonChannelIfRequested -ChannelStatus $channel
-$defaultCatalog = Get-DefaultCatalog -DefaultWindowHours $WindowHours -DefaultAlpha $Alpha -DefaultRatioFloor $RatioFloor -DefaultRatioUpper $RatioUpper -DefaultMinBaselineToCompare $MinBaselineToCompare -WithBuiltInRules:$UseBuiltInDefaultRules
-if ($null -eq $catalog) { $catalog = $defaultCatalog }
-# Apply catalog settings only if caller did not override
-if ($catalog.PSObject.Properties.Name -contains 'WindowHours' -and -not $PSBoundParameters.ContainsKey('WindowHours')) { $WindowHours = [int]$catalog.WindowHours }
-if ($catalog.PSObject.Properties.Name -contains 'Alpha' -and -not $PSBoundParameters.ContainsKey('Alpha')) { $Alpha = [double]$catalog.Alpha }
-if ($catalog.PSObject.Properties.Name -contains 'RatioFloor' -and -not $PSBoundParameters.ContainsKey('RatioFloor')) { $RatioFloor = [double]$catalog.RatioFloor }
-if ($catalog.PSObject.Properties.Name -contains 'RatioUpper' -and -not $PSBoundParameters.ContainsKey('RatioUpper')) { $RatioUpper = [double]$catalog.RatioUpper }
-if ($catalog.PSObject.Properties.Name -contains 'MinBaselineToCompare' -and -not $PSBoundParameters.ContainsKey('MinBaselineToCompare')) { $MinBaselineToCompare = [int]$catalog.MinBaselineToCompare }
-$startTime = (Get-Date).AddHours(-$WindowHours)
-if (-not $channel.Exists -or -not $channel.Enabled) {
-  $final = Get-FinalResult -OverallStatus 'CHANNEL_UNAVAILABLE' -StartTime $startTime -ChannelStatus $channel -ConfigChanged $null -Remediation $null -Rules @() -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $false
-  Write-AuditEvent -EventId $script:EventIdWarn -Message ("Sysmon channel unavailable: Exists={0} Enabled={1} Error={2}" -f $channel.Exists,$channel.Enabled,$channel.Error) -Level 'Warning'
-  if (-not $PassThru) { Show-ConsoleSummary -Result $final }
-} else {
-  $baseline = @{}
-  $state = Read-ValidatedSysmonState -Path $StatePath
-  if ($state -and $state.Baseline) { $baseline = ConvertTo-Hashtable -Object $state.Baseline }
-  $ruleResults = @(); $remediationResult = $null; $stateWriteOk = $false; $eventQueryFailed = $false; $configChanged = $null; $evidenceSummary = $null
-  try {
-    $activeRules = @($catalog.Rules | Where-Object { $_ -and $_.PSObject.Properties.Name -contains 'Id' -and -not ($_.PSObject.Properties.Name -contains 'Disabled' -and $_.Disabled -eq $true) })
+function Invoke-Capability17MainPhase03 {
+  param([hashtable]$RunState)
+  if ($RunState.catalog.PSObject.Properties.Name -contains 'RatioUpper' -and -not $script:__EntryBoundParameters.ContainsKey('RatioUpper')) { $RunState.RatioUpper = [double]$RunState.catalog.RatioUpper }
+  if ($RunState.catalog.PSObject.Properties.Name -contains 'MinBaselineToCompare' -and -not $script:__EntryBoundParameters.ContainsKey('MinBaselineToCompare')) { $RunState.MinBaselineToCompare = [int]$RunState.catalog.MinBaselineToCompare }
+  $RunState.startTime = (Get-Date).AddHours(-$WindowHours)
+}
+function Set-SysmonUnavailableResult {
+  param([hashtable]$RunState)
+    $final = Get-FinalResult ([pscustomobject]@{
+        OverallStatus = 'CHANNEL_UNAVAILABLE'
+        StartTime = $RunState.startTime
+        ChannelStatus = $channel
+        ConfigChanged = $null
+        Remediation = $null
+        Rules = @()
+        Evidence = $null
+        CatalogSource = $RunState.catalogSource
+        StatePathUsed = $StatePath
+        StateWriteOk = $false
+      })
+    Write-AuditEvent -EventId $script:EventIdWarn -Message ("Sysmon channel unavailable: Exists={0} Enabled={1} Error={2}" -f $channel.Exists,$channel.Enabled,$channel.Error) -Level 'Warning'
+    if (-not $PassThru) { Show-ConsoleSummary -Result $final -RunState $RunState }
+}
+function Initialize-SysmonRuleEvaluation {
+  param([hashtable]$RunState)
+    $RunState.baseline = @{}
+    $state = Read-ValidatedSysmonState -Path $StatePath -RunState $RunState
+    if ($state -and $state.Baseline) { $RunState.baseline = ConvertTo-Hashtable -Object $state.Baseline }
+    $RunState.ruleResults = @(); $RunState.remediationResult = $null; $RunState.stateWriteOk = $false; $RunState.eventQueryFailed = $false; $RunState.configChanged = $null; $RunState.evidenceSummary = $null
+}
+function Get-SysmonRuleEvidence {
+  param([hashtable]$RunState)
+    $activeRules = @($RunState.catalog.Rules | Where-Object { $_ -and $_.PSObject.Properties.Name -contains 'Id' -and -not ($_.PSObject.Properties.Name -contains 'Disabled' -and $_.Disabled -eq $true) })
     $queryIds = @(@($activeRules | ForEach-Object { [int]$_.Id }) + 16 | Sort-Object -Unique)
     $workStopwatch = [Diagnostics.Stopwatch]::StartNew()
-    $eventEvidence = Get-BoundedSysmonEventEvidence -EventIds $queryIds -StartTime $startTime -MaximumEvents $MaxEvents -MaximumSeconds $MaxQuerySeconds
-    $configCount = Get-EventCountFromEvidence -Evidence $eventEvidence -EventId 16 -WorkStopwatch $workStopwatch -MaximumSeconds $MaxQuerySeconds
-    if ($configCount.Success) { $configChanged = [bool]($configCount.Count -gt 0) } else { $eventQueryFailed = $true }
+    $eventEvidence = Get-BoundedSysmonEventEvidence -EventIds $queryIds -StartTime $RunState.startTime -MaximumEvents $MaxEvents -MaximumSeconds $MaxQuerySeconds -RunState $RunState
+    $configCount = Get-EventCountFromEvidence -Evidence $eventEvidence -EventId 16 -WorkStopwatch $workStopwatch -MaximumSeconds $MaxQuerySeconds -RunState $RunState
+    if ($configCount.Success) { $RunState.configChanged = [bool]($configCount.Count -gt 0) } else { $RunState.eventQueryFailed = $true }
+}
+function Initialize-SysmonRuleIteration {
+  param([hashtable]$RunState)
+        $id = [int]$r.Id
+        $RunState.name = if ((Test-AllConditions -Conditions @({ $r.PSObject.Properties.Name -contains 'Name' }, { $r.Name }))) { [string]$r.Name } else { "EventID $id" }
+        $RunState.isCritical = [bool]((Test-AllConditions -Conditions @({ $r.PSObject.Properties.Name -contains 'Critical' }, { $r.Critical })))
+        $RunState.minWin = if ((Test-AllConditions -Conditions @({ $r.PSObject.Properties.Name -contains 'MinPerWindow' }, { $null -ne $r.MinPerWindow }))) { [Nullable[int]][int]$r.MinPerWindow } else { $null }
+        $msgRegex = if ((Test-AllConditions -Conditions @({ $r.PSObject.Properties.Name -contains 'MessageRegex' }, { $r.MessageRegex }))) { [string]$r.MessageRegex } else { $null }
+        $RunState.countResult = Get-EventCountFromEvidence -Evidence $eventEvidence -EventId $id -MessageRegex $msgRegex -WorkStopwatch $workStopwatch -MaximumSeconds $MaxQuerySeconds -RunState $RunState
+}
+function Resolve-SysmonRuleStatus {
+  param([hashtable]$RunState)
+        $isCritical = $RunState.isCritical
+        $minimumWindowCount = $RunState.minWin
+        $ratioFloor = $RunState.RatioFloor
+        $ratioUpper = $RunState.RatioUpper
+        if ((Test-AllConditions -Conditions @({ $isCritical }, { $count -eq 0 }))) { return 'HARDZERO' }
+        if ((Test-AllConditions -Conditions @({ $null -ne $minimumWindowCount }, { $count -lt $minimumWindowCount }))) { return 'LOW' }
+        if ((Test-AllConditions -Conditions @({ $null -ne $ratio }, { $ratio -lt $ratioFloor }))) { return 'DRIFT_DOWN' }
+        if ((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ $IncludeSurge }, { $null -ne $ratio })) }, { $ratio -gt $ratioUpper }))) { return 'SURGE' }
+        return 'OK'
+}
+function Add-SysmonSuccessfulRuleMeasurement {
+  param([hashtable]$RunState)
+        $count = [int]$RunState.countResult.Count; $priorBase = $null
+        if ($RunState.baseline.ContainsKey("$id")) { try { $priorBase = [double]$RunState.baseline["$id"] } catch { $priorBase = $null } }
+        $ratio = $null
+        if ((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ $null -ne $priorBase }, { $priorBase -ge [double]$RunState.MinBaselineToCompare })) }, { $priorBase -gt 0 }))) { $ratio = [math]::Round($count / $priorBase,2) }
+        $status = Resolve-SysmonRuleStatus -RunState $RunState
+        $newBase = [double]$count
+        if ((Test-AllConditions -Conditions @({ -not $Rebaseline }, { $null -ne $priorBase }))) { $newBase = [double]::Round(($RunState.Alpha * $count) + ((1 - $RunState.Alpha) * $priorBase),2) }
+        $RunState.baseline["$id"] = $newBase
+        $RunState.ruleResults += Get-RuleResult ([pscustomobject]@{ Id=$id; Name=$RunState.name; Count=$count; PriorBaseline=$priorBase; NewBaseline=$newBase; Ratio=$ratio; MinPerWindow=$RunState.minWin; IsCritical=$RunState.isCritical; Status=$status; MessageRegex=$msgRegex; QueryError=$null })
+}
+function Measure-SysmonCatalogRules {
+  param([hashtable]$RunState)
     foreach ($r in $activeRules) {
-      $id = [int]$r.Id
-      $name = if ($r.PSObject.Properties.Name -contains 'Name' -and $r.Name) { [string]$r.Name } else { "EventID $id" }
-      $isCritical = [bool]($r.PSObject.Properties.Name -contains 'Critical' -and $r.Critical)
-      $minWin = if ($r.PSObject.Properties.Name -contains 'MinPerWindow' -and $null -ne $r.MinPerWindow) { [Nullable[int]][int]$r.MinPerWindow } else { $null }
-      $msgRegex = if ($r.PSObject.Properties.Name -contains 'MessageRegex' -and $r.MessageRegex) { [string]$r.MessageRegex } else { $null }
-      $countResult = Get-EventCountFromEvidence -Evidence $eventEvidence -EventId $id -MessageRegex $msgRegex -WorkStopwatch $workStopwatch -MaximumSeconds $MaxQuerySeconds
-      if (-not $countResult.Success) { $eventQueryFailed = $true; $ruleResults += Get-RuleResult -Id $id -Name $name -Count $null -PriorBaseline $null -NewBaseline $null -Ratio $null -MinPerWindow $minWin -IsCritical $isCritical -Status 'QUERY_ERROR' -MessageRegex $msgRegex -QueryError $countResult.Error; continue }
-      $count = [int]$countResult.Count; $priorBase = $null
-      if ($baseline.ContainsKey("$id")) { try { $priorBase = [double]$baseline["$id"] } catch { $priorBase = $null } }
-      $ratio = $null
-      if ($null -ne $priorBase -and $priorBase -ge [double]$MinBaselineToCompare -and $priorBase -gt 0) { $ratio = [math]::Round($count / $priorBase,2) }
-      $status = 'OK'
-      if ($isCritical -and $count -eq 0) { $status = 'HARDZERO' } elseif ($null -ne $minWin -and $count -lt $minWin) { $status = 'LOW' } elseif ($null -ne $ratio -and $ratio -lt $RatioFloor) { $status = 'DRIFT_DOWN' } elseif ($IncludeSurge -and $null -ne $ratio -and $ratio -gt $RatioUpper) { $status = 'SURGE' }
-      $newBase = [double]$count
-      if (-not $Rebaseline -and $null -ne $priorBase) { $newBase = [double]::Round(($Alpha * $count) + ((1 - $Alpha) * $priorBase),2) }
-      $baseline["$id"] = $newBase
-      $ruleResults += Get-RuleResult -Id $id -Name $name -Count $count -PriorBaseline $priorBase -NewBaseline $newBase -Ratio $ratio -MinPerWindow $minWin -IsCritical $isCritical -Status $status -MessageRegex $msgRegex -QueryError $null
-    }
-    $workStopwatch.Stop()
-    $evidenceComplete = [bool]($eventEvidence.Complete -and -not $eventQueryFailed -and $workStopwatch.Elapsed.TotalSeconds -lt $MaxQuerySeconds)
-    $evidenceSummary = [pscustomobject]@{ Complete = $evidenceComplete; Truncated = [bool]$eventEvidence.Truncated; TimedOut = [bool]($eventEvidence.TimedOut -or $workStopwatch.Elapsed.TotalSeconds -ge $MaxQuerySeconds); Error = $eventEvidence.Error; EventIds = @($eventEvidence.EventIds); EventsRead = $eventEvidence.EventsRead; MaximumEvents = $eventEvidence.MaximumEvents; MaximumSeconds = $eventEvidence.MaximumSeconds; ElapsedMilliseconds = $workStopwatch.ElapsedMilliseconds }
-    if ($evidenceComplete) {
-      $stateObj = [pscustomobject]@{ Version = 1; HostName = [string]$env:COMPUTERNAME; Timestamp = (Get-Date).ToString('s'); WindowHours = [int]$WindowHours; Alpha = [double]$Alpha; Baseline = [pscustomobject]$baseline; ConfigChanged = [bool]$configChanged; CatalogSource = [string]$catalogSource }
-      try { Write-SysmonState -InputObject $stateObj -Path $StatePath; $stateWriteOk = $true } catch { Write-Verbose ("Sysmon drift state write failed: {0}" -f $_.Exception.Message) }
-    }
-    $overallStatus = Resolve-SysmonOverallStatus -Rules $ruleResults -StateWriteOk $stateWriteOk -EvidenceComplete $evidenceComplete
-    if ($Mode -eq 'Remediate' -and $TriggerReapply -and $evidenceComplete -and $overallStatus -ne 'ERROR') {
-      $hasHardZero = @($ruleResults | Where-Object { $_.Status -eq 'HARDZERO' }).Count -gt 0
-      if ($hasHardZero) {
-        $remediationResult = Invoke-RemediationScript -ScriptPath $RemediationScriptPath -RequireSignature:$RequireSignedRemediationScript
-        if ($remediationResult.Attempted -and -not $remediationResult.Success) {
-          $overallStatus = 'ERROR'
+        . Initialize-SysmonRuleIteration -RunState $RunState
+        if (-not $RunState.countResult.Success) {
+          $RunState.eventQueryFailed = $true
+          $RunState.ruleResults += Get-RuleResult ([pscustomobject]@{ Id=$id; Name=$RunState.name; Count=$null; PriorBaseline=$null; NewBaseline=$null; Ratio=$null; MinPerWindow=$RunState.minWin; IsCritical=$RunState.isCritical; Status='QUERY_ERROR'; MessageRegex=$msgRegex; QueryError=$RunState.countResult.Error })
+          continue
         }
-      }
+        . Add-SysmonSuccessfulRuleMeasurement -RunState $RunState
     }
-    $final = Get-FinalResult -OverallStatus $overallStatus -StartTime $startTime -ChannelStatus $channel -ConfigChanged $configChanged -Remediation $remediationResult -Rules $ruleResults -Evidence $evidenceSummary -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $stateWriteOk
+}
+function Complete-SysmonEvidenceCollection {
+  param([hashtable]$RunState)
+    $workStopwatch.Stop()
+    $evidenceComplete = [bool]($eventEvidence.Complete -and -not $RunState.eventQueryFailed -and $workStopwatch.Elapsed.TotalSeconds -lt $MaxQuerySeconds)
+    $RunState.evidenceSummary = [pscustomobject]@{ Complete = $evidenceComplete; Truncated = [bool]$eventEvidence.Truncated; TimedOut = [bool]($eventEvidence.TimedOut -or $workStopwatch.Elapsed.TotalSeconds -ge $MaxQuerySeconds); Error = $eventEvidence.Error; EventIds = @($eventEvidence.EventIds); EventsRead = $eventEvidence.EventsRead; MaximumEvents = $eventEvidence.MaximumEvents; MaximumSeconds = $eventEvidence.MaximumSeconds; ElapsedMilliseconds = $workStopwatch.ElapsedMilliseconds }
+    if ($evidenceComplete) {
+        $stateObj = [pscustomobject]@{ Version = 1; HostName = [string]$env:COMPUTERNAME; Timestamp = (Get-Date).ToString('s'); WindowHours = [int]$WindowHours; Alpha = [double]$RunState.Alpha; Baseline = [pscustomobject]$RunState.baseline; ConfigChanged = [bool]$RunState.configChanged; CatalogSource = [string]$RunState.catalogSource }
+        try { Write-SysmonState -InputObject $stateObj -Path $StatePath -RunState $RunState; $RunState.stateWriteOk = $true } catch { Write-Verbose ("Sysmon drift state write failed: {0}" -f $_.Exception.Message) }
+    }
+}
+function Invoke-SysmonReapplyIfNeeded {
+  param([hashtable]$RunState)
+    $overallStatus = Resolve-SysmonOverallStatus -Rules $RunState.ruleResults -StateWriteOk $RunState.stateWriteOk -EvidenceComplete $evidenceComplete
+    if ((Test-AllConditions -Conditions @({ $Mode -eq 'Remediate' }, { $TriggerReapply })) -and $evidenceComplete -and $overallStatus -ne 'ERROR') {
+        $hasHardZero = @($RunState.ruleResults | Where-Object { $_.Status -eq 'HARDZERO' }).Count -gt 0
+        if ($hasHardZero) {
+          $RunState.remediationResult = Invoke-RemediationScript -ScriptPath $RemediationScriptPath -RequireSignature:$RequireSignedRemediationScript -RunState $RunState
+          if ((Test-AllConditions -Conditions @({ $RunState.remediationResult.Attempted }, { -not $RunState.remediationResult.Success }))) {
+            $overallStatus = 'ERROR'
+          }
+        }
+    }
+}
+function Set-SysmonSuccessfulResult {
+  param([hashtable]$RunState)
+    $final = Get-FinalResult ([pscustomobject]@{
+        OverallStatus = $overallStatus
+        StartTime = $RunState.startTime
+        ChannelStatus = $channel
+        ConfigChanged = $RunState.configChanged
+        Remediation = $RunState.remediationResult
+        Rules = $RunState.ruleResults
+        Evidence = $RunState.evidenceSummary
+        CatalogSource = $RunState.catalogSource
+        StatePathUsed = $StatePath
+        StateWriteOk = $RunState.stateWriteOk
+      })
     $auditMsg = "Rules={0} Anomalies={1} HardZero={2} EvidenceComplete={3} Truncated={4} ConfigChanged={5} Catalog={6}" -f $final.Summary.TotalRules,$final.Summary.Anomalies,$final.Summary.HardZero,$final.Evidence.Complete,$final.Evidence.Truncated,$final.ConfigChanged,$final.CatalogSource
     if ($final.Status -eq 'OK') { Write-AuditEvent -EventId $script:EventIdOk -Message $auditMsg -Level 'Information' } else { Write-AuditEvent -EventId $script:EventIdWarn -Message $auditMsg -Level 'Warning' }
-  } catch {
-    $err = $_.Exception.Message
-    $final = Get-FinalResult -OverallStatus 'ERROR' -StartTime $startTime -ChannelStatus $channel -ConfigChanged $configChanged -Remediation $remediationResult -Rules $ruleResults -Evidence $evidenceSummary -CatalogSource $catalogSource -StatePathUsed $StatePath -StateWriteOk $stateWriteOk
-    $final | Add-Member -NotePropertyName Error -NotePropertyValue $err -Force
-    Write-AuditEvent -EventId $script:EventIdWarn -Message ("Sysmon Drift Sensor ERROR: {0}" -f $err) -Level 'Error'
-  } finally { if (-not $PassThru) { Show-ConsoleSummary -Result $final } }
 }
+function Invoke-SysmonAvailableEvaluation {
+  param([hashtable]$RunState)
+    . Initialize-SysmonRuleEvaluation -RunState $RunState
+    try {
+      . Get-SysmonRuleEvidence -RunState $RunState
+      . Measure-SysmonCatalogRules -RunState $RunState
+      . Complete-SysmonEvidenceCollection -RunState $RunState
+      . Invoke-SysmonReapplyIfNeeded -RunState $RunState
+      . Set-SysmonSuccessfulResult -RunState $RunState
+    } catch {
+      $err = $_.Exception.Message
+      $final = Get-FinalResult ([pscustomobject]@{
+          OverallStatus = 'ERROR'
+          StartTime = $RunState.startTime
+          ChannelStatus = $channel
+          ConfigChanged = $RunState.configChanged
+          Remediation = $RunState.remediationResult
+          Rules = $RunState.ruleResults
+          Evidence = $RunState.evidenceSummary
+          CatalogSource = $RunState.catalogSource
+          StatePathUsed = $StatePath
+          StateWriteOk = $RunState.stateWriteOk
+        })
+      $final | Add-Member -NotePropertyName Error -NotePropertyValue $err -Force
+      Write-AuditEvent -EventId $script:EventIdWarn -Message ("Sysmon Drift Sensor ERROR: {0}" -f $err) -Level 'Error'
+    } finally { if (-not $PassThru) { Show-ConsoleSummary -Result $final -RunState $RunState } }
+}
+function Invoke-Capability17MainPhase04 {
+  param([hashtable]$RunState)
+  if (-not $channel.Exists -or -not $channel.Enabled) {
+    . Set-SysmonUnavailableResult -RunState $RunState
+  } else {
+    . Invoke-SysmonAvailableEvaluation -RunState $RunState
+  }
+}
+function Invoke-Capability17Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability17MainPhase01 -RunState $RunState
+  . Invoke-Capability17MainPhase02 -RunState $RunState
+  . Invoke-Capability17MainPhase03 -RunState $RunState
+  . Invoke-Capability17MainPhase04 -RunState $RunState
+}
+. Invoke-Capability17Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 # V2 output contract
-$resultToken = if ($final.Status -in @('FAIL', 'ERROR')) { 'FAIL' } elseif ($final.Status -ne 'OK') { 'WARN' } else { 'OK' }
-if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
+function Get-Capability17ResultToken {
+  $resultToken = if ($final.Status -in @('FAIL', 'ERROR')) { 'FAIL' } elseif ($final.Status -ne 'OK') { 'WARN' } else { 'OK' }
+  if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
+  return $resultToken
+}
+$resultToken = Get-Capability17ResultToken
 $v2Result = Get-V2ResultObject -ScriptName '17-Sysmon-Rule-Drift-Sensor.ps1' -Mode $Mode -Result $resultToken -Findings @() -Summary $final -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }

@@ -114,6 +114,11 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Initialize-Capability25Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+    SummaryJsonPath = $SummaryJsonPath
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
@@ -126,28 +131,41 @@ Import-Module (Join-Path $script:LibPath 'Validation.psm1') -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
-  $summary = [pscustomobject]@{
-    ComputerName = $env:COMPUTERNAME
-    Timestamp    = Get-Date
-    Mode         = $Mode
-    Supported    = $false
-    Notes        = @('Skipped: this script is only supported on Windows hosts.')
-  }
-  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
-  $result = Get-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
-  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
-  exit (Get-V2ExitCode -Result $unsupportedResult)
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability25Runtime -EntryBoundParameters $PSBoundParameters
+function Get-Capability25UnsupportedState {
+  param([hashtable]$RunState)
+$summary = [pscustomobject]@{
+  ComputerName = $env:COMPUTERNAME
+  Timestamp    = Get-Date
+  Mode         = $Mode
+  Supported    = $false
+  Notes        = @('Skipped: this script is only supported on Windows hosts.')
+}
+$RunState.unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+$RunState.result = Get-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $RunState.unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  [pscustomobject]@{ Result = $RunState.result; Token = $RunState.unsupportedResult }
+}
+function Set-Capability25UnsupportedState {
+  param([hashtable]$RunState)
+  $unsupportedState = Get-Capability25UnsupportedState -RunState $RunState
+  $RunState.result = $unsupportedState.Result
+  $RunState.unsupportedResult = $unsupportedState.Token
+}
+if (-not $RunState.isWindowsHost) {
+  . Set-Capability25UnsupportedState -RunState $RunState
+  Write-ResultObject -ResultObject $RunState.result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $RunState.result }
+  exit (Get-V2ExitCode -Result $RunState.unsupportedResult)
 }
 
 $script:Findings = Get-FindingsList
@@ -207,26 +225,37 @@ function Add-BoundedUtf8Log {
   }
 }
 
-function Add-WinGetPhaseFindings {
-  param([Parameter(Mandatory = $true)]$PhaseResult)
-
-  if ($PhaseResult.TimedOut) {
-    [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-Timeout' -Severity 'High' -Message ("WinGet phase '{0}' timed out." -f $PhaseResult.Phase) -Extra @{ Phase = $PhaseResult.Phase; DurationS = $PhaseResult.DurationS })
+function Add-WinGetPhaseFindingsSection01 {
+  param([hashtable]$RunState)
+if ($RunState.PhaseResult.TimedOut) {
+    [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-Timeout' -Severity 'High' -Message ("WinGet phase '{0}' timed out." -f $RunState.PhaseResult.Phase) -Extra @{ Phase = $RunState.PhaseResult.Phase; DurationS = $RunState.PhaseResult.DurationS })
   }
-  if ($PhaseResult.OutputTruncated -or $PhaseResult.StderrTruncated -or $PhaseResult.LogTruncated) {
-    [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-OutputTruncated' -Severity 'Medium' -Message ("WinGet phase '{0}' output was truncated; evidence is partial." -f $PhaseResult.Phase) -Extra @{ Phase = $PhaseResult.Phase })
+  if ($RunState.PhaseResult.OutputTruncated -or $RunState.PhaseResult.StderrTruncated -or $RunState.PhaseResult.LogTruncated) {
+    [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-OutputTruncated' -Severity 'Medium' -Message ("WinGet phase '{0}' output was truncated; evidence is partial." -f $RunState.PhaseResult.Phase) -Extra @{ Phase = $RunState.PhaseResult.Phase })
   }
-  if (-not [string]::IsNullOrWhiteSpace([string]$PhaseResult.LogError)) {
+  if (-not [string]::IsNullOrWhiteSpace([string]$RunState.PhaseResult.LogError)) {
     [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-LogFailed' -Severity 'Medium' `
-        -Message ("WinGet phase '{0}' completed, but its requested log could not be written: {1}" -f $PhaseResult.Phase, $PhaseResult.LogError) `
-        -Extra @{ Phase = $PhaseResult.Phase })
+        -Message ("WinGet phase '{0}' completed, but its requested log could not be written: {1}" -f $RunState.PhaseResult.Phase, $RunState.PhaseResult.LogError) `
+        -Extra @{ Phase = $RunState.PhaseResult.Phase })
   }
-  if ($PhaseResult.ExitCode -ne 0) {
-    $severity = if ($PhaseResult.Phase -eq 'apply') { 'High' } else { 'Medium' }
-    [void](Add-Finding -FindingList $script:Findings -Code ("WINGET-{0}Failed" -f $PhaseResult.Phase) -Severity $severity `
-        -Message ("WinGet phase '{0}' failed with exit code {1}" -f $PhaseResult.Phase, $PhaseResult.ExitCode) `
-        -Extra @{ Phase = $PhaseResult.Phase; ExitCode = $PhaseResult.ExitCode; DurationS = $PhaseResult.DurationS })
+}
+
+function Add-WinGetPhaseFindingsSection02 {
+  param([hashtable]$RunState)
+if ($RunState.PhaseResult.ExitCode -ne 0) {
+    $severity = if ($RunState.PhaseResult.Phase -eq 'apply') { 'High' } else { 'Medium' }
+    [void](Add-Finding -FindingList $script:Findings -Code ("WINGET-{0}Failed" -f $RunState.PhaseResult.Phase) -Severity $severity `
+        -Message ("WinGet phase '{0}' failed with exit code {1}" -f $RunState.PhaseResult.Phase, $RunState.PhaseResult.ExitCode) `
+        -Extra @{ Phase = $RunState.PhaseResult.Phase; ExitCode = $RunState.PhaseResult.ExitCode; DurationS = $RunState.PhaseResult.DurationS })
   }
+}
+
+function Add-WinGetPhaseFindings {
+  param([Parameter(Mandatory = $true)]$PhaseResult, [hashtable]$RunState)
+  $RunState.PhaseResult = $PhaseResult
+
+    . Add-WinGetPhaseFindingsSection01 -RunState $RunState
+    . Add-WinGetPhaseFindingsSection02 -RunState $RunState
 }
 
 function Complete-WinGetStagingCleanup {
@@ -245,24 +274,6 @@ function Complete-WinGetStagingCleanup {
     [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-StagingCleanupFailed' -Severity 'Medium' `
         -Message ("Protected WinGet staging cleanup failed: {0}" -f $message))
     return [pscustomobject]@{ Succeeded = $false; Error = $message }
-  }
-}
-
-function To-BoolOrDefault {
-  param($Value, [Parameter(Mandatory = $true)][bool]$Default)
-
-  if ($null -eq $Value) { return $Default }
-  if ($Value -is [bool]) { return [bool]$Value }
-
-  $s = [string]$Value
-  if ([string]::IsNullOrWhiteSpace($s)) { return $Default }
-
-  switch ($s.Trim().ToLowerInvariant()) {
-    'true'  { return $true }
-    'false' { return $false }
-    '1'     { return $true }
-    '0'     { return $false }
-    default { return $Default }
   }
 }
 
@@ -338,349 +349,251 @@ function Invoke-WinGet {
   }
 }
 
-function Get-SummaryObject {
-  param(
-    [string]$ConfigPathResolved,
-    [System.Collections.Generic.List[object]]$Results,
-    [int]$FinalExitCode,
-    [bool]$TestOnlyEffective,
-    [bool]$AcceptAgreementsEffective,
-    [bool]$DisableInteractivityEffective,
-    [bool]$FailFastEffective,
-    [bool]$PassThruEffective,
-    [bool]$QuietConsoleEffective,
-    [string]$LogPathEffective,
-    [string]$SummaryJsonPathEffective,
-    [string[]]$ExtraArgsEffective,
-    [string]$ErrorMessage
-  )
-
-  [pscustomobject]@{
-    ComputerName         = $env:COMPUTERNAME
-    ConfigPath           = $ConfigPathResolved
-    TestOnly             = $TestOnlyEffective
-    AcceptAgreements     = $AcceptAgreementsEffective
-    DisableInteractivity = $DisableInteractivityEffective
-    FailFast             = $FailFastEffective
-    PassThru             = $PassThruEffective
-    QuietConsole         = $QuietConsoleEffective
-    SummaryJsonPath      = (To-StringOrNull $SummaryJsonPathEffective)
-    LogPath              = $LogPathEffective
-    ExtraArgs            = @($ExtraArgsEffective)
-    Timestamp            = Get-Date
-    Results              = @($Results.ToArray())
-    FinalExitCode        = $FinalExitCode
-    ErrorMessage         = (To-StringOrNull $ErrorMessage)
-  }
-}
-
-function Invoke-WinGetConsoleSummary {
-  param([Parameter(Mandatory = $true)][pscustomobject]$Summary)
-
-  if ($Summary.QuietConsole) { return }
-
-  $fields = [ordered]@{
-    TestOnly             = [string]$Summary.TestOnly
-    AcceptAgreements     = [string]$Summary.AcceptAgreements
-    DisableInteractivity = [string]$Summary.DisableInteractivity
-    FailFast             = [string]$Summary.FailFast
-    FinalExitCode        = [string]$Summary.FinalExitCode
-  }
-  if ($Summary.ErrorMessage) { $fields['ErrorMessage'] = $Summary.ErrorMessage }
-
-  $findingsAL = [System.Collections.ArrayList]::new()
-  $findingsVar = Get-Variable -Name Findings -Scope Script -ErrorAction SilentlyContinue
-  if ($findingsVar -and $findingsVar.Value) {
-    foreach ($finding in @($findingsVar.Value.ToArray())) { [void]$findingsAL.Add($finding) }
-  }
-  Write-ConsoleSummary -Summary $Summary -Findings $findingsAL -CustomFields $fields
-
-  # Phases list
-  if ($Summary.Results -and $Summary.Results.Count -gt 0) {
-    Write-UiLine ''
-    Write-UiLine -Message 'Phases' -Style 'Header'
-    foreach ($r in $Summary.Results) {
-      $line = ("- {0,-8} ExitCode={1,-5} DurationS={2,-8}" -f $r.Phase, $r.ExitCode, $r.DurationS)
-      if ($r.ExitCode -eq 0) {
-        Write-UiLine -Message $line -Style 'Success'
-      } else {
-        Write-UiLine -Message $line -Style 'Error'
-      }
-    }
-  } else {
-    Write-UiLine ''
-    Write-UiLine -Message 'Phases' -Style 'Header'
-    Write-Warn "- (no phases executed)"
-  }
-}
-
-function Write-UserFriendlyFailure {
-  param(
-    [Parameter(Mandatory = $true)][string]$Message,
-    [Parameter(Mandatory = $true)][int]$ExitCode,
-    [System.Collections.Generic.List[object]]$Results,
-    [string]$ConfigPathResolved,
-    [bool]$TestOnlyEffective,
-    [bool]$AcceptAgreementsEffective,
-    [bool]$DisableInteractivityEffective,
-    [bool]$FailFastEffective,
-    [bool]$PassThruEffective,
-    [bool]$QuietConsoleEffective,
-    [string]$LogPathEffective,
-    [string]$SummaryJsonPathEffective,
-    [string[]]$ExtraArgsEffective
-  )
-
-  if (-not $QuietConsoleEffective) {
-    Write-UiLine -Message ("ERROR: {0}" -f $Message) -Style 'Error'
-    Write-UiLine "Hint: Provide a configuration file with -ConfigPath, or set 'ConfigPath' in the summary JSON passed with -SummaryJsonPath." -Style 'Warning'
-  }
-
-  $safeResults = $Results
-  if (-not $safeResults) { $safeResults = New-Object System.Collections.Generic.List[object] }
-
-  $summary = Get-SummaryObject -ConfigPathResolved $ConfigPathResolved -Results $safeResults -FinalExitCode $ExitCode `
-    -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
-    -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
-    -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPathEffective -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage $Message
-
-  Invoke-WinGetConsoleSummary -Summary $summary
-
-  $resultToken = if ($ExitCode -eq 2) { 'WARN' } else { 'FAIL' }
-  if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
-  Add-Finding -FindingList $script:Findings -Code 'WINGET-PreflightFailed' -Severity 'Medium' -Message $Message
-  $v2Result = Get-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $summary -Metadata @{}
-  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThruEffective) { $v2Result }
-  exit (Get-V2ExitCode -Result $resultToken)
-}
-
 # Defaults
-$defaultSettings = @{
-  ConfigPath           = $null
-  LogPath              = $null
-  AcceptAgreements     = $true
-  DisableInteractivity = $true
-  FailFast             = $false
-
-  # IMPORTANT: default is no pipeline output
-  PassThru             = $false
-
-  TestOnly             = $false
-  QuietConsole         = $false
-  Args                 = @()
+function Initialize-WinGetBaselineState {
+  param([hashtable]$RunState)
+  . Initialize-Capability25Defaults -RunState $RunState
+  . Initialize-Capability25JsonSettings -RunState $RunState
+  . Initialize-Capability25EffectiveSettings -RunState $RunState
+  . Initialize-Capability25ExtraArgs -RunState $RunState
+  . Initialize-Capability25RunState -RunState $RunState
 }
-
-# Default JSON sidecar path
-if (-not $PSBoundParameters.ContainsKey('SummaryJsonPath')) {
-  $SummaryJsonPath = Join-Path -Path $PSScriptRoot -ChildPath '25-WinGet-Config-Baseline-Runner.json'
-}
-
-$cfgResult = Read-ConfigWithDefaults -Path $SummaryJsonPath -Defaults @{} -AsHashtable -ReturnNullWhenMissing -ReturnNullOnError
-$jsonSettings = $cfgResult.Config
-if ($cfgResult.Meta.Error) {
-  [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-ConfigLoadFailed' -Severity 'Medium' `
-    -Message ("Summary JSON could not be loaded; using defaults. Error: {0}" -f $cfgResult.Meta.Error))
-}
-if (-not $jsonSettings) { $jsonSettings = @{} }
-
-# Effective settings
-$ConfigPathEffective = To-StringOrNull (Get-EffectiveSetting -Name 'ConfigPath' -Json $jsonSettings -DefaultValue $defaultSettings.ConfigPath)
-if ($PSBoundParameters.ContainsKey('ConfigPath')) { $ConfigPathEffective = To-StringOrNull $ConfigPath }
-
-$LogPathEffective = To-StringOrNull (Get-EffectiveSetting -Name 'LogPath' -Json $jsonSettings -DefaultValue $defaultSettings.LogPath)
-if ($PSBoundParameters.ContainsKey('LogPath')) { $LogPathEffective = To-StringOrNull $LogPath }
-
-$AcceptAgreementsEffective = To-BoolOrDefault (Get-EffectiveSetting -Name 'AcceptAgreements' -Json $jsonSettings -DefaultValue $defaultSettings.AcceptAgreements) -Default $defaultSettings.AcceptAgreements
-if ($PSBoundParameters.ContainsKey('AcceptAgreements')) { $AcceptAgreementsEffective = [bool]$AcceptAgreements }
-
-$DisableInteractivityEffective = To-BoolOrDefault (Get-EffectiveSetting -Name 'DisableInteractivity' -Json $jsonSettings -DefaultValue $defaultSettings.DisableInteractivity) -Default $defaultSettings.DisableInteractivity
-if ($PSBoundParameters.ContainsKey('DisableInteractivity')) { $DisableInteractivityEffective = [bool]$DisableInteractivity }
-
-$FailFastEffective = To-BoolOrDefault (Get-EffectiveSetting -Name 'FailFast' -Json $jsonSettings -DefaultValue $defaultSettings.FailFast) -Default $defaultSettings.FailFast
-if ($PSBoundParameters.ContainsKey('FailFast')) { $FailFastEffective = [bool]$FailFast }
-
-# PassThru can be enabled via JSON, but only if CLI didn't specify it.
-$PassThruEffective = To-BoolOrDefault (Get-EffectiveSetting -Name 'PassThru' -Json $jsonSettings -DefaultValue $defaultSettings.PassThru) -Default $defaultSettings.PassThru
-if ($PSBoundParameters.ContainsKey('PassThru')) { $PassThruEffective = [bool]$PassThru }
-
-$TestOnlyEffective = To-BoolOrDefault (Get-EffectiveSetting -Name 'TestOnly' -Json $jsonSettings -DefaultValue $defaultSettings.TestOnly) -Default $defaultSettings.TestOnly
-if ($PSBoundParameters.ContainsKey('TestOnly')) { $TestOnlyEffective = [bool]$TestOnly }
-# Audit mode is intentionally validate/test only. Applying a WinGet
-# configuration is a host mutation and must require explicit Remediate mode.
-if ($Mode -eq 'Audit') { $TestOnlyEffective = $true }
-
-$QuietConsoleEffective = To-BoolOrDefault (Get-EffectiveSetting -Name 'QuietConsole' -Json $jsonSettings -DefaultValue $defaultSettings.QuietConsole) -Default $defaultSettings.QuietConsole
-if ($PSBoundParameters.ContainsKey('QuietConsole')) { $QuietConsoleEffective = [bool]$QuietConsole }
-
-# Extra args
-$ExtraArgsEffective = @()
-if (($PSBoundParameters.ContainsKey('Args') -or $PSBoundParameters.ContainsKey('ExtraArgs')) -and $ExtraArgs) { $ExtraArgsEffective = @($ExtraArgs) }
-elseif ($jsonSettings.ContainsKey('Args')) {
-  $j = $jsonSettings['Args']
-  if ($j -is [string]) { $ExtraArgsEffective = @($j) }
-  elseif ($j -is [System.Collections.IEnumerable]) { $ExtraArgsEffective = @($j) }
-}
-
-# S12 fix: validate ExtraArgs against a blocklist of dangerous winget flags
-if ($ExtraArgsEffective -and $ExtraArgsEffective.Count -gt 0) {
-  $blockedFlags = @('--override', '--custom', '--ignore-security-hash', '--location',
-                     '--log', '-o', '-h', '--header', '--authentication-account',
-                     '--authentication-mode')
-  foreach ($arg in $ExtraArgsEffective) {
-    $argStr = [string]$arg
-    # Block shell metacharacters
-    if ($argStr -match '[;&|`$(){}<>]') {
-      $message = "ExtraArgs contains shell metacharacters: '$argStr'. Aborting."
-      [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-UnsafeExtraArgs' -Severity 'High' -Message $message)
-      Write-UserFriendlyFailure -Message $message -ExitCode 1 -Results (New-Object System.Collections.Generic.List[object]) `
-        -ConfigPathResolved $ConfigPathEffective -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective `
-        -DisableInteractivityEffective $DisableInteractivityEffective -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective `
-        -QuietConsoleEffective $QuietConsoleEffective -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective
-    }
-    # Block dangerous flags (case-insensitive, matching the flag portion before any '=' or space)
-    $flagPart = ($argStr -split '[= ]', 2)[0]
-    foreach ($blocked in $blockedFlags) {
-      if ($flagPart -ieq $blocked) {
-        $message = "ExtraArgs contains blocked flag '$argStr'. The flag '$blocked' is not allowed for safety reasons."
-        [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-UnsafeExtraArgs' -Severity 'High' -Message $message)
-        Write-UserFriendlyFailure -Message $message -ExitCode 1 -Results (New-Object System.Collections.Generic.List[object]) `
-          -ConfigPathResolved $ConfigPathEffective -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective `
-          -DisableInteractivityEffective $DisableInteractivityEffective -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective `
-          -QuietConsoleEffective $QuietConsoleEffective -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective
-      }
-    }
+function Initialize-Capability25Defaults {
+  param([hashtable]$RunState)
+  $RunState.defaultSettings = @{
+    ConfigPath = $null
+    LogPath = $null
+    AcceptAgreements = $true
+    DisableInteractivity = $true
+    FailFast = $false
+    PassThru = $false
+    TestOnly = $false
+    QuietConsole = $false
+    Args = @()
+  }
+  if (-not $EntryBoundParameters.ContainsKey('SummaryJsonPath')) {
+    $RunState.SummaryJsonPath = Join-Path -Path $PSScriptRoot -ChildPath '25-WinGet-Config-Baseline-Runner.json'
   }
 }
-
-if ((-not $ExtraArgsEffective) -or ($ExtraArgsEffective.Count -eq 0)) {
-  if (-not $QuietConsoleEffective) { Write-Info "Info: No extra -Args provided. Continuing without additional winget arguments." }
+function Initialize-Capability25JsonSettings {
+  param([hashtable]$RunState)
+  $cfgResult = Read-ConfigWithDefaults -Path $RunState.SummaryJsonPath -Defaults @{} -AsHashtable -ReturnNullWhenMissing -ReturnNullOnError
+  $jsonSettings = $cfgResult.Config
+  if ($cfgResult.Meta.Error) {
+    [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-ConfigLoadFailed' -Severity 'Medium' -Message ("Summary JSON could not be loaded; using defaults. Error: {0}" -f $cfgResult.Meta.Error))
+  }
+  if (-not $jsonSettings) { $jsonSettings = @{} }
 }
-
-$results = New-Object System.Collections.Generic.List[object]
-$script:WingetExecutablePath = $null
-
-if ([string]::IsNullOrWhiteSpace($ConfigPathEffective)) {
-  Write-UserFriendlyFailure -Message "ConfigPath is missing. Provide a configuration file with -ConfigPath, or set 'ConfigPath' in the summary JSON passed with -SummaryJsonPath." `
-    -ExitCode 2 -Results $results -ConfigPathResolved $null -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective `
-    -DisableInteractivityEffective $DisableInteractivityEffective -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective `
-    -QuietConsoleEffective $QuietConsoleEffective -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective
+function Get-Capability25EffectiveString {
+  param([string]$Name, [AllowNull()]$ParameterValue, [hashtable]$RunState)
+  if ($EntryBoundParameters.ContainsKey($Name)) { return To-StringOrNull $ParameterValue }
+  return To-StringOrNull (Get-EffectiveSetting -Name $Name -Json $jsonSettings -DefaultValue $RunState.defaultSettings[$Name])
 }
+function Get-Capability25EffectiveBool {
+  param([string]$Name, [bool]$ParameterValue, [hashtable]$RunState)
+  if ($EntryBoundParameters.ContainsKey($Name)) { return $ParameterValue }
+  return To-BoolOrDefault (Get-EffectiveSetting -Name $Name -Json $jsonSettings -DefaultValue $RunState.defaultSettings[$Name]) -Default $RunState.defaultSettings[$Name]
+}
+function Initialize-Capability25EffectiveSettings {
+  param([hashtable]$RunState)
+  $RunState.ConfigPathEffective = Get-Capability25EffectiveString -Name 'ConfigPath' -ParameterValue $ConfigPath -RunState $RunState
+  $RunState.LogPathEffective = Get-Capability25EffectiveString -Name 'LogPath' -ParameterValue $LogPath -RunState $RunState
+  $RunState.AcceptAgreementsEffective = Get-Capability25EffectiveBool -Name 'AcceptAgreements' -ParameterValue ([bool]$AcceptAgreements) -RunState $RunState
+  $RunState.DisableInteractivityEffective = Get-Capability25EffectiveBool -Name 'DisableInteractivity' -ParameterValue ([bool]$DisableInteractivity) -RunState $RunState
+  $RunState.FailFastEffective = Get-Capability25EffectiveBool -Name 'FailFast' -ParameterValue ([bool]$FailFast) -RunState $RunState
+  $RunState.PassThruEffective = Get-Capability25EffectiveBool -Name 'PassThru' -ParameterValue ([bool]$PassThru) -RunState $RunState
+  $RunState.TestOnlyEffective = Get-Capability25EffectiveBool -Name 'TestOnly' -ParameterValue ([bool]$TestOnly) -RunState $RunState
+  if ($Mode -eq 'Audit') { $RunState.TestOnlyEffective = $true }
+  $RunState.QuietConsoleEffective = Get-Capability25EffectiveBool -Name 'QuietConsole' -ParameterValue ([bool]$QuietConsole) -RunState $RunState
+}
+function Initialize-Capability25ExtraArgs {
+  param([hashtable]$RunState)
+  $ExtraArgsEffective = @(Get-Capability25ExtraArgs)
+  $RunState.initializationError = Test-WinGetExtraArgs -ExtraArgs $ExtraArgsEffective
+  if ($ExtraArgsEffective.Count -eq 0 -and -not $RunState.QuietConsoleEffective) {
+    Write-Info 'Info: No extra -Args provided. Continuing without additional winget arguments.'
+  }
+}
+function Get-Capability25ExtraArgs {
+  $argsWereBound = $EntryBoundParameters.ContainsKey('Args') -or $EntryBoundParameters.ContainsKey('ExtraArgs')
+  if ($argsWereBound -and $ExtraArgs) { return @($ExtraArgs) }
+  if (-not $jsonSettings.ContainsKey('Args')) { return @() }
+  $jsonArgs = $jsonSettings['Args']
+  if ($jsonArgs -is [string]) { return @($jsonArgs) }
+  if ($jsonArgs -is [System.Collections.IEnumerable]) { return @($jsonArgs) }
+  return @()
+}
+function Test-WinGetExtraArgs {
+  param([AllowEmptyCollection()][object[]]$ExtraArgs)
+  $blockedFlags = @('--override','--custom','--ignore-security-hash','--location','--log','-o','-h','--header','--authentication-account','--authentication-mode')
+  foreach ($argument in $ExtraArgs) {
+    $argString = [string]$argument
+    if ($argString -match '[;&|`$(){}<>]') { return "ExtraArgs contains shell metacharacters: '$argString'. Aborting." }
+    $flagPart = ($argString -split '[= ]', 2)[0]
+    foreach ($blocked in $blockedFlags) {
+      if ($flagPart -ieq $blocked) { return "ExtraArgs contains blocked flag '$argString'. The flag '$blocked' is not allowed for safety reasons." }
+    }
+  }
+  return $null
+}
+function Initialize-Capability25RunState {
+  param([hashtable]$RunState)
+  $RunState.results = New-Object System.Collections.Generic.List[object]
+  $script:WingetExecutablePath = $null
+  if (-not $RunState.initializationError -and [string]::IsNullOrWhiteSpace($RunState.ConfigPathEffective)) {
+    $RunState.initializationError = "ConfigPath is missing. Provide a configuration file with -ConfigPath, or set 'ConfigPath' in the summary JSON passed with -SummaryJsonPath."
+  }
+}
+. Initialize-WinGetBaselineState -RunState $RunState
 
-$stagedConfiguration = $null
-try {
+function Get-Capability25SummaryData {
+  param($Results, [int]$FinalExitCode, [AllowNull()][string]$ConfigPathResolved, [AllowNull()][string]$ErrorMessage, [hashtable]$RunState)
+  return [pscustomobject]@{
+    ConfigPathResolved = $ConfigPathResolved
+    Results = $Results
+    FinalExitCode = $FinalExitCode
+    TestOnlyEffective = $RunState.TestOnlyEffective
+    AcceptAgreementsEffective = $RunState.AcceptAgreementsEffective
+    DisableInteractivityEffective = $RunState.DisableInteractivityEffective
+    FailFastEffective = $RunState.FailFastEffective
+    PassThruEffective = $RunState.PassThruEffective
+    QuietConsoleEffective = $RunState.QuietConsoleEffective
+    LogPathEffective = $RunState.LogPathEffective
+    SummaryJsonPathEffective = $RunState.SummaryJsonPath
+    ExtraArgsEffective = $ExtraArgsEffective
+    ErrorMessage = $ErrorMessage
+  }
+}
+function New-Capability25FailureState {
+  param([string]$Message, [int]$ExitCode, $Results, [AllowNull()][string]$ConfigPathResolved, [hashtable]$RunState)
+  $data = Get-Capability25SummaryData -Results $Results -FinalExitCode $ExitCode -ConfigPathResolved $ConfigPathResolved -ErrorMessage $Message -RunState $RunState
+  $data | Add-Member -NotePropertyName Message -NotePropertyValue $Message
+  $data | Add-Member -NotePropertyName ExitCode -NotePropertyValue $ExitCode
+  return Write-UserFriendlyFailure -Data $data
+}
+function Get-Capability25Arguments {
+  param([string]$ExecutionConfigPath, [hashtable]$RunState)
+  $common = @('configure')
+  if ($RunState.AcceptAgreementsEffective) { $common += '--accept-configuration-agreements' }
+  if ($RunState.DisableInteractivityEffective) { $common += '--disable-interactivity' }
+  if ($ExtraArgsEffective -and $ExtraArgsEffective.Count -gt 0) { $common += $ExtraArgsEffective }
+  return [pscustomobject]@{
+    Validate = @($common + @('validate', '-f', $ExecutionConfigPath))
+    Test = @($common + @('test', '-f', $ExecutionConfigPath))
+    Apply = @($common + @('-f', $ExecutionConfigPath))
+  }
+}
+function Invoke-Capability25Phase {
+  param([string[]]$Arguments, [string]$Phase, $Results, [hashtable]$RunState)
+  $RunState.phaseResult = Invoke-WinGet -ArgsWinget $Arguments -Phase $Phase -LogPathEffective $RunState.LogPathEffective -TimeoutSecondsEffective $TimeoutSeconds -MaxOutputBytesEffective $MaxOutputBytes
+  $Results.Add($RunState.phaseResult) | Out-Null
+  Add-WinGetPhaseFindings -PhaseResult $RunState.phaseResult -RunState $RunState
+  return $RunState.phaseResult
+}
+function Complete-Capability25FailedPhase {
+  param([string]$Phase, $PhaseResult, $Results, [string]$ResolvedConfigPath, $StagedConfiguration, [hashtable]$RunState)
+  $exitCode = Get-WinGetAggregateExitCode -PhaseResults @($PhaseResult)
+  $cleanup = Complete-WinGetStagingCleanup -StagedConfiguration $StagedConfiguration
+  $data = Get-Capability25SummaryData -Results $Results -FinalExitCode $exitCode -ConfigPathResolved $ResolvedConfigPath -ErrorMessage "$Phase failed." -RunState $RunState
+  $summary = Get-SummaryObject -Data $data
+  $summary | Add-Member -NotePropertyName StagingCleanupSucceeded -NotePropertyValue $cleanup.Succeeded -Force
+  $summary | Add-Member -NotePropertyName StagingCleanupError -NotePropertyValue $cleanup.Error -Force
+  return [pscustomobject]@{ Summary = $summary; Token = 'FAIL'; CleanupSucceeded = $cleanup.Succeeded }
+}
+function Invoke-Capability25Apply {
+  param($Arguments, $Results, [bool]$PreflightSucceeded, $DecisionContext, [string]$ResolvedConfigPath, [hashtable]$RunState)
+  $applyRequested = $Mode -eq 'Remediate' -and -not $RunState.TestOnlyEffective
+  if ($applyRequested -and $PreflightSucceeded) {
+    if ($DecisionContext.ShouldProcess($ResolvedConfigPath, 'Run winget configure apply')) {
+      [void](Invoke-Capability25Phase -Arguments $Arguments.Apply -Phase 'apply' -Results $Results -RunState $RunState)
+    }
+  } elseif ($applyRequested) {
+    [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-ApplyBlocked' -Severity 'High' -Message 'WinGet apply was blocked because validate or test did not complete successfully.')
+  }
+}
+function Complete-Capability25Run {
+  param($Results, [string]$ResolvedConfigPath, $StagedConfiguration, [hashtable]$RunState)
+  $failedPhases = @($Results.ToArray() | Where-Object { $_.TimedOut -or $_.ExitCode -ne 0 })
+  $finalExitCode = Get-WinGetAggregateExitCode -PhaseResults $Results.ToArray()
+  $errorMessage = if ($failedPhases.Count -gt 0) { 'One or more WinGet phases failed or timed out.' } else { $null }
+  $cleanup = Complete-WinGetStagingCleanup -StagedConfiguration $StagedConfiguration
+  $data = Get-Capability25SummaryData -Results $Results -FinalExitCode $finalExitCode -ConfigPathResolved $ResolvedConfigPath -ErrorMessage $errorMessage -RunState $RunState
+  $summary = Get-SummaryObject -Data $data
+  $summary | Add-Member -NotePropertyName StagingCleanupSucceeded -NotePropertyValue $cleanup.Succeeded -Force
+  $summary | Add-Member -NotePropertyName StagingCleanupError -NotePropertyValue $cleanup.Error -Force
+  $token = Get-WinGetResultToken -FinalExitCode $finalExitCode -FindingsCount $script:Findings.Count -StrictMode ([bool]$Strict)
+  return [pscustomobject]@{ Summary = $summary; Token = $token; CleanupSucceeded = $cleanup.Succeeded }
+}
+function Invoke-Capability25Workflow {
+  param($DecisionContext, [hashtable]$RunState)
+  $stagedConfiguration = $null
+  try {
+    $failure = Get-Capability25InitializationFailure -RunState $RunState
+    if ($failure) { return $failure }
+    $preflight = Start-Capability25Preflight -RunState $RunState
+    if ($preflight.Error) { return New-Capability25FailureState -Message $preflight.Error -ExitCode 1 -Results $RunState.results -ConfigPathResolved $RunState.ConfigPathEffective -RunState $RunState }
+    $stagedConfiguration = $preflight.StagedConfiguration
+    $phaseState = Invoke-Capability25ValidatedPhases -Arguments $preflight.Arguments -Results $RunState.results -ResolvedConfigPath $preflight.ResolvedConfigPath -StagedConfiguration $stagedConfiguration -RunState $RunState
+    if ($phaseState.Terminal) {
+      if ($phaseState.State.CleanupSucceeded) { $stagedConfiguration = $null }
+      return $phaseState.State
+    }
+    Invoke-Capability25Apply -Arguments $preflight.Arguments -Results $RunState.results -PreflightSucceeded $phaseState.PreflightSucceeded -DecisionContext $DecisionContext -ResolvedConfigPath $preflight.ResolvedConfigPath -RunState $RunState
+    $state = Complete-Capability25Run -Results $RunState.results -ResolvedConfigPath $preflight.ResolvedConfigPath -StagedConfiguration $stagedConfiguration -RunState $RunState
+    if ($state.CleanupSucceeded) { $stagedConfiguration = $null }
+    return $state
+  } finally {
+    Remove-Capability25UnfinishedStaging -StagedConfiguration $stagedConfiguration
+  }
+}
+function Get-Capability25InitializationFailure {
+  param([hashtable]$RunState)
+  if (-not $RunState.initializationError) { return $null }
+  if ($RunState.initializationError -like 'ExtraArgs*') {
+    [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-UnsafeExtraArgs' -Severity 'High' -Message $RunState.initializationError)
+  }
+  $exitCode = if ($RunState.initializationError -like 'ConfigPath*') { 2 } else { 1 }
+  return New-Capability25FailureState -Message $RunState.initializationError -ExitCode $exitCode -Results $RunState.results -ConfigPathResolved $RunState.ConfigPathEffective -RunState $RunState
+}
+function Start-Capability25Preflight {
+  param([hashtable]$RunState)
   try {
     $script:WingetExecutablePath = Resolve-TrustedWingetPath
     if ([string]::IsNullOrWhiteSpace($script:WingetExecutablePath)) { throw 'Trusted WinGet executable not found.' }
     Ensure-NotSystemContext
-    $stagedConfiguration = New-WinGetStagedConfiguration -SourcePath $ConfigPathEffective
-    $resolvedConfigPath = $stagedConfiguration.SourcePath
-    $executionConfigPath = $stagedConfiguration.Path
+    $staged = New-WinGetStagedConfiguration -SourcePath $RunState.ConfigPathEffective
+    return [pscustomobject]@{ Error = $null; StagedConfiguration = $staged; ResolvedConfigPath = $staged.SourcePath; Arguments = (Get-Capability25Arguments -ExecutionConfigPath $staged.Path -RunState $RunState) }
   } catch {
-    $preflightMessage = $_.Exception.Message
-    $cleanupOutcome = Complete-WinGetStagingCleanup -StagedConfiguration $stagedConfiguration
-    if ($cleanupOutcome.Succeeded) { $stagedConfiguration = $null }
-    Write-UserFriendlyFailure -Message $preflightMessage -ExitCode 1 -Results $results `
-      -ConfigPathResolved $ConfigPathEffective -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective `
-      -DisableInteractivityEffective $DisableInteractivityEffective -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective `
-      -QuietConsoleEffective $QuietConsoleEffective -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective
+    return [pscustomobject]@{ Error = $_.Exception.Message; StagedConfiguration = $null; ResolvedConfigPath = $null; Arguments = $null }
   }
-
-$argsCommon = @('configure')
-if ($AcceptAgreementsEffective)     { $argsCommon += '--accept-configuration-agreements' }
-if ($DisableInteractivityEffective) { $argsCommon += '--disable-interactivity' }
-if ($ExtraArgsEffective -and $ExtraArgsEffective.Count -gt 0) { $argsCommon += $ExtraArgsEffective }
-
-$argsValidate = @($argsCommon + @('validate', '-f', $executionConfigPath))
-$argsTest     = @($argsCommon + @('test',     '-f', $executionConfigPath))
-$argsApply    = @($argsCommon + @('-f', $executionConfigPath))
-
-$rValidate = Invoke-WinGet -ArgsWinget $argsValidate -Phase 'validate' -LogPathEffective $LogPathEffective -TimeoutSecondsEffective $TimeoutSeconds -MaxOutputBytesEffective $MaxOutputBytes
-$results.Add($rValidate) | Out-Null
-Add-WinGetPhaseFindings -PhaseResult $rValidate
-$validateSucceeded = Test-WinGetPhaseSuccess -PhaseResult $rValidate
-$validateExitCode = Get-WinGetAggregateExitCode -PhaseResults @($rValidate)
-
-if ($FailFastEffective -and -not $validateSucceeded) {
-  $cleanupOutcome = Complete-WinGetStagingCleanup -StagedConfiguration $stagedConfiguration
-  if ($cleanupOutcome.Succeeded) { $stagedConfiguration = $null }
-  $summary = Get-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $validateExitCode `
-    -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
-    -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
-    -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage "Validate failed."
-  $summary | Add-Member -NotePropertyName StagingCleanupSucceeded -NotePropertyValue $cleanupOutcome.Succeeded -Force
-  $summary | Add-Member -NotePropertyName StagingCleanupError -NotePropertyValue $cleanupOutcome.Error -Force
-  Invoke-WinGetConsoleSummary -Summary $summary
-  $resultToken = 'FAIL'
-  $v2Result = Get-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $summary -Metadata @{}
-  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThruEffective) { $v2Result }
-  exit (Get-V2ExitCode -Result $resultToken)
 }
-
-$rTest = Invoke-WinGet -ArgsWinget $argsTest -Phase 'test' -LogPathEffective $LogPathEffective -TimeoutSecondsEffective $TimeoutSeconds -MaxOutputBytesEffective $MaxOutputBytes
-$results.Add($rTest) | Out-Null
-Add-WinGetPhaseFindings -PhaseResult $rTest
-$testSucceeded = Test-WinGetPhaseSuccess -PhaseResult $rTest
-$testExitCode = Get-WinGetAggregateExitCode -PhaseResults @($rTest)
-
-if ($FailFastEffective -and -not $testSucceeded) {
-  $cleanupOutcome = Complete-WinGetStagingCleanup -StagedConfiguration $stagedConfiguration
-  if ($cleanupOutcome.Succeeded) { $stagedConfiguration = $null }
-  $summary = Get-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $testExitCode `
-    -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
-    -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
-    -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective -ErrorMessage "Test failed."
-  $summary | Add-Member -NotePropertyName StagingCleanupSucceeded -NotePropertyValue $cleanupOutcome.Succeeded -Force
-  $summary | Add-Member -NotePropertyName StagingCleanupError -NotePropertyValue $cleanupOutcome.Error -Force
-  Invoke-WinGetConsoleSummary -Summary $summary
-  $resultToken = 'FAIL'
-  $v2Result = Get-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $summary -Metadata @{}
-  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThruEffective) { $v2Result }
-  exit (Get-V2ExitCode -Result $resultToken)
-}
-
-$rApply = $null
-$preflightSucceeded = ($validateSucceeded -and $testSucceeded)
-if (($Mode -eq 'Remediate') -and (-not $TestOnlyEffective) -and $preflightSucceeded) {
-  # The apply phase is the only mutating WinGet phase in this runner; validate
-  # and test can run in audit workflows, but apply stays behind ShouldProcess.
-  if ($PSCmdlet.ShouldProcess($resolvedConfigPath, 'Run winget configure apply')) {
-    $rApply = Invoke-WinGet -ArgsWinget $argsApply -Phase 'apply' -LogPathEffective $LogPathEffective -TimeoutSecondsEffective $TimeoutSeconds -MaxOutputBytesEffective $MaxOutputBytes
-    $results.Add($rApply) | Out-Null
-    Add-WinGetPhaseFindings -PhaseResult $rApply
+function Invoke-Capability25ValidatedPhases {
+  param($Arguments, $Results, [string]$ResolvedConfigPath, $StagedConfiguration, [hashtable]$RunState)
+  $validate = Invoke-Capability25Phase -Arguments $Arguments.Validate -Phase 'validate' -Results $Results -RunState $RunState
+  if ($RunState.FailFastEffective -and -not (Test-WinGetPhaseSuccess -PhaseResult $validate)) {
+    $state = Complete-Capability25FailedPhase -Phase 'Validate' -PhaseResult $validate -Results $Results -ResolvedConfigPath $ResolvedConfigPath -StagedConfiguration $StagedConfiguration -RunState $RunState
+    return [pscustomobject]@{ Terminal = $true; State = $state; PreflightSucceeded = $false }
   }
-} elseif (($Mode -eq 'Remediate') -and (-not $TestOnlyEffective)) {
-  [void](Add-Finding -FindingList $script:Findings -Code 'WINGET-ApplyBlocked' -Severity 'High' `
-      -Message 'WinGet apply was blocked because validate or test did not complete successfully.')
+  $test = Invoke-Capability25Phase -Arguments $Arguments.Test -Phase 'test' -Results $Results -RunState $RunState
+  if ($RunState.FailFastEffective -and -not (Test-WinGetPhaseSuccess -PhaseResult $test)) {
+    $state = Complete-Capability25FailedPhase -Phase 'Test' -PhaseResult $test -Results $Results -ResolvedConfigPath $ResolvedConfigPath -StagedConfiguration $StagedConfiguration -RunState $RunState
+    return [pscustomobject]@{ Terminal = $true; State = $state; PreflightSucceeded = $false }
+  }
+  $succeeded = (Test-WinGetPhaseSuccess -PhaseResult $validate) -and (Test-WinGetPhaseSuccess -PhaseResult $test)
+  return [pscustomobject]@{ Terminal = $false; State = $null; PreflightSucceeded = $succeeded }
+}
+function Remove-Capability25UnfinishedStaging {
+  param([AllowNull()]$StagedConfiguration)
+  if ($null -eq $StagedConfiguration) { return }
+  try { Remove-WinGetStagedConfiguration -StagedConfiguration $StagedConfiguration }
+  catch { Write-Warning "Failed to remove protected WinGet staging directory: $($_.Exception.Message)" }
 }
 
-$failedPhases = @($results.ToArray() | Where-Object { $_.TimedOut -or $_.ExitCode -ne 0 })
-$finalExitCode = Get-WinGetAggregateExitCode -PhaseResults $results.ToArray()
-$finalErrorMessage = if ($failedPhases.Count -gt 0) { 'One or more WinGet phases failed or timed out.' } else { $null }
-$cleanupOutcome = Complete-WinGetStagingCleanup -StagedConfiguration $stagedConfiguration
-if ($cleanupOutcome.Succeeded) { $stagedConfiguration = $null }
-
-$summary = Get-SummaryObject -ConfigPathResolved $resolvedConfigPath -Results $results -FinalExitCode $finalExitCode `
-  -TestOnlyEffective $TestOnlyEffective -AcceptAgreementsEffective $AcceptAgreementsEffective -DisableInteractivityEffective $DisableInteractivityEffective `
-  -FailFastEffective $FailFastEffective -PassThruEffective $PassThruEffective -QuietConsoleEffective $QuietConsoleEffective `
-  -LogPathEffective $LogPathEffective -SummaryJsonPathEffective $SummaryJsonPath -ExtraArgsEffective $ExtraArgsEffective `
-  -ErrorMessage $finalErrorMessage
-$summary | Add-Member -NotePropertyName StagingCleanupSucceeded -NotePropertyValue $cleanupOutcome.Succeeded -Force
-$summary | Add-Member -NotePropertyName StagingCleanupError -NotePropertyValue $cleanupOutcome.Error -Force
-
+$terminalState = Invoke-Capability25Workflow -DecisionContext $PSCmdlet -RunState $RunState
+$summary = $terminalState.Summary
+$resultToken = $terminalState.Token
 Invoke-WinGetConsoleSummary -Summary $summary
-
-# V2 output contract
-$resultToken = Get-WinGetResultToken -FinalExitCode $finalExitCode -FindingsCount $script:Findings.Count -StrictMode ([bool]$Strict)
 $v2Result = Get-V2ResultObject -ScriptName '25-WinGet-Config-Baseline-Runner.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings.ToArray()) -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-if ($PassThruEffective) { $v2Result }
+if ($RunState.PassThruEffective) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)
-} finally {
-  if ($null -ne $stagedConfiguration) {
-    try { Remove-WinGetStagedConfiguration -StagedConfiguration $stagedConfiguration }
-    catch { Write-Warning "Failed to remove protected WinGet staging directory: $($_.Exception.Message)" }
-  }
-}

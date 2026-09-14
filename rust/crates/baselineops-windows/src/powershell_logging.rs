@@ -84,9 +84,28 @@ pub(crate) fn apply_powershell_logging_plan(
     let live = observe_powershell_logging(false)?;
     let effective = build_powershell_logging_plan(live, plan.desired.clone())
         .map_err(PlatformError::TrustFailure)?;
-    for mutation in &effective.mutations {
+    apply_logging_mutations(&effective.mutations)?;
+    let after = verify_logging_apply(&effective)?;
+    Ok(PowerShellLoggingApplyReceipt {
+        before: effective.rollback.clone(),
+        rollback: effective.rollback,
+        after,
+        applied: effective.mutations,
+        reboot_required: false,
+        new_sessions_may_be_needed: true,
+    })
+}
+
+fn apply_logging_mutations(mutations: &[PowerShellLoggingMutation]) -> Result<(), PlatformError> {
+    for mutation in mutations {
         apply_mutation(mutation)?;
     }
+    Ok(())
+}
+
+fn verify_logging_apply(
+    effective: &PowerShellLoggingPlan,
+) -> Result<PowerShellLoggingHiveSnapshot, PlatformError> {
     let after = observe_powershell_logging(false)?.hklm;
     let verify = build_powershell_logging_plan(
         PowerShellLoggingObservation {
@@ -101,25 +120,16 @@ pub(crate) fn apply_powershell_logging_plan(
             "PowerShell logging policy did not reach exact desired state".into(),
         ));
     }
-    Ok(PowerShellLoggingApplyReceipt {
-        before: effective.rollback.clone(),
-        rollback: effective.rollback,
-        after,
-        applied: effective.mutations,
-        reboot_required: false,
-        new_sessions_may_be_needed: true,
-    })
+    Ok(after)
 }
 
 fn read_hive(current_user: bool) -> Result<PowerShellLoggingHiveSnapshot, PlatformError> {
-    let read = |location, name| {
-        if current_user {
-            registry::read_hkcu_value(location, name)
-        } else {
-            registry::read_hklm_value(location, name)
-        }
-    };
-    let module_names = if current_user {
+    let module_names = read_module_names(current_user)?;
+    read_hive_values(current_user, module_names)
+}
+
+fn read_module_names(current_user: bool) -> Result<ModuleNamesSnapshot, PlatformError> {
+    Ok(if current_user {
         ModuleNamesSnapshot {
             values: std::collections::BTreeMap::default(),
             complete: false,
@@ -130,34 +140,74 @@ fn read_hive(current_user: bool) -> Result<PowerShellLoggingHiveSnapshot, Platfo
             values: values.values,
             complete: values.complete,
         }
-    };
+    })
+}
+
+fn read_hive_values(
+    current_user: bool,
+    module_names: ModuleNamesSnapshot,
+) -> Result<PowerShellLoggingHiveSnapshot, PlatformError> {
     Ok(PowerShellLoggingHiveSnapshot {
-        enable_transcription: dword(&read(
+        enable_transcription: read_dword(
+            current_user,
             RegistryLocation::PowerShellTranscription,
             RegistryValueName::EnableTranscripting,
-        )?)?,
-        transcript_output_directory: string(read(
+        )?,
+        transcript_output_directory: read_string(
+            current_user,
             RegistryLocation::PowerShellTranscription,
             RegistryValueName::OutputDirectory,
-        )?)?,
-        enable_invocation_header: dword(&read(
+        )?,
+        enable_invocation_header: read_dword(
+            current_user,
             RegistryLocation::PowerShellTranscription,
             RegistryValueName::EnableInvocationHeader,
-        )?)?,
-        enable_script_block_logging: dword(&read(
+        )?,
+        enable_script_block_logging: read_dword(
+            current_user,
             RegistryLocation::PowerShellScriptBlockLogging,
             RegistryValueName::EnableScriptBlockLogging,
-        )?)?,
-        enable_script_block_invocation_logging: dword(&read(
+        )?,
+        enable_script_block_invocation_logging: read_dword(
+            current_user,
             RegistryLocation::PowerShellScriptBlockLogging,
             RegistryValueName::EnableScriptBlockInvocationLogging,
-        )?)?,
-        enable_module_logging: dword(&read(
+        )?,
+        enable_module_logging: read_dword(
+            current_user,
             RegistryLocation::PowerShellModuleLogging,
             RegistryValueName::EnableModuleLogging,
-        )?)?,
+        )?,
         module_names,
     })
+}
+
+fn read_policy(
+    current_user: bool,
+    location: RegistryLocation,
+    name: RegistryValueName,
+) -> Result<RegistryRead, PlatformError> {
+    if current_user {
+        registry::read_hkcu_value(location, name)
+    } else {
+        registry::read_hklm_value(location, name)
+    }
+}
+
+fn read_dword(
+    current_user: bool,
+    location: RegistryLocation,
+    name: RegistryValueName,
+) -> Result<ValueSnapshot<u32>, PlatformError> {
+    dword(&read_policy(current_user, location, name)?)
+}
+
+fn read_string(
+    current_user: bool,
+    location: RegistryLocation,
+    name: RegistryValueName,
+) -> Result<ValueSnapshot<String>, PlatformError> {
+    string(read_policy(current_user, location, name)?)
 }
 
 fn dword(read: &RegistryRead) -> Result<ValueSnapshot<u32>, PlatformError> {
@@ -190,29 +240,33 @@ fn apply_mutation(mutation: &PowerShellLoggingMutation) -> Result<(), PlatformEr
             let (location, name) = field_pair(*field);
             registry::set_hklm_value(location, name, RegistryValue::String(value.clone()))
         }
-        PowerShellLoggingMutation::ReplaceModuleNames { values } => {
-            let before = registry::list_hklm_module_names()?;
-            if !before.complete {
-                return Err(PlatformError::TrustFailure(
-                    "ModuleNames replacement requires a complete snapshot".into(),
-                ));
-            }
-            for number in before.values.keys() {
-                registry::delete_hklm_value(
-                    RegistryLocation::PowerShellModuleNames,
-                    RegistryValueName::ModuleName(*number),
-                )?;
-            }
-            for (number, value) in values {
-                registry::set_hklm_value(
-                    RegistryLocation::PowerShellModuleNames,
-                    RegistryValueName::ModuleName(*number),
-                    RegistryValue::String(value.clone()),
-                )?;
-            }
-            Ok(())
-        }
+        PowerShellLoggingMutation::ReplaceModuleNames { values } => replace_module_names(values),
     }
+}
+
+fn replace_module_names(
+    values: &std::collections::BTreeMap<u16, String>,
+) -> Result<(), PlatformError> {
+    let before = registry::list_hklm_module_names()?;
+    if !before.complete {
+        return Err(PlatformError::TrustFailure(
+            "ModuleNames replacement requires a complete snapshot".into(),
+        ));
+    }
+    for number in before.values.keys() {
+        registry::delete_hklm_value(
+            RegistryLocation::PowerShellModuleNames,
+            RegistryValueName::ModuleName(*number),
+        )?;
+    }
+    for (number, value) in values {
+        registry::set_hklm_value(
+            RegistryLocation::PowerShellModuleNames,
+            RegistryValueName::ModuleName(*number),
+            RegistryValue::String(value.clone()),
+        )?;
+    }
+    Ok(())
 }
 
 fn field_pair(field: PolicyField) -> (RegistryLocation, RegistryValueName) {
@@ -268,6 +322,11 @@ fn validate_transcript_directory(value: &str) -> Result<(), PlatformError> {
             "transcript directory must be absolute".into(),
         ));
     }
+    validate_existing_transcript_directory(path)
+}
+
+#[cfg(windows)]
+fn validate_existing_transcript_directory(path: &Path) -> Result<(), PlatformError> {
     let canonical = std::fs::canonicalize(path)?;
     if std::fs::symlink_metadata(path)?.file_type().is_symlink() || canonical != path {
         return Err(PlatformError::TrustFailure(

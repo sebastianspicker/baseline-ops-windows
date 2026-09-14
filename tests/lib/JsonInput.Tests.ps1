@@ -12,20 +12,18 @@ BeforeAll {
   Import-Module (Join-Path $PSScriptRoot '../../lib/JsonInput.psm1') -Force
   Import-Module (Join-Path $PSScriptRoot '../../lib/Config.psm1') -Force
   Import-Module (Join-Path $PSScriptRoot '../../lib/JsonCatalog.psm1') -Force
-}
 
-Describe 'Read-BoundedUtf8JsonInput' {
-  It 'parses bounded UTF-8 JSON while preserving the source text' {
+function Test-JsonInputParsesBoundedUTF8JSONWhilePreservingTheSourceText {
     $path = Join-Path $TestDrive 'input.json'
     [System.IO.File]::WriteAllText($path, '{"Name":"catalog"}', $script:Utf8NoBom)
 
-    $input = Read-BoundedUtf8JsonInput -Path $path -MaximumBytes 64
+    $jsonInput = Read-BoundedUtf8JsonInput -Path $path -MaximumBytes 64
 
-    $input.Text | Should -Be '{"Name":"catalog"}'
-    $input.Data.Name | Should -Be 'catalog'
+    $jsonInput.Text | Should -Be '{"Name":"catalog"}'
+    $jsonInput.Data.Name | Should -Be 'catalog'
   }
 
-  It 'rejects JSON input over the configured byte limit' {
+function Test-JsonInputRejectsJSONInputOverTheConfiguredByteLimit {
     $path = Join-Path $TestDrive 'oversized.json'
     [System.IO.File]::WriteAllText($path, '{"Name":"catalog"}', $script:Utf8NoBom)
 
@@ -33,19 +31,17 @@ Describe 'Read-BoundedUtf8JsonInput' {
       Should -Throw '*8 byte size limit*'
   }
 
-  It 'returns invalid JSON to the adapter that owns its error policy' {
+function Test-JsonInputReturnsInvalidJSONToTheAdapterThatOwnsItsErrorPolicy {
     $path = Join-Path $TestDrive 'invalid.json'
     [System.IO.File]::WriteAllText($path, '{"Name":', $script:Utf8NoBom)
 
-    $input = Read-BoundedUtf8JsonInput -Path $path
+    $jsonInput = Read-BoundedUtf8JsonInput -Path $path
 
-    $input.Data | Should -BeNullOrEmpty
-    $input.ParseError | Should -Not -BeNullOrEmpty
+    $jsonInput.Data | Should -BeNullOrEmpty
+    $jsonInput.ParseError | Should -Not -BeNullOrEmpty
   }
-}
 
-Describe 'JSON input adapters' {
-  It 'keeps Config default merge and parse-fallback metadata semantics' {
+function Test-JsonInputKeepsConfigDefaultMergeAndParseFallbackMetadataSemantics {
     $validPath = Join-Path $TestDrive 'config-valid.json'
     $invalidPath = Join-Path $TestDrive 'config-invalid.json'
     [System.IO.File]::WriteAllText($validPath, '{"Enabled":false,"Ignored":"value"}', $script:Utf8NoBom)
@@ -66,7 +62,7 @@ Describe 'JSON input adapters' {
     $fallback.Meta.Error | Should -Not -BeNullOrEmpty
   }
 
-  It 'keeps JsonCatalog loaded and invalid status-envelope semantics' {
+function Test-JsonInputKeepsJsonCatalogLoadedAndInvalidStatusEnvelopeSemantics {
     $validPath = Join-Path $TestDrive 'catalog-valid.json'
     $invalidPath = Join-Path $TestDrive 'catalog-invalid.json'
     [System.IO.File]::WriteAllText($validPath, '{"Name":"catalog"}', $script:Utf8NoBom)
@@ -83,4 +79,18 @@ Describe 'JSON input adapters' {
     $invalid.Meta.Status | Should -Be 'Invalid'
     $invalid.Meta.Error | Should -Not -BeNullOrEmpty
   }
+}
+
+Describe 'Read-BoundedUtf8JsonInput' {
+  It 'parses bounded UTF-8 JSON while preserving the source text' { Test-JsonInputParsesBoundedUTF8JSONWhilePreservingTheSourceText }
+
+  It 'rejects JSON input over the configured byte limit' { Test-JsonInputRejectsJSONInputOverTheConfiguredByteLimit }
+
+  It 'returns invalid JSON to the adapter that owns its error policy' { Test-JsonInputReturnsInvalidJSONToTheAdapterThatOwnsItsErrorPolicy }
+}
+
+Describe 'JSON input adapters' {
+  It 'keeps Config default merge and parse-fallback metadata semantics' { Test-JsonInputKeepsConfigDefaultMergeAndParseFallbackMetadataSemantics }
+
+  It 'keeps JsonCatalog loaded and invalid status-envelope semantics' { Test-JsonInputKeepsJsonCatalogLoadedAndInvalidStatusEnvelopeSemantics }
 }

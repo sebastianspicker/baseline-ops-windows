@@ -8,7 +8,7 @@ use baselineops_windows::{PlatformError, audit_app_control};
 
 /// Native Windows executor for capability 43.
 ///
-/// The descriptor remains `in_development`: EFI and multi-policy enumeration,
+/// The descriptor is `code_complete`; EFI and multi-policy enumeration,
 /// policy content, signature, and effective-policy semantics are intentionally excluded.
 pub struct AppControlWindowsExecutor;
 

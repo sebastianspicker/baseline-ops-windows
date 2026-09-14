@@ -76,6 +76,11 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Initialize-Capability34Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
@@ -86,16 +91,18 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '34-TimeSync-Health.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '34-TimeSync-Health.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability34Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
@@ -114,16 +121,15 @@ if (-not $isWindowsHost) {
 # Helpers
 # ----------------------------
 
-function Invoke-NativeCommandSoft {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$FilePath,
-    [Parameter(Mandatory)][string[]]$Arguments
-  )
+function Invoke-NativeCommandSoftSection01 {
+  param([hashtable]$RunState)
+$native = Invoke-NativeCommand -Command $RunState.FilePath -Arguments $RunState.Arguments -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 262144
+  $RunState.complete = ($null -ne $native -and $native.Success -and -not $native.TimedOut -and -not $native.OutputTruncated -and -not $native.StderrTruncated)
+}
 
-  $native = Invoke-NativeCommand -Command $FilePath -Arguments $Arguments -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 262144
-  $complete = ($null -ne $native -and $native.Success -and -not $native.TimedOut -and -not $native.OutputTruncated -and -not $native.StderrTruncated)
-  $failureReason = if ($null -eq $native) {
+function Invoke-NativeCommandSoftSection02 {
+  param([hashtable]$RunState)
+$RunState.failureReason = if ($null -eq $native) {
     'start failure'
   } elseif ($native.TimedOut) {
     'timeout'
@@ -134,15 +140,32 @@ function Invoke-NativeCommandSoft {
   } else {
     $null
   }
+}
 
-  [pscustomobject]@{
-    FilePath  = $FilePath
-    Arguments = ($Arguments -join ' ')
+function Invoke-NativeCommandSoftSection03 {
+  param([hashtable]$RunState)
+[pscustomobject]@{
+    FilePath  = $RunState.FilePath
+    Arguments = ($RunState.Arguments -join ' ')
     ExitCode  = if ($null -ne $native) { $native.ExitCode } else { -1 }
     Text      = if ($null -ne $native) { [string]$native.Output } else { '' }
-    Complete  = [bool]$complete
-    FailureReason = $failureReason
+    Complete  = [bool]$RunState.complete
+    FailureReason = $RunState.failureReason
   }
+}
+
+function Invoke-NativeCommandSoft {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$FilePath,
+    [Parameter(Mandatory)][string[]]$Arguments
+  , [hashtable]$RunState)
+  $RunState.Arguments = $Arguments
+  $RunState.FilePath = $FilePath
+
+    . Invoke-NativeCommandSoftSection01 -RunState $RunState
+    . Invoke-NativeCommandSoftSection02 -RunState $RunState
+    . Invoke-NativeCommandSoftSection03 -RunState $RunState
 }
 
 function Parse-W32tmField {
@@ -213,21 +236,7 @@ function Load-Config {
   }
 
   try {
-    if ($null -ne $obj.Thresholds.RootDispersionSecondsWarn) {
-      $result.Config.Thresholds.RootDispersionSecondsWarn = [double]$obj.Thresholds.RootDispersionSecondsWarn
-    }
-    if ($null -ne $obj.Thresholds.PhaseOffsetSecondsWarn) {
-      $result.Config.Thresholds.PhaseOffsetSecondsWarn = [double]$obj.Thresholds.PhaseOffsetSecondsWarn
-    }
-    if ($null -ne $obj.Behavior.TreatW32tmFailureAsHighFinding) {
-      $result.Config.Behavior.TreatW32tmFailureAsHighFinding = [bool]$obj.Behavior.TreatW32tmFailureAsHighFinding
-    }
-    if ($null -ne $obj.Behavior.AlwaysRunW32tmEvenIfServiceStopped) {
-      $result.Config.Behavior.AlwaysRunW32tmEvenIfServiceStopped = [bool]$obj.Behavior.AlwaysRunW32tmEvenIfServiceStopped
-    }
-    if ($null -ne $obj.Console.UseWriteInformation) {
-      $result.Config.Console.UseWriteInformation = [bool]$obj.Console.UseWriteInformation
-    }
+    Merge-TimeSyncConfig -Defaults $result.Config -Config $obj
   } catch {
     $result.LoadDetail = 'JSON config contained invalid values; using defaults.'
     return $result
@@ -236,6 +245,20 @@ function Load-Config {
   $result.LoadState  = 'Loaded'
   $result.LoadDetail = 'JSON config loaded successfully from [configured path].'
   return $result
+}
+function Set-TimeSyncConfigProperties {
+  param($Target, $Source, [string[]]$Names, [type]$ValueType)
+  if ($null -eq $Source) { return }
+  foreach ($name in $Names) {
+    $property = $Source.PSObject.Properties[$name]
+    if ($null -ne $property) { $Target.$name = $property.Value -as $ValueType }
+  }
+}
+function Merge-TimeSyncConfig {
+  param($Defaults, $Config)
+  Set-TimeSyncConfigProperties -Target $Defaults.Thresholds -Source $Config.Thresholds -Names @('RootDispersionSecondsWarn','PhaseOffsetSecondsWarn') -ValueType ([double])
+  Set-TimeSyncConfigProperties -Target $Defaults.Behavior -Source $Config.Behavior -Names @('TreatW32tmFailureAsHighFinding','AlwaysRunW32tmEvenIfServiceStopped') -ValueType ([bool])
+  Set-TimeSyncConfigProperties -Target $Defaults.Console -Source $Config.Console -Names @('UseWriteInformation') -ValueType ([bool])
 }
 
 function Get-CountSafe {
@@ -264,173 +287,219 @@ function Get-OutputFolderAndBase {
 # Main
 # ----------------------------
 
-Ensure-Exe -Name 'w32tm.exe'
+function Invoke-Capability34MainPhase01 {
+  param([hashtable]$RunState)
+  Ensure-Exe -Name 'w32tm.exe'
 
-$script:Findings = Get-FindingsList
+  $script:Findings = Get-FindingsList
 
-$configLoad = Load-Config -Path $ConfigJsonPath
-$ConfigUsed = $configLoad.Config
-$configPathLabel = $(if ($ConfigJsonPath) { '[configured path]' } else { $null })
+  $configLoad = Load-Config -Path $ConfigJsonPath
+  $RunState.ConfigUsed = $configLoad.Config
+  $configPathLabel = $(if ($ConfigJsonPath) { '[configured path]' } else { $null })
 
-if ($configLoad.LoadState -eq 'Loaded') {
-  Add-Finding -FindingList $script:Findings -Code 'CFG-Loaded' -Severity 'Low' -Message $configLoad.LoadDetail -Extra @{ Data = $configPathLabel }
-} else {
-  Add-Finding -FindingList $script:Findings -Code 'CFG-DefaultUsed' -Severity 'Low' -Message $configLoad.LoadDetail -Extra @{ Data = $configPathLabel }
+  if ($configLoad.LoadState -eq 'Loaded') {
+    Add-Finding -FindingList $script:Findings -Code 'CFG-Loaded' -Severity 'Low' -Message $configLoad.LoadDetail -Extra @{ Data = $configPathLabel }
+  } else {
+    Add-Finding -FindingList $script:Findings -Code 'CFG-DefaultUsed' -Severity 'Low' -Message $configLoad.LoadDetail -Extra @{ Data = $configPathLabel }
+  }
+
+  $RunState.svc = Get-Service -Name 'w32time' -ErrorAction Stop
 }
+function Invoke-Capability34MainPhase02 {
+  param([hashtable]$RunState)
+  if ($RunState.svc.Status -ne 'Running') {
+    Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceNotRunning' -Severity 'High' -Message ("w32time service is {0}." -f $RunState.svc.Status)
 
-$svc = Get-Service -Name 'w32time' -ErrorAction Stop
-if ($svc.Status -ne 'Running') {
-  Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceNotRunning' -Severity 'High' -Message ("w32time service is {0}." -f $svc.Status)
+    if ($AutoStartService) {
+      try {
+        if ($script:__EntryCmdlet.ShouldProcess('w32time', 'Start service')) {
+          Start-Service -Name 'w32time' -ErrorAction Stop
+          $RunState.svc = Get-Service -Name 'w32time' -ErrorAction Stop
 
-  if ($AutoStartService) {
-    try {
-      if ($PSCmdlet.ShouldProcess('w32time', 'Start service')) {
-        Start-Service -Name 'w32time' -ErrorAction Stop
-        $svc = Get-Service -Name 'w32time' -ErrorAction Stop
-
-        if ($svc.Status -eq 'Running') {
-          Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceAutoStarted' -Severity 'Low' -Message 'w32time service was started automatically (AutoStartService).'
-        } else {
-          Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceStartFailed' -Severity 'High' -Message ("Start-Service executed but service is still {0}." -f $svc.Status)
+          if ($RunState.svc.Status -eq 'Running') {
+            Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceAutoStarted' -Severity 'Low' -Message 'w32time service was started automatically (AutoStartService).'
+          } else {
+            Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceStartFailed' -Severity 'High' -Message ("Start-Service executed but service is still {0}." -f $RunState.svc.Status)
+          }
         }
+      } catch {
+        Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceStartException' -Severity 'High' -Message ("Start-Service w32time failed: {0}" -f $_.Exception.Message)
       }
-    } catch {
-      Add-Finding -FindingList $script:Findings -Code 'TIME-ServiceStartException' -Severity 'High' -Message ("Start-Service w32time failed: {0}" -f $_.Exception.Message)
-    }
-  }
-}
-
-$regParams    = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters'
-$regNtpClient = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpClient'
-
-$typeValue        = Get-RegValue -Path $regParams -Name 'Type'
-$ntpServerValue   = Get-RegValue -Path $regParams -Name 'NtpServer'
-$ntpClientEnabled = Get-RegValue -Path $regNtpClient -Name 'Enabled'
-
-if ($typeValue -eq 'NoSync') {
-  Add-Finding -FindingList $script:Findings -Code 'TIME-TypeNoSync' -Severity 'High' -Message 'Registry Type=NoSync: time service will not synchronize.'
-}
-if ($typeValue -eq 'NTP' -and -not $ntpServerValue) {
-  Add-Finding -FindingList $script:Findings -Code 'TIME-TypeNtpButNoServer' -Severity 'Medium' -Message 'Registry Type=NTP but NtpServer is empty/unreadable.'
-}
-if ($null -ne $ntpClientEnabled -and [int]$ntpClientEnabled -eq 0) {
-  Add-Finding -FindingList $script:Findings -Code 'TIME-NtpClientDisabled' -Severity 'High' -Message 'NtpClient provider is disabled (TimeProviders\\NtpClient\\Enabled=0).'
-}
-
-$srcText  = $null
-$statText = $null
-$cfgText  = $null
-
-$shouldRunW32tm = ($svc.Status -eq 'Running') -or $ConfigUsed.Behavior.AlwaysRunW32tmEvenIfServiceStopped
-
-if ($shouldRunW32tm) {
-  $srcR  = Invoke-NativeCommandSoft -FilePath 'w32tm.exe' -Arguments @('/query','/source')
-  $statR = Invoke-NativeCommandSoft -FilePath 'w32tm.exe' -Arguments @('/query','/status','/verbose')
-  $cfgR  = Invoke-NativeCommandSoft -FilePath 'w32tm.exe' -Arguments @('/query','/configuration')
-
-  $srcText  = $srcR.Text
-  $statText = $statR.Text
-  $cfgText  = $cfgR.Text
-
-  foreach ($r in @($srcR, $statR, $cfgR)) {
-    if (-not $r.Complete) {
-      $sev = if ($ConfigUsed.Behavior.TreatW32tmFailureAsHighFinding) { 'High' } else { 'Medium' }
-      Add-Finding -FindingList $script:Findings -Code 'TIME-W32tmCommandFailed' -Severity $sev -Message ("w32tm evidence is incomplete: {0} {1} ({2}; ExitCode={3})." -f $r.FilePath, $r.Arguments, $r.FailureReason, $r.ExitCode) -Extra @{ Data = $r.Text }
     }
   }
 
-  if ($srcText -and ($srcText -match 'Free-running System Clock')) {
-    Add-Finding -FindingList $script:Findings -Code 'TIME-FreeRunning' -Severity 'High' -Message 'Time source is "Free-running System Clock" (no NTP/domain sync).'
+  $regParams    = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters'
+  $regNtpClient = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpClient'
+
+  $RunState.typeValue        = Get-RegValue -Path $regParams -Name 'Type'
+  $RunState.ntpServerValue   = Get-RegValue -Path $regParams -Name 'NtpServer'
+  $RunState.ntpClientEnabled = Get-RegValue -Path $regNtpClient -Name 'Enabled'
+}
+function Invoke-Capability34MainPhase03 {
+  param([hashtable]$RunState)
+  if ($RunState.typeValue -eq 'NoSync') {
+    Add-Finding -FindingList $script:Findings -Code 'TIME-TypeNoSync' -Severity 'High' -Message 'Registry Type=NoSync: time service will not synchronize.'
+  }
+  if ($RunState.typeValue -eq 'NTP' -and -not $RunState.ntpServerValue) {
+    Add-Finding -FindingList $script:Findings -Code 'TIME-TypeNtpButNoServer' -Severity 'Medium' -Message 'Registry Type=NTP but NtpServer is empty/unreadable.'
+  }
+  if ($null -ne $RunState.ntpClientEnabled -and [int]$RunState.ntpClientEnabled -eq 0) {
+    Add-Finding -FindingList $script:Findings -Code 'TIME-NtpClientDisabled' -Severity 'High' -Message 'NtpClient provider is disabled (TimeProviders\\NtpClient\\Enabled=0).'
   }
 
-  if ($statText -and ($statText -match '(?m)^\s*Leap Indicator\s*:\s*3\b')) {
-    Add-Finding -FindingList $script:Findings -Code 'TIME-LeapUnsync' -Severity 'High' -Message 'Leap Indicator = 3 (not synchronized).'
-  }
+  $RunState.srcText  = $null
+  $RunState.statText = $null
+  $RunState.cfgText  = $null
+}
+function Invoke-Capability34MainPhase04 {
+  param([hashtable]$RunState)
+  $RunState.shouldRunW32tm = ($RunState.svc.Status -eq 'Running') -or $RunState.ConfigUsed.Behavior.AlwaysRunW32tmEvenIfServiceStopped
+}
+function Invoke-Capability34MainPhase05Step01 {
+  param([hashtable]$RunState)
+$srcR  = Invoke-NativeCommandSoft -FilePath 'w32tm.exe' -Arguments @('/query','/source') -RunState $RunState
+    $statR = Invoke-NativeCommandSoft -FilePath 'w32tm.exe' -Arguments @('/query','/status','/verbose') -RunState $RunState
+    $cfgR  = Invoke-NativeCommandSoft -FilePath 'w32tm.exe' -Arguments @('/query','/configuration') -RunState $RunState
 
-  $lastSyncError = Parse-W32tmField -Text $statText -FieldName 'Last Sync Error'
-  if ($lastSyncError -and ($lastSyncError -notmatch '^\s*0\s*\(')) {
-    Add-Finding -FindingList $script:Findings -Code 'TIME-LastSyncError' -Severity 'Medium' -Message ("Last Sync Error is non-zero: {0}" -f $lastSyncError)
-  }
+    $RunState.srcText  = $srcR.Text
+    $RunState.statText = $statR.Text
+    $RunState.cfgText  = $cfgR.Text
 
-  $phaseOffsetText    = Parse-W32tmField -Text $statText -FieldName 'Phase Offset'
-  $rootDispersionText = Parse-W32tmField -Text $statText -FieldName 'Root Dispersion'
+    foreach ($r in @($srcR, $statR, $cfgR)) {
+      if (-not $r.Complete) {
+        $sev = if ($RunState.ConfigUsed.Behavior.TreatW32tmFailureAsHighFinding) { 'High' } else { 'Medium' }
+        Add-Finding -FindingList $script:Findings -Code 'TIME-W32tmCommandFailed' -Severity $sev -Message ("w32tm evidence is incomplete: {0} {1} ({2}; ExitCode={3})." -f $r.FilePath, $r.Arguments, $r.FailureReason, $r.ExitCode) -Extra @{ Data = $r.Text }
+      }
+    }
 
-  $phaseOffsetSec    = Parse-SecondsValue -ValueText $phaseOffsetText
-  $rootDispersionSec = Parse-SecondsValue -ValueText $rootDispersionText
-
-  if ($null -ne $rootDispersionSec -and $rootDispersionSec -ge $ConfigUsed.Thresholds.RootDispersionSecondsWarn) {
-    Add-Finding -FindingList $script:Findings -Code 'TIME-RootDispersionHigh' -Severity 'Medium' -Message ("Root Dispersion is high ({0}s >= {1}s)." -f $rootDispersionSec, $ConfigUsed.Thresholds.RootDispersionSecondsWarn)
-  }
-
-  if ($null -ne $phaseOffsetSec -and ([math]::Abs($phaseOffsetSec) -ge $ConfigUsed.Thresholds.PhaseOffsetSecondsWarn)) {
-    Add-Finding -FindingList $script:Findings -Code 'TIME-PhaseOffsetHigh' -Severity 'Medium' -Message ("Phase Offset is high ({0}s >= {1}s)." -f ([math]::Abs($phaseOffsetSec)), $ConfigUsed.Thresholds.PhaseOffsetSecondsWarn)
-  }
-} else {
-  Add-Finding -FindingList $script:Findings -Code 'TIME-W32tmSkipped' -Severity 'Medium' -Message 'w32tm queries skipped because w32time is not running.'
+    if ($RunState.srcText -and ($RunState.srcText -match 'Free-running System Clock')) {
+      Add-Finding -FindingList $script:Findings -Code 'TIME-FreeRunning' -Severity 'High' -Message 'Time source is "Free-running System Clock" (no NTP/domain sync).'
+    }
 }
 
-$Findings = @($script:Findings.ToArray())
-$findingsCount = Get-CountSafe $Findings
+function Invoke-Capability34MainPhase05Step02 {
+  param([hashtable]$RunState)
+if ($RunState.statText -and ($RunState.statText -match '(?m)^\s*Leap Indicator\s*:\s*3\b')) {
+      Add-Finding -FindingList $script:Findings -Code 'TIME-LeapUnsync' -Severity 'High' -Message 'Leap Indicator = 3 (not synchronized).'
+    }
 
-$result = [pscustomobject]@{
-  Summary = [pscustomobject]@{
-    ComputerName        = $env:COMPUTERNAME
-    Timestamp           = Get-Date
-    W32TimeServiceState = $svc.Status
-    Type                = $typeValue
-    NtpServer           = $ntpServerValue
-    NtpClientEnabled    = $ntpClientEnabled
-    Source              = $srcText
-    FindingsCount       = $findingsCount
-  }
-  Findings   = $Findings
-  Raw        = [pscustomobject]@{
-    SourceText        = $srcText
-    StatusVerboseText = $statText
-    ConfigText        = $cfgText
-  }
-  ConfigUsed = $ConfigUsed
-  ConfigMeta = [pscustomobject]@{
-    LoadState  = $configLoad.LoadState
-    LoadDetail = $configLoad.LoadDetail
-  }
+    $lastSyncError = Parse-W32tmField -Text $RunState.statText -FieldName 'Last Sync Error'
+    if ($lastSyncError -and ($lastSyncError -notmatch '^\s*0\s*\(')) {
+      Add-Finding -FindingList $script:Findings -Code 'TIME-LastSyncError' -Severity 'Medium' -Message ("Last Sync Error is non-zero: {0}" -f $lastSyncError)
+    }
+
+    $phaseOffsetText    = Parse-W32tmField -Text $RunState.statText -FieldName 'Phase Offset'
+    $rootDispersionText = Parse-W32tmField -Text $RunState.statText -FieldName 'Root Dispersion'
+
+    $RunState.phaseOffsetSec    = Parse-SecondsValue -ValueText $phaseOffsetText
+    $RunState.rootDispersionSec = Parse-SecondsValue -ValueText $rootDispersionText
 }
 
-if ($ExportPath) {
-  $out = Get-OutputFolderAndBase -ExportPath $ExportPath
-  if (-not (Test-Path -LiteralPath $out.Folder)) {
-    New-Item -Path $out.Folder -ItemType Directory -Force | Out-Null
-  }
+function Invoke-Capability34MainPhase05Step03 {
+  param([hashtable]$RunState)
+if ($null -ne $RunState.rootDispersionSec -and $RunState.rootDispersionSec -ge $RunState.ConfigUsed.Thresholds.RootDispersionSecondsWarn) {
+      Add-Finding -FindingList $script:Findings -Code 'TIME-RootDispersionHigh' -Severity 'Medium' -Message ("Root Dispersion is high ({0}s >= {1}s)." -f $RunState.rootDispersionSec, $RunState.ConfigUsed.Thresholds.RootDispersionSecondsWarn)
+    }
 
-  $result.Summary  | Export-Csv -Path (Join-Path $out.Folder ($out.Base + "_summary.csv"))  -NoTypeInformation -Encoding UTF8
-  $result.Findings | Export-Csv -Path (Join-Path $out.Folder ($out.Base + "_findings.csv")) -NoTypeInformation -Encoding UTF8
-
-  if ($result.Raw.SourceText)        { Set-Content -Path (Join-Path $out.Folder ($out.Base + "_source.txt")) -Value $result.Raw.SourceText        -Encoding UTF8 }
-  if ($result.Raw.StatusVerboseText) { Set-Content -Path (Join-Path $out.Folder ($out.Base + "_status.txt")) -Value $result.Raw.StatusVerboseText -Encoding UTF8 }
-  if ($result.Raw.ConfigText)        { Set-Content -Path (Join-Path $out.Folder ($out.Base + "_config.txt")) -Value $result.Raw.ConfigText        -Encoding UTF8 }
+    if ($null -ne $RunState.phaseOffsetSec -and ([math]::Abs($RunState.phaseOffsetSec) -ge $RunState.ConfigUsed.Thresholds.PhaseOffsetSecondsWarn)) {
+      Add-Finding -FindingList $script:Findings -Code 'TIME-PhaseOffsetHigh' -Severity 'Medium' -Message ("Phase Offset is high ({0}s >= {1}s)." -f ([math]::Abs($RunState.phaseOffsetSec)), $RunState.ConfigUsed.Thresholds.PhaseOffsetSecondsWarn)
+    }
 }
 
-if (-not $NoConsoleSummary) {
-  $healthLabel = if (@($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'ATTENTION REQUIRED' }
-    elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARNINGS' }
-    else { 'OK' }
+function Invoke-Capability34MainPhase05 {
+  param([hashtable]$RunState)
+  if ($RunState.shouldRunW32tm) {
+    . Invoke-Capability34MainPhase05Step01 -RunState $RunState
+. Invoke-Capability34MainPhase05Step02 -RunState $RunState
+. Invoke-Capability34MainPhase05Step03 -RunState $RunState
+  } else {
+    Add-Finding -FindingList $script:Findings -Code 'TIME-W32tmSkipped' -Severity 'Medium' -Message 'w32tm queries skipped because w32time is not running.'
+  }
+}
+function Invoke-Capability34MainPhase06 {
+  param([hashtable]$RunState)
+  $Findings = @($script:Findings.ToArray())
+  $findingsCount = Get-CountSafe $Findings
 
-  $customFields = [ordered]@{
-    'W32Time'    = [string]$result.Summary.W32TimeServiceState
-    'Source'     = $(if ($result.Summary.Source) { $result.Summary.Source } else { '<n/a>' })
-    'Type'       = $(if ($result.Summary.Type) { $result.Summary.Type } else { '<n/a>' })
-    'NtpServer'  = $(if ($result.Summary.NtpServer) { $result.Summary.NtpServer } else { '<n/a>' })
-    'ConfigLoad' = $result.ConfigMeta.LoadState
-    'Health'     = $healthLabel
+  $result = [pscustomobject]@{
+    Summary = [pscustomobject]@{
+      ComputerName        = $env:COMPUTERNAME
+      Timestamp           = Get-Date
+      W32TimeServiceState = $RunState.svc.Status
+      Type                = $RunState.typeValue
+      NtpServer           = $RunState.ntpServerValue
+      NtpClientEnabled    = $RunState.ntpClientEnabled
+      Source              = $RunState.srcText
+      FindingsCount       = $findingsCount
+    }
+    Findings   = $Findings
+    Raw        = [pscustomobject]@{
+      SourceText        = $RunState.srcText
+      StatusVerboseText = $RunState.statText
+      ConfigText        = $RunState.cfgText
+    }
+    ConfigUsed = $RunState.ConfigUsed
+    ConfigMeta = [pscustomobject]@{
+      LoadState  = $configLoad.LoadState
+      LoadDetail = $configLoad.LoadDetail
+    }
   }
 
-  $findingsAL = ConvertTo-ArrayList -InputObject $Findings
-  Write-ConsoleSummary -Summary $result.Summary -Findings $findingsAL `
-    -Title 'TimeSync Health Summary' `
-    -CustomFields $customFields
-}
+  if ($ExportPath) {
+    $out = Get-OutputFolderAndBase -ExportPath $ExportPath
+    if (-not (Test-Path -LiteralPath $out.Folder)) {
+      New-Item -Path $out.Folder -ItemType Directory -Force | Out-Null
+    }
 
-$resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' } elseif ($findingsCount -gt 0) { 'WARN' } else { 'OK' }
+    $result.Summary  | Export-Csv -Path (Join-Path $out.Folder ($out.Base + "_summary.csv"))  -NoTypeInformation -Encoding UTF8
+    $result.Findings | Export-Csv -Path (Join-Path $out.Folder ($out.Base + "_findings.csv")) -NoTypeInformation -Encoding UTF8
+
+    if ($result.Raw.SourceText)        { Set-Content -Path (Join-Path $out.Folder ($out.Base + "_source.txt")) -Value $result.Raw.SourceText        -Encoding UTF8 }
+    if ($result.Raw.StatusVerboseText) { Set-Content -Path (Join-Path $out.Folder ($out.Base + "_status.txt")) -Value $result.Raw.StatusVerboseText -Encoding UTF8 }
+    if ($result.Raw.ConfigText)        { Set-Content -Path (Join-Path $out.Folder ($out.Base + "_config.txt")) -Value $result.Raw.ConfigText        -Encoding UTF8 }
+  }
+}
+function Invoke-Capability34MainPhase07 {
+  if (-not $NoConsoleSummary) {
+    $healthLabel = if (@($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'ATTENTION REQUIRED' }
+      elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARNINGS' }
+      else { 'OK' }
+
+    $customFields = [ordered]@{
+      'W32Time'    = [string]$result.Summary.W32TimeServiceState
+      'Source'     = $(if ($result.Summary.Source) { $result.Summary.Source } else { '<n/a>' })
+      'Type'       = $(if ($result.Summary.Type) { $result.Summary.Type } else { '<n/a>' })
+      'NtpServer'  = $(if ($result.Summary.NtpServer) { $result.Summary.NtpServer } else { '<n/a>' })
+      'ConfigLoad' = $result.ConfigMeta.LoadState
+      'Health'     = $healthLabel
+    }
+
+    $findingsAL = ConvertTo-ArrayList -InputObject $Findings
+    Write-ConsoleSummary -Summary $result.Summary -Findings $findingsAL `
+      -Title 'TimeSync Health Summary' `
+      -CustomFields $customFields
+  }
+}
+function Invoke-Capability34Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability34MainPhase01 -RunState $RunState
+  . Invoke-Capability34MainPhase02 -RunState $RunState
+  . Invoke-Capability34MainPhase03 -RunState $RunState
+  . Invoke-Capability34MainPhase04 -RunState $RunState
+  . Invoke-Capability34MainPhase05 -RunState $RunState
+  . Invoke-Capability34MainPhase06 -RunState $RunState
+  . Invoke-Capability34MainPhase07
+}
+. Invoke-Capability34Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
+
+function Get-Capability34ResultToken {
+  $resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' } elseif ($findingsCount -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability34ResultToken
 $v2Result = Get-V2ResultObject -ScriptName '34-TimeSync-Health.ps1' -Mode $Mode -Result $resultToken -Findings $Findings -Summary $result.Summary -Metadata @{ Raw = $result.Raw; ConfigUsed = $result.ConfigUsed; ConfigMeta = $result.ConfigMeta }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }

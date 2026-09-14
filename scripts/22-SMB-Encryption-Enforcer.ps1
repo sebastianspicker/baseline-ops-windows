@@ -178,35 +178,62 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
+function Initialize-Capability22Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+    ApplyClientRequireEncryption = $ApplyClientRequireEncryption
+    EnableRejectUnencryptedAccess = $EnableRejectUnencryptedAccess
+    Force = $Force
+    Mode = $Mode
+    RemediationScope = $RemediationScope
+    ShareName = $ShareName
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+. (Join-Path $PSScriptRoot 'internal/22-SMB-Encryption-Enforcer.failures.ps1')
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '22-SMB-Encryption-Enforcer.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '22-SMB-Encryption-Enforcer.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $RunState.Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability22Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
-    Mode         = $Mode
+    Mode         = $RunState.Mode
     Supported    = $false
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
   $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
-  $result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
-  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
+  $RunState.result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $RunState.Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $RunState.result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $RunState.result }
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
@@ -237,10 +264,30 @@ function ConvertTo-BoolOrNull {
 }
 
 function Load-JsonConfigOrDefault {
-  param([string]$Path)
-
-  # Safe defaults if config is missing/invalid.
-  $defaults = [pscustomobject]@{
+  param([string]$Path, [hashtable]$RunState)
+  $defaults = Get-SmbDefaultConfig
+  if ([string]::IsNullOrWhiteSpace($Path)) { return $defaults }
+  if (-not (Test-Path -LiteralPath $Path)) {
+    Write-Verbose -Message ('Config JSON not found at {0}. Using defaults.' -f $Path)
+    return $defaults
+  }
+  try {
+    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+      Write-Verbose -Message ('Config JSON is empty at {0}. Using defaults.' -f $Path)
+      return $defaults
+    }
+    $cfg = $raw | ConvertFrom-Json
+    if ($null -eq $cfg) { return $defaults }
+    Merge-SmbConfig -Defaults $defaults -Config $cfg -RunState $RunState
+    return $defaults
+  } catch {
+    Write-Warning -Message ('Failed to load/parse config JSON at {0}. Using defaults. Error: {1}' -f $Path, $_.Exception.Message)
+    return $defaults
+  }
+}
+function Get-SmbDefaultConfig {
+  return [pscustomobject]@{
     Mode                         = 'Audit'
     RemediationScope             = 'ServerGlobal'
     ShareName                     = @()
@@ -248,56 +295,26 @@ function Load-JsonConfigOrDefault {
     EnableRejectUnencryptedAccess = $false
     Force                         = $false
   }
-
-  if ([string]::IsNullOrWhiteSpace($Path)) { return $defaults }
-
-  if (-not (Test-Path -LiteralPath $Path)) {
-    Write-Verbose -Message ('Config JSON not found at {0}. Using defaults.' -f $Path)
-    return $defaults
-  }
-
-  try {
-    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
-    if ([string]::IsNullOrWhiteSpace($raw)) {
-      Write-Verbose -Message ('Config JSON is empty at {0}. Using defaults.' -f $Path)
-      return $defaults
-    }
-
-    $cfg = $raw | ConvertFrom-Json
-    if ($null -eq $cfg) { return $defaults }
-
-    $mode = [string](Get-Prop -Object $cfg -Name 'Mode')
-    if ($mode -and @('Audit','Remediate') -contains $mode) {
-      $defaults.Mode = $mode
-    } elseif ($mode -and @('ServerGlobal','ShareOnly') -contains $mode) {
-      # Legacy mapping for v1 mode values.
-      $defaults.Mode = 'Remediate'
-      $defaults.RemediationScope = $mode
-    } elseif ($mode -eq 'AuditOnly') {
-      $defaults.Mode = 'Audit'
-    }
-
-    $scope = [string](Get-Prop -Object $cfg -Name 'RemediationScope')
-    if ($scope -and @('ServerGlobal','ShareOnly') -contains $scope) {
-      $defaults.RemediationScope = $scope
-    }
-
-    $sn = Get-Prop -Object $cfg -Name 'ShareName'
-    if ($null -ne $sn) { $defaults.ShareName = @($sn) }
-
-    $b1 = ConvertTo-BoolOrNull (Get-Prop -Object $cfg -Name 'ApplyClientRequireEncryption')
-    if ($null -ne $b1) { $defaults.ApplyClientRequireEncryption = $b1 }
-
-    $b2 = ConvertTo-BoolOrNull (Get-Prop -Object $cfg -Name 'EnableRejectUnencryptedAccess')
-    if ($null -ne $b2) { $defaults.EnableRejectUnencryptedAccess = $b2 }
-
-    $b3 = ConvertTo-BoolOrNull (Get-Prop -Object $cfg -Name 'Force')
-    if ($null -ne $b3) { $defaults.Force = $b3 }
-
-    return $defaults
-  } catch {
-    Write-Warning -Message ('Failed to load/parse config JSON at {0}. Using defaults. Error: {1}' -f $Path, $_.Exception.Message)
-    return $defaults
+}
+function Merge-SmbConfig {
+  param($Defaults, $Config, [hashtable]$RunState)
+  $RunState.mode = [string](Get-Prop -Object $Config -Name 'Mode')
+  if (@('Audit','Remediate') -contains $RunState.mode) { $Defaults.Mode = $RunState.mode }
+  elseif (@('ServerGlobal','ShareOnly') -contains $RunState.mode) {
+    $Defaults.Mode = 'Remediate'
+    $Defaults.RemediationScope = $RunState.mode
+  } elseif ($RunState.mode -eq 'AuditOnly') { $Defaults.Mode = 'Audit' }
+  $scope = [string](Get-Prop -Object $Config -Name 'RemediationScope')
+  if (@('ServerGlobal','ShareOnly') -contains $scope) { $Defaults.RemediationScope = $scope }
+  $RunState.shareName = Get-Prop -Object $Config -Name 'ShareName'
+  if ($null -ne $RunState.shareName) { $Defaults.ShareName = @($RunState.shareName) }
+  Set-SmbBooleanConfig -Defaults $Defaults -Config $Config
+}
+function Set-SmbBooleanConfig {
+  param($Defaults, $Config)
+  foreach ($name in @('ApplyClientRequireEncryption','EnableRejectUnencryptedAccess','Force')) {
+    $value = ConvertTo-BoolOrNull (Get-Prop -Object $Config -Name $name)
+    if ($null -ne $value) { $Defaults.$name = $value }
   }
 }
 
@@ -321,24 +338,24 @@ function Resolve-Shares {
 }
 
 function Invoke-SetSmbServerConfiguration {
-  param([hashtable]$Params)
+  param([hashtable]$Params, [hashtable]$RunState)
   $Params['Confirm'] = $false
-  if ($Force) { $Params['Force'] = $true }
+  if ($RunState.Force) { $Params['Force'] = $true }
   Set-SmbServerConfiguration @Params
 }
 
 function Invoke-SetSmbShare {
-  param([hashtable]$Params)
+  param([hashtable]$Params, [hashtable]$RunState)
   $Params['Confirm'] = $false
-  if ($Force) { $Params['Force'] = $true }
+  if ($RunState.Force) { $Params['Force'] = $true }
   Set-SmbShare @Params
 }
 # Encryption per share uses Set-SmbShare -EncryptData.
 
 function Invoke-SetSmbClientConfiguration {
-  param([hashtable]$Params)
+  param([hashtable]$Params, [hashtable]$RunState)
   $Params['Confirm'] = $false
-  if ($Force) { $Params['Force'] = $true }
+  if ($RunState.Force) { $Params['Force'] = $true }
   Set-SmbClientConfiguration @Params
 }
 
@@ -396,243 +413,307 @@ function Write-PrettySettingChange {
 # -------------------------
 # Apply JSON defaults (only when parameters not explicitly provided)
 # -------------------------
-$sanitized = Sanitize-Path -Path $JsonPath -MustExist
-$cfg = Load-JsonConfigOrDefault -Path $sanitized
+function Invoke-Capability22MainPhase01 {
+  param([hashtable]$RunState)
+  $sanitized = Sanitize-Path -Path $JsonPath -MustExist
+  $cfg = Load-JsonConfigOrDefault -Path $sanitized -RunState $RunState
 
-if (-not $PSBoundParameters.ContainsKey('Mode')) { $Mode = $cfg.Mode }
-if (-not $PSBoundParameters.ContainsKey('RemediationScope')) { $RemediationScope = $cfg.RemediationScope }
-if (-not $PSBoundParameters.ContainsKey('ShareName')) { $ShareName = @($cfg.ShareName) }
+  if (-not $script:__EntryBoundParameters.ContainsKey('Mode')) { $RunState.Mode = $cfg.Mode }
+  if (-not $script:__EntryBoundParameters.ContainsKey('RemediationScope')) { $RunState.RemediationScope = $cfg.RemediationScope }
+  if (-not $script:__EntryBoundParameters.ContainsKey('ShareName')) { $RunState.ShareName = @($cfg.ShareName) }
 
-if (-not $PSBoundParameters.ContainsKey('ApplyClientRequireEncryption') -and $cfg.ApplyClientRequireEncryption) {
-  $ApplyClientRequireEncryption = $true
+  if (-not $script:__EntryBoundParameters.ContainsKey('ApplyClientRequireEncryption') -and $cfg.ApplyClientRequireEncryption) {
+    $RunState.ApplyClientRequireEncryption = $true
+  }
 }
-if (-not $PSBoundParameters.ContainsKey('EnableRejectUnencryptedAccess') -and $cfg.EnableRejectUnencryptedAccess) {
-  $EnableRejectUnencryptedAccess = $true
+function Invoke-Capability22MainPhase02 {
+  param([hashtable]$RunState)
+  if (-not $script:__EntryBoundParameters.ContainsKey('EnableRejectUnencryptedAccess') -and $cfg.EnableRejectUnencryptedAccess) {
+    $RunState.EnableRejectUnencryptedAccess = $true
+  }
+  if (-not $script:__EntryBoundParameters.ContainsKey('Force') -and $cfg.Force) {
+    $RunState.Force = $true
+  }
+
+  # -------------------------
+  # Preconditions
+  # -------------------------
+  Require-Admin
+
+  Ensure-Cmdlet 'Get-SmbServerConfiguration'
+  Ensure-Cmdlet 'Set-SmbServerConfiguration'
+  Ensure-Cmdlet 'Get-SmbShare'
+  Ensure-Cmdlet 'Set-SmbShare'
+  Ensure-Cmdlet 'Get-SmbClientConfiguration'
+  Ensure-Cmdlet 'Set-SmbClientConfiguration'
+
+  # Probe for optional properties to avoid StrictMode "property not found".
+  $serverCfgProbe = Get-SmbServerConfiguration
+  $clientCfgProbe = Get-SmbClientConfiguration
+
+  $RunState.hasRejectUnencryptedAccess = ($serverCfgProbe.PSObject.Properties.Name -contains 'RejectUnencryptedAccess')
+  $RunState.hasClientRequireEncryption = ($clientCfgProbe.PSObject.Properties.Name -contains 'RequireEncryption')
+
+  # -------------------------
+  # Main
+  # -------------------------
+  $script:Findings = Get-FindingsList
 }
-if (-not $PSBoundParameters.ContainsKey('Force') -and $cfg.Force) {
-  $Force = $true
+function Invoke-Capability22MainPhase03 {
+  param([hashtable]$RunState)
+  if ($RunState.EnableRejectUnencryptedAccess -and -not $RunState.hasRejectUnencryptedAccess) {
+    $message = 'RejectUnencryptedAccess is not available on this OS/build. Cannot enable it.'
+    $failure = New-SmbUnsupportedFeatureFailure -Message $message -Mode $RunState.Mode -FindingList $script:Findings
+    Write-ResultObject -ResultObject $failure.Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+    if ($PassThru) { $failure.Result }
+    exit (Get-V2ExitCode -Result $failure.Token)
+  }
+}
+function Invoke-Capability22MainPhase04 {
+  param([hashtable]$RunState)
+  if ($RunState.ApplyClientRequireEncryption -and -not $RunState.hasClientRequireEncryption) {
+    $message = 'Client RequireEncryption is not available on this OS/build. Cannot enable it.'
+    $failure = New-SmbUnsupportedFeatureFailure -Message $message -Mode $RunState.Mode -FindingList $script:Findings
+    Write-ResultObject -ResultObject $failure.Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+    if ($PassThru) { $failure.Result }
+    exit (Get-V2ExitCode -Result $failure.Token)
+  }
+
+  $RunState.start = Get-Date
+
+  $RunState.serverCfgBefore = Get-SmbServerConfiguration
+  $RunState.clientCfgBefore = Get-SmbClientConfiguration
+  $RunState.sharesBefore    = @(Resolve-Shares -Names $RunState.ShareName)
+
+  $RunState.changes = [ordered]@{
+    ServerEncryptDataChanged             = $false
+    ServerRejectUnencryptedAccessChanged = $false
+    ClientRequireEncryptionChanged       = $false
+    SharesChanged                        = New-Object System.Collections.Generic.List[string]
+    ShareCountTargeted                   = @($RunState.ShareName).Count
+    Status                               = 'OK'
+  }
+}
+function Invoke-Capability22MainPhase05Step01 {
+  param([hashtable]$RunState)
+$RunState.serverCfgAfter = Get-SmbServerConfiguration
+    $RunState.clientCfgAfter = Get-SmbClientConfiguration
+    $RunState.sharesAfter    = @(Resolve-Shares -Names $RunState.ShareName)
 }
 
-# -------------------------
-# Preconditions
-# -------------------------
-Require-Admin
+function Invoke-Capability22MainPhase05Step02 {
+  param([hashtable]$RunState)
+$shareNames = Get-ArrayOrEmpty -Value $RunState.ShareName
+$serverRejectBefore = Get-ValueWhenSupported -Supported $RunState.hasRejectUnencryptedAccess -Value (Get-Prop $RunState.serverCfgBefore 'RejectUnencryptedAccess')
+$serverRejectAfter = Get-ValueWhenSupported -Supported $RunState.hasRejectUnencryptedAccess -Value (Get-Prop $RunState.serverCfgAfter 'RejectUnencryptedAccess')
+$clientRequireBefore = Get-ValueWhenSupported -Supported $RunState.hasClientRequireEncryption -Value (Get-Prop $RunState.clientCfgBefore 'RequireEncryption')
+$clientRequireAfter = Get-ValueWhenSupported -Supported $RunState.hasClientRequireEncryption -Value (Get-Prop $RunState.clientCfgAfter 'RequireEncryption')
+$RunState.result = [pscustomobject]@{
+      ComputerName                          = $env:COMPUTERNAME
+      Mode                                  = $RunState.Mode
+      RemediationScope                      = $RunState.RemediationScope
+      ShareName                             = $shareNames
 
-Ensure-Cmdlet 'Get-SmbServerConfiguration'
-Ensure-Cmdlet 'Set-SmbServerConfiguration'
-Ensure-Cmdlet 'Get-SmbShare'
-Ensure-Cmdlet 'Set-SmbShare'
-Ensure-Cmdlet 'Get-SmbClientConfiguration'
-Ensure-Cmdlet 'Set-SmbClientConfiguration'
+      ApplyClientRequireEncryption          = [bool]$RunState.ApplyClientRequireEncryption
+      EnableRejectUnencryptedAccess         = [bool]$RunState.EnableRejectUnencryptedAccess
+      Force                                 = [bool]$RunState.Force
+      WhatIf                                = [bool]$WhatIfPreference
+      JsonPath                              = $JsonPath
 
-# Probe for optional properties to avoid StrictMode "property not found".
-$serverCfgProbe = Get-SmbServerConfiguration
-$clientCfgProbe = Get-SmbClientConfiguration
+      Started                               = $RunState.start
+      Finished                              = Get-Date
 
-$hasRejectUnencryptedAccess = ($serverCfgProbe.PSObject.Properties.Name -contains 'RejectUnencryptedAccess')
-$hasClientRequireEncryption = ($clientCfgProbe.PSObject.Properties.Name -contains 'RequireEncryption')
+      ServerEncryptData_Before              = Get-Prop $RunState.serverCfgBefore 'EncryptData'
+      ServerEncryptData_After               = Get-Prop $RunState.serverCfgAfter  'EncryptData'
 
-# -------------------------
-# Main
-# -------------------------
-$script:Findings = Get-FindingsList
+      ServerRejectUnencryptedAccess_Before  = $serverRejectBefore
+      ServerRejectUnencryptedAccess_After   = $serverRejectAfter
 
-if ($EnableRejectUnencryptedAccess -and -not $hasRejectUnencryptedAccess) {
-  $msg = 'RejectUnencryptedAccess is not available on this OS/build. Cannot enable it.'
-  Write-Warning $msg
-  Add-Finding -FindingList $script:Findings -Code 'SMB-UnsupportedFeature' -Severity 'Critical' -Message $msg
-  $v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
-  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $v2Result }
-  exit (Get-V2ExitCode -Result 'FAIL')
-}
-if ($ApplyClientRequireEncryption -and -not $hasClientRequireEncryption) {
-  $msg = 'Client RequireEncryption is not available on this OS/build. Cannot enable it.'
-  Write-Warning $msg
-  Add-Finding -FindingList $script:Findings -Code 'SMB-UnsupportedFeature' -Severity 'Critical' -Message $msg
-  $v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result 'FAIL' -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary @{ Error = $msg } -Metadata @{}
-  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $v2Result }
-  exit (Get-V2ExitCode -Result 'FAIL')
-}
+      ShareEncryptData_Before               = @($RunState.sharesBefore | Select-Object Name, EncryptData)
+      ShareEncryptData_After                = @($RunState.sharesAfter | Select-Object Name, EncryptData)
 
-$start = Get-Date
+      ClientRequireEncryption_Before        = $clientRequireBefore
+      ClientRequireEncryption_After         = $clientRequireAfter
 
-$serverCfgBefore = Get-SmbServerConfiguration
-$clientCfgBefore = Get-SmbClientConfiguration
-$sharesBefore    = @(Resolve-Shares -Names $ShareName)
-
-$changes = [ordered]@{
-  ServerEncryptDataChanged             = $false
-  ServerRejectUnencryptedAccessChanged = $false
-  ClientRequireEncryptionChanged       = $false
-  SharesChanged                        = New-Object System.Collections.Generic.List[string]
-  ShareCountTargeted                   = @($ShareName).Count
-  Status                               = 'OK'
-}
-
-try {
-
-  switch ($Mode) {
-
-    'Audit' {
-      if (-not $serverCfgBefore.EncryptData) {
-        Add-Finding -FindingList $script:Findings -Code 'SMB-Encryption-Disabled' -Severity 'Medium' -Message 'Server-wide SMB encryption is disabled.'
-      }
-      if ($hasRejectUnencryptedAccess -and -not $serverCfgBefore.RejectUnencryptedAccess) {
-        Add-Finding -FindingList $script:Findings -Code 'SMB-RejectUnencrypted-Disabled' -Severity 'Low' -Message 'SMB server RejectUnencryptedAccess is disabled.'
-      }
-      foreach ($s in $sharesBefore) {
-        if (-not $s.EncryptData) {
-          Add-Finding -FindingList $script:Findings -Code 'SMB-Share-NotEncrypted' -Severity 'Low' -Message "Share '$($s.Name)' encryption is disabled." -Extra @{ Share = $s.Name }
-        }
+      Changes                               = [pscustomobject]@{
+        Status                               = $RunState.changes.Status
+        ServerEncryptDataChanged             = [bool]$RunState.changes.ServerEncryptDataChanged
+        ServerRejectUnencryptedAccessChanged = [bool]$RunState.changes.ServerRejectUnencryptedAccessChanged
+        ClientRequireEncryptionChanged       = [bool]$RunState.changes.ClientRequireEncryptionChanged
+        SharesChanged                        = @($RunState.changes.SharesChanged)
+        ShareCountTargeted                   = [int]$RunState.changes.ShareCountTargeted
       }
     }
+}
+function Get-ValueWhenSupported {
+  param([bool]$Supported, $Value)
+  if ($Supported) { return $Value }
+  return $null
+}
+function Get-ArrayOrEmpty {
+  param([AllowNull()]$Value)
+  if ($null -eq $Value) { return @() }
+  return @($Value)
+}
 
-    'Remediate' {
-      switch ($RemediationScope) {
-        'ServerGlobal' {
-          $changes.ServerEncryptDataChanged =
-            Set-IfDifferent -Current ([bool](Get-Prop $serverCfgBefore 'EncryptData')) -Desired $true `
-              -Target $env:COMPUTERNAME `
-              -Action 'Set-SmbServerConfiguration EncryptData=True' `
-              -Setter { Invoke-SetSmbServerConfiguration @{ EncryptData = $true } }
+function Invoke-Capability22MainPhase05Step03 {
+  param([hashtable]$RunState)
+$summaryObj = [pscustomobject]@{ ComputerName = $RunState.result.ComputerName; StartTime = $RunState.result.Started; EndTime = $RunState.result.Finished }
+    $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
+    Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
+      -CustomFields ([ordered]@{
+        Mode             = $RunState.result.Mode
+        WhatIf           = (Format-Bool $RunState.result.WhatIf)
+        Force            = (Format-Bool $RunState.result.Force)
+        Status           = $RunState.result.Changes.Status
+        'Shares targeted' = $RunState.result.Changes.ShareCountTargeted
+      })
+    # Server / Client section
+    Write-UiLine ''
+    Write-UiLine -Text 'Server / Client' -Color ([ConsoleColor]::Cyan)
+    Write-UiLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
+    Write-PrettySettingChange -Label 'Server EncryptData' `
+      -Before $RunState.result.ServerEncryptData_Before -After $RunState.result.ServerEncryptData_After -Supported:$true
+    Write-PrettySettingChange -Label 'Server RejectUnencryptedAccess' `
+      -Before $RunState.result.ServerRejectUnencryptedAccess_Before -After $RunState.result.ServerRejectUnencryptedAccess_After -Supported:$RunState.hasRejectUnencryptedAccess
+    Write-PrettySettingChange -Label 'Client RequireEncryption' `
+      -Before $RunState.result.ClientRequireEncryption_Before -After $RunState.result.ClientRequireEncryption_After -Supported:$RunState.hasClientRequireEncryption
+    # Shares changed
+    if (@($RunState.result.Changes.SharesChanged).Count -gt 0) {
+      Write-KeyValue -Key 'Shares changed' -Value (@($RunState.result.Changes.SharesChanged) -join ', ') -ValueColor ([ConsoleColor]::Yellow)
+    } else {
+      Write-KeyValue -Key 'Shares changed' -Value 'none' -ValueColor ([ConsoleColor]::Gray)
+    }
+}
 
-          if ($EnableRejectUnencryptedAccess) {
-            $changes.ServerRejectUnencryptedAccessChanged =
-              Set-IfDifferent -Current ([bool](Get-Prop $serverCfgBefore 'RejectUnencryptedAccess')) -Desired $true `
+function Invoke-Capability22MainPhase05Stage01 {
+  param([hashtable]$RunState)
+switch ($RunState.Mode) {
+
+      'Audit' {
+        Invoke-SmbEncryptionAudit -RunState $RunState
+      }
+
+      'Remediate' {
+        Invoke-SmbEncryptionRemediation -RunState $RunState
+      }
+    }
+}
+function Invoke-SmbEncryptionAudit {
+  param([hashtable]$RunState)
+  if (-not $RunState.serverCfgBefore.EncryptData) {
+    Add-Finding -FindingList $script:Findings -Code 'SMB-Encryption-Disabled' -Severity 'Medium' -Message 'Server-wide SMB encryption is disabled.'
+  }
+  if ($RunState.hasRejectUnencryptedAccess -and -not $RunState.serverCfgBefore.RejectUnencryptedAccess) {
+    Add-Finding -FindingList $script:Findings -Code 'SMB-RejectUnencrypted-Disabled' -Severity 'Low' -Message 'SMB server RejectUnencryptedAccess is disabled.'
+  }
+  foreach ($share in $RunState.sharesBefore) {
+    if (-not $share.EncryptData) {
+      Add-Finding -FindingList $script:Findings -Code 'SMB-Share-NotEncrypted' -Severity 'Low' -Message "Share '$($share.Name)' encryption is disabled." -Extra @{ Share = $share.Name }
+    }
+  }
+}
+function Set-SmbSharesEncrypted {
+  param([hashtable]$RunState)
+  foreach ($share in $RunState.sharesBefore) {
+    $did = Set-IfDifferent -Current ([bool](Get-Prop $share 'EncryptData')) -Desired $true `
+      -Target $share.Name -Action ('Set-SmbShare EncryptData=True ({0})' -f $share.Name) `
+      -Setter { Invoke-SetSmbShare @{ Name = $share.Name; EncryptData = $true } -RunState $RunState }
+    if ($did) { $null = $RunState.changes.SharesChanged.Add($share.Name) }
+  }
+}
+function Invoke-SmbEncryptionRemediation {
+  param([hashtable]$RunState)
+  switch ($RunState.RemediationScope) {
+    'ServerGlobal' {
+            $RunState.changes.ServerEncryptDataChanged =
+              Set-IfDifferent -Current ([bool](Get-Prop $RunState.serverCfgBefore 'EncryptData')) -Desired $true `
                 -Target $env:COMPUTERNAME `
-                -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
-                -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } }
-            # Microsoft documents RejectUnencryptedAccess behavior/parameter.
-          }
+                -Action 'Set-SmbServerConfiguration EncryptData=True' `
+                -Setter { Invoke-SetSmbServerConfiguration @{ EncryptData = $true } -RunState $RunState }
 
-          foreach ($s in $sharesBefore) {
-            $did = Set-IfDifferent -Current ([bool](Get-Prop $s 'EncryptData')) -Desired $true `
-              -Target $s.Name `
-              -Action ('Set-SmbShare EncryptData=True ({0})' -f $s.Name) `
-              -Setter { Invoke-SetSmbShare @{ Name = $s.Name; EncryptData = $true } }
+            if ($RunState.EnableRejectUnencryptedAccess) {
+              $RunState.changes.ServerRejectUnencryptedAccessChanged =
+                Set-IfDifferent -Current ([bool](Get-Prop $RunState.serverCfgBefore 'RejectUnencryptedAccess')) -Desired $true `
+                  -Target $env:COMPUTERNAME `
+                  -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
+                  -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } -RunState $RunState }
+              # Microsoft documents RejectUnencryptedAccess behavior/parameter.
+            }
 
-            if ($did) { $null = $changes.SharesChanged.Add($s.Name) }
-          }
-        }
+            Set-SmbSharesEncrypted -RunState $RunState
+    }
 
-        'ShareOnly' {
+          'ShareOnly' {
 
-          if (-not $ShareName -or $ShareName.Count -eq 0) {
-            throw 'Mode Remediate with RemediationScope=ShareOnly requires at least one -ShareName.'
-          }
+            if ((Test-AnyCondition -Conditions @({ -not $RunState.ShareName }, { $RunState.ShareName.Count -eq 0 }))) {
+              throw 'Mode Remediate with RemediationScope=ShareOnly requires at least one -ShareName.'
+            }
 
-          foreach ($s in $sharesBefore) {
-            $did = Set-IfDifferent -Current ([bool](Get-Prop $s 'EncryptData')) -Desired $true `
-              -Target $s.Name `
-              -Action ('Set-SmbShare EncryptData=True ({0})' -f $s.Name) `
-              -Setter { Invoke-SetSmbShare @{ Name = $s.Name; EncryptData = $true } }
+            Set-SmbSharesEncrypted -RunState $RunState
 
-            if ($did) { $null = $changes.SharesChanged.Add($s.Name) }
-          }
-
-          if ($EnableRejectUnencryptedAccess) {
-            $serverNow = Get-SmbServerConfiguration
-            $changes.ServerRejectUnencryptedAccessChanged =
-              Set-IfDifferent -Current ([bool](Get-Prop $serverNow 'RejectUnencryptedAccess')) -Desired $true `
-                -Target $env:COMPUTERNAME `
-                -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
-                -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } }
-          }
-        }
-      }
+            if ($RunState.EnableRejectUnencryptedAccess) {
+              $serverNow = Get-SmbServerConfiguration
+              $RunState.changes.ServerRejectUnencryptedAccessChanged =
+                Set-IfDifferent -Current ([bool](Get-Prop $serverNow 'RejectUnencryptedAccess')) -Desired $true `
+                  -Target $env:COMPUTERNAME `
+                  -Action 'Set-SmbServerConfiguration RejectUnencryptedAccess=True' `
+                  -Setter { Invoke-SetSmbServerConfiguration @{ RejectUnencryptedAccess = $true } -RunState $RunState }
+            }
     }
   }
-
-  if ($ApplyClientRequireEncryption) {
-    $clientNow = Get-SmbClientConfiguration
-    $changes.ClientRequireEncryptionChanged =
-      Set-IfDifferent -Current ([bool](Get-Prop $clientNow 'RequireEncryption')) -Desired $true `
-        -Target $env:COMPUTERNAME `
-        -Action 'Set-SmbClientConfiguration RequireEncryption=True' `
-        -Setter { Invoke-SetSmbClientConfiguration @{ RequireEncryption = $true } }
-  }
-
-} catch {
-  $changes.Status = 'FAILED'
-  Add-Finding -FindingList $script:Findings -Code 'SMB-RemediationFailed' -Severity 'Critical' -Message ("SMB remediation failed: {0}" -f $_.Exception.Message)
-} finally {
-
-  $serverCfgAfter = Get-SmbServerConfiguration
-  $clientCfgAfter = Get-SmbClientConfiguration
-  $sharesAfter    = @(Resolve-Shares -Names $ShareName)
-
-  $result = [pscustomobject]@{
-    ComputerName                          = $env:COMPUTERNAME
-    Mode                                  = $Mode
-    RemediationScope                      = $RemediationScope
-    ShareName                             = if ($ShareName) { @($ShareName) } else { @() }
-
-    ApplyClientRequireEncryption          = [bool]$ApplyClientRequireEncryption
-    EnableRejectUnencryptedAccess         = [bool]$EnableRejectUnencryptedAccess
-    Force                                 = [bool]$Force
-    WhatIf                                = [bool]$WhatIfPreference
-    JsonPath                              = $JsonPath
-
-    Started                               = $start
-    Finished                              = Get-Date
-
-    ServerEncryptData_Before              = Get-Prop $serverCfgBefore 'EncryptData'
-    ServerEncryptData_After               = Get-Prop $serverCfgAfter  'EncryptData'
-
-    ServerRejectUnencryptedAccess_Before  = if ($hasRejectUnencryptedAccess) { Get-Prop $serverCfgBefore 'RejectUnencryptedAccess' } else { $null }
-    ServerRejectUnencryptedAccess_After   = if ($hasRejectUnencryptedAccess) { Get-Prop $serverCfgAfter  'RejectUnencryptedAccess' } else { $null }
-
-    ShareEncryptData_Before               = if (@($sharesBefore).Count -gt 0) { @($sharesBefore | Select-Object Name, EncryptData) } else { @() }
-    ShareEncryptData_After                = if (@($sharesAfter).Count  -gt 0) { @($sharesAfter  | Select-Object Name, EncryptData) } else { @() }
-
-    ClientRequireEncryption_Before        = if ($hasClientRequireEncryption) { Get-Prop $clientCfgBefore 'RequireEncryption' } else { $null }
-    ClientRequireEncryption_After         = if ($hasClientRequireEncryption) { Get-Prop $clientCfgAfter  'RequireEncryption' } else { $null }
-
-    Changes                               = [pscustomobject]@{
-      Status                               = $changes.Status
-      ServerEncryptDataChanged             = [bool]$changes.ServerEncryptDataChanged
-      ServerRejectUnencryptedAccessChanged = [bool]$changes.ServerRejectUnencryptedAccessChanged
-      ClientRequireEncryptionChanged       = [bool]$changes.ClientRequireEncryptionChanged
-      SharesChanged                        = @($changes.SharesChanged)
-      ShareCountTargeted                   = [int]$changes.ShareCountTargeted
-    }
-  }
-
-  # Console-only output (no pipeline pollution)
-  $summaryObj = [pscustomobject]@{ ComputerName = $result.ComputerName; StartTime = $result.Started; EndTime = $result.Finished }
-  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
-  Write-ConsoleSummary -Summary $summaryObj -Findings $findingsAL `
-    -CustomFields ([ordered]@{
-      Mode             = $result.Mode
-      WhatIf           = (Format-Bool $result.WhatIf)
-      Force            = (Format-Bool $result.Force)
-      Status           = $result.Changes.Status
-      'Shares targeted' = $result.Changes.ShareCountTargeted
-    })
-  # Server / Client section
-  Write-UiLine ''
-  Write-UiLine -Text 'Server / Client' -Color ([ConsoleColor]::Cyan)
-  Write-UiLine -Text ('-' * 46) -Color ([ConsoleColor]::DarkGray)
-  Write-PrettySettingChange -Label 'Server EncryptData' `
-    -Before $result.ServerEncryptData_Before -After $result.ServerEncryptData_After -Supported:$true
-  Write-PrettySettingChange -Label 'Server RejectUnencryptedAccess' `
-    -Before $result.ServerRejectUnencryptedAccess_Before -After $result.ServerRejectUnencryptedAccess_After -Supported:$hasRejectUnencryptedAccess
-  Write-PrettySettingChange -Label 'Client RequireEncryption' `
-    -Before $result.ClientRequireEncryption_Before -After $result.ClientRequireEncryption_After -Supported:$hasClientRequireEncryption
-  # Shares changed
-  if (@($result.Changes.SharesChanged).Count -gt 0) {
-    Write-KeyValue -Key 'Shares changed' -Value (@($result.Changes.SharesChanged) -join ', ') -ValueColor ([ConsoleColor]::Yellow)
-  } else {
-    Write-KeyValue -Key 'Shares changed' -Value 'none' -ValueColor ([ConsoleColor]::Gray)
-  }
-
 }
+
+function Invoke-Capability22MainPhase05Stage02 {
+  param([hashtable]$RunState)
+if ($RunState.ApplyClientRequireEncryption) {
+      $clientNow = Get-SmbClientConfiguration
+      $RunState.changes.ClientRequireEncryptionChanged =
+        Set-IfDifferent -Current ([bool](Get-Prop $clientNow 'RequireEncryption')) -Desired $true `
+          -Target $env:COMPUTERNAME `
+          -Action 'Set-SmbClientConfiguration RequireEncryption=True' `
+          -Setter { Invoke-SetSmbClientConfiguration @{ RequireEncryption = $true } -RunState $RunState }
+    }
+}
+
+function Invoke-Capability22MainPhase05 {
+  param([hashtable]$RunState)
+  try {
+
+    . Invoke-Capability22MainPhase05Stage01 -RunState $RunState
+. Invoke-Capability22MainPhase05Stage02 -RunState $RunState
+
+  } catch {
+    $RunState.changes.Status = 'FAILED'
+    Add-Finding -FindingList $script:Findings -Code 'SMB-RemediationFailed' -Severity 'Critical' -Message ("SMB remediation failed: {0}" -f $_.Exception.Message)
+  } finally {
+
+    . Invoke-Capability22MainPhase05Step01 -RunState $RunState
+. Invoke-Capability22MainPhase05Step02 -RunState $RunState
+. Invoke-Capability22MainPhase05Step03 -RunState $RunState
+
+  }
+}
+function Invoke-Capability22Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability22MainPhase01 -RunState $RunState
+  . Invoke-Capability22MainPhase02 -RunState $RunState
+  . Invoke-Capability22MainPhase03 -RunState $RunState
+  . Invoke-Capability22MainPhase04 -RunState $RunState
+  . Invoke-Capability22MainPhase05 -RunState $RunState
+}
+. Invoke-Capability22Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # V2 output contract
-$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result -Metadata @{}
+function Get-Capability22ResultToken {
+  $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability22ResultToken
+$v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $RunState.Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $RunState.result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

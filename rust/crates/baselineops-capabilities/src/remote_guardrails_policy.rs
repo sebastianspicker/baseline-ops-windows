@@ -13,7 +13,7 @@ use serde_json::json;
 
 /// Fixed RDP access state represented by `fDenyTSConnections`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RdpAccess {
     /// Deny new Remote Desktop connections.
     #[default]
@@ -29,7 +29,7 @@ impl RdpAccess {
 }
 /// Finite enabled or disabled state for a fixed guardrail.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum GuardrailSwitch {
     /// Disable the fixed guardrail.
     Disabled,
@@ -48,7 +48,7 @@ impl GuardrailSwitch {
 }
 /// Finite RDP security-layer values supported by Windows.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RdpSecurityLayer {
     /// Native RDP security layer.
     Rdp,
@@ -71,7 +71,7 @@ impl RdpSecurityLayer {
 
 /// Finite RDP minimum-encryption values supported by Windows.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RdpMinimumEncryption {
     /// Client-compatible encryption.
     ClientCompatible,
@@ -94,7 +94,7 @@ impl RdpMinimumEncryption {
 
 /// Fixed Remote Assistance ticket lifetimes accepted by this foundation.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RemoteAssistanceTicketLifetime {
     /// Limit Remote Assistance tickets to sixty minutes.
     #[default]
@@ -153,8 +153,8 @@ impl Default for RemoteGuardrailsPolicy {
 }
 
 /// Fixed local registry field evaluated by this foundation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RemoteGuardrailField {
     /// `fDenyTSConnections`, expressed as RDP access enabled/disabled.
     RdpAccess,
@@ -177,8 +177,8 @@ pub enum RemoteGuardrailField {
 }
 
 /// Typed fixed registry evidence and local RDP indicators.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RemoteGuardrailsObservation {
     /// Local RDP service and listener indicators. They are not reachability proof.
     pub remote_surface: RemoteSurfaceObservation,
@@ -207,31 +207,31 @@ impl RemoteGuardrailsObservation {
     /// no proposed change starts, stops, or otherwise controls a service, and no
     /// local observation can prove remote reachability.
     #[must_use]
-    pub const fn registry_plan_evidence_is_complete(&self) -> bool {
+    pub fn registry_plan_evidence_is_complete(&self) -> bool {
         matches!(self.remote_surface.rdp_enabled, Observation::Present(_))
-            && matches!(self.network_level_authentication, Observation::Present(_))
-            && matches!(self.security_layer, Observation::Present(_))
-            && matches!(self.minimum_encryption, Observation::Present(_))
-            && matches!(self.disable_restricted_admin, Observation::Present(_))
-            && matches!(self.disable_password_saving, Observation::Present(_))
-            && matches!(
-                self.allow_solicited_remote_assistance,
-                Observation::Present(_)
-            )
-            && matches!(
-                self.allow_unsolicited_remote_assistance,
-                Observation::Present(_)
-            )
-            && matches!(
-                self.remote_assistance_ticket_lifetime,
-                Observation::Present(_)
-            )
+            && self.dword_registry_evidence_is_complete()
+    }
+
+    fn dword_registry_evidence_is_complete(&self) -> bool {
+        let values = [
+            &self.network_level_authentication,
+            &self.security_layer,
+            &self.minimum_encryption,
+            &self.disable_restricted_admin,
+            &self.disable_password_saving,
+            &self.allow_solicited_remote_assistance,
+            &self.allow_unsolicited_remote_assistance,
+            &self.remote_assistance_ticket_lifetime,
+        ];
+        values
+            .iter()
+            .all(|value| matches!(value, Observation::Present(_)))
     }
 }
 
 /// One fixed desired field that differs from retained observation evidence.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RemoteGuardrailDrift {
     /// Fixed field whose present or incomplete evidence prevents compliance.
     pub field: RemoteGuardrailField,
@@ -292,70 +292,8 @@ pub fn evaluate_remote_guardrails(
         &mut findings,
         &mut drift,
     );
-    assess_dword(
-        RemoteGuardrailField::NetworkLevelAuthentication,
-        "RDP Network Level Authentication",
-        &observation.network_level_authentication,
-        policy.require_network_level_authentication.dword(),
-        &mut findings,
-        &mut drift,
-    );
-    assess_dword(
-        RemoteGuardrailField::SecurityLayer,
-        "RDP security layer",
-        &observation.security_layer,
-        policy.security_layer.dword(),
-        &mut findings,
-        &mut drift,
-    );
-    assess_dword(
-        RemoteGuardrailField::MinimumEncryption,
-        "RDP minimum encryption",
-        &observation.minimum_encryption,
-        policy.minimum_encryption.dword(),
-        &mut findings,
-        &mut drift,
-    );
-    assess_dword(
-        RemoteGuardrailField::RestrictedAdmin,
-        "RDP Restricted Admin",
-        &observation.disable_restricted_admin,
-        1 - policy.restricted_admin.dword(),
-        &mut findings,
-        &mut drift,
-    );
-    assess_dword(
-        RemoteGuardrailField::DisablePasswordSaving,
-        "RDP password-saving policy",
-        &observation.disable_password_saving,
-        policy.disable_password_saving.dword(),
-        &mut findings,
-        &mut drift,
-    );
-    assess_dword(
-        RemoteGuardrailField::SolicitedRemoteAssistance,
-        "solicited Remote Assistance",
-        &observation.allow_solicited_remote_assistance,
-        policy.allow_solicited_remote_assistance.dword(),
-        &mut findings,
-        &mut drift,
-    );
-    assess_dword(
-        RemoteGuardrailField::UnsolicitedRemoteAssistance,
-        "unsolicited Remote Assistance",
-        &observation.allow_unsolicited_remote_assistance,
-        policy.allow_unsolicited_remote_assistance.dword(),
-        &mut findings,
-        &mut drift,
-    );
-    assess_dword(
-        RemoteGuardrailField::RemoteAssistanceTicketLifetime,
-        "Remote Assistance ticket lifetime",
-        &observation.remote_assistance_ticket_lifetime,
-        policy.remote_assistance_ticket_lifetime.minutes(),
-        &mut findings,
-        &mut drift,
-    );
+    evaluate_rdp_registry_fields(&observation, policy, &mut findings, &mut drift);
+    evaluate_remote_assistance_fields(&observation, policy, &mut findings, &mut drift);
     let plan_blockers = (!observation.registry_plan_evidence_is_complete())
         .then_some("fixed RDP or Remote Assistance registry evidence is incomplete")
         .into_iter()
@@ -367,6 +305,86 @@ pub fn evaluate_remote_guardrails(
         drift,
         plan_blockers,
     }
+}
+
+fn evaluate_rdp_registry_fields(
+    observation: &RemoteGuardrailsObservation,
+    policy: &RemoteGuardrailsPolicy,
+    findings: &mut Vec<PolicyFinding>,
+    drift: &mut Vec<RemoteGuardrailDrift>,
+) {
+    assess_dword(
+        RemoteGuardrailField::NetworkLevelAuthentication,
+        "RDP Network Level Authentication",
+        &observation.network_level_authentication,
+        policy.require_network_level_authentication.dword(),
+        findings,
+        drift,
+    );
+    assess_dword(
+        RemoteGuardrailField::SecurityLayer,
+        "RDP security layer",
+        &observation.security_layer,
+        policy.security_layer.dword(),
+        findings,
+        drift,
+    );
+    assess_dword(
+        RemoteGuardrailField::MinimumEncryption,
+        "RDP minimum encryption",
+        &observation.minimum_encryption,
+        policy.minimum_encryption.dword(),
+        findings,
+        drift,
+    );
+    assess_dword(
+        RemoteGuardrailField::RestrictedAdmin,
+        "RDP Restricted Admin",
+        &observation.disable_restricted_admin,
+        1 - policy.restricted_admin.dword(),
+        findings,
+        drift,
+    );
+    assess_dword(
+        RemoteGuardrailField::DisablePasswordSaving,
+        "RDP password-saving policy",
+        &observation.disable_password_saving,
+        policy.disable_password_saving.dword(),
+        findings,
+        drift,
+    );
+}
+
+fn evaluate_remote_assistance_fields(
+    observation: &RemoteGuardrailsObservation,
+    policy: &RemoteGuardrailsPolicy,
+    findings: &mut Vec<PolicyFinding>,
+    drift: &mut Vec<RemoteGuardrailDrift>,
+) {
+    assess_dword(
+        RemoteGuardrailField::SolicitedRemoteAssistance,
+        "solicited Remote Assistance",
+        &observation.allow_solicited_remote_assistance,
+        policy.allow_solicited_remote_assistance.dword(),
+        findings,
+        drift,
+    );
+    assess_dword(
+        RemoteGuardrailField::UnsolicitedRemoteAssistance,
+        "unsolicited Remote Assistance",
+        &observation.allow_unsolicited_remote_assistance,
+        policy.allow_unsolicited_remote_assistance.dword(),
+        findings,
+        drift,
+    );
+    assess_dword(
+        RemoteGuardrailField::RemoteAssistanceTicketLifetime,
+        "Remote Assistance ticket lifetime",
+        &observation.remote_assistance_ticket_lifetime,
+        policy.remote_assistance_ticket_lifetime.minutes(),
+        findings,
+        drift,
+    );
 }
 
 /// Build a non-mutating proposal only when all proposed registry changes have evidence.
@@ -418,17 +436,11 @@ fn assess_bool(
         )),
         Observation::Present(actual) => {
             findings.push(drift_finding(label, json!(actual), desired.into()));
-            drift.push(RemoteGuardrailDrift {
-                field,
-                desired: desired.into(),
-            });
+            record_drift(drift, field, desired.into());
         }
         state => {
             findings.push(incomplete_finding(label, state));
-            drift.push(RemoteGuardrailDrift {
-                field,
-                desired: desired.into(),
-            });
+            record_drift(drift, field, desired.into());
         }
     }
 }
@@ -450,13 +462,17 @@ fn assess_dword(
         )),
         Observation::Present(actual) => {
             findings.push(drift_finding(label, json!(actual), desired));
-            drift.push(RemoteGuardrailDrift { field, desired });
+            record_drift(drift, field, desired);
         }
         state => {
             findings.push(incomplete_finding(label, state));
-            drift.push(RemoteGuardrailDrift { field, desired });
+            record_drift(drift, field, desired);
         }
     }
+}
+
+fn record_drift(drift: &mut Vec<RemoteGuardrailDrift>, field: RemoteGuardrailField, desired: u32) {
+    drift.push(RemoteGuardrailDrift { field, desired });
 }
 
 fn drift_finding(label: &'static str, observed: serde_json::Value, desired: u32) -> PolicyFinding {
@@ -513,87 +529,5 @@ fn observation_state<T>(value: &Observation<T>) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{ServiceObservation, ServiceStartMode, ServiceState, TcpListenerObservation};
-
-    fn service() -> Observation<ServiceObservation> {
-        Observation::Present(ServiceObservation {
-            name: "TermService".into(),
-            state: ServiceState::Running,
-            start_mode: ServiceStartMode::Automatic,
-        })
-    }
-
-    fn complete_observation() -> RemoteGuardrailsObservation {
-        RemoteGuardrailsObservation {
-            remote_surface: RemoteSurfaceObservation {
-                winrm_service: service(),
-                winrm_listener_configured: Observation::Present(false),
-                sshd_service: Observation::Missing,
-                rdp_enabled: Observation::Present(false),
-                rdp_service: service(),
-                smb_server_service: service(),
-                tcp_listeners: Observation::Present(vec![TcpListenerObservation {
-                    port: 3389,
-                    endpoint_count: 1,
-                }]),
-            },
-            network_level_authentication: Observation::Present(1),
-            security_layer: Observation::Present(2),
-            minimum_encryption: Observation::Present(3),
-            disable_restricted_admin: Observation::Present(0),
-            disable_password_saving: Observation::Present(1),
-            allow_solicited_remote_assistance: Observation::Present(0),
-            allow_unsolicited_remote_assistance: Observation::Present(0),
-            remote_assistance_ticket_lifetime: Observation::Present(60),
-        }
-    }
-
-    #[test]
-    fn policy_rejects_dynamic_legacy_authority() {
-        for value in [
-            serde_json::json!({"rdp_port": 3389}),
-            serde_json::json!({"firewall_rule": "Remote Desktop"}),
-            serde_json::json!({"allowed_groups": ["DOMAIN\\RDP-Admins"]}),
-            serde_json::json!({"remote_host": "host.example"}),
-            serde_json::json!({"command": "netsh"}),
-            serde_json::json!({"disable_password_saving": true}),
-        ] {
-            assert!(serde_json::from_value::<RemoteGuardrailsPolicy>(value).is_err());
-        }
-    }
-
-    #[test]
-    fn complete_fixed_evidence_produces_read_only_plan() {
-        let plan = build_remote_guardrails_plan(
-            complete_observation(),
-            &RemoteGuardrailsPolicy::default(),
-        )
-        .expect("complete fixed evidence");
-        assert!(!plan.apply_available);
-        assert!(plan.proposed_changes.is_empty());
-        assert!(plan.audit.findings.iter().any(|item| {
-            item.message
-                .contains("does not test or claim remote reachability")
-        }));
-    }
-
-    #[test]
-    fn denied_or_unparsed_evidence_cannot_produce_plan() {
-        let mut observation = complete_observation();
-        observation.network_level_authentication = Observation::AccessDenied;
-        observation.minimum_encryption = Observation::Unparsed;
-        let audit =
-            evaluate_remote_guardrails(observation.clone(), &RemoteGuardrailsPolicy::default());
-        assert!(
-            audit
-                .findings
-                .iter()
-                .any(|item| item.code == "REMOTE-GUARDRAILS-IncompleteEvidence")
-        );
-        assert!(
-            build_remote_guardrails_plan(observation, &RemoteGuardrailsPolicy::default()).is_err()
-        );
-    }
-}
+#[path = "remote_guardrails_policy_tests.rs"]
+mod tests;

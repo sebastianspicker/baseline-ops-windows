@@ -5,17 +5,29 @@
   Implements focused Windows event-log, scheduled-task, and registry
   operations behind the External module.
 #>
+function Get-CompleteNativeOutput {
+  param([AllowNull()][object]$Result)
+
+  if ($Result -and $Result.Success -and -not $Result.TimedOut -and -not $Result.OutputTruncated -and -not $Result.StderrTruncated) {
+    return $Result.Output
+  }
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Retrieves all audit policy subcategories via auditpol.exe.
+.DESCRIPTION
+  Implements focused Windows event-log, scheduled-task, and registry
+  operations behind the External module.
+#>
 function Get-AuditPolSubcategories {
   [CmdletBinding()]
   param()
 
   $result = Invoke-Auditpol -Arguments @('/get', '/category:*') -CaptureOutput
 
-  if ($result -and $result.Success -and -not $result.TimedOut -and -not $result.OutputTruncated -and -not $result.StderrTruncated) {
-    return $result.Output
-  }
-
-  return $null
+  return Get-CompleteNativeOutput -Result $result
 }
 
 <#
@@ -33,11 +45,7 @@ function Get-EventLogInfo {
 
   $result = Invoke-Wevtutil -Arguments @('gl', $LogName) -CaptureOutput
 
-  if ($result -and $result.Success -and -not $result.TimedOut -and -not $result.OutputTruncated -and -not $result.StderrTruncated) {
-    return $result.Output
-  }
-
-  return $null
+  return Get-CompleteNativeOutput -Result $result
 }
 
 <#
@@ -67,6 +75,7 @@ function Enable-EventLog {
 #>
 function Set-EventLogMaxSize {
   [CmdletBinding(SupportsShouldProcess = $true)]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [string]$LogName,
@@ -136,6 +145,7 @@ function Export-EventLog {
 #>
 function New-MdmScheduledTask {
   [CmdletBinding(SupportsShouldProcess = $true)]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
@@ -184,6 +194,7 @@ function New-MdmScheduledTask {
 #>
 function Remove-ScheduledTask {
   [CmdletBinding(SupportsShouldProcess = $true)]
+  [OutputType([bool])]
   param(
     [Parameter(Mandatory)]
     [string]$TaskName

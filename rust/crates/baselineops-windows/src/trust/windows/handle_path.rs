@@ -1,14 +1,14 @@
 use super::acl::{self, TrustedSids};
 use crate::PlatformError;
 use std::mem::MaybeUninit;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, GetFileInformationByHandle, GetFinalPathNameByHandleW, OPEN_EXISTING,
-    READ_CONTROL,
+    FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, GetFileInformationByHandle,
+    GetFinalPathNameByHandleW, OPEN_EXISTING, READ_CONTROL,
 };
 use windows::core::PCWSTR;
 
@@ -18,18 +18,11 @@ pub(super) struct OpenedPath {
     information: BY_HANDLE_FILE_INFORMATION,
 }
 
-struct PendingHandle(HANDLE);
+struct PendingHandle(OwnedHandle);
 
 impl PendingHandle {
     fn raw(&self) -> HANDLE {
-        self.0
-    }
-}
-
-impl Drop for PendingHandle {
-    fn drop(&mut self) {
-        // Closing a handle cannot make a failed trust check succeed.
-        let _ = unsafe { CloseHandle(self.0) };
+        HANDLE(self.0.as_raw_handle())
     }
 }
 
@@ -88,55 +81,155 @@ pub(super) fn verify_single_link(executable: &OpenedPath) -> Result<(), Platform
 }
 
 pub(super) fn verify_ancestors(
-    root: &Path,
+    root: &OpenedPath,
     trusted_sids: &TrustedSids,
-) -> Result<(), PlatformError> {
-    let mut current = root.parent().map(Path::to_path_buf);
+) -> Result<Vec<OpenedPath>, PlatformError> {
+    let mut child = root.final_path().to_path_buf();
+    let mut current = child.parent().map(Path::to_path_buf);
+    let mut retained = Vec::new();
     while let Some(path) = current {
         if is_volume_root(&path) {
             break;
         }
         let opened = open_directory(&path)?;
+        if !paths_equal(opened.final_path(), &path) || !path_is_within(&child, opened.final_path())
+        {
+            return Err(untrusted(
+                &path,
+                "ancestor handle identity does not contain the protected child",
+            ));
+        }
         acl::verify_object_acl(&opened, trusted_sids, false)?;
-        current = path.parent().map(Path::to_path_buf);
+        child = opened.final_path().to_path_buf();
+        current = child.parent().map(Path::to_path_buf);
+        retained.push(opened);
     }
-    Ok(())
+    Ok(retained)
+}
+
+pub(super) fn verify_descendant_directories(
+    root: &OpenedPath,
+    executable: &OpenedPath,
+    trusted_sids: &TrustedSids,
+) -> Result<Vec<OpenedPath>, PlatformError> {
+    let paths = descendant_directory_paths(root, executable)?;
+    let mut parent = root.final_path().to_path_buf();
+    let mut retained = Vec::with_capacity(paths.len());
+    for path in paths {
+        let opened = verified_descendant_directory(&path, &parent, trusted_sids)?;
+        parent = opened.final_path().to_path_buf();
+        retained.push(opened);
+    }
+    verify_executable_parent(executable, &parent)?;
+    Ok(retained)
+}
+
+fn descendant_directory_paths(
+    root: &OpenedPath,
+    executable: &OpenedPath,
+) -> Result<Vec<PathBuf>, PlatformError> {
+    super::super::protected_descendant_directories(root.final_path(), executable.final_path())
+        .ok_or_else(|| {
+            untrusted(
+                executable.final_path(),
+                "could not derive protected executable directory chain",
+            )
+        })
+}
+
+fn verified_descendant_directory(
+    path: &Path,
+    expected_parent: &Path,
+    trusted_sids: &TrustedSids,
+) -> Result<OpenedPath, PlatformError> {
+    let opened = open_directory(path)?;
+    let opened_parent = opened
+        .final_path()
+        .parent()
+        .ok_or_else(|| untrusted(opened.final_path(), "protected directory has no parent"))?;
+    if !paths_equal(opened.final_path(), path) || !paths_equal(opened_parent, expected_parent) {
+        return Err(untrusted(
+            path,
+            "protected directory handle identity differs from its expected parent chain",
+        ));
+    }
+    acl::verify_object_acl(&opened, trusted_sids, false)?;
+    Ok(opened)
+}
+
+fn verify_executable_parent(
+    executable: &OpenedPath,
+    expected_parent: &Path,
+) -> Result<(), PlatformError> {
+    if executable
+        .final_path()
+        .parent()
+        .is_some_and(|path| paths_equal(path, expected_parent))
+    {
+        return Ok(());
+    }
+    Err(untrusted(
+        executable.final_path(),
+        "protected executable is not a direct child of its verified directory chain",
+    ))
 }
 
 fn open_no_reparse(path: &Path, directory: bool) -> Result<OpenedPath, PlatformError> {
     reject_lexical_escape(path)?;
     reject_unc(path)?;
-    let wide = wide_path(path)?;
-    let mut flags = FILE_FLAG_OPEN_REPARSE_POINT;
-    if directory {
-        flags |= FILE_FLAG_BACKUP_SEMANTICS;
-    }
-    let handle = PendingHandle(
-        unsafe {
-            CreateFileW(
-                PCWSTR(wide.as_ptr()),
-                (FILE_READ_ATTRIBUTES | READ_CONTROL).0,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                None,
-                OPEN_EXISTING,
-                flags,
-                None,
-            )
-        }
-        .map_err(|error| {
-            PlatformError::TrustFailure(format!("could not open protected path: {error}"))
-        })?,
-    );
+    let handle = open_handle(path, directory)?;
     let information = file_information(handle.raw())?;
-    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-        return Err(untrusted(path, "reparse points are forbidden"));
-    }
+    reject_reparse_path(path, &information)?;
     let final_path = final_path(handle.raw())?;
     Ok(OpenedPath {
         handle,
         final_path,
         information,
     })
+}
+
+fn open_handle(path: &Path, directory: bool) -> Result<PendingHandle, PlatformError> {
+    let wide = wide_path(path)?;
+    let flags = open_flags(directory);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            (FILE_READ_ATTRIBUTES | READ_CONTROL).0,
+            // Retained protected-install handles allow readers but deny later
+            // content replacement, rename, and deletion until the authority drops.
+            FILE_SHARE_READ,
+            None,
+            OPEN_EXISTING,
+            flags,
+            None,
+        )
+    }
+    .map_err(|error| {
+        PlatformError::TrustFailure(format!("could not open protected path: {error}"))
+    })?;
+    // SAFETY: successful CreateFileW returns one owned real handle; ownership
+    // transfers exactly once to std's thread-safe RAII handle wrapper.
+    Ok(PendingHandle(unsafe {
+        OwnedHandle::from_raw_handle(handle.0)
+    }))
+}
+
+fn open_flags(directory: bool) -> windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES {
+    let mut flags = FILE_FLAG_OPEN_REPARSE_POINT;
+    if directory {
+        flags |= FILE_FLAG_BACKUP_SEMANTICS;
+    }
+    flags
+}
+
+fn reject_reparse_path(
+    path: &Path,
+    information: &BY_HANDLE_FILE_INFORMATION,
+) -> Result<(), PlatformError> {
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return Err(untrusted(path, "reparse points are forbidden"));
+    }
+    Ok(())
 }
 
 fn file_information(handle: HANDLE) -> Result<BY_HANDLE_FILE_INFORMATION, PlatformError> {
@@ -176,6 +269,12 @@ fn path_is_within(candidate: &Path, root: &Path) -> bool {
     matches!(candidate.as_bytes().get(root.len()), Some(b'\\' | b'/'))
 }
 
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    left.as_os_str()
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+}
+
 fn is_volume_root(path: &Path) -> bool {
     path.parent().is_none() || path.components().count() <= 2
 }
@@ -191,17 +290,17 @@ fn reject_lexical_escape(path: &Path) -> Result<(), PlatformError> {
 }
 
 fn reject_unc(path: &Path) -> Result<(), PlatformError> {
-    let value = path.as_os_str().to_string_lossy();
-    if value.starts_with("\\\\") || value.starts_with("//") {
-        return Err(untrusted(path, "UNC protected-install paths are forbidden"));
+    if super::super::is_forbidden_protected_path_namespace(path) {
+        return Err(untrusted(
+            path,
+            "UNC and device protected-install paths are forbidden",
+        ));
     }
     Ok(())
 }
 
 fn wide_path(path: &Path) -> Result<Vec<u16>, PlatformError> {
-    use std::os::windows::ffi::OsStrExt;
-
-    let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut value = encoded_wide_path(path);
     if value.is_empty() || value.contains(&0) {
         return Err(untrusted(path, "path contains an interior NUL or is empty"));
     }
@@ -209,7 +308,13 @@ fn wide_path(path: &Path) -> Result<Vec<u16>, PlatformError> {
     Ok(value)
 }
 
-fn untrusted(path: &Path, reason: &str) -> PlatformError {
+pub(super) fn encoded_wide_path(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+
+    path.as_os_str().encode_wide().collect()
+}
+
+pub(super) fn untrusted(path: &Path, reason: &str) -> PlatformError {
     PlatformError::UntrustedPath {
         path: path.to_path_buf(),
         reason: reason.into(),

@@ -1,6 +1,9 @@
 # Script reference
 
-The `scripts/` directory contains operator entry points. Files under `scripts/internal/` and `scripts/_lib/` are implementation details and should not be invoked directly.
+The `scripts/` directory contains the supported command-line entry points for
+operators. Run the six `00-*` scripts for orchestration or a numbered script for
+one endpoint capability. Files under `scripts/internal/` and `scripts/_lib/`
+are implementation details; do not invoke them directly.
 
 ## Orchestration scripts
 
@@ -13,7 +16,10 @@ The `scripts/` directory contains operator entry points. Files under `scripts/in
 | `00-Run-Profile.ps1` | Validates and executes profile steps in dependency order. |
 | `00-Validate-Profile.ps1` | Validates profile structure, script references, dependencies, and integrity fields. |
 
-The default deployment root for the runners is `C:\install\mdm\ps1`. When that path is absent and `-RootPath` was not supplied, source-tree execution falls back to the repository root. Pass `-RootPath` explicitly in automation.
+Runners use `C:\install\mdm\ps1` as the default deployment root. If that path
+does not exist and `-RootPath` was omitted, a source-tree run falls back to the
+repository root. Always pass `-RootPath` explicitly in automation so the target
+does not depend on the host filesystem.
 
 `00-Run-Batch.ps1` accepts these categories:
 
@@ -26,7 +32,8 @@ The default deployment root for the runners is `C:\install\mdm\ps1`. When that p
 | `Monitoring` | 17, 32, 34, 38 |
 | `All` | Every numbered script |
 
-These are curated batch memberships. A script can expose additional direct-invocation behavior that is not represented by a batch category.
+These categories are curated selections, not a complete description of each
+script. A script may offer additional behavior when invoked directly.
 
 ## Endpoint script catalog
 
@@ -87,9 +94,11 @@ These are curated batch memberships. A script can expose additional direct-invoc
 
 ## Common parameters
 
-Every script has comment-based help. Run `Get-Help .\scripts\<name>.ps1 -Full` before use because parameters and side effects are script-specific.
+Every script includes comment-based help. Before running one, use
+`Get-Help .\scripts\<name>.ps1 -Full` to review its exact parameters, required
+permissions, and side effects.
 
-Most numbered scripts expose some of these shared parameters:
+Most numbered scripts expose some of these common parameters:
 
 | Parameter | Meaning |
 | --- | --- |
@@ -104,18 +113,20 @@ Most numbered scripts expose some of these shared parameters:
 | `-WhatIf` | Skip state-changing operations guarded by `ShouldProcess`. |
 | `-Confirm` | Request or suppress confirmation for guarded operations. |
 
-Script-specific exports use parameters such as `-ExportPath`, `-ProofPath`, `-AuditPath`, or `-StatePath`. These outputs can be written in Audit mode.
+Script-specific exports use parameters such as `-ExportPath`, `-ProofPath`,
+`-AuditPath`, or `-StatePath`. Audit mode can still write these requested
+outputs.
 
 ## Examples
 
-Run a direct audit with a shipped catalog:
+To audit one capability with a shipped catalog:
 
 ```powershell
 .\scripts\18-Firewall-Baseline.ps1 `
   -CatalogPath .\examples\configs\firewall-baseline.json -Mode Audit
 ```
 
-Preview direct remediation:
+To preview direct remediation without applying changes:
 
 ```powershell
 .\scripts\18-Firewall-Baseline.ps1 `
@@ -123,7 +134,7 @@ Preview direct remediation:
   -Mode Remediate -WhatIf
 ```
 
-Run one script with an expected SHA-256 hash:
+To run one script only when it matches an expected SHA-256 hash:
 
 ```powershell
 $hash = (Get-FileHash .\scripts\27-Defender-Health-Audit.ps1 -Algorithm SHA256).Hash
@@ -132,7 +143,7 @@ $hash = (Get-FileHash .\scripts\27-Defender-Health-Audit.ps1 -Algorithm SHA256).
   -ExpectedHash "SHA256:$hash" -Mode Audit
 ```
 
-Validate a profile before execution:
+To validate a profile before execution:
 
 ```powershell
 .\scripts\00-Validate-Profile.ps1 `
@@ -141,4 +152,6 @@ Validate a profile before execution:
 
 ## Result contract
 
-Orchestration-compatible scripts use the v2 result helpers in `lib/Serialization.psm1`. See the [shared module reference](../lib/README.md) for the object and finding structure.
+Scripts that support orchestration return the v2 result defined by
+`lib/Serialization.psm1`. The [shared module reference](../lib/README.md)
+documents the result object and finding structure.

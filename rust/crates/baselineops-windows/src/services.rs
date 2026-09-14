@@ -51,14 +51,13 @@ mod platform {
     #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
     use super::{KnownService, Observation, PlatformError, ServiceObservation};
-    use baselineops_capabilities::{ServiceStartMode, ServiceState};
+    use baselineops_capabilities::ServiceState;
     use std::mem::{MaybeUninit, size_of};
     use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SERVICE_DOES_NOT_EXIST};
     use windows::Win32::System::Services::{
         CloseServiceHandle, OpenSCManagerW, OpenServiceW, QUERY_SERVICE_CONFIGW,
         QueryServiceConfigW, QueryServiceStatusEx, SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO,
-        SERVICE_AUTO_START, SERVICE_DEMAND_START, SERVICE_DISABLED, SERVICE_QUERY_CONFIG,
-        SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATUS_PROCESS,
+        SERVICE_QUERY_CONFIG, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATUS_PROCESS,
     };
     use windows::core::{PCWSTR, w};
 
@@ -158,17 +157,7 @@ mod platform {
         }
     }
 
-    fn start_mode(value: u32) -> ServiceStartMode {
-        if value == SERVICE_AUTO_START.0 {
-            ServiceStartMode::Automatic
-        } else if value == SERVICE_DEMAND_START.0 {
-            ServiceStartMode::Manual
-        } else if value == SERVICE_DISABLED.0 {
-            ServiceStartMode::Disabled
-        } else {
-            ServiceStartMode::Other(value)
-        }
-    }
+    use crate::native_values::service_start_mode as start_mode;
 
     fn wide_name(service: KnownService) -> PCWSTR {
         match service {

@@ -127,6 +127,11 @@ fn every_fixed_identity_is_traversed_in_order() {
 
 #[test]
 fn missing_observations_and_absent_fixed_keys_are_distinct() {
+    assert_missing_observations_are_incomplete();
+    assert_absent_fixed_keys_are_missing();
+}
+
+fn assert_missing_observations_are_incomplete() {
     let mut missing_observation = complete_observation();
     missing_observation
         .services
@@ -152,7 +157,9 @@ fn missing_observations_and_absent_fixed_keys_are_distinct() {
             ),
         ]
     );
+}
 
+fn assert_absent_fixed_keys_are_missing() {
     let mut absent_fixed_key = complete_observation();
     absent_fixed_key
         .services
@@ -259,72 +266,29 @@ fn all_fixed_identities_incomplete_observation() -> UpdateHealthObservation {
 }
 
 fn expected_fixed_identity_findings() -> Vec<PolicyFinding> {
-    vec![
+    let services = FIXED_UPDATE_HEALTH_SERVICES.into_iter().map(|service| {
         expected_incomplete_finding(
             "UPDATE-ServiceEvidenceIncomplete",
             "service",
-            "uhssvc",
+            service.name(),
             "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-ServiceEvidenceIncomplete",
-            "service",
-            "UsoSvc",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-ServiceEvidenceIncomplete",
-            "service",
-            "WaaSMedicSvc",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-ServiceEvidenceIncomplete",
-            "service",
-            "wuauserv",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-ServiceEvidenceIncomplete",
-            "service",
-            "DoSvc",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-ServiceEvidenceIncomplete",
-            "service",
-            "BITS",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-ServiceEvidenceIncomplete",
-            "service",
-            "cryptsvc",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-TaskEnabledEvidenceIncomplete",
-            "task",
-            r"\Microsoft\Windows\WindowsUpdate\Scheduled Start",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-TaskStateEvidenceIncomplete",
-            "task",
-            r"\Microsoft\Windows\WindowsUpdate\Scheduled Start",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-TaskEnabledEvidenceIncomplete",
-            "task",
-            r"\Microsoft\Windows\UpdateOrchestrator\Schedule Scan",
-            "missing",
-        ),
-        expected_incomplete_finding(
-            "UPDATE-TaskStateEvidenceIncomplete",
-            "task",
-            r"\Microsoft\Windows\UpdateOrchestrator\Schedule Scan",
-            "missing",
-        ),
-    ]
+        )
+    });
+    let tasks = FIXED_UPDATE_HEALTH_TASKS.into_iter().flat_map(|task| {
+        [
+            expected_incomplete_finding(
+                "UPDATE-TaskEnabledEvidenceIncomplete",
+                "task",
+                task.path(),
+                "missing",
+            ),
+            expected_incomplete_finding(
+                "UPDATE-TaskStateEvidenceIncomplete",
+                "task",
+                task.path(),
+                "missing",
+            ),
+        ]
+    });
+    services.chain(tasks).collect()
 }

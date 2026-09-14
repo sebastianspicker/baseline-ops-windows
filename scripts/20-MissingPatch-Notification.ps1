@@ -153,10 +153,8 @@ $script:UseInformationStream = [bool]$UseInformationStream
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '20-MissingPatch-Notification.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
@@ -183,6 +181,20 @@ $script:Findings = Get-FindingsList
 # Helpers
 # ----------------------------
 
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
 function Get-Count {
   [CmdletBinding()]
   param($Value)
@@ -257,38 +269,27 @@ function Load-KBFeedSafe {
   }
 }
 
-function Normalize-FeedKBs {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)]$Feed)
-
-  $items = @($Feed.KBs)
-  if ((Get-Count $items) -eq 0) { return @() }
-
-  $out = foreach ($i in $items) {
-    $kbId = $null
-    try { $kbId = $i.KB } catch { $kbId = $null }
-    if ([string]::IsNullOrWhiteSpace($kbId)) { continue }
+function Get-FeedPropertyValue {
+  param($InputObject, [string]$Name, $DefaultValue)
+  try {
+    if ($InputObject.PSObject.Properties.Name -contains $Name) { return $InputObject.$Name }
+  } catch { return $DefaultValue }
+  return $DefaultValue
+}
+function ConvertFrom-FeedKB {
+  param($InputObject)
+  $i = $InputObject
+    $kbId = Get-FeedPropertyValue -InputObject $i -Name 'KB' -DefaultValue $null
+    if ([string]::IsNullOrWhiteSpace($kbId)) { return }
 
     $kbId = $kbId.Trim()
-    if ($kbId -notmatch '^KB\d+$') { continue }
+    if ($kbId -notmatch '^KB\d+$') { return }
 
-    $title = $null
-    try { $title = $i.Title } catch { $title = $null }
+    $title = Get-FeedPropertyValue -InputObject $i -Name 'Title' -DefaultValue $null
     if ([string]::IsNullOrWhiteSpace([string]$title)) { $title = 'n/a' }
 
-    $isZeroDay = $false
-    try {
-      if ($i.PSObject -and ($i.PSObject.Properties.Name -contains 'IsZeroDay')) {
-        $isZeroDay = [bool]$i.IsZeroDay
-      }
-    } catch { $isZeroDay = $false }
-
-    $severity = $null
-    try {
-      if ($i.PSObject -and ($i.PSObject.Properties.Name -contains 'Severity')) {
-        $severity = $i.Severity
-      }
-    } catch { $severity = $null }
+    $isZeroDay = [bool](Get-FeedPropertyValue -InputObject $i -Name 'IsZeroDay' -DefaultValue $false)
+    $severity = Get-FeedPropertyValue -InputObject $i -Name 'Severity' -DefaultValue $null
 
     [pscustomobject]@{
       KB        = $kbId
@@ -296,8 +297,15 @@ function Normalize-FeedKBs {
       IsZeroDay = $isZeroDay
       Severity  = $severity
     }
+}
+function Normalize-FeedKBs {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)]$Feed)
+  $items = @($Feed.KBs)
+  if ((Get-Count $items) -eq 0) { return @() }
+  $out = foreach ($item in $items) {
+    ConvertFrom-FeedKB -InputObject $item
   }
-
   @($out | Sort-Object KB -Unique)
 }
 
@@ -334,124 +342,110 @@ function Get-UiStyleForLevel {
 # Main
 # ----------------------------
 
-$eventSource = 'PatchReminder'
-if (-not (Ensure-EventSource -Source $eventSource -Log 'Application')) {
-  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+function Invoke-Capability20MainPhase01 {
+  param([hashtable]$RunState)
+  $eventSource = 'PatchReminder'
+  if (-not (Ensure-EventSource -Source $eventSource -Log 'Application')) {
+    Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
+  }
+
+  $run = [ordered]@{
+    Host        = $env:COMPUTERNAME
+    Time        = (Get-Date).ToString('s')
+    User        = $env:USERNAME
+    KBFeedPath  = $KBFeedPath
+    StatePath   = $StatePath
+    Strict      = [bool]$Strict
+    FeedStatus  = 'OK'
+    StateStatus = 'OK'
+    Errors      = @()
+  }
+
+  if (Test-UnusablePath -Path $StatePath) {
+    $StatePath = Get-DefaultStatePath
+    $run.StatePath = $StatePath
+    $run.Errors += "StatePath was not usable. Using default: $StatePath"
+  }
+
+  if (Test-UnusablePath -Path $KBFeedPath) {
+    $run.FeedStatus = 'Missing'
+    $run.Errors += "KBFeedPath was not usable. Provide a readable JSON file with -KBFeedPath."
+  }
+
+  $RunState.installedKB = @()
+  try {
+    $RunState.installedKB = Get-InstalledKBs
+  } catch {
+    $RunState.installedKB = @()
+    $run.Errors += ("Get-HotFix failed: " + $_.Exception.Message)
+  }
+
+  $feedLoad = Load-KBFeedSafe -Path $KBFeedPath
+  $RunState.kbfeed   = $feedLoad.Feed
 }
+function Invoke-Capability20MainPhase02 {
+  param([hashtable]$RunState)
+  if ($run.FeedStatus -eq 'OK' -and $feedLoad.Status -ne 'OK') {
+    $run.FeedStatus = $feedLoad.Status
+  }
+  if (-not [string]::IsNullOrWhiteSpace([string]$feedLoad.Error)) {
+    $run.Errors += ("KB feed issue: " + $feedLoad.Error)
+  }
 
-$run = [ordered]@{
-  Host        = $env:COMPUTERNAME
-  Time        = (Get-Date).ToString('s')
-  User        = $env:USERNAME
-  KBFeedPath  = $KBFeedPath
-  StatePath   = $StatePath
-  Strict      = [bool]$Strict
-  FeedStatus  = 'OK'
-  StateStatus = 'OK'
-  Errors      = @()
+  $RunState.feedKBs = Normalize-FeedKBs -Feed $RunState.kbfeed
+
+  $RunState.missingCritical = @()
+  $RunState.zeroDays        = @()
 }
+function Invoke-Capability20MainPhase03 {
+  param([hashtable]$RunState)
+  foreach ($kb in @($RunState.feedKBs)) {
+    if ($RunState.installedKB -notcontains $kb.KB) {
+      if ($kb.IsZeroDay -eq $true) { $RunState.zeroDays += $kb }
+      else { $RunState.missingCritical += $kb }
+    }
+  }
 
-if (Test-UnusablePath -Path $StatePath) {
-  $StatePath = Get-DefaultStatePath
-  $run.StatePath = $StatePath
-  $run.Errors += "StatePath was not usable. Using default: $StatePath"
-}
-
-if (Test-UnusablePath -Path $KBFeedPath) {
-  $run.FeedStatus = 'Missing'
-  $run.Errors += "KBFeedPath was not usable. Provide a readable JSON file with -KBFeedPath."
-}
-
-$installedKB = @()
-try {
-  $installedKB = Get-InstalledKBs
-} catch {
-  $installedKB = @()
-  $run.Errors += ("Get-HotFix failed: " + $_.Exception.Message)
-}
-
-$feedLoad = Load-KBFeedSafe -Path $KBFeedPath
-$kbfeed   = $feedLoad.Feed
-
-if ($run.FeedStatus -eq 'OK' -and $feedLoad.Status -ne 'OK') {
-  $run.FeedStatus = $feedLoad.Status
-}
-if (-not [string]::IsNullOrWhiteSpace([string]$feedLoad.Error)) {
-  $run.Errors += ("KB feed issue: " + $feedLoad.Error)
-}
-
-$feedKBs = Normalize-FeedKBs -Feed $kbfeed
-
-$missingCritical = @()
-$zeroDays        = @()
-
-foreach ($kb in @($feedKBs)) {
-  if ($installedKB -notcontains $kb.KB) {
-    if ($kb.IsZeroDay -eq $true) { $zeroDays += $kb }
-    else { $missingCritical += $kb }
+  foreach ($z in @($RunState.zeroDays)) {
+    Add-Finding -FindingList $script:Findings -Code 'PATCH-MissingZeroDay' -Severity 'High' `
+      -Message ("Missing zero-day KB: {0} [{1}]" -f $z.KB, $z.Title) `
+      -Extra @{ KB = $z.KB; Title = $z.Title; IsZeroDay = $true }
+  }
+  foreach ($mc in @($RunState.missingCritical)) {
+    Add-Finding -FindingList $script:Findings -Code 'PATCH-MissingCritical' -Severity 'Medium' `
+      -Message ("Missing critical KB: {0} [{1}]" -f $mc.KB, $mc.Title) `
+      -Extra @{ KB = $mc.KB; Title = $mc.Title; IsZeroDay = $false }
   }
 }
+function Invoke-Capability20MainPhase04 {
+  param([hashtable]$RunState)
+  if ($run.FeedStatus -ne 'OK') {
+    Add-Finding -FindingList $script:Findings -Code 'PATCH-FeedIssue' -Severity 'Low' `
+      -Message ("KB feed status: {0}" -f $run.FeedStatus)
+  }
 
-foreach ($z in @($zeroDays)) {
-  Add-Finding -FindingList $script:Findings -Code 'PATCH-MissingZeroDay' -Severity 'High' `
-    -Message ("Missing zero-day KB: {0} [{1}]" -f $z.KB, $z.Title) `
-    -Extra @{ KB = $z.KB; Title = $z.Title; IsZeroDay = $true }
+  $RunState.status = 4904
+  $RunState.level  = 'Information'
+
+  if ((Get-Count $RunState.zeroDays) -gt 0) {
+    $RunState.status = 4906
+    $RunState.level  = 'Error'
+  } elseif ((Get-Count $RunState.missingCritical) -gt 0) {
+    $RunState.status = 4905
+    $RunState.level  = 'Warning'
+  } elseif ($run.FeedStatus -ne 'OK') {
+    $RunState.status = 4905
+    $RunState.level  = 'Warning'
+  }
 }
-foreach ($mc in @($missingCritical)) {
-  Add-Finding -FindingList $script:Findings -Code 'PATCH-MissingCritical' -Severity 'Medium' `
-    -Message ("Missing critical KB: {0} [{1}]" -f $mc.KB, $mc.Title) `
-    -Extra @{ KB = $mc.KB; Title = $mc.Title; IsZeroDay = $false }
-}
-if ($run.FeedStatus -ne 'OK') {
-  Add-Finding -FindingList $script:Findings -Code 'PATCH-FeedIssue' -Severity 'Low' `
-    -Message ("KB feed status: {0}" -f $run.FeedStatus)
-}
+function Invoke-Capability20MainPhase05 {
+  param([hashtable]$RunState)
+  if ($Strict -and ( ((Get-Count $RunState.zeroDays) -gt 0) -or ((Get-Count $RunState.missingCritical) -gt 0) -or ($run.FeedStatus -ne 'OK') -or ($run.StateStatus -ne 'OK') )) {
+    $RunState.status = 4906
+    $RunState.level  = 'Error'
+  }
 
-$status = 4904
-$level  = 'Information'
-
-if ((Get-Count $zeroDays) -gt 0) {
-  $status = 4906
-  $level  = 'Error'
-} elseif ((Get-Count $missingCritical) -gt 0) {
-  $status = 4905
-  $level  = 'Warning'
-} elseif ($run.FeedStatus -ne 'OK') {
-  $status = 4905
-  $level  = 'Warning'
-}
-
-if ($Strict -and ( ((Get-Count $zeroDays) -gt 0) -or ((Get-Count $missingCritical) -gt 0) -or ($run.FeedStatus -ne 'OK') -or ($run.StateStatus -ne 'OK') )) {
-  $status = 4906
-  $level  = 'Error'
-}
-
-$report = [pscustomobject]([ordered]@{
-  Host               = $run.Host
-  Time               = $run.Time
-  User               = $run.User
-  KBFeedPath         = $run.KBFeedPath
-  FeedStatus         = $run.FeedStatus
-  StatePath          = $run.StatePath
-  StateStatus        = $run.StateStatus
-  Strict             = $run.Strict
-  InstalledKBs       = @($installedKB)
-  CheckedFeedKBs     = @($feedKBs)
-  CheckedFeedKBCount = (Get-Count $feedKBs)
-  MissingCriticalKBs = @($missingCritical)
-  MissingZeroDayKBs  = @($zeroDays)
-  Errors             = @($run.Errors)
-  EventId            = $status
-  EventLevel         = $level
-})
-
-try {
-  Save-Json -InputObject $report -Path $StatePath -Depth 12 -NoBom
-} catch {
-  $run.StateStatus = 'WriteFailed'
-  $run.Errors += ("State write failed: " + $_.Exception.Message)
-
-  $report = [pscustomobject]([ordered]@{
+  $RunState.report = [pscustomobject]([ordered]@{
     Host               = $run.Host
     Time               = $run.Time
     User               = $run.User
@@ -460,83 +454,141 @@ try {
     StatePath          = $run.StatePath
     StateStatus        = $run.StateStatus
     Strict             = $run.Strict
-    InstalledKBs       = @($installedKB)
-    CheckedFeedKBs     = @($feedKBs)
-    CheckedFeedKBCount = (Get-Count $feedKBs)
-    MissingCriticalKBs = @($missingCritical)
-    MissingZeroDayKBs  = @($zeroDays)
+    InstalledKBs       = @($RunState.installedKB)
+    CheckedFeedKBs     = @($RunState.feedKBs)
+    CheckedFeedKBCount = (Get-Count $RunState.feedKBs)
+    MissingCriticalKBs = @($RunState.missingCritical)
+    MissingZeroDayKBs  = @($RunState.zeroDays)
     Errors             = @($run.Errors)
-    EventId            = $status
-    EventLevel         = $level
+    EventId            = $RunState.status
+    EventLevel         = $RunState.level
   })
 }
+function Invoke-Capability20MainPhase06 {
+  param([hashtable]$RunState)
+  try {
+    Save-Json -InputObject $RunState.report -Path $StatePath -Depth 12 -NoBom
+  } catch {
+    $run.StateStatus = 'WriteFailed'
+    $run.Errors += ("State write failed: " + $_.Exception.Message)
 
-$zList = (@($zeroDays) | ForEach-Object { $_.KB } | Sort-Object -Unique) -join ', '
-$mList = (@($missingCritical) | ForEach-Object { $_.KB } | Sort-Object -Unique) -join ', '
+    $RunState.report = [pscustomobject]([ordered]@{
+      Host               = $run.Host
+      Time               = $run.Time
+      User               = $run.User
+      KBFeedPath         = $run.KBFeedPath
+      FeedStatus         = $run.FeedStatus
+      StatePath          = $run.StatePath
+      StateStatus        = $run.StateStatus
+      Strict             = $run.Strict
+      InstalledKBs       = @($RunState.installedKB)
+      CheckedFeedKBs     = @($RunState.feedKBs)
+      CheckedFeedKBCount = (Get-Count $RunState.feedKBs)
+      MissingCriticalKBs = @($RunState.missingCritical)
+      MissingZeroDayKBs  = @($RunState.zeroDays)
+      Errors             = @($run.Errors)
+      EventId            = $RunState.status
+      EventLevel         = $RunState.level
+    })
+  }
 
-$msg = "Patch Status: MissingCritical=$(Get-Count $missingCritical), ZeroDayGaps=$(Get-Count $zeroDays), Checked=$(Get-Count $feedKBs), FeedStatus=$($run.FeedStatus), StateStatus=$($run.StateStatus)"
-if ((Get-Count $zeroDays) -gt 0) { $msg += " | ZERO-DAY: $zList" }
-elseif ((Get-Count $missingCritical) -gt 0) { $msg += " | Missing: $mList" }
+  $zList = (@($RunState.zeroDays) | ForEach-Object { $_.KB } | Sort-Object -Unique) -join ', '
+  $mList = (@($RunState.missingCritical) | ForEach-Object { $_.KB } | Sort-Object -Unique) -join ', '
 
-Write-HealthEvent -Id $status -Msg $msg -Level $level -Source $eventSource
+  $msg = "Patch Status: MissingCritical=$(Get-Count $RunState.missingCritical), ZeroDayGaps=$(Get-Count $RunState.zeroDays), Checked=$(Get-Count $RunState.feedKBs), FeedStatus=$($run.FeedStatus), StateStatus=$($run.StateStatus)"
+  if ((Get-Count $RunState.zeroDays) -gt 0) { $msg += " | ZERO-DAY: $zList" }
+  elseif ((Get-Count $RunState.missingCritical) -gt 0) { $msg += " | Missing: $mList" }
 
-# Formatted console output.
-$headerLine = Get-ConsoleLine -Char '='
-$line       = Get-ConsoleLine -Char '-'
-$levelStyle = Get-UiStyleForLevel -Level $level
+  Write-HealthEvent -Id $RunState.status -Msg $msg -Level $RunState.level -Source $eventSource
 
-Write-UiLine -Message $headerLine -Style Dim
-Write-UiLine -Message "Patch Reminder" -Style Title
-Write-UiLine -Message $headerLine -Style Dim
-Write-UiLine -Message $msg -Style $levelStyle
+  # Formatted console output.
+  $headerLine = Get-ConsoleLine -Char '='
+  $line       = Get-ConsoleLine -Char '-'
+  $levelStyle = Get-UiStyleForLevel -Level $RunState.level
 
-Write-UiLine -Message "" -Style Default
-Write-UiLine -Message $line -Style Dim
-Write-UiLine -Message "Summary" -Style Title
-Write-UiLine -Message $line -Style Dim
+  Write-UiLine -Message $headerLine -Style Dim
+  Write-UiLine -Message "Patch Reminder" -Style Title
+  Write-UiLine -Message $headerLine -Style Dim
+  Write-UiLine -Message $msg -Style $levelStyle
 
-Write-UiLine -Message ("Host:            " + $run.Host) -Style Info
-Write-UiLine -Message ("User:            " + $run.User) -Style Info
-Write-UiLine -Message ("Time:            " + $run.Time) -Style Info
-Write-UiLine -Message ("Installed KBs:   " + (Get-Count $installedKB)) -Style Info
-Write-UiLine -Message ("Feed KBs:        " + (Get-Count $feedKBs) + " (" + $run.FeedStatus + ")") -Style Info
-Write-UiLine -Message ("Missing critical:" + (" " * 1) + (Get-Count $missingCritical)) -Style Warn
-Write-UiLine -Message ("Missing zero-day:" + (" " * 2) + (Get-Count $zeroDays)) -Style Err
-Write-UiLine -Message ("Event:           " + $status + " / " + $level) -Style $levelStyle
-Write-UiLine -Message ("State file:      " + $StatePath) -Style Info
-
-if ((Get-Count $run.Errors) -gt 0) {
   Write-UiLine -Message "" -Style Default
   Write-UiLine -Message $line -Style Dim
-  Write-UiLine -Message "Warnings/Errors" -Style Title
+  Write-UiLine -Message "Summary" -Style Title
+}
+function Invoke-Capability20MainPhase07 {
+  param([hashtable]$RunState)
   Write-UiLine -Message $line -Style Dim
 
-  foreach ($e in @($run.Errors)) {
-    Write-UiLine -Message ("- " + $e) -Style Warn
+  Write-UiLine -Message ("Host:            " + $run.Host) -Style Info
+  Write-UiLine -Message ("User:            " + $run.User) -Style Info
+  Write-UiLine -Message ("Time:            " + $run.Time) -Style Info
+  Write-UiLine -Message ("Installed KBs:   " + (Get-Count $RunState.installedKB)) -Style Info
+  Write-UiLine -Message ("Feed KBs:        " + (Get-Count $RunState.feedKBs) + " (" + $run.FeedStatus + ")") -Style Info
+  Write-UiLine -Message ("Missing critical:" + (" " * 1) + (Get-Count $RunState.missingCritical)) -Style Warn
+  Write-UiLine -Message ("Missing zero-day:" + (" " * 2) + (Get-Count $RunState.zeroDays)) -Style Err
+  Write-UiLine -Message ("Event:           " + $RunState.status + " / " + $RunState.level) -Style $levelStyle
+  Write-UiLine -Message ("State file:      " + $StatePath) -Style Info
+
+  if ((Get-Count $run.Errors) -gt 0) {
+    Write-UiLine -Message "" -Style Default
+    Write-UiLine -Message $line -Style Dim
+    Write-UiLine -Message "Warnings/Errors" -Style Title
+    Write-UiLine -Message $line -Style Dim
+
+    foreach ($e in @($run.Errors)) {
+      Write-UiLine -Message ("- " + $e) -Style Warn
+    }
   }
+
+  Write-UiLine -Message "" -Style Default
+  Write-UiLine -Message $line -Style Dim
+  Write-UiLine -Message "Details" -Style Title
+  Write-UiLine -Message $line -Style Dim
+}
+function Invoke-Capability20MainPhase08 {
+  param([hashtable]$RunState)
+  if (((Get-Count $RunState.zeroDays) -gt 0) -or ((Get-Count $RunState.missingCritical) -gt 0)) {
+    foreach ($z in @($RunState.zeroDays)) {
+      Write-UiLine -Message ("ZERO-DAY: " + $z.KB + " [" + $z.Title + "]") -Style Err
+    }
+    foreach ($m in @($RunState.missingCritical)) {
+      Write-UiLine -Message ("Missing:  " + $m.KB + " [" + $m.Title + "]") -Style Warn
+    }
+  } else {
+    Write-UiLine -Message "No critical/zero-day gaps found in the feed scope." -Style Ok
+  }
+
+  Write-UiLine -Message $headerLine -Style Dim
+}
+function Invoke-Capability20Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation)
+  $RunState = @{
+
+  }
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability20MainPhase01 -RunState $RunState
+  . Invoke-Capability20MainPhase02 -RunState $RunState
+  . Invoke-Capability20MainPhase03 -RunState $RunState
+  . Invoke-Capability20MainPhase04 -RunState $RunState
+  . Invoke-Capability20MainPhase05 -RunState $RunState
+  . Invoke-Capability20MainPhase06 -RunState $RunState
+  . Invoke-Capability20MainPhase07 -RunState $RunState
+  . Invoke-Capability20MainPhase08 -RunState $RunState
+  $script:RunState = $RunState
 }
 
-Write-UiLine -Message "" -Style Default
-Write-UiLine -Message $line -Style Dim
-Write-UiLine -Message "Details" -Style Title
-Write-UiLine -Message $line -Style Dim
-
-if (((Get-Count $zeroDays) -gt 0) -or ((Get-Count $missingCritical) -gt 0)) {
-  foreach ($z in @($zeroDays)) {
-    Write-UiLine -Message ("ZERO-DAY: " + $z.KB + " [" + $z.Title + "]") -Style Err
-  }
-  foreach ($m in @($missingCritical)) {
-    Write-UiLine -Message ("Missing:  " + $m.KB + " [" + $m.Title + "]") -Style Warn
-  }
-} else {
-  Write-UiLine -Message "No critical/zero-day gaps found in the feed scope." -Style Ok
-}
-
-Write-UiLine -Message $headerLine -Style Dim
+. Invoke-Capability20Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation
 
 # V2 output contract
-$resultToken = if ($report.Errors.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '20-MissingPatch-Notification.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $report -Metadata @{}
+function Get-Capability20ResultToken {
+  param([hashtable]$RunState)
+  $resultToken = if ($RunState.report.Errors.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability20ResultToken -RunState $RunState
+$v2Result = Get-V2ResultObject -ScriptName '20-MissingPatch-Notification.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $RunState.report -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

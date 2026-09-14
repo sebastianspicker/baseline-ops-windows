@@ -93,10 +93,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '41-NTLM-Audit-Client.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
@@ -123,16 +121,10 @@ function Convert-LmCompatibilityLevelToText {
   [CmdletBinding()]
   param([Nullable[int]]$Value)
 
-  switch ($Value) {
-    0 { 'Send LM & NTLM responses' }
-    1 { 'Send LM & NTLM - use NTLMv2 session security if negotiated' }
-    2 { 'Send NTLM responses only' }
-    3 { 'Send NTLMv2 responses only' }
-    4 { 'Send NTLMv2 responses only. Refuse LM' }
-    5 { 'Send NTLMv2 responses only. Refuse LM & NTLM' }
-    $null { 'Not defined (registry value missing)' }
-    default { "Unknown($Value)" }
-  }
+  if ($null -eq $Value) { return 'Not defined (registry value missing)' }
+  $labels = @('Send LM & NTLM responses', 'Send LM & NTLM - use NTLMv2 session security if negotiated', 'Send NTLM responses only', 'Send NTLMv2 responses only', 'Send NTLMv2 responses only. Refuse LM', 'Send NTLMv2 responses only. Refuse LM & NTLM')
+  if ($Value -ge 0 -and $Value -lt $labels.Count) { return $labels[[int]$Value] }
+  return "Unknown($Value)"
 }
 
 function Get-DefaultConfig {
@@ -152,43 +144,58 @@ function Get-DefaultConfig {
   }
 }
 
+function Merge-ConfigSection01 {
+  param([hashtable]$RunState)
+$cfg = [pscustomobject]@{
+    MinimumLevel      = $RunState.Base.MinimumLevel
+    SeverityTooLow    = $RunState.Base.SeverityTooLow
+    SeverityLmAllowed = $RunState.Base.SeverityLmAllowed
+    SeverityNtlmv1    = $RunState.Base.SeverityNtlmv1
+    EmitInfoFindings  = $RunState.Base.EmitInfoFindings
+    ConsoleMode       = $RunState.Base.ConsoleMode
+  }
+
+  if ($null -ne $RunState.Override.MinimumLevel -and $RunState.Override.MinimumLevel -is [int] -and $RunState.Override.MinimumLevel -ge 0 -and $RunState.Override.MinimumLevel -le 5) {
+    $cfg.MinimumLevel = [int]$RunState.Override.MinimumLevel
+  }
+}
+
+function Merge-ConfigSection02 {
+  param([hashtable]$RunState)
+foreach ($k in 'SeverityTooLow','SeverityLmAllowed','SeverityNtlmv1') {
+    if ($null -ne $RunState.Override.$k) {
+      $sv = [string]$RunState.Override.$k
+      if ($sv -in @('Info','Low','Medium','High')) { $cfg.$k = $sv }
+    }
+  }
+
+  if ($null -ne $RunState.Override.EmitInfoFindings) {
+    $cfg.EmitInfoFindings = [bool]$RunState.Override.EmitInfoFindings
+  }
+}
+
+function Merge-ConfigSection03 {
+  param([hashtable]$RunState)
+if ($null -ne $RunState.Override.ConsoleMode) {
+    $cm = [string]$RunState.Override.ConsoleMode
+    if ($cm -in @('Pretty','Plain')) { $cfg.ConsoleMode = $cm }
+  }
+
+  $cfg
+}
+
 function Merge-Config {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)] [pscustomobject]$Base,
     [Parameter(Mandatory)] [pscustomobject]$Override
-  )
+  , [hashtable]$RunState)
+  $RunState.Base = $Base
+  $RunState.Override = $Override
 
-  $cfg = [pscustomobject]@{
-    MinimumLevel      = $Base.MinimumLevel
-    SeverityTooLow    = $Base.SeverityTooLow
-    SeverityLmAllowed = $Base.SeverityLmAllowed
-    SeverityNtlmv1    = $Base.SeverityNtlmv1
-    EmitInfoFindings  = $Base.EmitInfoFindings
-    ConsoleMode       = $Base.ConsoleMode
-  }
-
-  if ($null -ne $Override.MinimumLevel -and $Override.MinimumLevel -is [int] -and $Override.MinimumLevel -ge 0 -and $Override.MinimumLevel -le 5) {
-    $cfg.MinimumLevel = [int]$Override.MinimumLevel
-  }
-
-  foreach ($k in 'SeverityTooLow','SeverityLmAllowed','SeverityNtlmv1') {
-    if ($null -ne $Override.$k) {
-      $sv = [string]$Override.$k
-      if ($sv -in @('Info','Low','Medium','High')) { $cfg.$k = $sv }
-    }
-  }
-
-  if ($null -ne $Override.EmitInfoFindings) {
-    $cfg.EmitInfoFindings = [bool]$Override.EmitInfoFindings
-  }
-
-  if ($null -ne $Override.ConsoleMode) {
-    $cm = [string]$Override.ConsoleMode
-    if ($cm -in @('Pretty','Plain')) { $cfg.ConsoleMode = $cm }
-  }
-
-  $cfg
+    . Merge-ConfigSection01 -RunState $RunState
+    . Merge-ConfigSection02 -RunState $RunState
+    . Merge-ConfigSection03 -RunState $RunState
 }
 
 function Import-JsonConfigOrDefault {
@@ -196,7 +203,7 @@ function Import-JsonConfigOrDefault {
   param(
     [string]$Path,
     [Parameter(Mandatory)] [pscustomobject]$DefaultConfig
-  )
+  , [hashtable]$RunState)
 
   if ([string]::IsNullOrWhiteSpace($Path)) { return $DefaultConfig }
   if (-not (Test-Path -LiteralPath $Path)) { return $DefaultConfig }
@@ -209,7 +216,7 @@ function Import-JsonConfigOrDefault {
     $j = $raw | ConvertFrom-Json
     if ($null -eq $j) { return $DefaultConfig }
 
-    Merge-Config -Base $DefaultConfig -Override $j
+    Merge-Config -Base $DefaultConfig -Override $j -RunState $RunState
   } catch {
     $DefaultConfig
   }
@@ -221,105 +228,139 @@ function Import-JsonConfigOrDefault {
 #endregion Helpers
 
 #region Config
-$defaultConfig = Get-DefaultConfig -CliMinimumLevel $MinimumLevel
-$config        = Import-JsonConfigOrDefault -Path $ConfigPath -DefaultConfig $defaultConfig
-$MinimumLevel  = $config.MinimumLevel
+function Invoke-Capability41MainPhase01 {
+  param([hashtable]$RunState)
+  $defaultConfig = Get-DefaultConfig -CliMinimumLevel $MinimumLevel
+  $config        = Import-JsonConfigOrDefault -Path $ConfigPath -DefaultConfig $defaultConfig -RunState $RunState
+  $MinimumLevel  = $config.MinimumLevel
 
-# Track whether a config file was successfully loaded (without leaking internal paths).
-$configLoaded = $false
-if (-not [string]::IsNullOrWhiteSpace($ConfigPath) -and (Test-Path -LiteralPath $ConfigPath)) {
-  try {
-    $raw = Get-BoundedUtf8FileContent -Path $ConfigPath -MaximumBytes 1048576
-    if (-not [string]::IsNullOrWhiteSpace($raw)) {
-      $null = $raw | ConvertFrom-Json
-      $configLoaded = $true
+  # Track whether a config file was successfully loaded (without leaking internal paths).
+  $RunState.configLoaded = $false
+  if (-not [string]::IsNullOrWhiteSpace($ConfigPath) -and (Test-Path -LiteralPath $ConfigPath)) {
+    try {
+      $raw = Get-BoundedUtf8FileContent -Path $ConfigPath -MaximumBytes 1048576
+      if (-not [string]::IsNullOrWhiteSpace($raw)) {
+        $null = $raw | ConvertFrom-Json
+        $RunState.configLoaded = $true
+      }
+    } catch {
+      $RunState.configLoaded = $false
     }
-  } catch {
-    $configLoaded = $false
   }
+  #endregion Config
+
+  #region Audit
+  $RunState.findings = Get-FindingsList
+
+  $lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+  $val     = Get-RegDwordOrNull -Path $lsaPath -Name 'LmCompatibilityLevel'
+  $RunState.valText = Convert-LmCompatibilityLevelToText -Value $val
 }
-#endregion Config
+function Invoke-Capability41MainPhase02Step01 {
+  param([hashtable]$RunState)
+if ($val -lt $MinimumLevel) {
+      Add-Finding -FindingList $RunState.findings -Code 'NTLM-LmCompatibilityTooLow' -Severity $config.SeverityTooLow -Message `
+        ('LmCompatibilityLevel={0} ({1}) is below MinimumLevel={2}.' -f $val, $RunState.valText, $MinimumLevel)
+    }
+}
 
-#region Audit
-$findings = Get-FindingsList
-
-$lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
-$val     = Get-RegDwordOrNull -Path $lsaPath -Name 'LmCompatibilityLevel'
-$valText = Convert-LmCompatibilityLevelToText -Value $val
-
-if ($null -eq $val) {
-  Add-Finding -FindingList $findings -Code 'NTLM-LmCompatibilityNotDefined' -Severity 'Info' -Message `
-    'LmCompatibilityLevel is not set (policy not defined). Effective defaults may still apply; validate via GPO/RSOP if needed.'
-} else {
-  if ($val -lt $MinimumLevel) {
-    Add-Finding -FindingList $findings -Code 'NTLM-LmCompatibilityTooLow' -Severity $config.SeverityTooLow -Message `
-      ('LmCompatibilityLevel={0} ({1}) is below MinimumLevel={2}.' -f $val, $valText, $MinimumLevel)
-  }
-
-  if ($val -le 1) {
-    Add-Finding -FindingList $findings -Code 'NTLM-LMAllowed' -Severity $config.SeverityLmAllowed -Message `
-      ('LmCompatibilityLevel={0} ({1}) allows LM/NTLM. Recommended minimum is 3 (NTLMv2 only), if compatible.' -f $val, $valText)
-  } elseif ($val -eq 2) {
-    Add-Finding -FindingList $findings -Code 'NTLM-NTLMv1ClientAuth' -Severity $config.SeverityNtlmv1 -Message `
-      'LmCompatibilityLevel=2 implies NTLMv1 for client auth (Send NTLM response only). Recommended minimum is 3 (NTLMv2), if compatible.'
-  } else {
-    if ($config.EmitInfoFindings) {
-      if ($val -ge 3 -and $val -lt 5) {
-        Add-Finding -FindingList $findings -Code 'NTLM-NTLMv2ClientOnly' -Severity 'Info' -Message `
-          ('LmCompatibilityLevel={0} ({1}). Client uses NTLMv2; depending on level, LM/NTLM may still be accepted.' -f $val, $valText)
-      } elseif ($val -eq 5) {
-        Add-Finding -FindingList $findings -Code 'NTLM-Strictest' -Severity 'Info' -Message `
-          'LmCompatibilityLevel=5 is the strictest setting (refuse LM and NTLM). Verify legacy compatibility before enforcing broadly.'
+function Invoke-Capability41MainPhase02Step02 {
+  param([hashtable]$RunState)
+if ($val -le 1) {
+      Add-Finding -FindingList $RunState.findings -Code 'NTLM-LMAllowed' -Severity $config.SeverityLmAllowed -Message `
+        ('LmCompatibilityLevel={0} ({1}) allows LM/NTLM. Recommended minimum is 3 (NTLMv2 only), if compatible.' -f $val, $RunState.valText)
+    } elseif ($val -eq 2) {
+      Add-Finding -FindingList $RunState.findings -Code 'NTLM-NTLMv1ClientAuth' -Severity $config.SeverityNtlmv1 -Message `
+        'LmCompatibilityLevel=2 implies NTLMv1 for client auth (Send NTLM response only). Recommended minimum is 3 (NTLMv2), if compatible.'
+    } else {
+      if ($config.EmitInfoFindings) {
+        if ($val -ge 3 -and $val -lt 5) {
+          Add-Finding -FindingList $RunState.findings -Code 'NTLM-NTLMv2ClientOnly' -Severity 'Info' -Message `
+            ('LmCompatibilityLevel={0} ({1}). Client uses NTLMv2; depending on level, LM/NTLM may still be accepted.' -f $val, $RunState.valText)
+        } elseif ($val -eq 5) {
+          Add-Finding -FindingList $RunState.findings -Code 'NTLM-Strictest' -Severity 'Info' -Message `
+            'LmCompatibilityLevel=5 is the strictest setting (refuse LM and NTLM). Verify legacy compatibility before enforcing broadly.'
+        }
       }
     }
+}
+
+function Invoke-Capability41MainPhase02 {
+  param([hashtable]$RunState)
+  if ($null -eq $val) {
+    Add-Finding -FindingList $RunState.findings -Code 'NTLM-LmCompatibilityNotDefined' -Severity 'Info' -Message `
+      'LmCompatibilityLevel is not set (policy not defined). Effective defaults may still apply; validate via GPO/RSOP if needed.'
+  } else {
+    . Invoke-Capability41MainPhase02Step01 -RunState $RunState
+. Invoke-Capability41MainPhase02Step02 -RunState $RunState
   }
 }
-#endregion Audit
+function Invoke-Capability41MainPhase03 {
+  param([hashtable]$RunState)
+  $summary = [pscustomobject]@{
+    ComputerName         = $env:COMPUTERNAME
+    LmCompatibilityLevel = $val
+    LmCompatibilityText  = $RunState.valText
+    MinimumLevel         = $MinimumLevel
+    FindingsCount        = $RunState.findings.Count
+    Timestamp            = Get-Date
+    ConfigLoaded         = $RunState.configLoaded
+    ConfigPath           = $(if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $null } else { '[configured path]' })
+  }
+  #endregion Output objects (pipeline-safe)
 
-#region Output objects (pipeline-safe)
-$summary = [pscustomobject]@{
-  ComputerName         = $env:COMPUTERNAME
-  LmCompatibilityLevel = $val
-  LmCompatibilityText  = $valText
-  MinimumLevel         = $MinimumLevel
-  FindingsCount        = $findings.Count
-  Timestamp            = Get-Date
-  ConfigLoaded         = $configLoaded
-  ConfigPath           = $(if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $null } else { '[configured path]' })
+  #region Export
+  if ($ExportPath) {
+    [void](Ensure-DirectoryForFile -FilePath $ExportPath)
+
+    # Windows PowerShell 5.1 writes UTF-8 with BOM for -Encoding UTF8; keep for broad CSV/tool compatibility.
+    $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
+
+    $RunState.base   = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
+    $folder = Split-Path -Path $ExportPath -Parent
+    if (-not $folder) { $folder = (Get-Location).Path }
+
+    $RunState.findings | Export-Csv -Path (Join-Path $folder ($RunState.base + '_findings.csv')) -NoTypeInformation -Encoding UTF8
+  }
+  #endregion Export
+
+  #region Console-only output (no pipeline pollution)
+  $lvlValue = if ($null -eq $summary.LmCompatibilityLevel) { '<not set>' } else { [string]$summary.LmCompatibilityLevel }
+  $customFields = [ordered]@{
+    'LmLevel'    = ("{0} ({1})" -f $lvlValue, $summary.LmCompatibilityText)
+    'MinLevel'   = [string]$summary.MinimumLevel
+    'ConfigLoad' = [string]$summary.ConfigLoaded
+  }
+  $findingsAL = ConvertTo-ArrayList -InputObject $RunState.findings
+  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+    -Title 'NTLM Audit (LmCompatibilityLevel)' `
+    -CustomFields $customFields
 }
-#endregion Output objects (pipeline-safe)
+function Invoke-Capability41Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation)
+  $RunState = @{
 
-#region Export
-if ($ExportPath) {
-  [void](Ensure-DirectoryForFile -FilePath $ExportPath)
-
-  # Windows PowerShell 5.1 writes UTF-8 with BOM for -Encoding UTF8; keep for broad CSV/tool compatibility.
-  $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
-
-  $base   = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
-  $folder = Split-Path -Path $ExportPath -Parent
-  if (-not $folder) { $folder = (Get-Location).Path }
-
-  $findings | Export-Csv -Path (Join-Path $folder ($base + '_findings.csv')) -NoTypeInformation -Encoding UTF8
+  }
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability41MainPhase01 -RunState $RunState
+  . Invoke-Capability41MainPhase02 -RunState $RunState
+  . Invoke-Capability41MainPhase03 -RunState $RunState
+  $script:RunState = $RunState
 }
-#endregion Export
 
-#region Console-only output (no pipeline pollution)
-$lvlValue = if ($null -eq $summary.LmCompatibilityLevel) { '<not set>' } else { [string]$summary.LmCompatibilityLevel }
-$customFields = [ordered]@{
-  'LmLevel'    = ("{0} ({1})" -f $lvlValue, $summary.LmCompatibilityText)
-  'MinLevel'   = [string]$summary.MinimumLevel
-  'ConfigLoad' = [string]$summary.ConfigLoaded
-}
-$findingsAL = ConvertTo-ArrayList -InputObject $findings
-Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
-  -Title 'NTLM Audit (LmCompatibilityLevel)' `
-  -CustomFields $customFields
+. Invoke-Capability41Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation
 #endregion Console-only output
 
 # V2 output contract
-$resultToken = if ($Strict -and $findings.Count -gt 0) { 'FAIL' } elseif ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '41-NTLM-Audit-Client.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $findings) -Summary $summary -Metadata @{}
+function Get-Capability41ResultToken {
+  param([hashtable]$RunState)
+  $resultToken = if ($Strict -and $RunState.findings.Count -gt 0) { 'FAIL' } elseif ($RunState.findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability41ResultToken -RunState $RunState
+$v2Result = Get-V2ResultObject -ScriptName '41-NTLM-Audit-Client.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $RunState.findings) -Summary $summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

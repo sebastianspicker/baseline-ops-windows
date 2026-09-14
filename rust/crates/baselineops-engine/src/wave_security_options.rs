@@ -8,7 +8,7 @@ use baselineops_windows::{PlatformError, observe_security_options};
 
 /// Native executor seam for capability 38's fixed, read-only policy subset.
 ///
-/// The descriptor must remain `in_development`: raw capability Apply is
+/// The descriptor is `code_complete`: raw capability Apply is
 /// rejected, and no worker mutation route exists in this slice.
 pub struct WaveSecurityOptionsWindowsExecutor;
 

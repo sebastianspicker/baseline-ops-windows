@@ -222,9 +222,7 @@ mod platform {
     #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
     use super::{PlatformError, RegistryLocation, RegistryRead, RegistryValue, RegistryValueName};
-    use windows::Win32::Foundation::{
-        ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR,
-    };
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS};
     use windows::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE, REG_DWORD, REG_MULTI_SZ,
         REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE, RegCloseKey, RegCreateKeyExW,
@@ -233,6 +231,10 @@ mod platform {
     use windows::core::PCWSTR;
 
     const MAX_REGISTRY_BYTES: u32 = 64 * 1024;
+    #[cfg_attr(windows, path = "module_names.rs")]
+    #[cfg_attr(not(windows), path = "platform/module_names.rs")]
+    mod module_names;
+    pub(super) use module_names::list_hklm_module_names;
 
     pub(super) fn read_hklm_value(
         location: RegistryLocation,
@@ -292,74 +294,6 @@ mod platform {
                     "registry value remained after delete read-back".into(),
                 )),
             }
-        }
-    }
-
-    pub(super) fn list_hklm_module_names()
-    -> Result<crate::powershell_logging::ModuleNamesRead, PlatformError> {
-        unsafe {
-            let path = wide(location_path(RegistryLocation::PowerShellModuleNames));
-            let mut raw_key = HKEY::default();
-            let status = RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                PCWSTR(path.as_ptr()),
-                None,
-                KEY_READ,
-                &raw mut raw_key,
-            );
-            if status == ERROR_FILE_NOT_FOUND {
-                return Ok(crate::powershell_logging::ModuleNamesRead::missing());
-            }
-            check_status(status)?;
-            let key = OwnedKey(raw_key);
-            let mut values = std::collections::BTreeMap::new();
-            for index in 0..=u32::from(crate::powershell_logging::MAX_MODULE_NAMES) {
-                let mut name = vec![0_u16; 4];
-                let mut name_len = u32::try_from(name.len()).map_err(|_| {
-                    PlatformError::TrustFailure("module name length overflow".into())
-                })?;
-                let mut value_type = 0_u32;
-                let mut size = 0_u32;
-                let status = RegEnumValueW(
-                    key.0,
-                    index,
-                    Some(windows::core::PWSTR(name.as_mut_ptr())),
-                    &raw mut name_len,
-                    None,
-                    Some(&raw mut value_type),
-                    None,
-                    Some(&raw mut size),
-                );
-                if status == ERROR_NO_MORE_ITEMS {
-                    break;
-                }
-                check_status(status)?;
-                let numeric = String::from_utf16(
-                    &name[..usize::try_from(name_len).map_err(|_| {
-                        PlatformError::TrustFailure("module name length overflow".into())
-                    })?],
-                )
-                .map_err(|error| PlatformError::TrustFailure(error.to_string()))?
-                .parse::<u16>()
-                .ok()
-                .filter(|value| (1..=crate::powershell_logging::MAX_MODULE_NAMES).contains(value))
-                .ok_or_else(|| {
-                    PlatformError::TrustFailure(
-                        "ModuleNames has a non-numbered or out-of-range value".into(),
-                    )
-                })?;
-                let read = query_value(&key, RegistryValueName::ModuleName(numeric))?;
-                let RegistryRead::Present(RegistryValue::String(value)) = read else {
-                    return Err(PlatformError::TrustFailure(
-                        "ModuleNames value has an unexpected type".into(),
-                    ));
-                };
-                values.insert(numeric, value);
-            }
-            Ok(crate::powershell_logging::ModuleNamesRead {
-                values,
-                complete: true,
-            })
         }
     }
 
@@ -444,11 +378,21 @@ mod platform {
         value_type: REG_VALUE_TYPE,
         bytes: &[u8],
     ) -> Result<RegistryValue, PlatformError> {
-        if value_type == REG_DWORD && bytes.len() == 4 {
-            return Ok(RegistryValue::Dword(u32::from_le_bytes(
-                bytes.try_into().expect("DWORD length checked"),
-            )));
+        if let Some(value) = dword_value(value_type, bytes) {
+            return Ok(RegistryValue::Dword(value));
         }
+        decode_string_value(value_type, bytes)
+    }
+
+    fn dword_value(value_type: REG_VALUE_TYPE, bytes: &[u8]) -> Option<u32> {
+        (value_type == REG_DWORD && bytes.len() == 4)
+            .then(|| u32::from_le_bytes(bytes.try_into().expect("DWORD length checked")))
+    }
+
+    fn decode_string_value(
+        value_type: REG_VALUE_TYPE,
+        bytes: &[u8],
+    ) -> Result<RegistryValue, PlatformError> {
         if value_type != REG_SZ && value_type != REG_MULTI_SZ {
             return Err(PlatformError::TrustFailure(format!(
                 "registry value has unsupported type {}",
@@ -465,13 +409,7 @@ mod platform {
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         if value_type == REG_SZ {
-            let end = units
-                .iter()
-                .position(|unit| *unit == 0)
-                .unwrap_or(units.len());
-            return String::from_utf16(&units[..end])
-                .map(RegistryValue::String)
-                .map_err(|error| PlatformError::TrustFailure(error.to_string()));
+            return decode_single_string(&units);
         }
         let values = units
             .split(|unit| *unit == 0)
@@ -480,6 +418,16 @@ mod platform {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| PlatformError::TrustFailure(error.to_string()))?;
         Ok(RegistryValue::MultiString(values))
+    }
+
+    fn decode_single_string(units: &[u16]) -> Result<RegistryValue, PlatformError> {
+        let end = units
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(units.len());
+        String::from_utf16(&units[..end])
+            .map(RegistryValue::String)
+            .map_err(|error| PlatformError::TrustFailure(error.to_string()))
     }
 
     fn encode_value(value: &RegistryValue) -> Result<(REG_VALUE_TYPE, Vec<u8>), PlatformError> {
@@ -509,15 +457,7 @@ mod platform {
         Ok(bytes)
     }
 
-    fn check_status(status: WIN32_ERROR) -> Result<(), PlatformError> {
-        if status == ERROR_SUCCESS {
-            Ok(())
-        } else {
-            Err(PlatformError::Io(std::io::Error::from_raw_os_error(
-                i32::try_from(status.0).unwrap_or(i32::MAX),
-            )))
-        }
-    }
+    use crate::native_values::check_status;
 
     const fn location_path(location: RegistryLocation) -> &'static str {
         match location {

@@ -2,20 +2,15 @@
 
 #![cfg_attr(windows, allow(unsafe_code))]
 
-use anyhow::{Context, Result, anyhow, bail};
-#[cfg(windows)]
-use baselineops_domain::{
-    ExecutionIntent, InputIdentityV3, JsonLoadLimits, PlanValidationContext, ProfileV3,
-    Sha256Digest, SourceIdentityV3, SourceKind, ToolIdentityV3, load_profile_json,
-};
+use anyhow::{Context, Result, bail};
 use baselineops_domain::{ExitCode, PlanV3};
 #[cfg(windows)]
-use baselineops_engine::{
-    DetachedSignatureVerifier, InstalledPackageExpectation, NativeObservationSource, PackageError,
-    PlanBuildContext, SignatureVerifier, prepare_worker_apply, reobserve_profile,
-    verify_installed_package,
-};
-use baselineops_windows::{InstallationTrustPolicy, verify_protected_install};
+mod broker;
+#[cfg(any(windows, test))]
+mod control;
+#[cfg(any(windows, test))]
+mod responses;
+mod trust;
 use clap::Parser;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -36,6 +31,7 @@ struct Arguments {
 #[cfg_attr(not(windows), allow(dead_code))]
 struct ProposalRequest {
     plan: PlanV3,
+    profile_source: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,27 +39,6 @@ struct ProposalRequest {
 #[cfg_attr(not(windows), allow(dead_code))]
 struct ApprovalRequest {
     approved_digest: String,
-}
-
-#[derive(Clone)]
-struct ReleaseSignerIdentity {
-    subject: String,
-    spki_sha256: baselineops_windows::SignerSpkiSha256,
-}
-
-fn release_signer_identity() -> Result<ReleaseSignerIdentity> {
-    let subject = option_env!("BASELINEOPS_EXPECTED_SIGNER_SUBJECT")
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("worker build does not embed the release signer subject"))?;
-    let spki_sha256 = option_env!("BASELINEOPS_EXPECTED_SIGNER_SPKI_SHA256")
-        .ok_or_else(|| anyhow!("worker build does not embed the release signer SPKI pin"))
-        .and_then(|value| {
-            baselineops_windows::SignerSpkiSha256::from_hex(value).map_err(|error| anyhow!(error))
-        })?;
-    Ok(ReleaseSignerIdentity {
-        subject: subject.into(),
-        spki_sha256,
-    })
 }
 
 fn main() {
@@ -108,27 +83,14 @@ fn safe_log_filter(value: &std::ffi::OsStr) -> bool {
 }
 
 fn run(arguments: &Arguments) -> Result<ExitCode> {
-    let current_executable = std::env::current_exe().context("resolve worker executable")?;
-    let bin = current_executable
-        .parent()
-        .context("worker executable has no package bin directory")?;
-    let root = bin
-        .parent()
-        .context("worker package has no protected root")?;
-    let signer = release_signer_identity()?;
-    let trust = verify_protected_install(
-        &InstallationTrustPolicy {
-            root: root.to_path_buf(),
-            publisher_subject: signer.subject.clone(),
-            publisher_spki_sha256: signer.spki_sha256.clone(),
-            validate_ancestors: true,
-        },
-        &current_executable,
-    )?;
+    #[cfg(windows)]
+    baselineops_windows::wait_for_worker_containment(std::time::Duration::from_secs(30))?;
+    let signer = trust::release_signer_identity()?;
+    let trust = trust::verify_current_worker(&signer)?;
     #[cfg(windows)]
     {
-        let _installed_package = verify_current_installed_package(&trust, &signer)?;
-        run_windows(arguments, &trust, &signer)
+        let _installed_package = trust::verify_current_installed_package(&trust, &signer)?;
+        broker::run_windows(arguments, &trust, &signer)
     }
     #[cfg(not(windows))]
     {
@@ -137,248 +99,24 @@ fn run(arguments: &Arguments) -> Result<ExitCode> {
     }
 }
 
-#[cfg(windows)]
-fn run_windows(
-    arguments: &Arguments,
-    trust: &baselineops_windows::TrustedInstallation,
-    signer: &ReleaseSignerIdentity,
-) -> Result<ExitCode> {
-    use baselineops_windows::ipc::NamedPipeServer;
-    use baselineops_windows::{
-        BrokerBinding, BrokerMessage, FrameCodec, PROTOCOL_VERSION, ReplayNonceCache,
-    };
-    use std::time::{Duration, Instant};
-    let pipe_name = arguments.session.as_simple().to_string();
-    let verifier = StrictClientVerifier::new(arguments.client_pid, trust, signer)?;
-    let server = NamedPipeServer::bind(&pipe_name, verifier.expected_logon_sid())?;
-    let mut client = server.accept(&verifier)?;
-    let frame = client.receive()?;
-    let message: BrokerMessage = FrameCodec::decode(&frame.0)?;
-    message.validate()?;
-    let mut replays = ReplayNonceCache::new(Duration::from_mins(2), 8)?;
-    replays.accept(&message.nonce, Instant::now())?;
-    let request = parse_proposal_request(&message)?;
-    let submitted_digest = baselineops_domain::canonical_json_digest(&request.plan)?;
-    message.binding.require_request(
-        &pipe_name,
-        &request.plan.id.to_string(),
-        &submitted_digest.to_hex(),
-    )?;
-    let (profile, context) = reload_apply_inputs(&request.plan.source, trust, signer)?;
-    let session = prepare_worker_apply(&request.plan, &profile, context)?;
-    let proposal = BrokerMessage {
-        version: PROTOCOL_VERSION,
-        binding: BrokerBinding {
-            session_id: pipe_name.clone(),
-            plan_id: session.proposal().id.to_string(),
-            plan_digest: session.digest().to_hex(),
-            reply_to: Some(message.nonce.clone()),
-        },
-        nonce: Uuid::new_v4().simple().to_string(),
-        kind: "plan.proposal".into(),
-        payload: serde_json::json!({"plan":session.proposal(),"digest":session.digest().to_hex()}),
-    };
-    proposal.validate()?;
-    client.send(&FrameCodec::encode(&proposal)?)?;
-    let approval: BrokerMessage = FrameCodec::decode(&client.receive()?.0)?;
-    approval.validate()?;
-    replays.accept(&approval.nonce, Instant::now())?;
-    approval.binding.require_reply_to(
-        &pipe_name,
-        &proposal.binding.plan_id,
-        &proposal.binding.plan_digest,
-        &proposal.nonce,
-    )?;
-    let approved_digest = parse_approval_request(&approval)?
-        .approved_digest
-        .parse::<Sha256Digest>()
-        .map_err(|error| anyhow!(error))?;
-    let (_, context) = reload_apply_inputs(&request.plan.source, trust, signer)?;
-    let live = PlanValidationContext {
-        now: chrono::Utc::now(),
-        intent: context.intent,
-        host: context.host,
-        tool: context.tool,
-        package_digest: context.package_digest,
-        source: context.source,
-        input: context.input,
-        observed_state_digest: context.observed_state.digest,
-    };
-    let _verified = session.approve(approved_digest, &live, trust)?;
-    // Mutation remains fail-closed until a worker-owned native executor is
-    // registered. The opaque approval proof cannot reach a mutation scheduler.
-    let reply = BrokerMessage {
-        version: PROTOCOL_VERSION,
-        binding: BrokerBinding {
-            session_id: pipe_name,
-            plan_id: proposal.binding.plan_id,
-            plan_digest: proposal.binding.plan_digest,
-            reply_to: Some(approval.nonce),
-        },
-        nonce: Uuid::new_v4().simple().to_string(),
-        kind: "plan.result".into(),
-        payload: serde_json::json!({"status":"unsupported","reason":"no worker-owned native mutation executor is registered","exitCode":ExitCode::Unsupported.as_i32()}),
-    };
-    reply.validate()?;
-    client.send(&FrameCodec::encode(&reply)?)?;
-    Ok(ExitCode::Unsupported)
-}
-
-#[cfg(windows)]
-fn reload_apply_inputs(
-    reviewed: &SourceIdentityV3,
-    trust: &baselineops_windows::TrustedInstallation,
-    signer: &ReleaseSignerIdentity,
-) -> Result<(ProfileV3, PlanBuildContext)> {
-    if reviewed.kind != SourceKind::LocalFile {
-        bail!("apply accepts only a locally validated profile source");
-    }
-    let profile_path = std::path::PathBuf::from(&reviewed.locator);
-    if !profile_path.is_absolute() {
-        bail!("profile source must use an absolute canonical path");
-    }
-    let parent = profile_path
-        .parent()
-        .context("profile source has no parent directory")?;
-    let policy = baselineops_windows::PathPolicy::new(parent)?;
-    let profile_path = policy.existing_file(&profile_path)?;
-    if profile_path.as_os_str() != reviewed.locator.as_str() {
-        bail!("profile source must already be a canonical path");
-    }
-    let source_bytes = baselineops_windows::read_bounded_utf8_no_follow(
-        &profile_path,
-        baselineops_windows::MAX_INPUT_BYTES,
-    )?
-    .into_bytes();
-    let profile = load_profile_json(&source_bytes, JsonLoadLimits::default())?;
-    let source_digest = Sha256Digest::of_bytes(&source_bytes);
-    let source = SourceIdentityV3 {
-        kind: SourceKind::LocalFile,
-        locator: profile_path.display().to_string(),
-        digest: source_digest,
-    };
-    let package_digest = verify_current_installed_package(trust, signer)?.binding_digest();
-    let now = chrono::Utc::now();
-    let observed_state = reobserve_profile(&profile, &NativeObservationSource, now)
-        .map_err(|error| anyhow!(error))?;
-    Ok((
-        profile,
-        PlanBuildContext {
-            intent: ExecutionIntent::Apply,
-            host: baselineops_windows::collect_host_identity()?,
-            tool: ToolIdentityV3 {
-                name: "baselineops".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                build_digest: Some(package_digest),
-            },
-            package_digest,
-            source,
-            input: InputIdentityV3 {
-                digest: source_digest,
-                size_bytes: u64::try_from(source_bytes.len())?,
-            },
-            observed_state,
-            lifetime: chrono::Duration::minutes(5),
-        },
-    ))
-}
-
-#[cfg(windows)]
-fn verify_current_installed_package(
-    trust: &baselineops_windows::TrustedInstallation,
-    signer: &ReleaseSignerIdentity,
-) -> Result<baselineops_engine::InstalledPackageIdentity> {
-    Ok(verify_installed_package(
-        trust.root(),
-        InstalledPackageExpectation {
-            product: "BaselineOps for Windows",
-            package_version: env!("CARGO_PKG_VERSION"),
-            target: "x86_64-pc-windows-msvc",
-            signer_subject: &signer.subject,
-        },
-        &PlatformDetachedSignatureVerifier::new(signer),
-        &PlatformSignatureVerifier::new(signer),
-    )?)
-}
-
-#[cfg(windows)]
-struct PlatformDetachedSignatureVerifier {
-    signer: ReleaseSignerIdentity,
-}
-
-#[cfg(windows)]
-impl PlatformDetachedSignatureVerifier {
-    fn new(signer: &ReleaseSignerIdentity) -> Self {
-        Self {
-            signer: signer.clone(),
-        }
-    }
-}
-
-#[cfg(windows)]
-impl DetachedSignatureVerifier for PlatformDetachedSignatureVerifier {
-    fn verify(
-        &self,
-        signed_bytes: &[u8],
-        signature_bytes: &[u8],
-        expected_subject: &str,
-    ) -> Result<(), PackageError> {
-        if expected_subject != self.signer.subject {
-            return Err(PackageError::Signature(
-                "package verifier received an untrusted signer subject".into(),
-            ));
-        }
-        baselineops_windows::verify_detached_manifest(
-            signed_bytes,
-            signature_bytes,
-            &self.signer.subject,
-            &self.signer.spki_sha256,
-        )
-        .map_err(|error| PackageError::Signature(error.to_string()))
-    }
-}
-
-#[cfg(windows)]
-struct PlatformSignatureVerifier {
-    signer: ReleaseSignerIdentity,
-}
-
-#[cfg(windows)]
-impl PlatformSignatureVerifier {
-    fn new(signer: &ReleaseSignerIdentity) -> Self {
-        Self {
-            signer: signer.clone(),
-        }
-    }
-}
-
-#[cfg(windows)]
-impl SignatureVerifier for PlatformSignatureVerifier {
-    fn verify(
-        &self,
-        executable: &std::path::Path,
-        expected_subject: &str,
-    ) -> Result<(), PackageError> {
-        if expected_subject != self.signer.subject {
-            return Err(PackageError::Signature(
-                "package verifier received an untrusted signer subject".into(),
-            ));
-        }
-        baselineops_windows::verify_authenticode(
-            executable,
-            &self.signer.subject,
-            &self.signer.spki_sha256,
-        )
-        .map_err(|error| PackageError::Signature(error.to_string()))
-    }
-}
-
 #[cfg_attr(not(windows), allow(dead_code))]
 fn parse_proposal_request(message: &baselineops_windows::BrokerMessage) -> Result<ProposalRequest> {
     if message.kind != "plan.propose" {
         bail!("worker only accepts plan.propose messages");
     }
-    serde_json::from_value(message.payload.clone()).context("invalid bounded proposal request")
+    let request: ProposalRequest = serde_json::from_value(message.payload.clone())
+        .context("invalid bounded proposal request")?;
+    validate_worker_resources(&request.plan.resources)?;
+    Ok(request)
+}
+
+fn validate_worker_resources(resources: &[baselineops_domain::ResourceBindingV3]) -> Result<()> {
+    if !resources.is_empty() {
+        bail!(
+            "resource-dependent Apply requires authenticated retained-handle transfer; resource metadata alone is not worker authority"
+        );
+    }
+    Ok(())
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -415,113 +153,6 @@ fn parse_process_id(value: &str) -> Result<u32, String> {
     Ok(pid)
 }
 
-#[cfg(windows)]
-struct StrictClientVerifier {
-    expected_pid: u32,
-    expected_session: u32,
-    expected_image: std::path::PathBuf,
-    expected_user_sid: String,
-    expected_logon_sid: String,
-    installation_root: std::path::PathBuf,
-    publisher_subject: String,
-    publisher_spki_sha256: baselineops_windows::SignerSpkiSha256,
-}
-
-#[cfg(windows)]
-impl StrictClientVerifier {
-    fn new(
-        client_pid: u32,
-        trust: &baselineops_windows::TrustedInstallation,
-        signer: &ReleaseSignerIdentity,
-    ) -> Result<Self> {
-        let identity = baselineops_windows::ipc::inspect_process(client_pid)?;
-        let bin = trust
-            .executable()
-            .parent()
-            .context("trusted worker lacks bin directory")?;
-        let expected_image = baselineops_windows::verify_protected_install(
-            &InstallationTrustPolicy {
-                root: trust.root().to_path_buf(),
-                publisher_subject: signer.subject.clone(),
-                publisher_spki_sha256: signer.spki_sha256.clone(),
-                validate_ancestors: true,
-            },
-            bin.join("baselineops.exe"),
-        )?
-        .executable()
-        .to_path_buf();
-        Ok(Self {
-            expected_pid: client_pid,
-            expected_session: identity.session_id,
-            expected_image,
-            expected_user_sid: identity.user_sid,
-            expected_logon_sid: identity.logon_sid,
-            installation_root: trust.root().to_path_buf(),
-            publisher_subject: signer.subject.clone(),
-            publisher_spki_sha256: signer.spki_sha256.clone(),
-        })
-    }
-
-    fn expected_logon_sid(&self) -> &str {
-        &self.expected_logon_sid
-    }
-}
-
-#[cfg(windows)]
-impl baselineops_windows::ipc::PipePeerVerifier for StrictClientVerifier {
-    fn verify(
-        &self,
-        peer: &baselineops_windows::PeerIdentity,
-    ) -> Result<(), baselineops_windows::PlatformError> {
-        if peer.process_id != self.expected_pid || peer.session_id != self.expected_session {
-            return Err(protocol(
-                "pipe PID or session does not match the UAC launch binding",
-            ));
-        }
-        let identity = baselineops_windows::ipc::inspect_process(peer.process_id)?;
-        if identity.user_sid != self.expected_user_sid
-            || identity.logon_sid != self.expected_logon_sid
-            || identity.integrity_rid < 0x2000
-        {
-            return Err(protocol(
-                "pipe client token does not match the launched standard-user logon identity",
-            ));
-        }
-        if !same_windows_path(&identity.image_path, &self.expected_image) {
-            return Err(protocol(
-                "pipe client image is not the protected BaselineOps CLI",
-            ));
-        }
-        let verified = baselineops_windows::verify_protected_install(
-            &InstallationTrustPolicy {
-                root: self.installation_root.clone(),
-                publisher_subject: self.publisher_subject.clone(),
-                publisher_spki_sha256: self.publisher_spki_sha256.clone(),
-                validate_ancestors: true,
-            },
-            &identity.image_path,
-        )?;
-        if !same_windows_path(verified.executable(), &self.expected_image) {
-            return Err(protocol(
-                "pipe client final image does not match protected CLI",
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[cfg(windows)]
-fn protocol(message: &str) -> baselineops_windows::PlatformError {
-    baselineops_windows::PlatformError::ProtocolRejected(message.into())
-}
-
-#[cfg(windows)]
-fn same_windows_path(actual: &std::path::Path, expected: &std::path::Path) -> bool {
-    actual
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&expected.to_string_lossy())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +177,18 @@ mod tests {
         };
         assert!(parse_proposal_request(&message).is_err());
         assert!(parse_approval_request(&message).is_err());
+    }
+
+    #[test]
+    fn resource_metadata_cannot_grant_worker_authority() {
+        let resource = baselineops_domain::ResourceBindingV3 {
+            logical_id: baselineops_domain::LogicalResourceId::new("catalog").unwrap(),
+            kind: baselineops_domain::ResourceKind::File,
+            digest: baselineops_domain::Sha256Digest::of_bytes(b"unverified"),
+            size_bytes: 10,
+        };
+        assert!(validate_worker_resources(&[resource]).is_err());
+        assert!(validate_worker_resources(&[]).is_ok());
     }
 
     #[test]

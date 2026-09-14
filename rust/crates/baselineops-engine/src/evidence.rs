@@ -10,6 +10,13 @@ use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+mod error;
+
+pub use error::EvidenceError;
+
 const MANIFEST_NAME: &str = "evidence-manifest.v1.json";
 
 /// Quotas applied before the evidence store retains a capability output.
@@ -104,6 +111,9 @@ pub struct EvidenceStore {
     limits: EvidenceLimits,
     protection: Arc<dyn EvidenceProtection>,
     manifest: EvidenceManifest,
+    usable: bool,
+    #[cfg(test)]
+    fail_after_manifest_replace: AtomicBool,
 }
 
 impl EvidenceStore {
@@ -118,8 +128,7 @@ impl EvidenceStore {
         limits: EvidenceLimits,
         protection: Arc<dyn EvidenceProtection>,
     ) -> Result<Self, EvidenceError> {
-        limits.validate()?;
-        let root = root.as_ref().to_path_buf();
+        let root = validated_root(root, limits)?;
         fs::create_dir_all(&root)?;
         protection.protect(&root)?;
         protection.verify(&root)?;
@@ -132,6 +141,9 @@ impl EvidenceStore {
             limits,
             protection,
             manifest: EvidenceManifest::empty(),
+            usable: true,
+            #[cfg(test)]
+            fail_after_manifest_replace: AtomicBool::new(false),
         };
         store.persist_manifest()?;
         Ok(store)
@@ -148,8 +160,7 @@ impl EvidenceStore {
         limits: EvidenceLimits,
         protection: Arc<dyn EvidenceProtection>,
     ) -> Result<Self, EvidenceError> {
-        limits.validate()?;
-        let root = root.as_ref().to_path_buf();
+        let root = validated_root(root, limits)?;
         protection.verify(&root)?;
         let manifest = read_manifest(&root)?;
         validate_manifest(&root, &manifest, limits)?;
@@ -158,6 +169,9 @@ impl EvidenceStore {
             limits,
             protection,
             manifest,
+            usable: true,
+            #[cfg(test)]
+            fail_after_manifest_replace: AtomicBool::new(false),
         })
     }
 
@@ -172,54 +186,61 @@ impl EvidenceStore {
         request: EvidenceWrite<'_>,
         bytes: &[u8],
     ) -> Result<ArtifactV3, EvidenceError> {
-        self.protection.verify(&self.root)?;
+        self.verify_access()?;
         let relative = safe_relative_path(request.locator)?;
-        let size_bytes = u64::try_from(bytes.len()).map_err(|_| EvidenceError::QuotaExceeded)?;
-        if size_bytes > self.limits.max_file_bytes
+        let (size_bytes, total_bytes) = self.write_quota(bytes)?;
+        let path = self.root.join(&relative);
+        ensure_safe_parent(&self.root, &relative)?;
+        write_new_file(&path, bytes)?;
+        let artifact = artifact_from(request, bytes, size_bytes);
+        self.commit_artifact(&artifact, total_bytes, path)?;
+        Ok(artifact)
+    }
+
+    fn write_quota(&self, bytes: &[u8]) -> Result<(u64, u64), EvidenceError> {
+        let size = u64::try_from(bytes.len()).map_err(|_| EvidenceError::QuotaExceeded)?;
+        if size > self.limits.max_file_bytes
             || self.manifest.artifacts.len() >= self.limits.max_artifacts
         {
             return Err(EvidenceError::QuotaExceeded);
         }
-        let total_bytes = self
+        let total = self
             .manifest
             .total_bytes
-            .checked_add(size_bytes)
+            .checked_add(size)
             .ok_or(EvidenceError::QuotaExceeded)?;
-        if total_bytes > self.limits.max_total_bytes {
+        if total > self.limits.max_total_bytes {
             return Err(EvidenceError::QuotaExceeded);
         }
-        let path = self.root.join(&relative);
-        ensure_safe_parent(&self.root, &relative)?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        let artifact = ArtifactV3 {
-            id: ArtifactId::new(),
-            kind: request.kind,
-            media_type: request.media_type.into(),
-            locator: request.locator.into(),
-            digest: Sha256Digest::of_bytes(bytes),
-            size_bytes,
-            created_at: request.created_at,
-            metadata: request.metadata,
-        };
-        self.manifest.artifacts.push(artifact.clone());
-        self.manifest
-            .artifacts
-            .sort_by(|left, right| left.locator.cmp(&right.locator));
-        self.manifest.total_bytes = total_bytes;
+        Ok((size, total))
+    }
+
+    fn commit_artifact(
+        &mut self,
+        artifact: &ArtifactV3,
+        total: u64,
+        path: PathBuf,
+    ) -> Result<(), EvidenceError> {
+        let previous_total = self.manifest.total_bytes;
+        let insertion = insert_artifact_sorted(&mut self.manifest.artifacts, artifact.clone());
+        self.manifest.total_bytes = total;
         if let Err(error) = self.persist_manifest() {
-            self.manifest
-                .artifacts
-                .retain(|candidate| candidate.id != artifact.id);
-            self.manifest.total_bytes = self.manifest.total_bytes.saturating_sub(size_bytes);
-            let _ = fs::remove_file(path);
+            self.manifest.artifacts.remove(insertion);
+            self.manifest.total_bytes = previous_total;
+            if let Err(rollback) = self.persist_manifest() {
+                self.usable = false;
+                return Err(EvidenceError::PersistenceRollback {
+                    persistence: Box::new(error),
+                    rollback: Box::new(rollback),
+                });
+            }
+            if let Err(cleanup) = fs::remove_file(path) {
+                self.usable = false;
+                return Err(EvidenceError::Io(cleanup));
+            }
             return Err(error);
         }
-        Ok(artifact)
+        Ok(())
     }
 
     /// Read retained bytes only after re-verifying protection and recorded integrity.
@@ -228,7 +249,7 @@ impl EvidenceStore {
     ///
     /// Returns an error when the locator is unknown, protection fails, or retained bytes differ.
     pub fn read(&self, locator: &str) -> Result<Vec<u8>, EvidenceError> {
-        self.protection.verify(&self.root)?;
+        self.verify_access()?;
         let relative = safe_relative_path(locator)?;
         let artifact = self
             .manifest
@@ -236,17 +257,7 @@ impl EvidenceStore {
             .iter()
             .find(|artifact| artifact.locator == locator)
             .ok_or(EvidenceError::UnknownArtifact)?;
-        let mut bytes = Vec::new();
-        OpenOptions::new()
-            .read(true)
-            .open(self.root.join(relative))?
-            .read_to_end(&mut bytes)?;
-        if u64::try_from(bytes.len()).ok() != Some(artifact.size_bytes)
-            || Sha256Digest::of_bytes(&bytes) != artifact.digest
-        {
-            return Err(EvidenceError::IntegrityMismatch(locator.into()));
-        }
-        Ok(bytes)
+        read_verified_artifact(self.root.join(relative), artifact, locator)
     }
 
     /// Return the current canonical inventory without exposing a mutable root path.
@@ -261,8 +272,49 @@ impl EvidenceStore {
             self.root.join(MANIFEST_NAME),
             &canonical_json_bytes(&self.manifest)?,
         )?;
+        #[cfg(test)]
+        if self
+            .fail_after_manifest_replace
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(EvidenceError::Protection(
+                "injected post-replacement failure".into(),
+            ));
+        }
         Ok(())
     }
+
+    fn verify_access(&self) -> Result<(), EvidenceError> {
+        self.ensure_usable()?;
+        self.protection.verify(&self.root)
+    }
+
+    fn ensure_usable(&self) -> Result<(), EvidenceError> {
+        if !self.usable {
+            return Err(EvidenceError::Unusable);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn fail_next_persist_after_replace(&self) {
+        self.fail_after_manifest_replace
+            .store(true, Ordering::SeqCst);
+    }
+}
+
+fn insert_artifact_sorted(artifacts: &mut Vec<ArtifactV3>, artifact: ArtifactV3) -> usize {
+    let insertion = artifacts.partition_point(|candidate| candidate.locator < artifact.locator);
+    artifacts.insert(insertion, artifact);
+    insertion
+}
+
+fn validated_root(
+    root: impl AsRef<Path>,
+    limits: EvidenceLimits,
+) -> Result<PathBuf, EvidenceError> {
+    limits.validate()?;
+    Ok(root.as_ref().to_path_buf())
 }
 
 fn read_manifest(root: &Path) -> Result<EvidenceManifest, EvidenceError> {
@@ -279,24 +331,11 @@ fn validate_manifest(
     manifest: &EvidenceManifest,
     limits: EvidenceLimits,
 ) -> Result<(), EvidenceError> {
-    if manifest.schema_version != "1.0" || manifest.artifacts.len() > limits.max_artifacts {
-        return Err(EvidenceError::InvalidManifest);
-    }
-    let mut locators = BTreeSet::new();
+    validate_manifest_header(manifest, limits)?;
+    let mut locators = BTreeSet::<String>::new();
     let mut total = 0_u64;
     for artifact in &manifest.artifacts {
-        let path = safe_relative_path(&artifact.locator)?;
-        if !locators.insert(artifact.locator.as_str())
-            || artifact.size_bytes > limits.max_file_bytes
-        {
-            return Err(EvidenceError::InvalidManifest);
-        }
-        let bytes = fs::read(root.join(path))?;
-        if u64::try_from(bytes.len()).ok() != Some(artifact.size_bytes)
-            || Sha256Digest::of_bytes(&bytes) != artifact.digest
-        {
-            return Err(EvidenceError::IntegrityMismatch(artifact.locator.clone()));
-        }
+        validate_manifest_artifact(root, artifact, limits, &mut locators)?;
         total = total
             .checked_add(artifact.size_bytes)
             .ok_or(EvidenceError::QuotaExceeded)?;
@@ -305,6 +344,29 @@ fn validate_manifest(
         return Err(EvidenceError::InvalidManifest);
     }
     Ok(())
+}
+
+fn validate_manifest_header(
+    manifest: &EvidenceManifest,
+    limits: EvidenceLimits,
+) -> Result<(), EvidenceError> {
+    if manifest.schema_version != "1.0" || manifest.artifacts.len() > limits.max_artifacts {
+        return Err(EvidenceError::InvalidManifest);
+    }
+    Ok(())
+}
+
+fn validate_manifest_artifact(
+    root: &Path,
+    artifact: &ArtifactV3,
+    limits: EvidenceLimits,
+    locators: &mut BTreeSet<String>,
+) -> Result<(), EvidenceError> {
+    let path = safe_relative_path(&artifact.locator)?;
+    if !locators.insert(artifact.locator.clone()) || artifact.size_bytes > limits.max_file_bytes {
+        return Err(EvidenceError::InvalidManifest);
+    }
+    read_verified_artifact(root.join(path), artifact, &artifact.locator).map(|_| ())
 }
 
 fn safe_relative_path(locator: &str) -> Result<PathBuf, EvidenceError> {
@@ -328,157 +390,67 @@ fn ensure_safe_parent(root: &Path, relative: &Path) -> Result<(), EvidenceError>
             let Component::Normal(part) = part else {
                 return Err(EvidenceError::UnsafeLocator(relative.display().to_string()));
             };
-            current.push(part);
-            fs::create_dir(&current).or_else(|error| {
-                if error.kind() == io::ErrorKind::AlreadyExists {
-                    Ok(())
-                } else {
-                    Err(error)
-                }
-            })?;
-            let metadata = fs::symlink_metadata(&current)?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err(EvidenceError::UnsafeLocator(relative.display().to_string()));
-            }
+            create_safe_directory(&mut current, part, relative)?;
         }
     }
     Ok(())
 }
 
-/// Evidence retention failures. Protection failures deliberately reject use.
-#[derive(Debug, thiserror::Error)]
-pub enum EvidenceError {
-    /// File operation failed.
-    #[error(transparent)]
-    Io(#[from] io::Error),
-    /// Canonical serialization failed.
-    #[error(transparent)]
-    Domain(#[from] baselineops_domain::DomainError),
-    /// Strict manifest decoding failed.
-    #[error(transparent)]
-    Json(#[from] serde_json::Error),
-    /// Atomic manifest replacement failed.
-    #[error(transparent)]
-    Platform(#[from] baselineops_windows::PlatformError),
-    /// Protection establishment or verification failed.
-    #[error("evidence protection failed: {0}")]
-    Protection(String),
-    /// Limits are empty or internally inconsistent.
-    #[error("evidence limits are invalid")]
-    InvalidLimits,
-    /// A new store would replace an existing manifest.
-    #[error("evidence manifest already exists")]
-    AlreadyExists,
-    /// A locator is absolute, traversal-like, or platform-ambiguous.
-    #[error("unsafe evidence locator: {0}")]
-    UnsafeLocator(String),
-    /// A quota would be exceeded.
-    #[error("evidence quota exceeded")]
-    QuotaExceeded,
-    /// Manifest fields or retained inventory are inconsistent.
-    #[error("evidence manifest is invalid")]
-    InvalidManifest,
-    /// The on-disk manifest is not its canonical serialization.
-    #[error("evidence manifest is not canonical")]
-    NonCanonicalManifest,
-    /// A retained artifact changed after its digest was recorded.
-    #[error("evidence integrity mismatch: {0}")]
-    IntegrityMismatch(String),
-    /// The requested locator does not appear in the manifest.
-    #[error("unknown evidence artifact")]
-    UnknownArtifact,
+fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), EvidenceError> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+fn artifact_from(request: EvidenceWrite<'_>, bytes: &[u8], size_bytes: u64) -> ArtifactV3 {
+    ArtifactV3 {
+        id: ArtifactId::new(),
+        kind: request.kind,
+        media_type: request.media_type.into(),
+        locator: request.locator.into(),
+        digest: Sha256Digest::of_bytes(bytes),
+        size_bytes,
+        created_at: request.created_at,
+        metadata: request.metadata,
+    }
+}
+fn read_verified_artifact(
+    path: PathBuf,
+    artifact: &ArtifactV3,
+    locator: &str,
+) -> Result<Vec<u8>, EvidenceError> {
+    let mut bytes = Vec::new();
+    OpenOptions::new()
+        .read(true)
+        .open(path)?
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).ok() != Some(artifact.size_bytes)
+        || Sha256Digest::of_bytes(&bytes) != artifact.digest
+    {
+        return Err(EvidenceError::IntegrityMismatch(locator.into()));
+    }
+    Ok(bytes)
+}
+fn create_safe_directory(
+    current: &mut PathBuf,
+    part: &std::ffi::OsStr,
+    relative: &Path,
+) -> Result<(), EvidenceError> {
+    current.push(part);
+    fs::create_dir(&*current).or_else(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })?;
+    let metadata = fs::symlink_metadata(&*current)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(EvidenceError::UnsafeLocator(relative.display().to_string()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Default)]
-    struct Protection;
-    impl EvidenceProtection for Protection {
-        fn protect(&self, _root: &Path) -> Result<(), EvidenceError> {
-            Ok(())
-        }
-        fn verify(&self, _root: &Path) -> Result<(), EvidenceError> {
-            Ok(())
-        }
-    }
-
-    fn limits() -> EvidenceLimits {
-        EvidenceLimits {
-            max_file_bytes: 8,
-            max_total_bytes: 10,
-            max_artifacts: 2,
-        }
-    }
-
-    #[test]
-    fn store_rejects_traversal_and_enforces_quotas() {
-        let root = tempfile::tempdir().expect("root");
-        let mut store =
-            EvidenceStore::create(root.path().join("evidence"), limits(), Arc::new(Protection))
-                .expect("store");
-        let request = |locator| EvidenceWrite {
-            locator,
-            kind: ArtifactKind::Evidence,
-            media_type: "text/plain",
-            created_at: Utc::now(),
-            metadata: JsonMap::new(),
-        };
-        assert!(matches!(
-            store.write(request("../outside"), b"x"),
-            Err(EvidenceError::UnsafeLocator(_))
-        ));
-        store
-            .write(request("first.txt"), b"12345678")
-            .expect("first");
-        assert!(matches!(
-            store.write(request("second.txt"), b"123"),
-            Err(EvidenceError::QuotaExceeded)
-        ));
-    }
-
-    #[test]
-    fn store_detects_tampered_artifacts_when_reopened() {
-        let root = tempfile::tempdir().expect("root");
-        let evidence_root = root.path().join("evidence");
-        let mut store =
-            EvidenceStore::create(&evidence_root, limits(), Arc::new(Protection)).expect("store");
-        store
-            .write(
-                EvidenceWrite {
-                    locator: "nested/receipt.txt",
-                    kind: ArtifactKind::Evidence,
-                    media_type: "text/plain",
-                    created_at: Utc::now(),
-                    metadata: JsonMap::new(),
-                },
-                b"original",
-            )
-            .expect("write");
-        fs::write(evidence_root.join("nested/receipt.txt"), b"edited").expect("tamper");
-        assert!(matches!(
-            EvidenceStore::open(evidence_root, limits(), Arc::new(Protection)),
-            Err(EvidenceError::IntegrityMismatch(_))
-        ));
-    }
-
-    #[test]
-    fn noncanonical_manifest_is_rejected() {
-        let root = tempfile::tempdir().expect("root");
-        let evidence_root = root.path().join("evidence");
-        let _store =
-            EvidenceStore::create(&evidence_root, limits(), Arc::new(Protection)).expect("store");
-        let manifest = fs::read(evidence_root.join(MANIFEST_NAME)).expect("manifest");
-        let value = serde_json::from_slice::<serde_json::Value>(&manifest).expect("json");
-        fs::write(
-            evidence_root.join(MANIFEST_NAME),
-            serde_json::to_vec_pretty(&value).expect("pretty json"),
-        )
-        .expect("tamper");
-        assert!(matches!(
-            EvidenceStore::open(evidence_root, limits(), Arc::new(Protection)),
-            Err(EvidenceError::NonCanonicalManifest)
-        ));
-    }
-}
+#[path = "evidence_tests.rs"]
+mod tests;

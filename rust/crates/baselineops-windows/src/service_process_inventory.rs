@@ -191,6 +191,40 @@ mod platform {
     {
         let manager = OpenSCManagerW(None, None, SC_MANAGER_ENUMERATE_SERVICE)
             .map_err(|error| PlatformError::TrustFailure(error.to_string()))?;
+        let needed = match service_buffer_size(manager) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = CloseServiceHandle(manager);
+                return Err(error);
+            }
+        };
+        let (buffer, returned) = match service_buffer(manager, needed) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = CloseServiceHandle(manager);
+                return Err(error);
+            }
+        };
+        let bytes = std::slice::from_raw_parts(
+            buffer.as_ptr().cast::<u8>(),
+            usize::try_from(needed).expect("validated service buffer"),
+        );
+        let rows = service_rows(bytes, returned).ok_or_else(|| {
+            PlatformError::TrustFailure("SCM returned malformed service records".into())
+        })?;
+        let complete = rows.len() <= MAX_RECORDS;
+        let records = rows
+            .iter()
+            .take(MAX_RECORDS)
+            .map(|row| service_record(manager, row))
+            .collect();
+        let _ = CloseServiceHandle(manager);
+        Ok((records, complete))
+    }
+
+    unsafe fn service_buffer_size(
+        manager: windows::Win32::System::Services::SC_HANDLE,
+    ) -> Result<u32, PlatformError> {
         let mut needed = 0_u32;
         let mut returned = 0_u32;
         let probe = EnumServicesStatusExW(
@@ -204,50 +238,44 @@ mod platform {
             None,
             PCWSTR::null(),
         );
-        if !matches!(probe, Err(ref error) if win32_code(error) == ERROR_MORE_DATA.0)
-            || needed == 0
-            || needed as usize > MAX_SERVICE_BUFFER
+        if matches!(probe, Err(ref error) if win32_code(error) == ERROR_MORE_DATA.0)
+            && needed != 0
+            && usize::try_from(needed).is_ok_and(|value| value <= MAX_SERVICE_BUFFER)
         {
-            let _ = CloseServiceHandle(manager);
-            return Err(PlatformError::TrustFailure(
+            Ok(needed)
+        } else {
+            Err(PlatformError::TrustFailure(
                 "SCM returned an invalid service enumeration size".into(),
-            ));
+            ))
         }
+    }
+
+    unsafe fn service_buffer(
+        manager: windows::Win32::System::Services::SC_HANDLE,
+        needed: u32,
+    ) -> Result<(Vec<usize>, u32), PlatformError> {
         let allocation = usize::try_from(needed).map_err(|_| {
             PlatformError::TrustFailure(
                 "SCM returned an unrepresentable service buffer size".into(),
             )
         })?;
-        let word_count = allocation.div_ceil(size_of::<usize>());
-        let mut buffer = vec![0_usize; word_count];
+        let mut buffer = vec![0_usize; allocation.div_ceil(size_of::<usize>())];
         let bytes = std::slice::from_raw_parts_mut(buffer.as_mut_ptr().cast::<u8>(), allocation);
-        returned = 0;
-        let result = EnumServicesStatusExW(
+        let mut returned = 0_u32;
+        let mut requested = needed;
+        EnumServicesStatusExW(
             manager,
             SC_ENUM_PROCESS_INFO,
             SERVICE_WIN32,
             SERVICE_STATE_ALL,
             Some(bytes),
-            &raw mut needed,
+            &raw mut requested,
             &raw mut returned,
             None,
             PCWSTR::null(),
-        );
-        if let Err(error) = result {
-            let _ = CloseServiceHandle(manager);
-            return Err(PlatformError::TrustFailure(error.to_string()));
-        }
-        let rows = service_rows(bytes, returned).ok_or_else(|| {
-            PlatformError::TrustFailure("SCM returned malformed service records".into())
-        })?;
-        let complete = rows.len() <= MAX_RECORDS;
-        let records = rows
-            .iter()
-            .take(MAX_RECORDS)
-            .map(|row| service_record(manager, row))
-            .collect();
-        let _ = CloseServiceHandle(manager);
-        Ok((records, complete))
+        )
+        .map_err(|error| PlatformError::TrustFailure(error.to_string()))?;
+        Ok((buffer, returned))
     }
 
     unsafe fn service_record(

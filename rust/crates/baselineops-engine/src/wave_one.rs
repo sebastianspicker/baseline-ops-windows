@@ -11,7 +11,7 @@ const MAX_AGE_DAYS: u32 = 3650;
 
 /// Native Windows executor for the two Wave 1 read-only vertical slices.
 ///
-/// Registry maturity remains `in_development` until authoritative Windows VM evidence is retained.
+/// Registry maturity is `code_complete`; authoritative Windows VM evidence remains open.
 pub struct WaveOneWindowsExecutor;
 
 impl CapabilityExecutor for WaveOneWindowsExecutor {
@@ -111,13 +111,12 @@ struct EffectiveIdentityConfig {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DefenderParameters {
-    #[serde(default, rename = "warn_signature_age_days")]
+    #[serde(rename = "warn_signature_age_days")]
     signature: Option<u32>,
-    #[serde(default, rename = "warn_quick_scan_age_days")]
+    #[serde(rename = "warn_quick_scan_age_days")]
     quick_scan: Option<u32>,
-    #[serde(default, rename = "warn_full_scan_age_days")]
+    #[serde(rename = "warn_full_scan_age_days")]
     full_scan: Option<u32>,
-    #[serde(default)]
     config: Option<DefenderConfig>,
 }
 
@@ -242,9 +241,23 @@ fn evaluate_defender(
     effective_config: EffectiveDefenderConfig,
 ) -> DefenderAudit {
     let mut findings = Vec::new();
+    evaluate_provider(&mut findings, observation);
+    evaluate_protection_flags(&mut findings, observation);
+    evaluate_signature_state(&mut findings, observation.signatures_out_of_date);
+    evaluate_ages(&mut findings, observation, &effective_config);
+    evaluate_defender_statuses(&mut findings, observation);
+    DefenderAudit {
+        observation: observation.clone(),
+        effective_config,
+        healthy: findings.is_empty(),
+        findings,
+    }
+}
+
+fn evaluate_provider(findings: &mut Vec<Finding>, observation: &DefenderHealthObservation) {
     if let Some(error) = &observation.provider_error {
         finding(
-            &mut findings,
+            findings,
             "DEF-ProviderAccessError",
             "high",
             &format!("Defender provider evidence is unavailable: {error}"),
@@ -252,73 +265,92 @@ fn evaluate_defender(
     }
     if !observation.service_running {
         finding(
-            &mut findings,
+            findings,
             "DEF-AMServiceDisabled",
             "high",
             "Defender AM service is not running.",
         );
     }
-    evaluate_bool(
-        &mut findings,
-        observation.antivirus_enabled,
-        "DEF-AntivirusDisabled",
-        "AntivirusEnabled",
-    );
-    evaluate_bool(
-        &mut findings,
-        observation.antispyware_enabled,
-        "DEF-AntispywareDisabled",
-        "AntispywareEnabled",
-    );
-    evaluate_bool(
-        &mut findings,
-        observation.behavior_monitor_enabled,
-        "DEF-BehaviorMonitorDisabled",
-        "BehaviorMonitorEnabled",
-    );
-    evaluate_bool(
-        &mut findings,
-        observation.real_time_protection_enabled,
-        "DEF-RTP-Disabled",
-        "RealTimeProtectionEnabled",
-    );
-    match observation.signatures_out_of_date {
+}
+
+fn evaluate_protection_flags(findings: &mut Vec<Finding>, observation: &DefenderHealthObservation) {
+    for (value, code, field) in [
+        (
+            observation.antivirus_enabled,
+            "DEF-AntivirusDisabled",
+            "AntivirusEnabled",
+        ),
+        (
+            observation.antispyware_enabled,
+            "DEF-AntispywareDisabled",
+            "AntispywareEnabled",
+        ),
+        (
+            observation.behavior_monitor_enabled,
+            "DEF-BehaviorMonitorDisabled",
+            "BehaviorMonitorEnabled",
+        ),
+        (
+            observation.real_time_protection_enabled,
+            "DEF-RTP-Disabled",
+            "RealTimeProtectionEnabled",
+        ),
+    ] {
+        evaluate_bool(findings, value, code, field);
+    }
+}
+
+fn evaluate_signature_state(findings: &mut Vec<Finding>, signatures_out_of_date: Option<bool>) {
+    match signatures_out_of_date {
         Some(true) => finding(
-            &mut findings,
+            findings,
             "DEF-SignaturesOutOfDate",
             "medium",
             "Defender signatures are out of date.",
         ),
         Some(false) => {}
-        None => missing(&mut findings, "signatures_out_of_date"),
+        None => missing(findings, "signatures_out_of_date"),
     }
+}
+
+fn evaluate_ages(
+    findings: &mut Vec<Finding>,
+    observation: &DefenderHealthObservation,
+    config: &EffectiveDefenderConfig,
+) {
     evaluate_age(
-        &mut findings,
+        findings,
         observation.antivirus_signature_age_days,
-        effective_config.signature,
+        config.signature,
         "DEF-SignatureAgeHigh",
         "AntivirusSignatureAge",
         false,
     );
     evaluate_age(
-        &mut findings,
+        findings,
         observation.quick_scan_age_days,
-        effective_config.quick_scan,
+        config.quick_scan,
         "DEF-QuickScanOld",
         "QuickScanAge",
         false,
     );
     evaluate_age(
-        &mut findings,
+        findings,
         observation.full_scan_age_days,
-        effective_config.full_scan,
+        config.full_scan,
         "DEF-FullScanOld",
         "FullScanAge",
         true,
     );
+}
+
+fn evaluate_defender_statuses(
+    findings: &mut Vec<Finding>,
+    observation: &DefenderHealthObservation,
+) {
     if observation.tamper_protected == Some(false) {
         finding(
-            &mut findings,
+            findings,
             "DEF-TamperProtectionOff",
             "medium",
             "Tamper protection is off.",
@@ -326,17 +358,11 @@ fn evaluate_defender(
     }
     if observation.reboot_required == Some(true) {
         finding(
-            &mut findings,
+            findings,
             "DEF-RebootRequired",
             "medium",
             "Defender reports a pending reboot.",
         );
-    }
-    DefenderAudit {
-        observation: observation.clone(),
-        effective_config,
-        healthy: findings.is_empty(),
-        findings,
     }
 }
 

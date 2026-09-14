@@ -1,10 +1,12 @@
 # Configuration and profile examples
 
-The files in this directory are executable examples. They are not organization-specific policy and should be reviewed before use.
+These examples show the supported input formats. They are generic and do not
+represent an organization's policy. Review and adapt each file before using it
+on an endpoint.
 
 ## Configuration examples
 
-Files under `examples/configs/` are direct inputs to individual scripts:
+Files under `examples/configs/` go directly to individual scripts:
 
 | File | Script | Direct parameter | Shipped state |
 | --- | --- | --- | --- |
@@ -13,7 +15,8 @@ Files under `examples/configs/` are direct inputs to individual scripts:
 | `firewall-baseline.json` | `18-Firewall-Baseline.ps1` | `-CatalogPath` | Domain, Private, and Public profiles are defined; custom rule lists are empty. |
 | `wufb-proofing.json` | `05-WUFB-Proofing.ps1` | `-CatalogPath` | WUfB is selected; target release and active hours are disabled. |
 
-Start with Audit mode:
+Start in Audit mode so you can review the reported state before considering any
+change:
 
 ```powershell
 .\scripts\01-ASR-Defender-Allowlist.ps1 `
@@ -29,7 +32,9 @@ Start with Audit mode:
   -CatalogPath .\examples\configs\wufb-proofing.json -Mode Audit
 ```
 
-`-ConfigPath` is a wrapper document, not an alias for these direct inputs. The wrapper keys for these examples are:
+`-ConfigPath` expects a wrapper document. It is not another name for the direct
+input parameters shown above. Use these wrapper keys when the same files are
+referenced through `-ConfigPath`:
 
 | Direct input | `-ConfigPath` wrapper key |
 | --- | --- |
@@ -40,7 +45,8 @@ Start with Audit mode:
 
 ## Profile examples
 
-Files under `examples/profiles/` are inputs to `scripts/00-Run-Profile.ps1`:
+Files under `examples/profiles/` define runs for
+`scripts/00-Run-Profile.ps1`:
 
 | File | Declared mode | Steps | Scope |
 | --- | --- | ---: | --- |
@@ -52,7 +58,8 @@ Files under `examples/profiles/` are inputs to `scripts/00-Run-Profile.ps1`:
 | `incident-response.json` | Audit | 7 | Event, IOC, artifact, process, task, remote-surface, and support-bundle collection |
 | `compliance-full.json` | Audit | 12 | Security baseline, policy, platform protection, logging, SMB, Defender, BitLocker, and NTLM |
 
-The runner treats profile JSON as untrusted input:
+The runner treats every profile as untrusted input. These rules prevent a
+profile from granting itself additional execution or output authority:
 
 - `Steps[].Args` must be an empty array.
 - `Defaults.Mode` cannot enable remediation. Pass `-Mode Remediate` to the runner.
@@ -61,14 +68,14 @@ The runner treats profile JSON as untrusted input:
 - `Defaults.OutputFormat` and `Defaults.OutputPath` do not control runner output.
 - A command-line `-Strict` or `-RequireSigned` can strengthen profile settings.
 
-Validate one profile:
+Validate a single profile before running it:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\00-Validate-Profile.ps1 `
   -ProfilePath .\examples\profiles\baseline-audit.json -RootPath .
 ```
 
-Validate every shipped profile:
+To validate every profile shipped with the repository:
 
 ```powershell
 Get-ChildItem -LiteralPath .\examples\profiles -Filter '*.json' | ForEach-Object {
@@ -80,7 +87,7 @@ Get-ChildItem -LiteralPath .\examples\profiles -Filter '*.json' | ForEach-Object
 }
 ```
 
-Run the baseline profile:
+After validation, run the baseline audit profile with:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 `
@@ -90,7 +97,8 @@ pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 `
 
 ## Preview behavior
 
-At the profile layer, `-WhatIf` skips every selected child script. At the batch layer, it stops before creating the temporary profile workspace:
+For a profile, `-WhatIf` skips every selected child script. For a batch, it
+stops before creating the temporary profile workspace:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 `
@@ -103,4 +111,6 @@ pwsh -NoProfile -File .\scripts\00-Run-Batch.ps1 `
   -OutputFormat None -WhatIf -Confirm:$false
 ```
 
-Both commands return warning exit code `2`. The preview verifies control flow only. It does not query the endpoint or prove that remediation would succeed. `-Confirm:$false` without `-WhatIf` is not a preview.
+Both commands return warning exit code `2`. A preview checks selection and
+control flow only: it does not query the endpoint or show that remediation
+would succeed. `-Confirm:$false` without `-WhatIf` is not a preview.

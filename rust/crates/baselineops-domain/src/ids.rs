@@ -143,3 +143,59 @@ impl fmt::Display for CapabilityId {
         self.0.fmt(formatter)
     }
 }
+
+/// A bounded logical resource key that never contains a filesystem locator.
+#[derive(Clone, Debug, Eq, Hash, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct LogicalResourceId(String);
+
+impl LogicalResourceId {
+    /// Validate a logical resource identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for empty, oversized, or path-like identifiers.
+    pub fn new(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if value.is_empty() || value.len() > 64 {
+            return Err("logical resource IDs must be between 1 and 64 bytes");
+        }
+        if !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
+        }) {
+            return Err(
+                "logical resource IDs use lowercase ASCII letters, digits, '.', '-' and '_'",
+            );
+        }
+        Ok(Self(value))
+    }
+
+    /// Return the wire-format identifier.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for LogicalResourceId {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for LogicalResourceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Display for LogicalResourceId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}

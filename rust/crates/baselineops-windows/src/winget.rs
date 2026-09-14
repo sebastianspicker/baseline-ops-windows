@@ -40,7 +40,7 @@ mod platform {
     };
     use windows::Win32::Foundation::{
         ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_PATH_NOT_FOUND,
-        ERROR_SUCCESS, WIN32_ERROR,
+        WIN32_ERROR,
     };
     use windows::Win32::System::Registry::{
         HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ, REG_VALUE_TYPE, RegCloseKey, RegOpenKeyExW,
@@ -74,6 +74,12 @@ mod platform {
         }
         status_ok(status)?;
         let key = Key(raw_key);
+        read_app_path(&key)
+    }
+
+    unsafe fn read_app_path(
+        key: &Key,
+    ) -> Result<Observation<WingetExecutableEvidence>, PlatformError> {
         let mut value_type = REG_VALUE_TYPE::default();
         let mut size = 0_u32;
         let status = RegQueryValueExW(
@@ -84,21 +90,20 @@ mod platform {
             None,
             Some(&raw mut size),
         );
-        if missing(status) {
-            return Ok(Observation::Missing);
+        if let Some(observation) = app_path_status(status, size, true)? {
+            return Ok(observation);
         }
-        if status == ERROR_ACCESS_DENIED {
-            return Ok(Observation::AccessDenied);
-        }
-        if status == ERROR_MORE_DATA
-            || usize::try_from(size).unwrap_or(usize::MAX) > MAX_WINGET_APP_PATH_BYTES
-        {
-            return Ok(Observation::Truncated);
-        }
-        status_ok(status)?;
         if value_type != REG_SZ || size == 0 || !size.is_multiple_of(2) {
             return Ok(Observation::Unparsed);
         }
+        read_app_path_bytes(key, value_type, size)
+    }
+
+    unsafe fn read_app_path_bytes(
+        key: &Key,
+        mut value_type: REG_VALUE_TYPE,
+        mut size: u32,
+    ) -> Result<Observation<WingetExecutableEvidence>, PlatformError> {
         let mut bytes = vec![
             0_u8;
             usize::try_from(size).map_err(|_| {
@@ -113,21 +118,39 @@ mod platform {
             Some(bytes.as_mut_ptr()),
             Some(&raw mut size),
         );
-        if status == ERROR_ACCESS_DENIED {
-            return Ok(Observation::AccessDenied);
+        if let Some(observation) = app_path_status(status, size, false)? {
+            return Ok(observation);
         }
-        if status == ERROR_MORE_DATA
-            || usize::try_from(size).unwrap_or(usize::MAX) > MAX_WINGET_APP_PATH_BYTES
-        {
-            return Ok(Observation::Truncated);
-        }
-        status_ok(status)?;
         if value_type != REG_SZ || !size.is_multiple_of(2) {
             return Ok(Observation::Unparsed);
         }
         bytes.truncate(usize::try_from(size).map_err(|_| {
             PlatformError::TrustFailure("WinGet App Paths value length overflow".into())
         })?);
+        Ok(decode_app_path(&bytes))
+    }
+
+    fn app_path_status(
+        status: WIN32_ERROR,
+        size: u32,
+        allow_missing: bool,
+    ) -> Result<Option<Observation<WingetExecutableEvidence>>, PlatformError> {
+        if allow_missing && missing(status) {
+            return Ok(Some(Observation::Missing));
+        }
+        if status == ERROR_ACCESS_DENIED {
+            return Ok(Some(Observation::AccessDenied));
+        }
+        if status == ERROR_MORE_DATA
+            || usize::try_from(size).unwrap_or(usize::MAX) > MAX_WINGET_APP_PATH_BYTES
+        {
+            return Ok(Some(Observation::Truncated));
+        }
+        status_ok(status)?;
+        Ok(None)
+    }
+
+    fn decode_app_path(bytes: &[u8]) -> Observation<WingetExecutableEvidence> {
         let units = bytes
             .chunks_exact(2)
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
@@ -135,19 +158,17 @@ mod platform {
             .collect::<Vec<_>>();
         let path = match String::from_utf16(&units) {
             Ok(path) if path.len() <= MAX_WINGET_APP_PATH_BYTES => path,
-            Ok(_) => return Ok(Observation::Truncated),
-            Err(_) => return Ok(Observation::Unparsed),
+            Ok(_) => return Observation::Truncated,
+            Err(_) => return Observation::Unparsed,
         };
         if !absolute_windows_path(&path) {
-            return Ok(Observation::Present(
-                WingetExecutableEvidence::UntrustedPath { path },
-            ));
+            return Observation::Present(WingetExecutableEvidence::UntrustedPath { path });
         }
-        Ok(Observation::Present(WingetExecutableEvidence::Located {
+        Observation::Present(WingetExecutableEvidence::Located {
             package_family: APP_INSTALLER_PACKAGE_FAMILY.into(),
             path,
             version: Observation::NotRun,
-        }))
+        })
     }
 
     fn absolute_windows_path(path: &str) -> bool {
@@ -163,15 +184,7 @@ mod platform {
         status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND
     }
 
-    fn status_ok(status: WIN32_ERROR) -> Result<(), PlatformError> {
-        if status == ERROR_SUCCESS {
-            Ok(())
-        } else {
-            Err(PlatformError::Io(std::io::Error::from_raw_os_error(
-                i32::try_from(status.0).unwrap_or(i32::MAX),
-            )))
-        }
-    }
+    use crate::native_values::check_status as status_ok;
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()

@@ -32,9 +32,9 @@ mod platform {
     use super::{PlatformError, UpdateHealthObservation};
     use baselineops_capabilities::{
         FIXED_UPDATE_HEALTH_SERVICES, FIXED_UPDATE_HEALTH_TASKS, MAX_UPDATE_HISTORY_RECORDS,
-        MAX_UPDATE_TITLE_BYTES, Observation, ServiceObservation, ServiceStartMode, ServiceState,
-        UpdateAgentMetadata, UpdateHealthService, UpdateHealthTask, UpdateHealthTaskSnapshot,
-        UpdateHealthTaskState, UpdateHistoryRecord,
+        MAX_UPDATE_TITLE_BYTES, Observation, ServiceObservation, ServiceState, UpdateAgentMetadata,
+        UpdateHealthService, UpdateHealthTask, UpdateHealthTaskSnapshot, UpdateHealthTaskState,
+        UpdateHistoryRecord,
     };
     use std::collections::BTreeMap;
     use std::mem::{MaybeUninit, size_of};
@@ -49,8 +49,7 @@ mod platform {
     use windows::Win32::System::Services::{
         CloseServiceHandle, OpenSCManagerW, OpenServiceW, QUERY_SERVICE_CONFIGW,
         QueryServiceConfigW, QueryServiceStatusEx, SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO,
-        SERVICE_AUTO_START, SERVICE_DEMAND_START, SERVICE_DISABLED, SERVICE_QUERY_CONFIG,
-        SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATUS_PROCESS,
+        SERVICE_QUERY_CONFIG, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATUS_PROCESS,
     };
     use windows::Win32::System::TaskScheduler::{
         IRegisteredTask, ITaskFolder, ITaskService, TASK_STATE_DISABLED, TASK_STATE_QUEUED,
@@ -206,6 +205,14 @@ mod platform {
             Ok(history) => history,
             Err(error) => return observation_error(&error),
         };
+        collect_update_history(&history, count, total)
+    }
+
+    unsafe fn collect_update_history(
+        history: &windows::Win32::System::UpdateAgent::IUpdateHistoryEntryCollection,
+        count: usize,
+        total: usize,
+    ) -> Observation<UpdateAgentMetadata> {
         let mut records = Vec::with_capacity(count);
         for index in 0..count {
             let entry = match history.get_Item(i32::try_from(index).unwrap_or(0)) {
@@ -263,17 +270,7 @@ mod platform {
         })
     }
 
-    fn service_start_mode(value: u32) -> ServiceStartMode {
-        if value == SERVICE_AUTO_START.0 {
-            ServiceStartMode::Automatic
-        } else if value == SERVICE_DEMAND_START.0 {
-            ServiceStartMode::Manual
-        } else if value == SERVICE_DISABLED.0 {
-            ServiceStartMode::Disabled
-        } else {
-            ServiceStartMode::Other(value)
-        }
-    }
+    use crate::native_values::service_start_mode;
 
     fn service_name(service: UpdateHealthService) -> PCWSTR {
         match service {

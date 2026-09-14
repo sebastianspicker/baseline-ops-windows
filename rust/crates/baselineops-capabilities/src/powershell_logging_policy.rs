@@ -14,8 +14,13 @@ pub const MAX_MODULE_NAMES: u16 = 64;
 pub const MAX_POLICY_STRING_BYTES: usize = 16 * 1024;
 
 /// A missing registry value is distinct from a configured value.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "status", content = "value", rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum ValueSnapshot<T> {
     /// The key or named value is absent.
     Missing,
@@ -24,8 +29,8 @@ pub enum ValueSnapshot<T> {
 }
 
 /// All bounded values observed from one policy hive.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct PowerShellLoggingHiveSnapshot {
     /// `Transcription\\EnableTranscripting` (spelling retained by Windows policy).
     pub enable_transcription: ValueSnapshot<u32>,
@@ -44,8 +49,8 @@ pub struct PowerShellLoggingHiveSnapshot {
 }
 
 /// Complete snapshot status for the numbered `ModuleNames` registry subkey.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ModuleNamesSnapshot {
     /// The values keyed by their bounded numeric registry value name.
     pub values: BTreeMap<u16, String>,
@@ -54,8 +59,8 @@ pub struct ModuleNamesSnapshot {
 }
 
 /// HKLM is always observed; HKCU appears only when explicitly requested.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct PowerShellLoggingObservation {
     /// Machine policy snapshot used for every mutation.
     pub hklm: PowerShellLoggingHiveSnapshot,
@@ -260,41 +265,12 @@ pub fn build_plan(
     desired: PowerShellLoggingDesiredState,
 ) -> Result<PowerShellLoggingPlan, String> {
     let mut mutations = Vec::new();
-    add_dword_drift(
-        &mut mutations,
-        PolicyField::EnableTranscription,
-        &observation.hklm.enable_transcription,
-        desired.enable_transcription,
-    );
+    add_dword_mutations(&mut mutations, &observation.hklm, &desired);
     add_string_drift(
         &mut mutations,
         PolicyField::TranscriptOutputDirectory,
         &observation.hklm.transcript_output_directory,
         &desired.transcript_output_directory,
-    );
-    add_dword_drift(
-        &mut mutations,
-        PolicyField::EnableInvocationHeader,
-        &observation.hklm.enable_invocation_header,
-        desired.enable_invocation_header,
-    );
-    add_dword_drift(
-        &mut mutations,
-        PolicyField::EnableScriptBlockLogging,
-        &observation.hklm.enable_script_block_logging,
-        desired.enable_script_block_logging,
-    );
-    add_dword_drift(
-        &mut mutations,
-        PolicyField::EnableScriptBlockInvocationLogging,
-        &observation.hklm.enable_script_block_invocation_logging,
-        desired.enable_script_block_invocation_logging,
-    );
-    add_dword_drift(
-        &mut mutations,
-        PolicyField::EnableModuleLogging,
-        &observation.hklm.enable_module_logging,
-        desired.enable_module_logging,
     );
     let desired_names = numbered(&desired.module_names)?;
     if observation.hklm.module_names.values != desired_names {
@@ -314,6 +290,42 @@ pub fn build_plan(
         reboot_required: false,
         new_sessions_may_be_needed: true,
     })
+}
+
+fn add_dword_mutations(
+    mutations: &mut Vec<PowerShellLoggingMutation>,
+    observed: &PowerShellLoggingHiveSnapshot,
+    desired: &PowerShellLoggingDesiredState,
+) {
+    for (field, before, value) in [
+        (
+            PolicyField::EnableTranscription,
+            &observed.enable_transcription,
+            desired.enable_transcription,
+        ),
+        (
+            PolicyField::EnableInvocationHeader,
+            &observed.enable_invocation_header,
+            desired.enable_invocation_header,
+        ),
+        (
+            PolicyField::EnableScriptBlockLogging,
+            &observed.enable_script_block_logging,
+            desired.enable_script_block_logging,
+        ),
+        (
+            PolicyField::EnableScriptBlockInvocationLogging,
+            &observed.enable_script_block_invocation_logging,
+            desired.enable_script_block_invocation_logging,
+        ),
+        (
+            PolicyField::EnableModuleLogging,
+            &observed.enable_module_logging,
+            desired.enable_module_logging,
+        ),
+    ] {
+        add_dword_drift(mutations, field, before, value);
+    }
 }
 
 fn choose_bool(explicit: Option<bool>, configured: Option<bool>, default: bool) -> bool {

@@ -16,6 +16,15 @@ pub enum SchemaVersion {
     V3,
 }
 
+/// Wire version for plans with step-bound observations and semantic actions.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum PlanSchemaVersion {
+    /// Regenerate older plans; their approvals cannot authorize this contract.
+    #[serde(rename = "4.0")]
+    #[default]
+    V4,
+}
+
 /// Whether an action is observation-only or can alter the endpoint.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

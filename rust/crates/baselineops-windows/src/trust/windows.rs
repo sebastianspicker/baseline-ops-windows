@@ -5,7 +5,13 @@
 mod acl;
 mod authenticode;
 mod handle_path;
+mod protected_directory;
 pub(super) mod signer;
+
+pub(crate) use protected_directory::{
+    ProtectedRunDirectory, ProtectedRunLease, create_protected_run_directory,
+    read_protected_run_artifacts,
+};
 
 use super::{InstallationTrustPolicy, PlatformError};
 use std::path::{Path, PathBuf};
@@ -15,8 +21,19 @@ const WINDOWS_SYSTEM_PUBLISHER: &str =
     "CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US";
 
 pub(super) struct VerifiedInstallPaths {
-    pub(super) executable: PathBuf,
-    pub(super) root: PathBuf,
+    executable: handle_path::OpenedPath,
+    root: handle_path::OpenedPath,
+    _directories: Vec<handle_path::OpenedPath>,
+}
+
+impl VerifiedInstallPaths {
+    pub(super) fn executable(&self) -> &Path {
+        self.executable.final_path()
+    }
+
+    pub(super) fn root(&self) -> &Path {
+        self.root.final_path()
+    }
 }
 
 pub(super) fn verify_authenticode_subject(
@@ -51,15 +68,7 @@ pub(super) fn verify_protected_install(
 ) -> Result<VerifiedInstallPaths, PlatformError> {
     let root = handle_path::open_directory(&policy.root)?;
     let executable = handle_path::open_regular_file(executable)?;
-    handle_path::verify_containment(&root, &executable)?;
-    handle_path::verify_single_link(&executable)?;
-
-    let trusted_sids = acl::TrustedSids::new()?;
-    acl::verify_object_acl(&root, &trusted_sids, true)?;
-    acl::verify_object_acl(&executable, &trusted_sids, false)?;
-    if policy.validate_ancestors {
-        handle_path::verify_ancestors(root.final_path(), &trusted_sids)?;
-    }
+    let directories = verify_path_controls(&root, &executable, true, policy.validate_ancestors)?;
     authenticode::verify(
         executable.handle(),
         executable.final_path(),
@@ -67,21 +76,16 @@ pub(super) fn verify_protected_install(
         &policy.publisher_spki_sha256,
     )?;
     Ok(VerifiedInstallPaths {
-        executable: executable.final_path().to_path_buf(),
-        root: root.final_path().to_path_buf(),
+        executable,
+        root,
+        _directories: directories,
     })
 }
 
 pub(super) fn verify_windows_system_executable(path: &Path) -> Result<PathBuf, PlatformError> {
     let root = handle_path::open_directory(&system32_directory()?)?;
     let executable = handle_path::open_regular_file(path)?;
-    handle_path::verify_containment(&root, &executable)?;
-    handle_path::verify_single_link(&executable)?;
-
-    let trusted_sids = acl::TrustedSids::new()?;
-    acl::verify_object_acl(&root, &trusted_sids, false)?;
-    acl::verify_object_acl(&executable, &trusted_sids, false)?;
-    handle_path::verify_ancestors(root.final_path(), &trusted_sids)?;
+    let _ancestors = verify_path_controls(&root, &executable, false, true)?;
     authenticode::verify_subject(
         executable.handle(),
         executable.final_path(),
@@ -94,6 +98,41 @@ pub(super) fn resolve_regular_executable(path: &Path) -> Result<PathBuf, Platfor
     let executable = handle_path::open_regular_file(path)?;
     handle_path::verify_single_link(&executable)?;
     Ok(executable.final_path().to_path_buf())
+}
+
+fn verify_path_controls(
+    root: &handle_path::OpenedPath,
+    executable: &handle_path::OpenedPath,
+    require_protected_root_dacl: bool,
+    validate_ancestors: bool,
+) -> Result<Vec<handle_path::OpenedPath>, PlatformError> {
+    verify_handle_invariants(root, executable)?;
+    let trusted_sids = acl::TrustedSids::new()?;
+    verify_acls(root, executable, &trusted_sids, require_protected_root_dacl)?;
+    let mut directories =
+        handle_path::verify_descendant_directories(root, executable, &trusted_sids)?;
+    if validate_ancestors {
+        directories.extend(handle_path::verify_ancestors(root, &trusted_sids)?);
+    }
+    Ok(directories)
+}
+
+fn verify_handle_invariants(
+    root: &handle_path::OpenedPath,
+    executable: &handle_path::OpenedPath,
+) -> Result<(), PlatformError> {
+    handle_path::verify_containment(root, executable)?;
+    handle_path::verify_single_link(executable)
+}
+
+fn verify_acls(
+    root: &handle_path::OpenedPath,
+    executable: &handle_path::OpenedPath,
+    trusted_sids: &acl::TrustedSids,
+    require_protected_root_dacl: bool,
+) -> Result<(), PlatformError> {
+    acl::verify_object_acl(root, trusted_sids, require_protected_root_dacl)?;
+    acl::verify_object_acl(executable, trusted_sids, false)
 }
 
 pub(super) fn system32_directory() -> Result<PathBuf, PlatformError> {

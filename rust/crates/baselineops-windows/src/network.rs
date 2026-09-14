@@ -67,43 +67,7 @@ mod platform {
 
     pub(super) fn audit_network_inventory() -> Result<NetworkInventoryObservation, PlatformError> {
         unsafe {
-            let mut bytes = 0_u32;
-            let status = GetAdaptersAddresses(
-                u32::from(AF_UNSPEC.0),
-                GAA_FLAG_INCLUDE_GATEWAYS,
-                None,
-                None,
-                &raw mut bytes,
-            );
-            if status != ERROR_BUFFER_OVERFLOW.0 || bytes == 0 || bytes as usize > MAX_BUFFER_BYTES
-            {
-                return Err(PlatformError::TrustFailure(
-                    "IP Helper returned an invalid adapter buffer size".into(),
-                ));
-            }
-            let allocation = usize::try_from(bytes).map_err(|_| {
-                PlatformError::TrustFailure(
-                    "IP Helper returned an unrepresentable adapter buffer size".into(),
-                )
-            })?;
-            let word_count = allocation.div_ceil(size_of::<usize>());
-            let mut buffer = vec![0_usize; word_count];
-            let status = GetAdaptersAddresses(
-                u32::from(AF_UNSPEC.0),
-                GAA_FLAG_INCLUDE_GATEWAYS,
-                None,
-                Some(buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>()),
-                &raw mut bytes,
-            );
-            if status != WIN32_ERROR(0).0 {
-                return Err(PlatformError::TrustFailure(format!(
-                    "GetAdaptersAddresses failed with {status}"
-                )));
-            }
-            let buffer = AdapterBuffer {
-                storage: buffer,
-                bytes: allocation,
-            };
+            let buffer = read_adapter_buffer()?;
             let mut records = Vec::new();
             let mut seen = HashSet::new();
             let mut adapter = buffer.storage.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
@@ -122,6 +86,45 @@ mod platform {
                 enumeration_complete: adapter.is_null(),
             })
         }
+    }
+
+    unsafe fn read_adapter_buffer() -> Result<AdapterBuffer, PlatformError> {
+        let mut bytes = 0_u32;
+        let status = GetAdaptersAddresses(
+            u32::from(AF_UNSPEC.0),
+            GAA_FLAG_INCLUDE_GATEWAYS,
+            None,
+            None,
+            &raw mut bytes,
+        );
+        if status != ERROR_BUFFER_OVERFLOW.0 || bytes == 0 || bytes as usize > MAX_BUFFER_BYTES {
+            return Err(PlatformError::TrustFailure(
+                "IP Helper returned an invalid adapter buffer size".into(),
+            ));
+        }
+        let allocation = usize::try_from(bytes).map_err(|_| {
+            PlatformError::TrustFailure(
+                "IP Helper returned an unrepresentable adapter buffer size".into(),
+            )
+        })?;
+        let word_count = allocation.div_ceil(size_of::<usize>());
+        let mut buffer = vec![0_usize; word_count];
+        let status = GetAdaptersAddresses(
+            u32::from(AF_UNSPEC.0),
+            GAA_FLAG_INCLUDE_GATEWAYS,
+            None,
+            Some(buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>()),
+            &raw mut bytes,
+        );
+        if status != WIN32_ERROR(0).0 {
+            return Err(PlatformError::TrustFailure(format!(
+                "GetAdaptersAddresses failed with {status}"
+            )));
+        }
+        Ok(AdapterBuffer {
+            storage: buffer,
+            bytes: allocation,
+        })
     }
 
     struct AdapterBuffer {
@@ -178,13 +181,7 @@ mod platform {
                 ));
             }
             let node = &*address;
-            if let Some((family, value)) = socket_text(&node.Address) {
-                if family == AF_INET {
-                    ipv4.push(value);
-                } else if family == AF_INET6 {
-                    ipv6.push(value);
-                }
-            }
+            append_socket_address(&node.Address, &mut ipv4, &mut ipv6);
             address = node.Next;
         }
         if !address.is_null() {
@@ -193,6 +190,20 @@ mod platform {
             ));
         }
         Ok((ipv4, ipv6))
+    }
+
+    unsafe fn append_socket_address(
+        address: &SOCKET_ADDRESS,
+        ipv4: &mut Vec<String>,
+        ipv6: &mut Vec<String>,
+    ) {
+        if let Some((family, value)) = socket_text(address) {
+            if family == AF_INET {
+                ipv4.push(value);
+            } else if family == AF_INET6 {
+                ipv6.push(value);
+            }
+        }
     }
 
     unsafe fn gateways(
@@ -239,25 +250,32 @@ mod platform {
             return None;
         }
         let family = (*address.lpSockaddr).sa_family;
-        if family == AF_INET
-            && address.iSockaddrLength >= i32::try_from(size_of::<SOCKADDR_IN>()).ok()?
-        {
-            #[allow(clippy::cast_ptr_alignment)]
-            let address = &*address.lpSockaddr.cast::<SOCKADDR_IN>();
-            let octets = address.sin_addr.S_un.S_un_b;
-            return Some((
-                family,
-                Ipv4Addr::new(octets.s_b1, octets.s_b2, octets.s_b3, octets.s_b4).to_string(),
-            ));
+        if family == AF_INET {
+            return ipv4_socket_text(address).map(|text| (family, text));
         }
-        if family == AF_INET6
-            && address.iSockaddrLength >= i32::try_from(size_of::<SOCKADDR_IN6>()).ok()?
-        {
-            #[allow(clippy::cast_ptr_alignment)]
-            let address = &*address.lpSockaddr.cast::<SOCKADDR_IN6>();
-            return Some((family, Ipv6Addr::from(address.sin6_addr.u.Byte).to_string()));
+        if family == AF_INET6 {
+            return ipv6_socket_text(address).map(|text| (family, text));
         }
         None
+    }
+
+    unsafe fn ipv4_socket_text(address: &SOCKET_ADDRESS) -> Option<String> {
+        if address.iSockaddrLength < i32::try_from(size_of::<SOCKADDR_IN>()).ok()? {
+            return None;
+        }
+        #[allow(clippy::cast_ptr_alignment)]
+        let address = &*address.lpSockaddr.cast::<SOCKADDR_IN>();
+        let octets = address.sin_addr.S_un.S_un_b;
+        Some(Ipv4Addr::new(octets.s_b1, octets.s_b2, octets.s_b3, octets.s_b4).to_string())
+    }
+
+    unsafe fn ipv6_socket_text(address: &SOCKET_ADDRESS) -> Option<String> {
+        if address.iSockaddrLength < i32::try_from(size_of::<SOCKADDR_IN6>()).ok()? {
+            return None;
+        }
+        #[allow(clippy::cast_ptr_alignment)]
+        let address = &*address.lpSockaddr.cast::<SOCKADDR_IN6>();
+        Some(Ipv6Addr::from(address.sin6_addr.u.Byte).to_string())
     }
 
     unsafe fn wide_string(value: *mut u16) -> String {

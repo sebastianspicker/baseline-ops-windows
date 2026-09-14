@@ -31,10 +31,10 @@ mod platform {
     use super::{Observation, PhysicalDiskObservation, ReliabilityCounters};
     use baselineops_capabilities::StorageReliabilityObservation;
     use std::collections::BTreeMap;
-    use windows::Win32::Foundation::RPC_E_TOO_LATE;
+
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-        CoInitializeSecurity, CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
+        CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
         RPC_C_IMP_LEVEL_IMPERSONATE,
     };
     use windows::Win32::System::Variant::{
@@ -63,12 +63,19 @@ mod platform {
         let _apartment = ComApartment::initialize()?;
         initialize_security()?;
         let services = services()?;
-        let counters = query(&services, COUNTERS)?
-            .into_iter()
-            .filter_map(|object| counter(&object).ok())
-            .collect::<BTreeMap<_, _>>();
+        let counters = read_counters(&services)?;
+        let disks = read_disks(&services, &counters)?;
+        Ok(StorageReliabilityObservation {
+            physical_disks: Observation::Present(disks),
+        })
+    }
+
+    unsafe fn read_disks(
+        services: &IWbemServices,
+        counters: &BTreeMap<String, ReliabilityCounters>,
+    ) -> Result<Vec<PhysicalDiskObservation>, String> {
         let mut disks = Vec::new();
-        for object in query(&services, DISKS)? {
+        for object in query(services, DISKS)? {
             let id = string_property(&object, "DeviceId")?;
             disks.push(PhysicalDiskObservation {
                 health_healthy: health(&object),
@@ -80,26 +87,21 @@ mod platform {
                 id,
             });
         }
-        Ok(StorageReliabilityObservation {
-            physical_disks: Observation::Present(disks),
-        })
+        Ok(disks)
+    }
+
+    unsafe fn read_counters(
+        services: &IWbemServices,
+    ) -> Result<BTreeMap<String, ReliabilityCounters>, String> {
+        Ok(query(services, COUNTERS)?
+            .into_iter()
+            .filter_map(|object| counter(&object).ok())
+            .collect::<BTreeMap<_, _>>())
     }
 
     unsafe fn initialize_security() -> Result<(), String> {
-        if let Err(error) = CoInitializeSecurity(
-            None,
-            -1,
-            None,
-            None,
-            RPC_C_AUTHN_LEVEL_CALL,
-            RPC_C_IMP_LEVEL_IMPERSONATE,
-            None,
-            EOAC_NONE,
-            None,
-        ) && error.code() != RPC_E_TOO_LATE
-        {
-            return Err(format!("WMI security initialization failed: {error}"));
-        }
+        crate::com_security::initialize_wmi_security()
+            .map_err(|error| format!("WMI security initialization failed: {error}"))?;
         Ok(())
     }
 

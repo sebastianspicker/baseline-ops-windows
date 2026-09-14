@@ -10,10 +10,16 @@ on:
       - 'feat/**'
     paths:
       - 'rust/**'
+      - 'tools/quality/**'
+      - 'tests/RustV3Oracle*.ps1'
+      - 'PSScriptAnalyzerSettings.psd1'
       - '.github/workflows/rust-ci.yml'
   pull_request:
     paths:
       - 'rust/**'
+      - 'tools/quality/**'
+      - 'tests/RustV3Oracle*.ps1'
+      - 'PSScriptAnalyzerSettings.psd1'
       - '.github/workflows/rust-ci.yml'
 
 permissions: {}
@@ -44,6 +50,25 @@ jobs:
         shell: bash
         run: rustup toolchain install 1.96.0 --profile minimal --component clippy,rustfmt
 
+      - name: Cache Rust compilation
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/rust-toolchain.toml', 'rust/Cargo.lock') }}
+
+      - name: Cache quality analyzer dependencies
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: .cache/quality
+          key: quality-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust/rust-toolchain.toml', 'tools/quality/tool-versions.psd1', 'tools/quality/requirements-lizard.txt', 'tools/quality/jscpd/package-lock.json') }}
+
+      - name: Verify Rust v3 code quality
+        shell: pwsh
+        run: ./tools/quality/Test-CodeQuality.ps1 -ReleaseLine Rust
+
       - name: Verify workspace
         working-directory: rust
         shell: bash
@@ -55,12 +80,21 @@ jobs:
           RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --all-features
           cargo run -p xtask -- verify
 
+      - name: Cache pinned cargo-deny
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-${{ runner.os }}-${{ runner.arch }}-0.20.2-${{ hashFiles('rust/rust-toolchain.toml', 'rust/Cargo.lock') }}
+
       - name: Verify dependency advisories, licenses, bans, and sources
         working-directory: rust
         shell: bash
         run: |
           set -euo pipefail
-          cargo install cargo-deny --version 0.20.2 --locked
+          if ! command -v cargo-deny >/dev/null 2>&1; then
+            cargo install cargo-deny --version 0.20.2 --locked
+          fi
+          test "$(cargo deny --version)" = "cargo-deny 0.20.2"
           cargo deny check
 
   windows-x64:
@@ -83,6 +117,25 @@ jobs:
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: rustup toolchain install 1.96.0 --profile minimal --component clippy,rustfmt --target x86_64-pc-windows-msvc
+
+      - name: Cache Rust compilation
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/rust-toolchain.toml', 'rust/Cargo.lock') }}
+
+      - name: Cache quality analyzer dependencies
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: .cache/quality
+          key: quality-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust/rust-toolchain.toml', 'tools/quality/tool-versions.psd1', 'tools/quality/requirements-lizard.txt', 'tools/quality/jscpd/package-lock.json') }}
+
+      - name: Verify Rust v3 code quality
+        shell: pwsh
+        run: ./tools/quality/Test-CodeQuality.ps1 -ReleaseLine Rust
 
       - name: Build and test Windows boundary
         working-directory: rust

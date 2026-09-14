@@ -84,10 +84,8 @@ Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '47-WDAG-Readiness-Audit.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
@@ -112,132 +110,156 @@ if (-not $isWindowsHost) {
 # Main
 # ----------------------------
 
-$script:Findings = Get-FindingsList
+function Invoke-Capability47MainPhase01 {
+  param([hashtable]$RunState)
+  $script:Findings = Get-FindingsList
 
-$hyperVState      = $null
-$wdagState        = $null
-$hyperVAvailable  = $false
-$wdagAvailable    = $false
-$virtualizationOk = $false
+  $hyperVState      = $null
+  $wdagState        = $null
+  $RunState.hyperVAvailable  = $false
+  $RunState.wdagAvailable    = $false
+  $RunState.virtualizationOk = $false
 
-# 1. Check Hyper-V feature
-try {
-  $hyperVFeature = Get-WindowsOptionalFeature -Online -FeatureName 'Microsoft-Hyper-V-All' -ErrorAction Stop
-  $hyperVState   = $hyperVFeature.State
-  $hyperVAvailable = $true
+  # 1. Check Hyper-V feature
+  try {
+    $hyperVFeature = Get-WindowsOptionalFeature -Online -FeatureName 'Microsoft-Hyper-V-All' -ErrorAction Stop
+    $hyperVState   = $hyperVFeature.State
+    $RunState.hyperVAvailable = $true
 
-  if ($hyperVState -ne 'Enabled') {
-    Add-Finding -FindingList $script:Findings -Code 'WDAG-HyperVNotEnabled' -Severity 'Medium' `
-      -Message ("Hyper-V feature is available but not enabled (State={0})." -f $hyperVState)
-  } else {
-    Add-Finding -FindingList $script:Findings -Code 'WDAG-HyperVEnabled' -Severity 'Low' `
-      -Message 'Hyper-V feature is enabled.'
+    if ($hyperVState -ne 'Enabled') {
+      Add-Finding -FindingList $script:Findings -Code 'WDAG-HyperVNotEnabled' -Severity 'Medium' `
+        -Message ("Hyper-V feature is available but not enabled (State={0})." -f $hyperVState)
+    } else {
+      Add-Finding -FindingList $script:Findings -Code 'WDAG-HyperVEnabled' -Severity 'Low' `
+        -Message 'Hyper-V feature is enabled.'
+    }
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'WDAG-HyperVNotAvailable' -Severity 'Low' `
+      -Message ("Hyper-V feature query failed (may not be available on this edition): {0}" -f $_.Exception.Message)
   }
-} catch {
-  Add-Finding -FindingList $script:Findings -Code 'WDAG-HyperVNotAvailable' -Severity 'Low' `
-    -Message ("Hyper-V feature query failed (may not be available on this edition): {0}" -f $_.Exception.Message)
-}
 
-# 2. Check WDAG feature
-try {
-  $wdagFeature = Get-WindowsOptionalFeature -Online -FeatureName 'Windows-Defender-ApplicationGuard' -ErrorAction Stop
-  $wdagState   = $wdagFeature.State
-  $wdagAvailable = $true
+  # 2. Check WDAG feature
+  try {
+    $wdagFeature = Get-WindowsOptionalFeature -Online -FeatureName 'Windows-Defender-ApplicationGuard' -ErrorAction Stop
+    $wdagState   = $wdagFeature.State
+    $RunState.wdagAvailable = $true
 
-  if ($wdagState -ne 'Enabled') {
-    Add-Finding -FindingList $script:Findings -Code 'WDAG-FeatureNotEnabled' -Severity 'Medium' `
-      -Message ("WDAG feature is available but not enabled (State={0})." -f $wdagState)
-  } else {
-    Add-Finding -FindingList $script:Findings -Code 'WDAG-FeatureEnabled' -Severity 'Low' `
-      -Message 'Windows Defender Application Guard feature is enabled.'
+    if ($wdagState -ne 'Enabled') {
+      Add-Finding -FindingList $script:Findings -Code 'WDAG-FeatureNotEnabled' -Severity 'Medium' `
+        -Message ("WDAG feature is available but not enabled (State={0})." -f $wdagState)
+    } else {
+      Add-Finding -FindingList $script:Findings -Code 'WDAG-FeatureEnabled' -Severity 'Low' `
+        -Message 'Windows Defender Application Guard feature is enabled.'
+    }
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'WDAG-FeatureNotAvailable' -Severity 'Low' `
+      -Message ("WDAG feature query failed (may not be available on this edition): {0}" -f $_.Exception.Message)
   }
-} catch {
-  Add-Finding -FindingList $script:Findings -Code 'WDAG-FeatureNotAvailable' -Severity 'Low' `
-    -Message ("WDAG feature query failed (may not be available on this edition): {0}" -f $_.Exception.Message)
+
+  # 3. Check WDAG policy settings
+  $RunState.wdagPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\AppHVSI'
+  $RunState.wdagPolicies   = @{}
 }
+function Invoke-Capability47MainPhase02 {
+  param([hashtable]$RunState)
+  try {
+    if (Test-Path -LiteralPath $RunState.wdagPolicyPath) {
+      $policyProps = Get-ItemProperty -LiteralPath $RunState.wdagPolicyPath -ErrorAction Stop
+      foreach ($prop in $policyProps.PSObject.Properties) {
+        if ($prop.Name -notmatch '^PS') {
+          $RunState.wdagPolicies[$prop.Name] = $prop.Value
+        }
+      }
 
-# 3. Check WDAG policy settings
-$wdagPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\AppHVSI'
-$wdagPolicies   = @{}
-
-try {
-  if (Test-Path -LiteralPath $wdagPolicyPath) {
-    $policyProps = Get-ItemProperty -LiteralPath $wdagPolicyPath -ErrorAction Stop
-    foreach ($prop in $policyProps.PSObject.Properties) {
-      if ($prop.Name -notmatch '^PS') {
-        $wdagPolicies[$prop.Name] = $prop.Value
+      if ($RunState.wdagPolicies.Count -eq 0) {
+        Add-Finding -FindingList $script:Findings -Code 'WDAG-PolicyEmpty' -Severity 'Medium' `
+          -Message 'WDAG policy registry key exists but contains no configured values.'
+      } else {
+        Add-Finding -FindingList $script:Findings -Code 'WDAG-PolicyConfigured' -Severity 'Low' `
+          -Message ("WDAG policy key has {0} configured value(s)." -f $RunState.wdagPolicies.Count)
+      }
+    } else {
+      Add-Finding -FindingList $script:Findings -Code 'WDAG-PolicyMissing' -Severity 'Medium' `
+        -Message 'WDAG policy registry key (AppHVSI) not found. WDAG policies are not configured via GPO/MDM.'
+    }
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'WDAG-PolicyReadFailed' -Severity 'Medium' `
+      -Message ("Failed to read WDAG policy registry: {0}" -f $_.Exception.Message)
+  }
+}
+function Invoke-Capability47MainPhase03 {
+  param([hashtable]$RunState)
+  try {
+    $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
+    if ($cpu) {
+      $RunState.virtualizationOk = [bool]$cpu.VirtualizationFirmwareEnabled
+      if (-not $RunState.virtualizationOk) {
+        Add-Finding -FindingList $script:Findings -Code 'WDAG-VirtDisabled' -Severity 'Medium' `
+          -Message 'Hardware virtualization is not enabled in firmware (VirtualizationFirmwareEnabled=false).'
+      } else {
+        Add-Finding -FindingList $script:Findings -Code 'WDAG-VirtEnabled' -Severity 'Low' `
+          -Message 'Hardware virtualization is enabled in firmware.'
       }
     }
-
-    if ($wdagPolicies.Count -eq 0) {
-      Add-Finding -FindingList $script:Findings -Code 'WDAG-PolicyEmpty' -Severity 'Medium' `
-        -Message 'WDAG policy registry key exists but contains no configured values.'
-    } else {
-      Add-Finding -FindingList $script:Findings -Code 'WDAG-PolicyConfigured' -Severity 'Low' `
-        -Message ("WDAG policy key has {0} configured value(s)." -f $wdagPolicies.Count)
-    }
-  } else {
-    Add-Finding -FindingList $script:Findings -Code 'WDAG-PolicyMissing' -Severity 'Medium' `
-      -Message 'WDAG policy registry key (AppHVSI) not found. WDAG policies are not configured via GPO/MDM.'
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'WDAG-VirtQueryFailed' -Severity 'Low' `
+      -Message ("Could not query virtualization support: {0}" -f $_.Exception.Message)
   }
-} catch {
-  Add-Finding -FindingList $script:Findings -Code 'WDAG-PolicyReadFailed' -Severity 'Medium' `
-    -Message ("Failed to read WDAG policy registry: {0}" -f $_.Exception.Message)
-}
 
-# 4. Hardware virtualization support
-try {
-  $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
-  if ($cpu) {
-    $virtualizationOk = [bool]$cpu.VirtualizationFirmwareEnabled
-    if (-not $virtualizationOk) {
-      Add-Finding -FindingList $script:Findings -Code 'WDAG-VirtDisabled' -Severity 'Medium' `
-        -Message 'Hardware virtualization is not enabled in firmware (VirtualizationFirmwareEnabled=false).'
-    } else {
-      Add-Finding -FindingList $script:Findings -Code 'WDAG-VirtEnabled' -Severity 'Low' `
-        -Message 'Hardware virtualization is enabled in firmware.'
-    }
+  # ----------------------------
+  # Build summary & result
+  # ----------------------------
+
+  $Findings      = @($script:Findings.ToArray())
+  $findingsCount = @($Findings).Count
+
+  $RunState.summary = [pscustomobject]@{
+    ComputerName          = $env:COMPUTERNAME
+    Timestamp             = Get-Date
+    HyperVAvailable       = $RunState.hyperVAvailable
+    HyperVState           = $hyperVState
+    WDAGAvailable         = $RunState.wdagAvailable
+    WDAGState             = $wdagState
+    WDAGPolicyConfigured  = ($RunState.wdagPolicies.Count -gt 0)
+    VirtualizationEnabled = $RunState.virtualizationOk
+    FindingsCount         = $findingsCount
   }
-} catch {
-  Add-Finding -FindingList $script:Findings -Code 'WDAG-VirtQueryFailed' -Severity 'Low' `
-    -Message ("Could not query virtualization support: {0}" -f $_.Exception.Message)
+
+  if (-not $Quiet -and $OutputFormat -eq 'Console') {
+    Write-Section -Title 'WDAG Readiness Audit'
+    Write-KeyValue -Key 'HyperV'          -Value ([string]$hyperVState)
+    Write-KeyValue -Key 'WDAG'            -Value ([string]$wdagState)
+    Write-KeyValue -Key 'Virtualization'  -Value ([string]$RunState.virtualizationOk)
+    Write-KeyValue -Key 'Findings'        -Value ([string]$findingsCount)
+  }
+}
+function Invoke-Capability47Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation)
+  $RunState = @{
+
+  }
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability47MainPhase01 -RunState $RunState
+  . Invoke-Capability47MainPhase02 -RunState $RunState
+  . Invoke-Capability47MainPhase03 -RunState $RunState
+  $script:RunState = $RunState
 }
 
-# ----------------------------
-# Build summary & result
-# ----------------------------
+. Invoke-Capability47Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation
 
-$Findings      = @($script:Findings.ToArray())
-$findingsCount = @($Findings).Count
-
-$summary = [pscustomobject]@{
-  ComputerName          = $env:COMPUTERNAME
-  Timestamp             = Get-Date
-  HyperVAvailable       = $hyperVAvailable
-  HyperVState           = $hyperVState
-  WDAGAvailable         = $wdagAvailable
-  WDAGState             = $wdagState
-  WDAGPolicyConfigured  = ($wdagPolicies.Count -gt 0)
-  VirtualizationEnabled = $virtualizationOk
-  FindingsCount         = $findingsCount
+function Get-Capability47ResultToken {
+  $resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' }
+    elseif (@($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'FAIL' }
+    elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARN' }
+    else { 'OK' }
+  return $resultToken
 }
-
-if (-not $Quiet -and $OutputFormat -eq 'Console') {
-  Write-Section -Title 'WDAG Readiness Audit'
-  Write-KeyValue -Key 'HyperV'          -Value ([string]$hyperVState)
-  Write-KeyValue -Key 'WDAG'            -Value ([string]$wdagState)
-  Write-KeyValue -Key 'Virtualization'  -Value ([string]$virtualizationOk)
-  Write-KeyValue -Key 'Findings'        -Value ([string]$findingsCount)
-}
-
-$resultToken = if ($Strict -and $findingsCount -gt 0) { 'FAIL' }
-  elseif (@($Findings | Where-Object { $_.Severity -eq 'High' }).Count -gt 0) { 'FAIL' }
-  elseif (@($Findings | Where-Object { $_.Severity -eq 'Medium' }).Count -gt 0) { 'WARN' }
-  else { 'OK' }
-
+$resultToken = Get-Capability47ResultToken
 $v2Result = Get-V2ResultObject -ScriptName '47-WDAG-Readiness-Audit.ps1' -Mode $Mode `
-  -Result $resultToken -Findings $Findings -Summary $summary `
-  -Metadata @{ WDAGPolicies = $wdagPolicies }
+  -Result $resultToken -Findings $Findings -Summary $RunState.summary `
+  -Metadata @{ WDAGPolicies = $RunState.wdagPolicies }
 
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }

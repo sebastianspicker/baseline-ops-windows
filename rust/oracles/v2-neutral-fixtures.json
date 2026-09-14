@@ -1,0 +1,1722 @@
+{
+  "schema_version": 2,
+  "purpose": "Deterministic structural bindings. Executable comparisons are stored in v2-rust-behavioral-cases.json.",
+  "fixtures": [
+    {
+      "fixture_id": "v3.defender.asr-allowlist.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.defender.asr-allowlist",
+      "source_sha256": "eebaf043116587729d9892dbc52397f23fa093050b6228a0d907dbaf227a74d4",
+      "source_closure_sha256": "5d92a16683151d4d0c0907a82f4851a991a5bdb245f8ab3bd3e0dde4928daea6",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.defender.asr-allowlist/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.defender.asr-allowlist/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 1
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.laps.hygiene.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.laps.hygiene",
+      "source_sha256": "2170dda65aa68e7f597b914aeaf8fa8f0ab688f21bc9a6d752a713083edecaf0",
+      "source_closure_sha256": "215483f253c0f6a9495fc75ca8b4962994851d9724c512e33d0f23a32571cba0",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.laps.hygiene/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.laps.hygiene/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 2
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.local-admins.guardrail.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.local-admins.guardrail",
+      "source_sha256": "a8a0c0b748f4fcc0b83ee531e87e6d8f3ac4290712893082d19f40c9edd4496a",
+      "source_closure_sha256": "a9d0b97f84b63775f5c82a7147bee586ba152587acedc65e3e68d3d91d557abb",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.local-admins.guardrail/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.local-admins.guardrail/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 3
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.office-browser.hardening.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.office-browser.hardening",
+      "source_sha256": "eefea24512779305921e8dcef40ad23b98d5c54f2a004d6c05d68206b7a1a488",
+      "source_closure_sha256": "53a101fe11d3f39db55e6852e7bdd0cd1325d35006b20425e08cdb1cfbcaa592",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.office-browser.hardening/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.office-browser.hardening/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 4
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.windows-update.policy.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.windows-update.policy",
+      "source_sha256": "7d203d55ee63fe9a976823b5216adcef6bb8888fbaa370b9fa8e459d7771c78a",
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.windows-update.policy/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.windows-update.policy/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 5
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.update-health.ssu.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.update-health.ssu",
+      "source_sha256": "a6bf284dc24f203eda705fc559cc4096a783fd2b01f2f5132d709690e8a546b0",
+      "source_closure_sha256": "72cc6a80786dd973598e3069269855887080088570d09a8d7e9ff627f11e72ab",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.update-health.ssu/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.update-health.ssu/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 6
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.scheduled-tasks.hygiene.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.scheduled-tasks.hygiene",
+      "source_sha256": "f43b0418c843c4a178bed1c3f4ed9fd1fb60572df43179abe45b3ca274b51357",
+      "source_closure_sha256": "752bc414ff4ec173039303e88f983e10a02bbc0f41a3f956b5a99c81a19243c1",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.scheduled-tasks.hygiene/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.scheduled-tasks.hygiene/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 7
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.winget.self-heal.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.winget.self-heal",
+      "source_sha256": "c1b76a4522e47270ba037a7b647fc5c5d222555509d2423e6aed4c3a7b8ac2a1",
+      "source_closure_sha256": "728f0c68f8873487fe0c27933d75735a2adeb4f39511a684cbbcce0801badab6",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.winget.self-heal/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.winget.self-heal/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 8
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.support-bundle.collect.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.support-bundle.collect",
+      "source_sha256": "509a9ede1b2bdb240fbc782cf123ce627557c2b975bf042e9e39a8a4d65e5dc7",
+      "source_closure_sha256": "87abcc79214b84f8f98a9a62f96e7d4c827af0bcaa8fe80ad3df82b79cd49227",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.support-bundle.collect/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.support-bundle.collect/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 9
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.support-bundle.parse.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.support-bundle.parse",
+      "source_sha256": "0f322717769c5b4766228e796847b3b90958e4f2be667cfa526659232af653e8",
+      "source_closure_sha256": "39c9568ed5926e474a5856c023b7519eb4a1645d5c3d61e24860ffdb0a52a1a8",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.support-bundle.parse/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.support-bundle.parse/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 10
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.defender.ioc-sweep.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.defender.ioc-sweep",
+      "source_sha256": "d0350ee721eaca0bb3269ccbef9cf23bbbe13ddd6268025735cc8eeb975e56e6",
+      "source_closure_sha256": "5e15ca3772d4bf00a60826f5ed2ba10a008c09b9932362dbd05c488f061972e5",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.defender.ioc-sweep/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.defender.ioc-sweep/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 11
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.ir.artifact-grabber.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.ir.artifact-grabber",
+      "source_sha256": "d10359566b0488ebdc6d9b95d3715c08ee9d003c464ef0760d277ad75acbced3",
+      "source_closure_sha256": "c63e733497bd80bc91264e5a3323ebf3b3da3a5247ad7d2c294e7087c5dd9c37",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.ir.artifact-grabber/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.ir.artifact-grabber/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 12
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.lsass.vbs-hardening.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.lsass.vbs-hardening",
+      "source_sha256": "f3c70540729326cb52fc2e2b3687ab44c4bf3697b14b51c4bd2964cdbfb94a19",
+      "source_closure_sha256": "04c32cd22d2b638ee4cac9bc3c9f1ee77e4fe691b94bfb61bef64f1d38eef778",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.lsass.vbs-hardening/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.lsass.vbs-hardening/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 13
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.remote-access.guardrails.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.remote-access.guardrails",
+      "source_sha256": "2a42ade9bb9c41fdd147072f0d9a273cee1a4e08c61b513fc87a68c79ef66b9b",
+      "source_closure_sha256": "b07c3efbf4b481114d418eb05b700b93a570d58575119d916cde955b4ff738bc",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.remote-access.guardrails/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.remote-access.guardrails/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 14
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.hardware.tpm-posture.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.hardware.tpm-posture",
+      "source_sha256": "6c6189305070593a45bb649ba31f291d4fa8ef20317eddf3f4bb362bceb9f1bb",
+      "source_closure_sha256": "0ad9e95ba964f7a1271b93517435e3e397b20d3c8c1f81319a5f2e8ac36a294d",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.hardware.tpm-posture/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.hardware.tpm-posture/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 15
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.sysmon.config.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.sysmon.config",
+      "source_sha256": "4273927c4658a088eb4e511063ce68fe6f8cfa3cb4a433238c5b35026e03887c",
+      "source_closure_sha256": "8dadec60a117da153b8e64f000956f8c32a161d45105a0d5a228c490391f5f07",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.sysmon.config/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.sysmon.config/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 16
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.sysmon.rule-drift.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.sysmon.rule-drift",
+      "source_sha256": "ee035a257c724b72850d21c6aaa84eb2f04d5daef75ba987f38c83942172a2f0",
+      "source_closure_sha256": "29a52c2f88db88cb84e484a22b8e3748ff233a615f5eae17ef3342da65e94895",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.sysmon.rule-drift/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.sysmon.rule-drift/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 17
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.firewall.baseline.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.firewall.baseline",
+      "source_sha256": "9d62d21c4f44336c71f8eff58d80526d040ad631676a6607a41eebae17aeec25",
+      "source_closure_sha256": "6126e53babfbfd886389ae84acf3df390fd960d999f68afbd99e5458423f25d8",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.firewall.baseline/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.firewall.baseline/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 18
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.software.inventory.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.software.inventory",
+      "source_sha256": "1a8b1c1986f63b8e6fbd0d9901fdf2ae1eca859ec0c0a4bde85ec97b5f0f22f3",
+      "source_closure_sha256": "1a1fa662e9858ea442b49260e991b911075ee56449e0efe384350c3c049ce891",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.software.inventory/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.software.inventory/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 19
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.patch.missing.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.patch.missing",
+      "source_sha256": "b8136ac87e354b0b4e251544f137178eeefe85150d3e839735cff4415f26d1ff",
+      "source_closure_sha256": "02b10d218d9b58c1022e780d4f26c94f3d758e6903e74f2906916ed2d2c593ec",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.patch.missing/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.patch.missing/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 20
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.network.emergency-isolation.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.network.emergency-isolation",
+      "source_sha256": "4ae237579ba121f6a7b155436be96775f890524d1d2d39954b8024cfded4287d",
+      "source_closure_sha256": "f75990cc6b7fc394cb8dd77a0289185851e54039cd4c31b616ded11c6ecfdff2",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.network.emergency-isolation/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.network.emergency-isolation/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 21
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.smb.encryption.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.smb.encryption",
+      "source_sha256": "96569d1d2f71993ab3fc41ef5fc1c7348f3d37a0818e05875f4169c0d4fa98d5",
+      "source_closure_sha256": "8a36ebf05b3dafff3c6fb9a9ef313d8515272a6fceafdd4b6799e621475767aa",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.smb.encryption/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.smb.encryption/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 22
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.bitlocker.operations.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.bitlocker.operations",
+      "source_sha256": "5e05d03286c772faca77ebea3e2ba89d0f5a9177088270e63ff01d32cd5e8a30",
+      "source_closure_sha256": "bed584045fbf3737995d947f21e4d3bf1ac0329916ac0b43a534ef79d3c31ae0",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.bitlocker.operations/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.bitlocker.operations/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 23
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.cert.autoenrollment-health.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.cert.autoenrollment-health",
+      "source_sha256": "b03e37987cbdd30da80dbc2f4079683ff13ef4c931192b64d000be0a9290ea1d",
+      "source_closure_sha256": "3af0427f45f7b0ea04fc9b233e02f127ddcae01f0679972cee45c77752ebe795",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.cert.autoenrollment-health/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.cert.autoenrollment-health/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 24
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.winget.configuration.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.winget.configuration",
+      "source_sha256": "8708f3132759d26abdbe827916ae2f3cb9822005be4128790f0ca7476c80a4cb",
+      "source_closure_sha256": "1fa2f452c006d9decdd00fdb3bce08155892ef52fc77eae501bf931d860c66a9",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.winget.configuration/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.winget.configuration/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 25
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.eventlog.fast-triage.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.eventlog.fast-triage",
+      "source_sha256": "c5c9d872144477d7f8a39b28caef78268f216985ecdc651560d026ca0c1b8362",
+      "source_closure_sha256": "a48ac99e45b9e5e5e23a591e6bd65b2022706dc46fd94e439b6dbf9b5599f41c",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.eventlog.fast-triage/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.eventlog.fast-triage/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 26
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.defender.health.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.defender.health",
+      "source_sha256": "a5166b349545c9693049067ff2bbb2b2bb22af2043dd14df71357b131ed34624",
+      "source_closure_sha256": "0ba84316c4d6462920884929850831d8a68c204304aa3e43896222d36f97932a",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.defender.health/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.defender.health/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 27
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.identity.join.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.identity.join",
+      "source_sha256": "d2e441ccf8b80ea6cc9af72897660241d55360972192cfe86a68982e03586b90",
+      "source_closure_sha256": "6e93fa1793435ff911101ad69023b9baf8f8f586fd4f9c7ef4f1305fcda74bae",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.identity.join/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.identity.join/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 28
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.network.configuration.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.network.configuration",
+      "source_sha256": "ff247d4d77c4f7699b77744ef37c8d0c3950c8b89a290b100c7b5ac87def33d5",
+      "source_closure_sha256": "d73d43e1a2292b0a2b46b29bc3ecbad81e7454657b4216f8b9a6dde863b663d1",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.network.configuration/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.network.configuration/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 29
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.service-process.inventory.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.service-process.inventory",
+      "source_sha256": "5ccd23d33b0cb5f5d70f22b8b13482b4004fd6d0e07950cce0a65dd120f255b2",
+      "source_closure_sha256": "76b297f5be8c1048c5e4e29a0e0b614ee3317347c58227125a607326a082f27b",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.service-process.inventory/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.service-process.inventory/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 30
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.powershell.logging.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.powershell.logging",
+      "source_sha256": "5e0b2a3760abd91e4a6d027195699962579b8e644a9a939ca7a5f992c135cff6",
+      "source_closure_sha256": "acbccb183c3e4aeb6aa5067c8eb40be334734d6774c90808d3b3e418b3e8142f",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.powershell.logging/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.powershell.logging/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 31
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.firewall.logging.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.firewall.logging",
+      "source_sha256": "637129a73b654da810261978463da749d1fcd36f2a57e92c0a3651037f316903",
+      "source_closure_sha256": "431ead3070932f6cdadf41375f97bfc296316635d4eca8153a3d29adc4a74a0b",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.firewall.logging/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.firewall.logging/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 32
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.advanced-audit-policy.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.advanced-audit-policy",
+      "source_sha256": "8e2ad77cde680a3c386ab6171031ffdef828e7664781ea81979befa116c80135",
+      "source_closure_sha256": "c3f840db201c451e2fe456fbfa67fc6e3ef613f771b4083a37162c6e8047094d",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.advanced-audit-policy/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.advanced-audit-policy/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 33
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.time-sync.health.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.time-sync.health",
+      "source_sha256": "4d02be420f63268b7bb10bac3715ad39709640f938c575f84669c3eb78ec5623",
+      "source_closure_sha256": "f18e63a939a56512eee1286de60c07620d290b0c5a51a78d2f16935beccfecc0",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.time-sync.health/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.time-sync.health/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 34
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.storage.reliability.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.storage.reliability",
+      "source_sha256": "888e1e15720031beb5b4c7b4abeace40a0f9c84dff68ea0be98e89073896031e",
+      "source_closure_sha256": "849e8ad572839efb7f612368ab56a6d2d154e1ad3152671994bf55a4394beae9",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.storage.reliability/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.storage.reliability/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 35
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.backup.readiness.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.backup.readiness",
+      "source_sha256": "f2d854548e77d6b5bb72f58b3a5d815fcac173ad7699a3c0ef890bcd44515067",
+      "source_closure_sha256": "a789d56700cc502361c056df382c56b4c8a74f815f486d6bb28e800d43b8492c",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.backup.readiness/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.backup.readiness/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 36
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.remote-surface.audit.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.remote-surface.audit",
+      "source_sha256": "f409423219d5332b120d170046067621f7a53379c54c7f7a054f3f44222157bf",
+      "source_closure_sha256": "9d6d4d6b9407460f568f8fb350e639657e905d1a4634729262df1802d87ef649",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.remote-surface.audit/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.remote-surface.audit/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 37
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.security-options.drift.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.security-options.drift",
+      "source_sha256": "41a09201c01bcc95cdfaec230518e18463e36e1d5315fc2c299733f3f48ef575",
+      "source_closure_sha256": "6867af6d43002f8a702cacf6c3229dd4b4c9d65db3e85b65eb341988a53766ed",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.security-options.drift/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.security-options.drift/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 38
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.credential-guard.vbs.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.credential-guard.vbs",
+      "source_sha256": "76ceb5d1d73144c0b48c98c945a0f5fa5af8801becd9315c3b6022e51d33ca80",
+      "source_closure_sha256": "ad9014c8f41ad4b0991a7c6001c15fcb640a78a0a3bb3441218783be8e86309a",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.credential-guard.vbs/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.credential-guard.vbs/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 39
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.lsa.protection.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.lsa.protection",
+      "source_sha256": "f6eebf9472105edc54e55a032ef97e5fbc778a3bffd42e12a583ae9025361464",
+      "source_closure_sha256": "bd7993f839d78b066cdf4408699be084f02998220990faa9f9e2be9c514cbd31",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.lsa.protection/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.lsa.protection/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 40
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.ntlm.client.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.ntlm.client",
+      "source_sha256": "4843397ced3871c3529e763b97525ee2029a8421743f9ba80a4c514725a4f6af",
+      "source_closure_sha256": "519c1204c44b7e0c7cf52cbfa8a0a9b22503f0d7363165701bd781c7ca6826ba",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.ntlm.client/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.ntlm.client/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 41
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.client-security-baseline.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.client-security-baseline",
+      "source_sha256": "aae4a35b409130da1cad3e3cf5939f3f744c76775dd8ffe84791afadba6d0c75",
+      "source_closure_sha256": "f4ac86824bfe8fe8816c1a4377c44417327a3df52d5eefa0fb96afbc8ed9f64f",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.client-security-baseline/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.client-security-baseline/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 42
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.app-control.audit.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.app-control.audit",
+      "source_sha256": "96edeb625078983dfeef65f0fc233fa08ef3e709279f299b07dfa6b22e6e0a8a",
+      "source_closure_sha256": "172573eb1998503a361455479a6cc5e6c171403788184ce3e2d2a1074fa2a446",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.app-control.audit/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.app-control.audit/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 43
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.defender.ransomware-network-protection.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.defender.ransomware-network-protection",
+      "source_sha256": "bacaf8a3aba0a27bda301ce0b56a2ca4955f2c85cabe3ea0b28eb8aeba63b253",
+      "source_closure_sha256": "568c1dcd1097c1ffcd31184df3f8a1aede664725374a707ec7970ea6491df4f1",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.defender.ransomware-network-protection/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.defender.ransomware-network-protection/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 44
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.wef.client-readiness.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.wef.client-readiness",
+      "source_sha256": "d5e34f855bd66a55dfe955e38abb41e3a4df4cd7a0061905ea09cf46d89aa376",
+      "source_closure_sha256": "fbdb471a5ff9a442c6fdba97ac881323c9a6da9900de3b737a09b26dc03d9adc",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.wef.client-readiness/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.wef.client-readiness/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 45
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.secure-boot.uefi.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.secure-boot.uefi",
+      "source_sha256": "6446421253a7daa1da7647cf24d2ddae83b989a8ad5734af04269d9e0d07af7b",
+      "source_closure_sha256": "29d6d3472ff1c890573a08eb435a0c348f3af9d603e8c935c20a4b2d487e7aef",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.secure-boot.uefi/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.secure-boot.uefi/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 46
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.wdag.readiness.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.wdag.readiness",
+      "source_sha256": "a93876781566c28224010ce3cc175126f5a8fe1786ba380a243c57286dab2e4a",
+      "source_closure_sha256": "f996fe41c3743c0b01f1a668d611a8cefa4635eb8659381adfa790f47e12a743",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.wdag.readiness/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.wdag.readiness/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 47
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.exploit-protection.audit.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.exploit-protection.audit",
+      "source_sha256": "14c872a572578ffb3a2016ee62ff5dfe4b8f1a52ec865e3c47852be1bffb847a",
+      "source_closure_sha256": "737510d915f2303726345f5112583584f683cfb0247dae4ab5695678ceb7d76c",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.exploit-protection.audit/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.exploit-protection.audit/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 48
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.driver-signing.integrity.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.driver-signing.integrity",
+      "source_sha256": "8c7729679e9e926caad397f7f39426780df991ef74e72959840d6420a56cae4b",
+      "source_closure_sha256": "a255562c04dad2edca72913775d7f1e8dd50034f7b2b3a938e347cc944e677e9",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.driver-signing.integrity/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.driver-signing.integrity/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 49
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.amsi.audit.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.amsi.audit",
+      "source_sha256": "59cbeefb44e415089b6591bcc3ce9d6b2cb0424a55e679ab762e5a74873858fd",
+      "source_closure_sha256": "2098145b15f42437011edd5827106c0109de55929352260ab6beef700ddd5bbf",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.amsi.audit/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.amsi.audit/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 50
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.applocker.audit.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.applocker.audit",
+      "source_sha256": "613aa211f84c9c833e636adbdfcc69bbedb0496377f8416b835658bc43823977",
+      "source_closure_sha256": "501e5257d062647f2ed18c661c228f6f8e6ef2d640d9fd8494d5e20f62669628",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.applocker.audit/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.applocker.audit/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 51
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    },
+    {
+      "fixture_id": "v3.doh.audit.neutral",
+      "fixture_kind": "structural_binding",
+      "proof_scope": "structure_only",
+      "capability_id": "v3.doh.audit",
+      "source_sha256": "28e1b3615e478aea6c45c45571f2029a0dcf20edb05312468f5e884437a64411",
+      "source_closure_sha256": "d04f419681be2faedd5610e8c28754ee33feba542d73b53924b34204ce7b0c20",
+      "typed_input": {
+        "mode": "Audit",
+        "config_path": "fixture://v3.doh.audit/profile-v2.json",
+        "output_format": "Json",
+        "output_path": "fixture://v3.doh.audit/result.json",
+        "pass_thru": true,
+        "strict": false,
+        "quiet": true,
+        "no_color": true
+      },
+      "normalized_observation": {
+        "kind": "neutral",
+        "complete": false,
+        "evidence": [],
+        "values": {
+          "capability_number": 52
+        }
+      },
+      "limitations": [
+        "This structural fixture does not execute either implementation.",
+        "It is not behavioral parity or Windows runtime evidence."
+      ],
+      "intentional_safe_parity_differences": [
+        "The fixture never grants legacy paths, commands, native output, or mutation authority."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Explore BaselineOps for Windows: inspect an audit profile, prepare a command, and read a sample result. No endpoint connection required."
+    />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>BaselineOps for Windows · Interactive tour</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#workspace">Skip to interactive tour</a>
+    <header class="masthead">
+      <a class="brand" href="./"
+        ><span class="mark" aria-hidden="true">B/</span> BaselineOps
+        <span class="platform">for Windows</span></a
+      ><a data-repo href="https://github.com/sebastianspicker/baseline-ops"
+        >Source on GitHub ↗</a
+      >
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">WINDOWS ENDPOINT OPERATIONS / POWERSHELL V2</p>
+          <h1>Know the state.<br />Review the next step.</h1>
+          <p class="lede">
+            Audit configuration, investigate drift, and collect evidence.<br
+              class="wide-only"
+            />
+            Start with a profile you can read before you run.
+          </p>
+        </div>
+        <aside class="tour-note">
+          <span class="tag">INTERACTIVE TOUR</span>
+          <p>Real example profiles.<br /> Illustrative endpoint results.</p>
+          <p class="small">
+            This browser demo never runs PowerShell or connects to your devices.
+            The Windows Forms launcher is a separate application.
+          </p>
+        </aside>
+      </section>
+      <div class="facts">
+        <span><strong>52</strong> endpoint capabilities</span
+        ><span><strong>7</strong> example profiles</span
+        ><span><strong>Audit</strong> before remediation</span
+        ><span><strong>JSON</strong> results you can inspect</span>
+      </div>
+      <section
+        id="workspace"
+        class="workspace"
+        aria-label="Interactive walkthrough"
+      >
+        <nav class="steps" aria-label="Tour steps">
+          <button data-step="profiles" aria-current="step">
+            <span>01</span> Choose a profile</button
+          ><button data-step="command"><span>02</span> Prepare an audit</button
+          ><button data-step="result"><span>03</span> Read a result</button>
+        </nav>
+        <div class="workspace-body">
+          <section id="profiles" aria-labelledby="profiles-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">PROFILE LIBRARY</p>
+                <h2 id="profiles-title">Start with a question.</h2>
+                <p>
+                  Each profile lists the scripts it runs. Review those scripts
+                  and their requirements before endpoint use.
+                </p>
+              </div>
+              <span class="tag">PROFILE V2</span>
+            </div>
+            <div class="profile-layout">
+              <div>
+                <label for="profile">Example profile</label
+                ><select id="profile" disabled>
+                  <option>Loading profiles…</option>
+                </select>
+                <p id="profile-description" class="small"></p>
+                <dl class="profile-meta">
+                  <div>
+                    <dt>Mode</dt>
+                    <dd>Audit</dd>
+                  </div>
+                  <div>
+                    <dt>Arguments per step</dt>
+                    <dd>Empty</dd>
+                  </div>
+                  <div>
+                    <dt>Signed scripts required</dt>
+                    <dd>No, in these examples</dd>
+                  </div>
+                </dl>
+                <p class="notice">
+                  Examples need your review. Configure signatures or
+                  authenticated hashes before trusted deployment.
+                </p>
+              </div>
+              <div class="step-list-wrap">
+                <div class="list-heading">
+                  <strong>Execution order</strong><span id="step-count"></span>
+                </div>
+                <ol id="script-list" class="script-list"></ol>
+              </div>
+            </div>
+            <details>
+              <summary>Inspect the profile JSON</summary>
+              <pre id="profile-json"></pre>
+            </details>
+          </section>
+          <section id="command" aria-labelledby="command-title" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">COMMAND PREVIEW</p>
+                <h2 id="command-title">Make the run explicit.</h2>
+                <p>
+                  Run from the toolkit root on Windows, after reviewing the
+                  selected profile.
+                </p>
+              </div>
+              <span class="tag">AUDIT ONLY</span>
+            </div>
+            <div class="command-layout">
+              <div>
+                <label for="output">Output format</label
+                ><select id="output">
+                  <option value="Json">JSON</option>
+                  <option value="Console">Console</option>
+                  <option value="Csv">CSV</option>
+                  <option value="None">Pipeline objects</option></select
+                ><label class="check"
+                  ><input id="whatif" type="checkbox" /> Preview orchestration
+                  with -WhatIf</label
+                >
+                <p class="small">
+                  A profile preview runs no child capabilities and returns
+                  warning exit code 2. An Audit run can still write diagnostic
+                  evidence.
+                </p>
+              </div>
+              <div>
+                <div class="list-heading">
+                  <strong id="command-profile"></strong
+                  ><button id="copy-command" class="utility">
+                    Copy command
+                  </button>
+                </div>
+                <pre id="command-text" class="terminal"></pre>
+                <p class="small">
+                  Use an authenticated release in an administrator-protected
+                  directory for privileged execution. A user-owned checkout is
+                  not a trusted elevated root.
+                </p>
+              </div>
+            </div>
+          </section>
+          <section id="result" aria-labelledby="result-title" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">ILLUSTRATIVE RESULT / DEMO-ENDPOINT</p>
+                <h2 id="result-title">A warning is a place to start.</h2>
+                <p>
+                  A hand-authored Defender example explains the v2 fields. It is
+                  not output from your device or the selected profile.
+                </p>
+              </div>
+              <span class="status">WARN · EXIT 2</span>
+            </div>
+            <div class="result-summary">
+              <div>
+                <span>Capability</span><strong>Defender health audit</strong>
+              </div>
+              <div><span>Mode</span><strong>Audit</strong></div>
+              <div>
+                <span>Sample findings</span><strong>2 to review</strong>
+              </div>
+            </div>
+            <div class="list-heading">
+              <label for="severity">Filter findings</label
+              ><select id="severity">
+                <option value="all">All severities</option>
+                <option value="Medium">Medium</option>
+                <option value="Low">Low</option>
+                <option value="High">High</option></select
+              ><button id="download-result" class="utility">
+                Download sample JSON
+              </button>
+            </div>
+            <div id="findings"></div>
+            <p class="notice">
+              Review the finding in context, decide whether a change is
+              appropriate, then audit again. A result is evidence for a
+              decision, not a compliance certification.
+            </p>
+            <details>
+              <summary>Inspect the v2 result JSON</summary>
+              <pre id="result-json"></pre>
+            </details>
+          </section>
+          <p id="load-error" class="notice" role="alert" hidden>
+            Profiles could not be loaded. Serve this directory over HTTP and
+            reload the page.
+          </p>
+          <noscript
+            ><p class="notice">
+              Enable JavaScript for the interactive tour, or read the profiles
+              and guides on GitHub.
+            </p></noscript
+          >
+          <p
+            id="announcement"
+            class="small"
+            role="status"
+            aria-live="polite"
+          ></p>
+          <div class="workspace-footer">
+            <span>Local browser tour · No device access</span
+            ><button id="next-step" class="primary">Prepare an audit →</button>
+          </div>
+        </div>
+      </section>
+      <section class="reading">
+        <div>
+          <p class="eyebrow">TAKE IT TO WINDOWS</p>
+          <h2>Read first. Run deliberately.</h2>
+        </div>
+        <a
+          data-doc="docs/alpha-release.md"
+          href="https://github.com/sebastianspicker/baseline-ops/blob/main/docs/alpha-release.md"
+          >01
+          <span
+            >Install a trusted release<small
+              >Package verification and protected paths</small
+            ></span
+          >
+          ↗</a
+        ><a
+          data-doc="scripts/README.md"
+          href="https://github.com/sebastianspicker/baseline-ops/blob/main/scripts/README.md"
+          >02
+          <span
+            >Find a capability<small>Script catalog and parameters</small></span
+          >
+          ↗</a
+        ><a
+          data-doc="docs/launcher-gui.md"
+          href="https://github.com/sebastianspicker/baseline-ops/blob/main/docs/launcher-gui.md"
+          >03
+          <span
+            >Use the Windows launcher<small
+              >Profiles, output, and process control</small
+            ></span
+          >
+          ↗</a
+        >
+      </section>
+    </main>
+    <footer>
+      <span>BaselineOps for Windows · MIT licensed</span
+      ><span>PowerShell v2 application · Rust v3 remains unreleased</span>
+    </footer>
+  </body>
+</html>

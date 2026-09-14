@@ -1,5 +1,44 @@
 <#
 .SYNOPSIS
+  Provides private native-process execution helpers.
+.DESCRIPTION
+  Implements trusted executable launch, bounded output capture, and process-tree cleanup behind External.psm1.
+#>
+
+<#
+.SYNOPSIS
+  Appends escaped trailing backslashes to a Windows command line.
+.DESCRIPTION
+  Doubles the trailing run so the closing quote remains part of the argument boundary.
+#>
+function Add-TrailingWindowsCommandLineBackslashes {
+  param([Parameter(Mandatory)][System.Text.StringBuilder]$Builder, [Parameter(Mandatory)][int]$SlashCount)
+  if ($SlashCount -gt 0) { [void]$Builder.Append(('\' * ($SlashCount * 2))) }
+}
+
+<#
+.SYNOPSIS
+  Escapes one value for a Windows native command line.
+.DESCRIPTION
+  Preserves argument boundaries when ProcessStartInfo uses a single string.
+#>
+function Invoke-NativeArgumentEscaper {
+  param([AllowEmptyString()][string]$Argument)
+  if ($Argument.Length -eq 0) { return '""' }
+  if ($Argument -notmatch '[\s"]') { return $Argument }
+  $builder = New-Object System.Text.StringBuilder; [void]$builder.Append('"'); $slashes = 0
+  foreach ($character in $Argument.ToCharArray()) {
+    if ($character -eq '\') { $slashes++; continue }
+    if ($character -eq '"') { [void]$builder.Append(('\' * (($slashes * 2) + 1))); [void]$builder.Append('"'); $slashes = 0; continue }
+    if ($slashes -gt 0) { [void]$builder.Append(('\' * $slashes)); $slashes = 0 }
+    [void]$builder.Append($character)
+  }
+  Add-TrailingWindowsCommandLineBackslashes -Builder $builder -SlashCount $slashes
+  [void]$builder.Append('"'); return $builder.ToString()
+}
+
+<#
+.SYNOPSIS
   Escapes one value for a Windows native command line.
 .DESCRIPTION
   Preserves argument boundaries when ProcessStartInfo uses a single string.
@@ -7,25 +46,7 @@
 function ConvertTo-WindowsCommandLineArgument {
   param([AllowEmptyString()][string]$Argument)
 
-  if ($Argument.Length -eq 0) { return '""' }
-  if ($Argument -notmatch '[\s"]') { return $Argument }
-  $builder = New-Object System.Text.StringBuilder
-  [void]$builder.Append('"')
-  $slashes = 0
-  foreach ($character in $Argument.ToCharArray()) {
-    if ($character -eq '\') { $slashes++; continue }
-    if ($character -eq '"') {
-      [void]$builder.Append(('\' * (($slashes * 2) + 1)))
-      [void]$builder.Append('"')
-      $slashes = 0
-      continue
-    }
-    if ($slashes -gt 0) { [void]$builder.Append(('\' * $slashes)); $slashes = 0 }
-    [void]$builder.Append($character)
-  }
-  if ($slashes -gt 0) { [void]$builder.Append(('\' * ($slashes * 2))) }
-  [void]$builder.Append('"')
-  return $builder.ToString()
+  return Invoke-NativeArgumentEscaper -Argument $Argument
 }
 
 <#
@@ -192,7 +213,19 @@ function Get-NativeWorkerScript {
   [OutputType([string])]
   param()
 
-  return @'
+  $argumentEscaper = @"
+function Add-TrailingWindowsCommandLineBackslashes {
+$(${function:Add-TrailingWindowsCommandLineBackslashes})
+}
+function ConvertTo-WorkerCommandLineArgument {
+$(${function:Invoke-NativeArgumentEscaper})
+}
+"@
+  $workerArgumentSetter = ([string]${function:Set-NativeProcessArguments}).Replace(
+    'ConvertTo-WindowsCommandLineArgument',
+    'ConvertTo-WorkerCommandLineArgument'
+  )
+  return (@'
 $ErrorActionPreference = 'Stop'
 # Windows PowerShell 5.1 can serialize first-use module progress as CLIXML on
 # stderr when the worker is redirected. Suppress only the worker's progress;
@@ -203,61 +236,10 @@ $child = $null
 $utf8 = New-Object Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8
 [Console]::InputEncoding = $utf8
+__BASELINEOPS_ARGUMENT_ESCAPER__
 
-<#
-.SYNOPSIS
-  Escapes one argument for the native worker command line.
-.DESCRIPTION
-  Keeps worker argument boundaries intact for the fallback launch API.
-#>
-function ConvertTo-WorkerCommandLineArgument {
-  param([AllowEmptyString()][string]$Argument)
-
-  if ($Argument.Length -eq 0) { return '""' }
-  if ($Argument -notmatch '[\s"]') { return $Argument }
-  $builder = New-Object System.Text.StringBuilder
-  [void]$builder.Append('"')
-  $slashes = 0
-  foreach ($character in $Argument.ToCharArray()) {
-    if ($character -eq '\') { $slashes++; continue }
-    if ($character -eq '"') {
-      [void]$builder.Append(('\' * (($slashes * 2) + 1)))
-      [void]$builder.Append('"')
-      $slashes = 0
-      continue
-    }
-    if ($slashes -gt 0) { [void]$builder.Append(('\' * $slashes)); $slashes = 0 }
-    [void]$builder.Append($character)
-  }
-  if ($slashes -gt 0) { [void]$builder.Append(('\' * ($slashes * 2))) }
-  [void]$builder.Append('"')
-  return $builder.ToString()
-}
-
-<#
-.SYNOPSIS
-  Configures command-line arguments for the native worker.
-.DESCRIPTION
-  Uses the worker-specific quoting rules required by the child process.
-#>
 function Set-WorkerProcessArguments {
-  param(
-    [Parameter(Mandatory)][Diagnostics.ProcessStartInfo]$StartInfo,
-    [AllowEmptyCollection()][object[]]$Arguments = @()
-  )
-
-  if ($null -ne $StartInfo.PSObject.Properties['ArgumentList']) {
-    foreach ($argument in @($Arguments)) {
-      [void]$StartInfo.ArgumentList.Add([string]$argument)
-    }
-    return
-  }
-
-  $StartInfo.Arguments = (@(
-      $Arguments | ForEach-Object {
-        ConvertTo-WorkerCommandLineArgument -Argument ([string]$_)
-      }
-    ) -join ' ')
+__BASELINEOPS_ARGUMENT_SETTER__
 }
 
 try {
@@ -325,7 +307,7 @@ public static class NativeProcessWorkerSession {
   if ($null -ne $child) { $child.Dispose() }
   if ($null -ne $gate) { $gate.Dispose() }
 }
-'@
+'@).Replace('__BASELINEOPS_ARGUMENT_ESCAPER__', $argumentEscaper).Replace('__BASELINEOPS_ARGUMENT_SETTER__', $workerArgumentSetter)
 }
 
 <#
@@ -379,41 +361,68 @@ function New-NativeWorkerStartInfo {
 .DESCRIPTION
   Uses platform-appropriate termination with a safe failure result.
 #>
-function Stop-NativeProcessTree {
-  [OutputType([bool])]
+function Stop-PosixNativeProcessGroup {
   param(
-    [Parameter(Mandatory)][System.Diagnostics.Process]$Process,
-    [int]$ProcessGroupId = 0
+    [Parameter(Mandatory)][System.Diagnostics.Process]$Process, [Parameter(Mandatory)][int]$ProcessGroupId
   )
-  if (-not $script:IsWindowsHost -and $ProcessGroupId -gt 0) {
-    try {
-      [void][NativeProcessPosix]::KillProcessGroup($ProcessGroupId)
-      try { if ($Process.HasExited) { return $true } } catch { return $false }
-      return $Process.WaitForExit(5000)
-    } catch { Write-Verbose "POSIX process-group termination failed: $($_.Exception.Message)" }
+
+  try {
+    [void][NativeProcessPosix]::KillProcessGroup($ProcessGroupId)
+    try { if ($Process.HasExited) { return $true } } catch { return $false }
+    return $Process.WaitForExit(5000)
+  } catch {
+    Write-Verbose "POSIX process-group termination failed: $($_.Exception.Message)"
+    return $null
   }
-  try { if ($Process.HasExited) { return $true } } catch { return $false }
-  if ($script:IsWindowsHost) {
-    $taskkill = $null
-    try {
-      $taskkillPath = Resolve-TrustedWindowsSystemFile -LeafName 'taskkill.exe'
-      if ([string]::IsNullOrWhiteSpace($taskkillPath)) { throw 'Trusted taskkill executable not found.' }
-      $killer = New-Object System.Diagnostics.ProcessStartInfo
-      $killer.FileName = $taskkillPath; $killer.Arguments = "/PID $($Process.Id) /T /F"; $killer.UseShellExecute = $false; $killer.CreateNoWindow = $true
-      $taskkill = [System.Diagnostics.Process]::Start($killer)
-      if ($taskkill -and -not $taskkill.WaitForExit(10000)) {
-        try { $taskkill.Kill(); [void]$taskkill.WaitForExit(2000) } catch { Write-Verbose "taskkill timeout cleanup failed: $($_.Exception.Message)" }
-      }
-      if ($Process.WaitForExit(5000)) { return $true }
-    } catch { Write-Verbose "taskkill process-tree termination failed: $($_.Exception.Message)" }
-    finally { if ($null -ne $taskkill) { $taskkill.Dispose() } }
+}
+
+<#
+.SYNOPSIS
+  Stops a Windows native process tree through the trusted taskkill executable.
+.DESCRIPTION
+  Returns false when taskkill cannot complete the tree so callers can fall back.
+#>
+function Stop-WindowsNativeProcessTree {
+  [OutputType([bool])]
+  param([Parameter(Mandatory)][System.Diagnostics.Process]$Process)
+
+  $taskkill = $null
+  try {
+    $taskkillPath = Resolve-TrustedWindowsSystemFile -LeafName 'taskkill.exe'
+    if ([string]::IsNullOrWhiteSpace($taskkillPath)) { throw 'Trusted taskkill executable not found.' }
+    $killer = New-Object System.Diagnostics.ProcessStartInfo
+    $killer.FileName = $taskkillPath; $killer.Arguments = "/PID $($Process.Id) /T /F"; $killer.UseShellExecute = $false; $killer.CreateNoWindow = $true
+    $taskkill = [System.Diagnostics.Process]::Start($killer)
+    if ($taskkill -and -not $taskkill.WaitForExit(10000)) {
+      try { $taskkill.Kill(); [void]$taskkill.WaitForExit(2000) } catch { Write-Verbose "taskkill timeout cleanup failed: $($_.Exception.Message)" }
+    }
+    return $Process.WaitForExit(5000)
+  } catch {
+    Write-Verbose "taskkill process-tree termination failed: $($_.Exception.Message)"
+    return $false
+  } finally {
+    if ($null -ne $taskkill) { $taskkill.Dispose() }
   }
+}
+
+<#
+.SYNOPSIS
+  Stops one native process when tree termination has not completed it.
+.DESCRIPTION
+  Uses the broader Process.Kill overload only where the platform supports it.
+#>
+function Stop-DirectNativeProcess {
+  [OutputType([bool])]
+  param([Parameter(Mandatory)][System.Diagnostics.Process]$Process)
+
   try {
     if (-not $script:IsWindowsHost) {
       try {
         $Process.Kill($true)
         return $Process.WaitForExit(5000)
-      } catch { Write-Verbose "Whole process-tree kill is unavailable; falling back to the direct process: $($_.Exception.Message)" }
+      } catch {
+        Write-Verbose "Whole process-tree kill is unavailable; falling back to the direct process: $($_.Exception.Message)"
+      }
     }
     $Process.Kill()
     return $Process.WaitForExit(5000)
@@ -421,6 +430,53 @@ function Stop-NativeProcessTree {
     Write-Verbose "Process kill fallback failed: $($_.Exception.Message)"
     return $false
   }
+}
+
+<#
+.SYNOPSIS
+  Attempts POSIX process-group termination when a group is available.
+.DESCRIPTION
+  Returns null when the supplied execution context has no usable POSIX group.
+#>
+function Stop-NativeProcessGroupIfAvailable {
+  param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [Parameter(Mandatory)][int]$ProcessGroupId)
+
+  if ($script:IsWindowsHost -or $ProcessGroupId -le 0) { return $null }
+  return Stop-PosixNativeProcessGroup -Process $Process -ProcessGroupId $ProcessGroupId
+}
+
+<#
+.SYNOPSIS
+  Tests whether a native process has already exited.
+.DESCRIPTION
+  Converts disposed-process access failures into a safe false result.
+#>
+function Test-NativeProcessExited {
+  [OutputType([bool])]
+  param([Parameter(Mandatory)][System.Diagnostics.Process]$Process)
+
+  try { return $Process.HasExited } catch { return $false }
+}
+
+<#
+.SYNOPSIS
+  Stops a native process and its descendants.
+.DESCRIPTION
+  Uses platform-appropriate termination with a safe failure result.
+#>
+function Stop-NativeProcessTree {
+  [OutputType([bool])]
+  param(
+    [Parameter(Mandatory)][System.Diagnostics.Process]$Process,
+    [int]$ProcessGroupId = 0
+  )
+  $groupResult = Stop-NativeProcessGroupIfAvailable -Process $Process -ProcessGroupId $ProcessGroupId
+  if ($null -ne $groupResult) { return $groupResult }
+  if (Test-NativeProcessExited -Process $Process) { return $true }
+  if ($script:IsWindowsHost) {
+    if (Stop-WindowsNativeProcessTree -Process $Process) { return $true }
+  }
+  return Stop-DirectNativeProcess -Process $Process
 }
 
 <#
@@ -511,6 +567,73 @@ function New-NativeWorkerLaunchContext {
 .DESCRIPTION
   Returns bounded output, exit state, and timeout information for callers.
 #>
+function Stop-NativeProcessAfterTimeout {
+  [OutputType([bool])]
+  param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [AllowNull()][object]$NativeJob, [Parameter(Mandatory)][int]$ProcessGroupId)
+
+  if ($null -ne $NativeJob) { $NativeJob.Dispose() }
+  $terminated = $Process.WaitForExit(5000)
+  if (-not $terminated) {
+    return Stop-NativeProcessTree -Process $Process -ProcessGroupId $ProcessGroupId
+  }
+  return $true
+}
+
+<#
+.SYNOPSIS
+  Cleans up a native process whose output drains did not finish.
+.DESCRIPTION
+  Marks both streams truncated after bounded cleanup has been attempted.
+#>
+function Complete-IncompleteNativeProcessDrain {
+  param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [Parameter(Mandatory)][object]$Capture, [Parameter(Mandatory)][System.Threading.Tasks.Task[]]$DrainTasks, [AllowNull()][object]$NativeJob, [Parameter(Mandatory)][int]$ProcessGroupId)
+
+  if ($null -ne $NativeJob) { $NativeJob.Dispose() }
+  if (-not $script:IsWindowsHost) {
+    [void](Stop-NativeProcessTree -Process $Process -ProcessGroupId $ProcessGroupId)
+  }
+  $Capture.OutputTruncated = $true
+  $Capture.StderrTruncated = $true
+  try { $Process.StandardOutput.Dispose() } catch { Write-Verbose "Stdout drain cleanup failed: $($_.Exception.Message)" }
+  try { $Process.StandardError.Dispose() } catch { Write-Verbose "Stderr drain cleanup failed: $($_.Exception.Message)" }
+  try {
+    [void][System.Threading.Tasks.Task]::WaitAll($DrainTasks, 2000)
+  } catch {
+    Write-Verbose "Native stream drain did not reach a clean terminal state: $($_.Exception.Message)"
+  }
+}
+
+<#
+.SYNOPSIS
+  Waits for the bounded native output drain tasks.
+.DESCRIPTION
+  Performs timeout cleanup only after a terminated process cannot drain cleanly.
+#>
+function Complete-NativeProcessDrain {
+  [OutputType([bool])]
+  param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [Parameter(Mandatory)][object]$Capture, [Parameter(Mandatory)][System.Threading.Tasks.Task[]]$DrainTasks, [Parameter(Mandatory)][bool]$Terminated, [AllowNull()][object]$NativeJob, [Parameter(Mandatory)][int]$ProcessGroupId)
+
+  $drained = $false
+  if ($Terminated) {
+    try {
+      $drained = [System.Threading.Tasks.Task]::WaitAll($DrainTasks, 10000)
+    } catch {
+      $drained = $false
+    }
+  }
+  if (-not $drained) {
+    Complete-IncompleteNativeProcessDrain -Process $Process -Capture $Capture -DrainTasks $DrainTasks `
+      -NativeJob $NativeJob -ProcessGroupId $ProcessGroupId
+  }
+  return $drained
+}
+
+<#
+.SYNOPSIS
+  Waits for native process completion and captures its output.
+.DESCRIPTION
+  Returns bounded output, exit state, and timeout information for callers.
+#>
 function Wait-NativeProcessCompletion {
   [CmdletBinding()]
   param(
@@ -527,36 +650,11 @@ function Wait-NativeProcessCompletion {
   $executionTimedOut = -not $Process.WaitForExit($TimeoutSeconds * 1000)
   $terminated = $true
   if ($executionTimedOut) {
-    if ($null -ne $NativeJob) { $NativeJob.Dispose() }
-    $terminated = $Process.WaitForExit(5000)
-    if (-not $terminated) {
-      $terminated = Stop-NativeProcessTree -Process $Process -ProcessGroupId $ProcessGroupId
-    }
+    $terminated = Stop-NativeProcessAfterTimeout -Process $Process -NativeJob $NativeJob -ProcessGroupId $ProcessGroupId
   }
 
-  $drained = $false
-  if ($terminated) {
-    try {
-      $drained = [System.Threading.Tasks.Task]::WaitAll($drainTasks, 10000)
-    } catch {
-      $drained = $false
-    }
-  }
-  if (-not $drained) {
-    if ($null -ne $NativeJob) { $NativeJob.Dispose() }
-    if (-not $script:IsWindowsHost) {
-      [void](Stop-NativeProcessTree -Process $Process -ProcessGroupId $ProcessGroupId)
-    }
-    $Capture.OutputTruncated = $true
-    $Capture.StderrTruncated = $true
-    try { $Process.StandardOutput.Dispose() } catch { Write-Verbose "Stdout drain cleanup failed: $($_.Exception.Message)" }
-    try { $Process.StandardError.Dispose() } catch { Write-Verbose "Stderr drain cleanup failed: $($_.Exception.Message)" }
-    try {
-      [void][System.Threading.Tasks.Task]::WaitAll($drainTasks, 2000)
-    } catch {
-      Write-Verbose "Native stream drain did not reach a clean terminal state: $($_.Exception.Message)"
-    }
-  }
+  $drained = Complete-NativeProcessDrain -Process $Process -Capture $Capture -DrainTasks $drainTasks `
+    -Terminated $terminated -NativeJob $NativeJob -ProcessGroupId $ProcessGroupId
 
   $timedOut = $executionTimedOut -or -not $drained
   return [pscustomobject]@{
@@ -660,110 +758,173 @@ function New-NativeCommandResult {
 
 <#
 .SYNOPSIS
+  Resolves a command for native invocation.
+.DESCRIPTION
+  Applies the command-text and canonical-executable trust policy before launch.
+#>
+function Resolve-NativeInvocationCommand {
+  [OutputType([string])]
+  param([Parameter(Mandatory)][string]$Command, [switch]$ThrowOnError)
+
+  if ([string]::IsNullOrWhiteSpace($Command) -or $Command -match '[\x00-\x1F\x7F]') {
+    throw 'Invoke-NativeCommand: -Command must be a non-empty executable name or path without control characters.'
+  }
+  $resolvedCommand = Resolve-NativeExecutablePath -Name $Command
+  if (-not [string]::IsNullOrWhiteSpace($resolvedCommand)) { return $resolvedCommand }
+  $message = "Command not found: $Command"
+  if ($ThrowOnError) { throw $message }
+  Write-Warning $message
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Starts a validated native command through its isolated worker.
+.DESCRIPTION
+  Holds executable and worker identities through the process launch transition.
+#>
+function Start-NativeCommandExecution {
+  param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][string]$ResolvedCommand, [AllowEmptyCollection()][string[]]$Arguments, [Parameter(Mandatory)][int]$MaxOutputBytes)
+
+  $executableLock = $null
+  $launchContext = $null
+  $process = $null
+  try {
+    $executableLock = [IO.File]::Open($ResolvedCommand, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    Assert-NativeExecutableIdentity -ResolvedCommand $ResolvedCommand
+    Initialize-NativeProcessCaptureType
+    $launchContext = New-NativeWorkerLaunchContext -ResolvedCommand $ResolvedCommand -Arguments $Arguments
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $launchContext.StartInfo
+    $capture = New-Object NativeProcessCapture($MaxOutputBytes)
+    if (-not $process.Start()) { throw "Process did not start: $Command" }
+    $processGroupId = if ($script:IsWindowsHost) { 0 } else { $process.Id }
+    if ($null -ne $launchContext.NativeJob) {
+      $launchContext.NativeJob.Assign($process)
+      [void]$launchContext.StartGate.Set()
+    }
+    return [pscustomobject]@{ Process = $process; Capture = $capture; ExecutableLock = $executableLock; LaunchContext = $launchContext; ProcessGroupId = $processGroupId }
+  } catch {
+    Clear-PartiallyStartedNativeCommandExecution -Process $process -LaunchContext $launchContext -ExecutableLock $executableLock
+    throw
+  }
+}
+
+<#
+.SYNOPSIS
+  Releases resources acquired before a native command launch completes.
+.DESCRIPTION
+  Mirrors normal disposal while allowing any individual allocation to be absent.
+#>
+function Clear-PartiallyStartedNativeCommandExecution {
+  param([AllowNull()][object]$Process, [AllowNull()][object]$LaunchContext, [AllowNull()][object]$ExecutableLock)
+
+  if ($null -ne $Process) { $Process.Dispose() }
+  if ($null -ne $LaunchContext) {
+    if ($null -ne $LaunchContext.StartGate) { $LaunchContext.StartGate.Dispose() }
+    if ($null -ne $LaunchContext.NativeJob) { $LaunchContext.NativeJob.Dispose() }
+    if ($null -ne $LaunchContext.WorkerLock) { $LaunchContext.WorkerLock.Dispose() }
+  }
+  if ($null -ne $ExecutableLock) { $ExecutableLock.Dispose() }
+}
+
+<#
+.SYNOPSIS
+  Stops a started native execution following an invocation failure.
+.DESCRIPTION
+  Preserves the existing best-effort cleanup path without replacing its error.
+#>
+function Stop-FailedNativeCommandExecution {
+  param([AllowNull()][object]$Execution)
+
+  if ($null -eq $Execution) { return }
+  try {
+    if (-not $Execution.Process.HasExited) {
+      [void](Stop-NativeProcessTree -Process $Execution.Process -ProcessGroupId $Execution.ProcessGroupId)
+    }
+  } catch {
+    Write-Verbose "Failed native process cleanup: $($_.Exception.Message)"
+  }
+}
+
+<#
+.SYNOPSIS
+  Releases native command execution resources.
+.DESCRIPTION
+  Disposes launch controls, process handles, and executable locks after use.
+#>
+function Complete-NativeCommandExecution {
+  param([AllowNull()][object]$Execution)
+
+  if ($null -eq $Execution) { return }
+  $launchContext = $Execution.LaunchContext
+  if ($null -ne $launchContext.StartGate) { $launchContext.StartGate.Dispose() }
+  if ($null -ne $launchContext.NativeJob) { $launchContext.NativeJob.Dispose() }
+  if ($null -ne $launchContext.WorkerLock) { $launchContext.WorkerLock.Dispose() }
+  $Execution.Process.Dispose()
+  $Execution.ExecutableLock.Dispose()
+}
+
+<#
+.SYNOPSIS
+  Formats the public result of a completed native command.
+.DESCRIPTION
+  Preserves capture, warning, and throw behavior for command failure outcomes.
+#>
+function Get-NativeInvocationResult {
+  param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][object]$Completion, [Parameter(Mandatory)][int]$TimeoutSeconds, [switch]$ThrowOnError, [switch]$CaptureOutput, [switch]$Quiet)
+
+  $success = (-not $Completion.TimedOut -and $Completion.ExitCode -eq 0)
+  if (-not $success) {
+    $message = Get-NativeCommandFailureMessage -Command $Command -Completion $Completion -TimeoutSeconds $TimeoutSeconds
+    if ($ThrowOnError) { throw $message }
+    if (-not $Quiet) { Write-Warning $message }
+  }
+  if ($CaptureOutput) { return New-NativeCommandResult -Completion $Completion }
+  if ($success) { return $true }
+  return $false
+}
+
+<#
+.SYNOPSIS
+  Handles a native command invocation failure.
+.DESCRIPTION
+  Rethrows only when requested and otherwise retains the established warning result.
+#>
+function Resolve-NativeInvocationFailure {
+  param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord, [switch]$ThrowOnError)
+
+  $message = "Failed to execute $Command : $($ErrorRecord.Exception.Message)"
+  if ($ThrowOnError) { throw $message }
+  Write-Warning $message
+  return $null
+}
+
+<#
+.SYNOPSIS
   Invokes a validated native command with bounded capture.
 .DESCRIPTION
   Runs the command through the isolated worker and returns structured status.
 #>
 function Invoke-NativeCommand {
   [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [string]$Command,
+  [OutputType([bool], [psobject])]
+  param([Parameter(Mandatory)][string]$Command, [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Arguments, [switch]$ThrowOnError, [switch]$CaptureOutput, [switch]$Quiet, [ValidateRange(1, 86400)][int]$TimeoutSeconds = 300, [ValidateRange(1024, 10485760)][int]$MaxOutputBytes = 1048576)
 
-    [Parameter(Mandatory)]
-    [AllowEmptyCollection()]
-    [AllowEmptyString()]
-    [string[]]$Arguments,
-
-    [switch]$ThrowOnError,
-
-    [switch]$CaptureOutput,
-
-    [switch]$Quiet,
-
-    [ValidateRange(1, 86400)][int]$TimeoutSeconds = 300,
-
-    [ValidateRange(1024, 10485760)][int]$MaxOutputBytes = 1048576
-  )
-
-  # ProcessStartInfo starts FileName directly with UseShellExecute disabled, so
-  # path characters such as spaces and ampersands are data rather than shell
-  # syntax. Reject only empty values and control characters that cannot identify
-  # a safe executable path.
-  if ([string]::IsNullOrWhiteSpace($Command) -or $Command -match '[\x00-\x1F\x7F]') {
-    throw "Invoke-NativeCommand: -Command must be a non-empty executable name or path without control characters."
-  }
-
-  # Resolve once to an absolute path. The read-share lock prevents replacement
-  # on Windows. POSIX launch remains path-based: the open descriptor proves the
-  # checked file was readable but cannot prevent a concurrent rename/unlink.
-  $resolvedCommand = Resolve-NativeExecutablePath -Name $Command
-  if ([string]::IsNullOrWhiteSpace($resolvedCommand)) {
-    $msg = "Command not found: $Command"
-    if ($ThrowOnError) {
-      throw $msg
-    }
-    Write-Warning $msg
-    return $null
-  }
-
-  $process = $null
-  $processStarted = $false
-  $executableLock = $null
-  $launchContext = $null
-  $processGroupId = 0
+  $resolvedCommand = Resolve-NativeInvocationCommand -Command $Command -ThrowOnError:$ThrowOnError
+  if ([string]::IsNullOrWhiteSpace($resolvedCommand)) { return $null }
+  $execution = $null
   try {
-    $executableLock = [System.IO.File]::Open($resolvedCommand, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-    Assert-NativeExecutableIdentity -ResolvedCommand $resolvedCommand
-    Initialize-NativeProcessCaptureType
-    $launchContext = New-NativeWorkerLaunchContext -ResolvedCommand $resolvedCommand -Arguments $Arguments
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $launchContext.StartInfo
-    $capture = New-Object NativeProcessCapture($MaxOutputBytes)
-    if (-not $process.Start()) { throw "Process did not start: $Command" }
-    $processStarted = $true
-    if (-not $script:IsWindowsHost) { $processGroupId = $process.Id }
-    if ($null -ne $launchContext.NativeJob) {
-      $launchContext.NativeJob.Assign($process)
-      [void]$launchContext.StartGate.Set()
-    }
-    $completion = Wait-NativeProcessCompletion `
-      -Process $process `
-      -Capture $capture `
-      -TimeoutSeconds $TimeoutSeconds `
-      -NativeJob $launchContext.NativeJob `
-      -ProcessGroupId $processGroupId
-    $success = (-not $completion.TimedOut -and $completion.ExitCode -eq 0)
-    if (-not $success) {
-      $msg = Get-NativeCommandFailureMessage `
-        -Command $Command `
-        -Completion $completion `
-        -TimeoutSeconds $TimeoutSeconds
-      if ($ThrowOnError) { throw $msg }
-      if (-not $Quiet) { Write-Warning $msg }
-    }
-    if ($CaptureOutput) {
-      return New-NativeCommandResult -Completion $completion
-    }
-    if ($success) { return $true }
-    return $false
+    $execution = Start-NativeCommandExecution -Command $Command -ResolvedCommand $resolvedCommand `
+      -Arguments $Arguments -MaxOutputBytes $MaxOutputBytes
+    $completion = Wait-NativeProcessCompletion -Process $execution.Process -Capture $execution.Capture `
+      -TimeoutSeconds $TimeoutSeconds -NativeJob $execution.LaunchContext.NativeJob -ProcessGroupId $execution.ProcessGroupId
+    return Get-NativeInvocationResult -Command $Command -Completion $completion -TimeoutSeconds $TimeoutSeconds `
+      -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput -Quiet:$Quiet
   } catch {
-    if ($processStarted) {
-      try { if (-not $process.HasExited) { [void](Stop-NativeProcessTree -Process $process -ProcessGroupId $processGroupId) } } catch { Write-Verbose "Failed native process cleanup: $($_.Exception.Message)" }
-    }
-    $msg = "Failed to execute $Command : $($_.Exception.Message)"
-    if ($ThrowOnError) {
-      throw $msg
-    }
-    Write-Warning $msg
-    return $null
+    Stop-FailedNativeCommandExecution -Execution $execution
+    return Resolve-NativeInvocationFailure -Command $Command -ErrorRecord $_ -ThrowOnError:$ThrowOnError
   } finally {
-    if ($null -ne $launchContext) {
-      if ($null -ne $launchContext.StartGate) { $launchContext.StartGate.Dispose() }
-      if ($null -ne $launchContext.NativeJob) { $launchContext.NativeJob.Dispose() }
-      if ($null -ne $launchContext.WorkerLock) { $launchContext.WorkerLock.Dispose() }
-    }
-    if ($null -ne $process) { $process.Dispose() }
-    if ($null -ne $executableLock) { $executableLock.Dispose() }
+    Complete-NativeCommandExecution -Execution $execution
   }
 }

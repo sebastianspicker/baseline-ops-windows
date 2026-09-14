@@ -21,8 +21,8 @@ pub struct DefenderAsrAllowlistPolicy {}
 ///
 /// Values are aggregate metadata only. The collector never retains rule identifiers
 /// or pairs an action with a specific rule.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AsrRuleActionCounts {
     /// Rules explicitly disabled (`0`).
     pub disabled: u32,
@@ -56,8 +56,8 @@ impl AsrRuleActionCounts {
 }
 
 /// Native evidence retained by the capability 01 adapter.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct DefenderAsrAllowlistObservation {
     /// Count of ASR-only exclusions; their values are intentionally not retained.
     pub asr_only_exclusion_count: Observation<u32>,

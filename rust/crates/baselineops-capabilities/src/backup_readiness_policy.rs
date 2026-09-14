@@ -192,13 +192,7 @@ pub fn parse_vss_writers(output: &str) -> Observation<Vec<VssWriter>> {
 
 fn parse_writer_block(block: &str) -> Option<VssWriter> {
     let (name, body) = block.split_once('\'')?;
-    let state = body
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("State: ["))?;
-    let (_, state) = state.split_once("] ")?;
-    let error = body
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("Last error: "))?;
+    let (state, error) = writer_status(body)?;
     if name.is_empty() || name.len() > 256 || state.is_empty() || error.is_empty() {
         return None;
     }
@@ -207,6 +201,17 @@ fn parse_writer_block(block: &str) -> Option<VssWriter> {
         stable: state == "Stable",
         no_error: error == "No error",
     })
+}
+
+fn writer_status(body: &str) -> Option<(&str, &str)> {
+    let state = body
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("State: ["))?;
+    let (_, state) = state.split_once("] ")?;
+    let error = body
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Last error: "))?;
+    Some((state, error))
 }
 
 fn incomplete(code: &'static str, state: &str, findings: &mut Vec<PolicyFinding>) {
@@ -257,31 +262,7 @@ mod tests {
     #[test]
     fn mixed_vss_writers_preserve_failed_writer_and_audit_finding_order() {
         let audit = evaluate_backup_readiness(
-            BackupReadinessObservation {
-                os_volume: Observation::Present(OsVolumeSpace {
-                    volume: "C:\\".into(),
-                    free_bytes: BackupReadinessPolicy::default().minimum_os_free_bytes,
-                    total_bytes: 100 * 1024 * 1024 * 1024,
-                }),
-                vss_writers: Observation::Present(vec![
-                    VssWriter {
-                        name: "System Writer".into(),
-                        stable: true,
-                        no_error: true,
-                    },
-                    VssWriter {
-                        name: "SqlServerWriter".into(),
-                        stable: false,
-                        no_error: true,
-                    },
-                    VssWriter {
-                        name: "Registry Writer".into(),
-                        stable: true,
-                        no_error: false,
-                    },
-                ]),
-                file_history_present: Observation::Present(false),
-            },
+            mixed_writers_observation(),
             &BackupReadinessPolicy::default(),
         );
 
@@ -316,6 +297,34 @@ mod tests {
         );
     }
 
+    fn mixed_writers_observation() -> BackupReadinessObservation {
+        BackupReadinessObservation {
+            os_volume: Observation::Present(OsVolumeSpace {
+                volume: "C:\\".into(),
+                free_bytes: BackupReadinessPolicy::default().minimum_os_free_bytes,
+                total_bytes: 100 * 1024 * 1024 * 1024,
+            }),
+            vss_writers: Observation::Present(vec![
+                VssWriter {
+                    name: "System Writer".into(),
+                    stable: true,
+                    no_error: true,
+                },
+                VssWriter {
+                    name: "SqlServerWriter".into(),
+                    stable: false,
+                    no_error: true,
+                },
+                VssWriter {
+                    name: "Registry Writer".into(),
+                    stable: true,
+                    no_error: false,
+                },
+            ]),
+            file_history_present: Observation::Present(false),
+        }
+    }
+
     #[test]
     fn empty_vss_writers_emit_the_exact_incomplete_finding() {
         let mut findings = Vec::new();
@@ -348,31 +357,20 @@ mod tests {
         assert_eq!(
             audit.findings,
             vec![
-                PolicyFinding {
-                    code: "BKP-OsDiskIncomplete",
-                    status: FindingStatus::Warning,
-                    severity: Severity::Medium,
-                    message: "Required backup-readiness evidence is incomplete: access denied."
-                        .into(),
-                    evidence: JsonMap::from([("read_only".into(), json!(true))]),
-                },
-                PolicyFinding {
-                    code: "BKP-VssWritersIncomplete",
-                    status: FindingStatus::Warning,
-                    severity: Severity::Medium,
-                    message: "Required backup-readiness evidence is incomplete: access denied."
-                        .into(),
-                    evidence: JsonMap::from([("read_only".into(), json!(true))]),
-                },
-                PolicyFinding {
-                    code: "BKP-FileHistoryIncomplete",
-                    status: FindingStatus::Warning,
-                    severity: Severity::Medium,
-                    message: "Required backup-readiness evidence is incomplete: access denied."
-                        .into(),
-                    evidence: JsonMap::from([("read_only".into(), json!(true))]),
-                },
+                access_denied_finding("BKP-OsDiskIncomplete"),
+                access_denied_finding("BKP-VssWritersIncomplete"),
+                access_denied_finding("BKP-FileHistoryIncomplete"),
             ]
         );
+    }
+
+    fn access_denied_finding(code: &'static str) -> PolicyFinding {
+        PolicyFinding {
+            code,
+            status: FindingStatus::Warning,
+            severity: Severity::Medium,
+            message: "Required backup-readiness evidence is incomplete: access denied.".into(),
+            evidence: JsonMap::from([("read_only".into(), json!(true))]),
+        }
     }
 }

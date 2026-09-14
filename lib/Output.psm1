@@ -20,6 +20,8 @@ $script:UiDefaults = [ordered]@{
   PrefixWidth  = 7
 }
 
+$script:UiColorAliases = @{ 'default' = $null; 'key' = [ConsoleColor]::Gray; 'value' = [ConsoleColor]::White; 'accent' = [ConsoleColor]::White; 'header' = [ConsoleColor]::Cyan; 'title' = [ConsoleColor]::Cyan; 'section' = [ConsoleColor]::Cyan; 'darkcyan' = [ConsoleColor]::Cyan; 'darkyellow' = [ConsoleColor]::Yellow; 'darkgreen' = [ConsoleColor]::Green; 'darkred' = [ConsoleColor]::Red; 'darkgrey' = [ConsoleColor]::DarkGray; 'grey' = [ConsoleColor]::Gray }
+
 <#
 .SYNOPSIS
   Resolves a UI style to a console color.
@@ -37,21 +39,8 @@ function Resolve-UiColor {
   if ([string]::IsNullOrWhiteSpace($s)) { return $null }
 
   $name = $s.Trim()
-  switch ($name.ToLowerInvariant()) {
-    'default' { return $null }
-    'key' { return [ConsoleColor]::Gray }
-    'value' { return [ConsoleColor]::White }
-    'accent' { return [ConsoleColor]::White }
-    'header' { return [ConsoleColor]::Cyan }
-    'title' { return [ConsoleColor]::Cyan }
-    'section' { return [ConsoleColor]::Cyan }
-    'darkcyan' { return [ConsoleColor]::Cyan }
-    'darkyellow' { return [ConsoleColor]::Yellow }
-    'darkgreen' { return [ConsoleColor]::Green }
-    'darkred' { return [ConsoleColor]::Red }
-    'darkgrey' { return [ConsoleColor]::DarkGray }
-    'grey' { return [ConsoleColor]::Gray }
-  }
+  $alias = $name.ToLowerInvariant()
+  if ($script:UiColorAliases.ContainsKey($alias)) { return $script:UiColorAliases[$alias] }
 
   try {
     return [ConsoleColor]$name
@@ -59,6 +48,61 @@ function Resolve-UiColor {
     $severityColor = Console\Get-StatusColor -Status $name
     return [ConsoleColor]$severityColor
   }
+}
+
+<#
+.SYNOPSIS
+  Gets a switch value from explicit parameters or compatible caller state.
+#>
+function Get-UiInheritedSwitch {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$BoundParameters,
+    [Parameter(Mandatory)][string]$Name,
+    [bool]$Value
+  )
+
+  if ($BoundParameters.ContainsKey($Name)) { return $Value }
+  return [bool](Get-CallerValue -Name $Name)
+}
+
+<#
+.SYNOPSIS
+  Determines whether output should use the information stream.
+#>
+function Test-UiInformationOutput {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$BoundParameters,
+    [bool]$UseWriteInformation,
+    [bool]$UseInformationStream
+  )
+
+  if ($BoundParameters.ContainsKey('UseWriteInformation') -or $BoundParameters.ContainsKey('UseInformationStream')) {
+    return $UseWriteInformation -or $UseInformationStream
+  }
+  $useInformation = [bool](Get-CallerValue -Name 'UseWriteInformation')
+  if (-not $useInformation) { $useInformation = [bool](Get-CallerValue -Name 'UseInformationStream') }
+  return $useInformation
+}
+
+<#
+.SYNOPSIS
+  Determines whether output color should be suppressed.
+#>
+function Test-UiNoColorOutput {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$BoundParameters,
+    [bool]$NoColor
+  )
+
+  if ($BoundParameters.ContainsKey('NoColor')) { return $NoColor }
+  $noColor = [bool](Get-CallerValue -Name 'NoColor')
+  if ($noColor) { return $true }
+  $useColor = Get-CallerValue -Name 'UseColor'
+  if ($null -eq $useColor) { return $false }
+  return -not [bool]$useColor
 }
 
 <#
@@ -82,22 +126,12 @@ function Write-UiLine {
     [switch]$Quiet
   )
 
-  if (-not $PSBoundParameters.ContainsKey('NoConsole')) {
-    # Compatibility behavior: omitted values are inherited from caller scope.
-    $NoConsole = [bool](Get-CallerValue -Name 'NoConsole')
-  }
-  if (-not $PSBoundParameters.ContainsKey('Quiet')) {
-    # Compatibility behavior: omitted values are inherited from caller scope.
-    $Quiet = [bool](Get-CallerValue -Name 'Quiet')
-  }
+  $NoConsole = Get-UiInheritedSwitch -BoundParameters $PSBoundParameters -Name 'NoConsole' -Value $NoConsole
+  $Quiet = Get-UiInheritedSwitch -BoundParameters $PSBoundParameters -Name 'Quiet' -Value $Quiet
   if ($NoConsole -or $Quiet) { return }
 
-  $useInfo = $UseWriteInformation -or $UseInformationStream
-  if (-not $PSBoundParameters.ContainsKey('UseWriteInformation') -and -not $PSBoundParameters.ContainsKey('UseInformationStream')) {
-    # Compatibility behavior: omitted values are inherited from caller scope.
-    $useInfo = [bool](Get-CallerValue -Name 'UseWriteInformation')
-    if (-not $useInfo) { $useInfo = [bool](Get-CallerValue -Name 'UseInformationStream') }
-  }
+  $useInfo = Test-UiInformationOutput -BoundParameters $PSBoundParameters `
+    -UseWriteInformation $UseWriteInformation -UseInformationStream $UseInformationStream
 
   if ($useInfo) {
     if ([string]::IsNullOrEmpty($Message)) {
@@ -108,27 +142,84 @@ function Write-UiLine {
     return
   }
 
-  if (-not $PSBoundParameters.ContainsKey('NoColor')) {
-    # Compatibility behavior: omitted color controls are inherited from caller scope.
-    $NoColor = [bool](Get-CallerValue -Name 'NoColor')
-  }
-  if (-not $NoColor) {
-    # Compatibility behavior: omitted color controls are inherited from caller scope.
-    $callerUseColor = Get-CallerValue -Name 'UseColor'
-    if ($null -eq $callerUseColor) { $callerUseColor = $true }
-    if (-not $callerUseColor) { $NoColor = $true }
-  }
+  $NoColor = Test-UiNoColorOutput -BoundParameters $PSBoundParameters -NoColor $NoColor
 
   $fg = if ($NoColor) { $null } else { Resolve-UiColor -Style $Style }
   if ($NoNewLine) {
-    if ($null -ne $fg) {
-      $PSCmdlet.Host.UI.Write($fg, $PSCmdlet.Host.UI.RawUI.BackgroundColor, $Message)
-    } else {
-      $PSCmdlet.Host.UI.Write($Message)
-    }
+    Console\Write-HostConsoleLine -HostUi $PSCmdlet.Host.UI -Color $fg `
+      -BackgroundColor $PSCmdlet.Host.UI.RawUI.BackgroundColor -Message $Message -NoNewLine
     return
   }
   Write-Information -MessageData $Message -InformationAction Continue
+}
+
+<#
+.SYNOPSIS
+  Creates ordered severity counts for a UI summary.
+#>
+function Get-UiSummaryCounts {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][psobject]$Stats)
+
+  return [ordered]@{
+    Critical = $Stats.Critical; High = $Stats.High; Error = $Stats.Error; Medium = $Stats.Medium; Low = $Stats.Low
+    Info = $Stats.Info; Skipped = $Stats.Skip; Debug = $Stats.Debug; OK = $Stats.OK
+  }
+}
+
+<#
+.SYNOPSIS
+  Tests whether severity counts represent a failed result.
+#>
+function Test-UiSummaryFailure {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][hashtable]$Counts)
+
+  return ($Counts.Critical -gt 0 -or $Counts.High -gt 0 -or $Counts.Error -gt 0)
+}
+
+<#
+.SYNOPSIS
+  Gets the style for a summary total.
+#>
+function Get-UiSummaryTotalStyle {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$Counts,
+    [Parameter(Mandatory)][int]$Total
+  )
+
+  if (Test-UiSummaryFailure -Counts $Counts) { return 'Error' }
+  if ($Counts.Medium -gt 0) { return 'Warn' }
+  if ($Total -eq 0 -or $Counts.OK -gt 0) { return 'Success' }
+  return 'Info'
+}
+
+<#
+.SYNOPSIS
+  Writes nonzero severity rows for a UI summary.
+#>
+function Write-UiSummaryRows {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][hashtable]$Counts)
+
+  $styles = @{ Critical = 'Error'; High = 'Error'; Error = 'Error'; Medium = 'Warn'; Low = 'Info'; Info = 'Muted'; Skipped = 'Muted'; Debug = 'Muted'; OK = 'Success' }
+  foreach ($name in $styles.Keys) {
+    if ($Counts[$name] -gt 0) { Write-KeyValue -Key ('  ' + $name) -Value ([string]$Counts[$name]) -ValueStyle $styles[$name] }
+  }
+}
+
+<#
+.SYNOPSIS
+  Gets the overall summary result and style.
+#>
+function Get-UiSummaryResult {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][hashtable]$Counts)
+
+  if (Test-UiSummaryFailure -Counts $Counts) { return [pscustomobject]@{ Result = 'FAIL'; Style = 'Error' } }
+  if ($Counts.Medium -gt 0) { return [pscustomobject]@{ Result = 'WARN'; Style = 'Warn' } }
+  return [pscustomobject]@{ Result = 'PASS'; Style = 'Success' }
 }
 
 <#
@@ -140,8 +231,8 @@ function Write-UiLine {
 function Write-ConsoleLine {
   [CmdletBinding()]
   param(
-    [Parameter(Position=0)][Alias('Text')][AllowNull()][AllowEmptyString()][string]$Message = '',
-    [Parameter(Position=1)][Alias('Color','ForegroundColor','Role')][object]$Style,
+    [Alias('Text')][Parameter(Position=0)][AllowNull()][AllowEmptyString()][string]$Message = '',
+    [Alias('Color','ForegroundColor','Role')][Parameter(Position=1)][object]$Style,
     [switch]$NoNewLine,
     [pscustomobject]$Config,
     [switch]$NoConsole,
@@ -650,43 +741,16 @@ function Write-UiSummaryTable {
   if ($null -ne $Findings) { $findingsList = @($Findings) }
 
   $stats = Console\Get-FindingStats -Findings $findingsList
-  $counts = [ordered]@{
-    Critical = $stats.Critical
-    High     = $stats.High
-    Error    = $stats.Error
-    Medium   = $stats.Medium
-    Low      = $stats.Low
-    Info     = $stats.Info
-    Skipped  = $stats.Skip
-    Debug    = $stats.Debug
-    OK       = $stats.OK
-  }
+  $counts = Get-UiSummaryCounts -Stats $stats
 
   Write-Section -Title $Title -Width $Width
   $total = $findingsList.Count
-  $totalStyle = if ($counts.Critical -gt 0 -or $counts.High -gt 0 -or $counts.Error -gt 0) { 'Error' }
-                elseif ($counts.Medium -gt 0) { 'Warn' }
-                elseif ($total -eq 0 -or $counts.OK -gt 0) { 'Success' }
-                else { 'Info' }
+  $totalStyle = Get-UiSummaryTotalStyle -Counts $counts -Total $total
 
   Write-KeyValue -Key 'Total findings' -Value ([string]$total) -ValueStyle $totalStyle
-  if ($counts.Critical -gt 0) { Write-KeyValue -Key '  Critical' -Value ([string]$counts.Critical) -ValueStyle 'Error' }
-  if ($counts.High -gt 0)     { Write-KeyValue -Key '  High'     -Value ([string]$counts.High)     -ValueStyle 'Error' }
-  if ($counts.Error -gt 0)    { Write-KeyValue -Key '  Error'    -Value ([string]$counts.Error)    -ValueStyle 'Error' }
-  if ($counts.Medium -gt 0)   { Write-KeyValue -Key '  Medium'   -Value ([string]$counts.Medium)   -ValueStyle 'Warn' }
-  if ($counts.Low -gt 0)      { Write-KeyValue -Key '  Low'      -Value ([string]$counts.Low)      -ValueStyle 'Info' }
-  if ($counts.Info -gt 0)     { Write-KeyValue -Key '  Info'     -Value ([string]$counts.Info)     -ValueStyle 'Muted' }
-  if ($counts.Skipped -gt 0)  { Write-KeyValue -Key '  Skipped'  -Value ([string]$counts.Skipped)  -ValueStyle 'Muted' }
-  if ($counts.Debug -gt 0)    { Write-KeyValue -Key '  Debug'    -Value ([string]$counts.Debug)    -ValueStyle 'Muted' }
-  if ($counts.OK -gt 0)       { Write-KeyValue -Key '  OK'       -Value ([string]$counts.OK)       -ValueStyle 'Success' }
-
-  $overallResult = if ($counts.Critical -gt 0 -or $counts.High -gt 0 -or $counts.Error -gt 0) { 'FAIL' }
-                   elseif ($counts.Medium -gt 0) { 'WARN' }
-                   else { 'PASS' }
-  $resultStyle = if ($overallResult -eq 'FAIL') { 'Error' }
-                 elseif ($overallResult -eq 'WARN') { 'Warn' }
-                 else { 'Success' }
-  Write-KeyValue -Key 'Overall result' -Value $overallResult -ValueStyle $resultStyle
+  Write-UiSummaryRows -Counts $counts
+  $result = Get-UiSummaryResult -Counts $counts
+  Write-KeyValue -Key 'Overall result' -Value $result.Result -ValueStyle $result.Style
   Write-UiLine -Message ('=' * $Width) -Style 'Dim'
 }
 

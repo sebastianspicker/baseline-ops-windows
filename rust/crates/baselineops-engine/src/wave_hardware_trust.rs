@@ -11,9 +11,9 @@ use baselineops_windows::{
 
 /// Native Windows executor for capabilities 15, 23, and 46.
 ///
-/// The descriptors remain `in_development` until native observations are
-/// compared with legacy PowerShell on representative physical and virtual
-/// hardware, including TPM and UEFI/Secure Boot permutations.
+/// The descriptors are `code_complete`; native comparison with legacy
+/// PowerShell on representative physical and virtual hardware, including TPM
+/// and UEFI/Secure Boot permutations, remains an open release gate.
 pub struct WaveHardwareTrustWindowsExecutor;
 
 impl CapabilityExecutor for WaveHardwareTrustWindowsExecutor {

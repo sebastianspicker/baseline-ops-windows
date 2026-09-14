@@ -110,7 +110,7 @@ mod platform {
 
     use super::{Observation, PlatformError};
     use windows::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR,
+        ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS,
     };
     use windows::Win32::System::Registry::{
         HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_MULTI_SZ, REG_SZ, REG_VALUE_TYPE, RegCloseKey,
@@ -190,6 +190,13 @@ mod platform {
         }
         check(status)?;
         data.truncate(usize::try_from(data_len).unwrap_or(0));
+        decode_subscription_values(kind, &data)
+    }
+
+    fn decode_subscription_values(
+        kind: u32,
+        data: &[u8],
+    ) -> Result<Option<Vec<String>>, PlatformError> {
         let kind = REG_VALUE_TYPE(kind);
         if kind != REG_SZ && kind != REG_MULTI_SZ || !data.len().is_multiple_of(2) {
             return Ok(Some(Vec::new()));
@@ -207,15 +214,8 @@ mod platform {
         Ok(Some(values))
     }
 
-    fn check(status: WIN32_ERROR) -> Result<(), PlatformError> {
-        if status == ERROR_SUCCESS {
-            Ok(())
-        } else {
-            Err(PlatformError::Io(std::io::Error::from_raw_os_error(
-                i32::try_from(status.0).unwrap_or(i32::MAX),
-            )))
-        }
-    }
+    use crate::native_values::check_status as check;
+
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }

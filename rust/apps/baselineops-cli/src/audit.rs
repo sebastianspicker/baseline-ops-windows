@@ -2,10 +2,7 @@
 
 use crate::{Selection, resolve_selection, unsupported_response};
 use anyhow::{Result, anyhow};
-use baselineops_capabilities::{
-    Capability, CapabilityDescriptor, CapabilityExecutor, CapabilityOutcome, CapabilityRequest,
-    ExecutionEnvironment, ImplementationMaturity, Operation,
-};
+use baselineops_capabilities::{CapabilityDescriptor, CapabilityOutcome, Operation};
 use baselineops_domain::{
     ActionId, ActionResultV3, ActionStatus, ExitCode, FindingId, FindingStatus, PlanId, ProfileId,
     ResultId, ResultStatus, ResultV3, RunId, SchemaVersion, Severity,
@@ -13,95 +10,66 @@ use baselineops_domain::{
 use chrono::Utc;
 use std::collections::BTreeMap;
 
-const NATIVE_AUDIT_IDS: [&str; 47] = [
-    "v3.defender.asr-allowlist",
-    "v3.laps.hygiene",
-    "v3.local-admins.guardrail",
-    "v3.office-browser.hardening",
-    "v3.windows-update.policy",
-    "v3.update-health.ssu",
-    "v3.scheduled-tasks.hygiene",
-    "v3.winget.self-heal",
-    "v3.support-bundle.parse",
-    "v3.lsass.vbs-hardening",
-    "v3.remote-access.guardrails",
-    "v3.hardware.tpm-posture",
-    "v3.sysmon.config",
-    "v3.sysmon.rule-drift",
-    "v3.firewall.baseline",
-    "v3.software.inventory",
-    "v3.patch.missing",
-    "v3.smb.encryption",
-    "v3.bitlocker.operations",
-    "v3.cert.autoenrollment-health",
-    "v3.winget.configuration",
-    "v3.eventlog.fast-triage",
-    "v3.defender.health",
-    "v3.identity.join",
-    "v3.network.configuration",
-    "v3.service-process.inventory",
-    "v3.firewall.logging",
-    "v3.advanced-audit-policy",
-    "v3.security-options.drift",
-    "v3.storage.reliability",
-    "v3.backup.readiness",
-    "v3.remote-surface.audit",
-    "v3.time-sync.health",
-    "v3.credential-guard.vbs",
-    "v3.lsa.protection",
-    "v3.ntlm.client",
-    "v3.client-security-baseline",
-    "v3.app-control.audit",
-    "v3.defender.ransomware-network-protection",
-    "v3.wef.client-readiness",
-    "v3.secure-boot.uefi",
-    "v3.wdag.readiness",
-    "v3.exploit-protection.audit",
-    "v3.driver-signing.integrity",
-    "v3.amsi.audit",
-    "v3.applocker.audit",
-    "v3.doh.audit",
-];
-
 pub(crate) fn run(selection: &Selection) -> Result<ExitCode> {
     let (targets, profile_id) = resolve_targets(selection)?;
+    reject_unsupported_targets(&targets)?;
+    let host = baselineops_windows::collect_host_identity().map_err(|error| anyhow!(error))?;
+    let started_at = Utc::now();
+    let accumulated = collect_outcomes(targets, started_at)?;
+    let result = audit_result(profile_id, host, started_at, accumulated);
+    result.validate()?;
+    crate::print_json(&result)?;
+    Ok(result.exit_code())
+}
+
+fn reject_unsupported_targets(targets: &[AuditTarget]) -> Result<()> {
     let unsupported = targets
         .iter()
         .filter(|target| !native_audit_supported(target.descriptor))
         .map(|target| target.descriptor.id)
         .collect::<Vec<_>>();
-    if !unsupported.is_empty() {
-        return unsupported_response("audit", &unsupported);
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        unsupported_response("audit", &unsupported).map(|_| ())
     }
-    let host = baselineops_windows::collect_host_identity().map_err(|error| anyhow!(error))?;
-    let started_at = Utc::now();
-    let mut accumulated = AuditAccumulator {
-        actions: Vec::with_capacity(targets.len()),
-        findings: Vec::new(),
-        status: ResultStatus::Completed,
-    };
+}
+
+fn collect_outcomes(
+    targets: Vec<AuditTarget>,
+    started_at: chrono::DateTime<Utc>,
+) -> Result<AuditAccumulator> {
+    let mut accumulated = AuditAccumulator::new(targets.len());
     for target in targets {
-        let descriptor = target.descriptor;
-        let action_id = ActionId::new();
-        let outcome = dispatch_native_audit(descriptor, &target.parameters);
-        let completed_at = Utc::now();
         record_outcome(
-            outcome,
-            descriptor,
-            action_id,
+            dispatch_native_audit(target.descriptor, &target.parameters),
+            target.descriptor,
+            ActionId::new(),
             started_at,
-            completed_at,
+            Utc::now(),
             &mut accumulated,
         )?;
     }
+    Ok(accumulated)
+}
+
+fn audit_result(
+    profile_id: Option<ProfileId>,
+    host: baselineops_domain::HostIdentity,
+    started_at: chrono::DateTime<Utc>,
+    accumulated: AuditAccumulator,
+) -> ResultV3 {
     let capability_id =
         (accumulated.actions.len() == 1).then(|| accumulated.actions[0].capability.clone());
-    let result = ResultV3 {
+    ResultV3 {
         schema_version: SchemaVersion::V3,
         id: ResultId::new(),
         run_id: RunId::new(),
         plan_id: PlanId::new(),
-        profile_id: profile_id.unwrap_or_else(ProfileId::new),
+        profile_id: match profile_id {
+            Some(id) => id,
+            None => ProfileId::new(),
+        },
         capability_id,
         operation: baselineops_domain::Operation::Audit,
         host,
@@ -113,10 +81,7 @@ pub(crate) fn run(selection: &Selection) -> Result<ExitCode> {
         summary: "standard-user native audit completed without mutation".into(),
         artifacts: Vec::new(),
         metadata: BTreeMap::new(),
-    };
-    result.validate()?;
-    crate::print_json(&result)?;
-    Ok(result.exit_code())
+    }
 }
 
 struct AuditTarget {
@@ -130,6 +95,16 @@ struct AuditAccumulator {
     actions: Vec<ActionResultV3>,
 }
 
+impl AuditAccumulator {
+    fn new(capacity: usize) -> Self {
+        Self {
+            actions: Vec::with_capacity(capacity),
+            findings: Vec::new(),
+            status: ResultStatus::Completed,
+        }
+    }
+}
+
 fn record_outcome(
     outcome: CapabilityOutcome,
     descriptor: &'static CapabilityDescriptor,
@@ -140,85 +115,144 @@ fn record_outcome(
 ) -> Result<()> {
     match outcome {
         CapabilityOutcome::Completed { result } => {
-            let has_findings = result
-                .get("findings")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|items| !items.is_empty());
-            if has_findings {
-                raise_status(&mut accumulated.status, ResultStatus::Warnings);
-            }
-            let (finding_status, severity, message, action_status) = if has_findings {
-                (
-                    FindingStatus::Warning,
-                    Severity::Medium,
-                    "audit completed with incomplete or adverse evidence",
-                    ActionStatus::Findings,
-                )
-            } else {
-                (
-                    FindingStatus::Info,
-                    Severity::Info,
-                    "audit observation collected",
-                    ActionStatus::Succeeded,
-                )
-            };
-            accumulated.findings.push(finding(
+            record_completed(
+                result,
                 descriptor,
                 action_id,
-                finding_status,
-                severity,
-                message,
-                result.clone(),
-            ));
-            accumulated.actions.push(action_result(
-                descriptor,
-                action_id,
-                action_status,
                 started_at,
                 completed_at,
-                result,
-            ));
+                accumulated,
+            );
         }
         CapabilityOutcome::Unsupported { reason } => {
-            raise_status(&mut accumulated.status, ResultStatus::Unsupported);
-            accumulated.findings.push(finding(
+            record_unsupported(
+                reason,
                 descriptor,
                 action_id,
-                FindingStatus::Skipped,
-                Severity::Info,
-                "native audit is unavailable",
-                serde_json::to_value(reason)?,
-            ));
-            accumulated.actions.push(action_result(
-                descriptor,
-                action_id,
-                ActionStatus::Blocked,
                 started_at,
                 completed_at,
-                serde_json::json!({}),
-            ));
+                accumulated,
+            )?;
         }
         CapabilityOutcome::Failed { message, .. } => {
-            raise_status(&mut accumulated.status, ResultStatus::ExecutionFailed);
-            accumulated.findings.push(finding(
+            record_failure(
+                &message,
                 descriptor,
                 action_id,
-                FindingStatus::Error,
-                Severity::High,
-                "native audit failed",
-                serde_json::json!({"error": message}),
-            ));
-            accumulated.actions.push(action_result(
-                descriptor,
-                action_id,
-                ActionStatus::Failed,
                 started_at,
                 completed_at,
-                serde_json::json!({}),
-            ));
+                accumulated,
+            );
         }
     }
     Ok(())
+}
+
+fn record_completed(
+    result: serde_json::Value,
+    descriptor: &'static CapabilityDescriptor,
+    action_id: ActionId,
+    started_at: chrono::DateTime<Utc>,
+    completed_at: chrono::DateTime<Utc>,
+    accumulated: &mut AuditAccumulator,
+) {
+    let has_findings = result
+        .get("findings")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|items| !items.is_empty());
+    let (finding_status, severity, message, action_status) = completed_status(has_findings);
+    if has_findings {
+        raise_status(&mut accumulated.status, ResultStatus::Warnings);
+    }
+    accumulated.findings.push(finding(
+        descriptor,
+        action_id,
+        finding_status,
+        severity,
+        message,
+        result.clone(),
+    ));
+    accumulated.actions.push(action_result(
+        descriptor,
+        action_id,
+        action_status,
+        started_at,
+        completed_at,
+        result,
+    ));
+}
+
+fn completed_status(has_findings: bool) -> (FindingStatus, Severity, &'static str, ActionStatus) {
+    if has_findings {
+        (
+            FindingStatus::Warning,
+            Severity::Medium,
+            "audit completed with incomplete or adverse evidence",
+            ActionStatus::Findings,
+        )
+    } else {
+        (
+            FindingStatus::Info,
+            Severity::Info,
+            "audit observation collected",
+            ActionStatus::Succeeded,
+        )
+    }
+}
+
+fn record_unsupported(
+    reason: baselineops_capabilities::Unsupported,
+    descriptor: &'static CapabilityDescriptor,
+    action_id: ActionId,
+    started_at: chrono::DateTime<Utc>,
+    completed_at: chrono::DateTime<Utc>,
+    accumulated: &mut AuditAccumulator,
+) -> Result<()> {
+    raise_status(&mut accumulated.status, ResultStatus::Unsupported);
+    accumulated.findings.push(finding(
+        descriptor,
+        action_id,
+        FindingStatus::Skipped,
+        Severity::Info,
+        "native audit is unavailable",
+        serde_json::to_value(reason)?,
+    ));
+    accumulated.actions.push(action_result(
+        descriptor,
+        action_id,
+        ActionStatus::Blocked,
+        started_at,
+        completed_at,
+        serde_json::json!({}),
+    ));
+    Ok(())
+}
+
+fn record_failure(
+    message: &str,
+    descriptor: &'static CapabilityDescriptor,
+    action_id: ActionId,
+    started_at: chrono::DateTime<Utc>,
+    completed_at: chrono::DateTime<Utc>,
+    accumulated: &mut AuditAccumulator,
+) {
+    raise_status(&mut accumulated.status, ResultStatus::ExecutionFailed);
+    accumulated.findings.push(finding(
+        descriptor,
+        action_id,
+        FindingStatus::Error,
+        Severity::High,
+        "native audit failed",
+        serde_json::json!({"error": message}),
+    ));
+    accumulated.actions.push(action_result(
+        descriptor,
+        action_id,
+        ActionStatus::Failed,
+        started_at,
+        completed_at,
+        serde_json::json!({}),
+    ));
 }
 
 fn raise_status(current: &mut ResultStatus, candidate: ResultStatus) {
@@ -239,32 +273,44 @@ fn raise_status(current: &mut ResultStatus, candidate: ResultStatus) {
 
 fn resolve_targets(selection: &Selection) -> Result<(Vec<AuditTarget>, Option<ProfileId>)> {
     if let Some(path) = &selection.profile {
-        let profile: baselineops_domain::ProfileV3 = baselineops_domain::load_json_file(
-            path,
-            baselineops_domain::JsonLoadLimits::default(),
-        )?;
-        let validation = profile.validate()?;
-        let mut targets = Vec::with_capacity(profile.steps.len());
-        for step_id in validation.topological_order.as_slice() {
-            let step = profile
-                .steps
-                .iter()
-                .find(|step| &step.step_id == step_id)
-                .ok_or_else(|| anyhow!("validated profile step is unavailable"))?;
-            let descriptor = baselineops_capabilities::lookup(step.capability_id.as_str())
-                .ok_or_else(|| {
-                    anyhow!(
-                        "profile references unknown capability: {}",
-                        step.capability_id
-                    )
-                })?;
-            targets.push(AuditTarget {
-                descriptor,
-                parameters: serde_json::to_value(&step.parameters)?,
-            });
-        }
-        return Ok((targets, Some(profile.id)));
+        return profile_targets(path);
     }
+    direct_targets(selection)
+}
+
+fn profile_targets(path: &std::path::Path) -> Result<(Vec<AuditTarget>, Option<ProfileId>)> {
+    let profile: baselineops_domain::ProfileV3 =
+        baselineops_domain::load_json_file(path, baselineops_domain::JsonLoadLimits::default())?;
+    let validation = profile.validate()?;
+    let targets = validation
+        .topological_order
+        .as_slice()
+        .iter()
+        .map(|id| profile_target(&profile, &id.to_string()))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((targets, Some(profile.id)))
+}
+
+fn profile_target(profile: &baselineops_domain::ProfileV3, step_id: &str) -> Result<AuditTarget> {
+    let step = profile
+        .steps
+        .iter()
+        .find(|step| step.step_id.to_string() == step_id)
+        .ok_or_else(|| anyhow!("validated profile step is unavailable"))?;
+    let descriptor =
+        baselineops_capabilities::lookup(step.capability_id.as_str()).ok_or_else(|| {
+            anyhow!(
+                "profile references unknown capability: {}",
+                step.capability_id
+            )
+        })?;
+    Ok(AuditTarget {
+        descriptor,
+        parameters: serde_json::to_value(&step.parameters)?,
+    })
+}
+
+fn direct_targets(selection: &Selection) -> Result<(Vec<AuditTarget>, Option<ProfileId>)> {
     let (descriptors, profile_id) = resolve_selection(selection)?;
     let targets = descriptors
         .into_iter()
@@ -285,95 +331,26 @@ fn direct_parameters(
     if descriptor.id != "v3.support-bundle.parse" {
         return Ok(serde_json::json!({}));
     }
-    let support_dir = selection
-        .support_dir
-        .as_ref()
-        .ok_or_else(|| anyhow!("v3.support-bundle.parse requires --support-dir DIR"))?;
+    let support_dir = selection.support_dir.as_deref().or_else(|| {
+        selection
+            .resources
+            .iter()
+            .find(|resource| resource.logical_id().as_str() == "support_bundle")
+            .map(super::resources::ResourceArgument::path)
+    }).ok_or_else(|| anyhow!("v3.support-bundle.parse requires --resource support_bundle=DIR or --support-dir DIR"))?;
     Ok(serde_json::json!({"support_dir": support_dir}))
 }
 
 pub(crate) fn native_audit_supported(descriptor: &CapabilityDescriptor) -> bool {
-    descriptor.maturity == ImplementationMaturity::InDevelopment
-        && NATIVE_AUDIT_IDS.contains(&descriptor.id)
+    descriptor.operations.supports(Operation::Audit)
+        && baselineops_engine::has_native_handler(descriptor)
 }
 
 pub(crate) fn dispatch_native_audit(
     descriptor: &'static CapabilityDescriptor,
     parameters: &serde_json::Value,
 ) -> CapabilityOutcome {
-    let environment = ExecutionEnvironment {
-        is_windows: cfg!(windows),
-        available_requirements: descriptor.requirements,
-    };
-    let request = CapabilityRequest {
-        operation: Operation::Audit,
-        parameters,
-    };
-    let executor: &dyn CapabilityExecutor = match descriptor.id {
-        "v3.defender.asr-allowlist" => &baselineops_engine::WaveDefenderAsrAllowlistWindowsExecutor,
-        "v3.defender.health" | "v3.identity.join" => &baselineops_engine::WaveOneWindowsExecutor,
-        "v3.office-browser.hardening" => &baselineops_engine::WaveOfficeBrowserWindowsExecutor,
-        "v3.windows-update.policy" => &baselineops_engine::WaveWindowsUpdateWindowsExecutor,
-        "v3.laps.hygiene" => &baselineops_engine::WaveLapsHygieneWindowsExecutor,
-        "v3.local-admins.guardrail" => &baselineops_engine::WaveLocalAdminsWindowsExecutor,
-        "v3.update-health.ssu" => &baselineops_engine::WaveUpdateHealthWindowsExecutor,
-        "v3.scheduled-tasks.hygiene" => &baselineops_engine::WaveScheduledTasksWindowsExecutor,
-        "v3.winget.self-heal" | "v3.winget.configuration" => {
-            &baselineops_engine::WaveWingetWindowsExecutor
-        }
-        "v3.ntlm.client" | "v3.doh.audit" => &baselineops_engine::WaveTwoWindowsExecutor,
-        "v3.time-sync.health" | "v3.wef.client-readiness" => {
-            &baselineops_engine::WaveWefTimeWindowsExecutor
-        }
-        "v3.network.configuration" | "v3.service-process.inventory" => {
-            &baselineops_engine::WaveNetworkServicesWindowsExecutor
-        }
-        "v3.firewall.logging" => &baselineops_engine::WaveFirewallLoggingWindowsExecutor,
-        "v3.firewall.baseline" => &baselineops_engine::WaveFirewallBaselineWindowsExecutor,
-        "v3.advanced-audit-policy" => &baselineops_engine::WaveAdvancedAuditWindowsExecutor,
-        "v3.security-options.drift" => &baselineops_engine::WaveSecurityOptionsWindowsExecutor,
-        "v3.remote-access.guardrails" => &baselineops_engine::WaveRemoteGuardrailsWindowsExecutor,
-        "v3.sysmon.config" | "v3.sysmon.rule-drift" => {
-            &baselineops_engine::WaveSysmonWindowsExecutor
-        }
-        "v3.smb.encryption" => &baselineops_engine::WaveSmbEncryptionWindowsExecutor,
-        "v3.cert.autoenrollment-health" => &baselineops_engine::WaveCertHealthWindowsExecutor,
-        "v3.lsass.vbs-hardening" | "v3.credential-guard.vbs" | "v3.lsa.protection" => {
-            &baselineops_engine::WaveBootSecurityWindowsExecutor
-        }
-        "v3.support-bundle.parse" => &baselineops_engine::SupportBundleParserExecutor,
-        "v3.software.inventory" | "v3.patch.missing" | "v3.eventlog.fast-triage" => {
-            &baselineops_engine::WaveInventoryWindowsExecutor
-        }
-        "v3.hardware.tpm-posture" | "v3.bitlocker.operations" | "v3.secure-boot.uefi" => {
-            &baselineops_engine::WaveHardwareTrustWindowsExecutor
-        }
-        "v3.storage.reliability" | "v3.backup.readiness" => {
-            &baselineops_engine::WaveStorageBackupWindowsExecutor
-        }
-        "v3.remote-surface.audit" | "v3.wdag.readiness" => {
-            &baselineops_engine::WaveRemoteWdagWindowsExecutor
-        }
-        "v3.app-control.audit" => &baselineops_engine::AppControlWindowsExecutor,
-        "v3.defender.ransomware-network-protection" => {
-            &baselineops_engine::WaveDefenderRansomwareWindowsExecutor
-        }
-        "v3.client-security-baseline"
-        | "v3.driver-signing.integrity"
-        | "v3.exploit-protection.audit"
-        | "v3.amsi.audit"
-        | "v3.applocker.audit" => &baselineops_engine::WaveApplicationControlWindowsExecutor,
-        _ => {
-            return CapabilityOutcome::Unsupported {
-                reason: baselineops_capabilities::Unsupported::ExecutorUnavailable {
-                    capability_id: descriptor.id.into(),
-                },
-            };
-        }
-    };
-    baselineops_capabilities::adapter_for(descriptor.id)
-        .expect("catalog IDs are valid")
-        .execute(environment, request, Some(executor))
+    baselineops_engine::dispatch_native(descriptor, Operation::Audit, parameters)
 }
 
 fn action_result(
@@ -431,6 +408,7 @@ mod tests {
             ),
             batch: None,
             support_dir: None,
+            resources: Vec::new(),
         };
         let (targets, profile_id) = resolve_targets(&selection).expect("resolve audit profile");
         assert!(profile_id.is_some());

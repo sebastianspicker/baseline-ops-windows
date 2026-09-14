@@ -140,7 +140,7 @@ mod platform {
     };
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-        CoInitializeSecurity, CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
+        CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
         RPC_C_IMP_LEVEL_IMPERSONATE,
     };
     use windows::Win32::System::Services::{
@@ -157,9 +157,13 @@ mod platform {
     use windows::core::{BSTR, PCWSTR, PWSTR, w};
 
     const TIME_ZONE_KEY_MAX: usize = 128;
-    const RPC_E_TOO_LATE: i32 = -2_147_417_577;
+
     const RPC_C_AUTHN_WINNT: u32 = 10;
     const RPC_C_AUTHZ_NONE: u32 = 0;
+    #[cfg_attr(windows, path = "projection.rs")]
+    #[cfg_attr(not(windows), path = "platform/projection.rs")]
+    mod projection;
+    use projection::{DefenderProviderEvidence, defender_observation};
 
     #[repr(C)]
     struct SystemTime {
@@ -254,66 +258,8 @@ mod platform {
             query.map_err(|error| PlatformError::TrustFailure(error.to_string()))?;
             let status = status.assume_init();
             let evidence = defender_wmi().map_err(|error| error.to_string());
-            Ok(DefenderHealthObservation {
-                provider: "wmi_msft_mpcomputerstatus".into(),
-                provider_error: evidence.as_ref().err().cloned(),
-                service_running: status.dwCurrentState == SERVICE_RUNNING,
-                service_state: status.dwCurrentState.0,
-                process_id: status.dwProcessId,
-                win32_exit_code: status.dwWin32ExitCode,
-                antivirus_enabled: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.antivirus_enabled),
-                antispyware_enabled: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.antispyware_enabled),
-                behavior_monitor_enabled: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.behavior_monitor_enabled),
-                real_time_protection_enabled: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.real_time_protection_enabled),
-                signatures_out_of_date: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.signatures_out_of_date),
-                antivirus_signature_age_days: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.antivirus_signature_age_days),
-                quick_scan_age_days: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.quick_scan_age_days),
-                full_scan_age_days: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.full_scan_age_days),
-                tamper_protected: evidence
-                    .as_ref()
-                    .ok()
-                    .and_then(|item| item.tamper_protected),
-                reboot_required: evidence.as_ref().ok().and_then(|item| item.reboot_required),
-            })
+            Ok(defender_observation(status, &evidence))
         }
-    }
-
-    #[derive(Clone, Debug)]
-    struct DefenderProviderEvidence {
-        antivirus_enabled: Option<bool>,
-        antispyware_enabled: Option<bool>,
-        behavior_monitor_enabled: Option<bool>,
-        real_time_protection_enabled: Option<bool>,
-        signatures_out_of_date: Option<bool>,
-        antivirus_signature_age_days: Option<u32>,
-        quick_scan_age_days: Option<u32>,
-        full_scan_age_days: Option<u32>,
-        tamper_protected: Option<bool>,
-        reboot_required: Option<bool>,
     }
 
     fn defender_wmi() -> Result<DefenderProviderEvidence, PlatformError> {
@@ -332,22 +278,22 @@ mod platform {
     }
 
     unsafe fn defender_wmi_initialized() -> Result<DefenderProviderEvidence, PlatformError> {
-        if let Err(error) = CoInitializeSecurity(
-            None,
-            -1,
-            None,
-            None,
-            RPC_C_AUTHN_LEVEL_CALL,
-            RPC_C_IMP_LEVEL_IMPERSONATE,
-            None,
-            EOAC_NONE,
-            None,
-        ) && error.code().0 != RPC_E_TOO_LATE
-        {
-            return Err(PlatformError::TrustFailure(format!(
+        initialize_defender_security()?;
+        let enumerator = defender_status_query()?;
+        let object = defender_status_object(&enumerator)?;
+        defender_properties(&object)
+    }
+
+    unsafe fn initialize_defender_security() -> Result<(), PlatformError> {
+        crate::com_security::initialize_wmi_security().map_err(|error| {
+            PlatformError::TrustFailure(format!(
                 "Defender WMI security initialization failed: {error}"
-            )));
-        }
+            ))
+        })?;
+        Ok(())
+    }
+
+    unsafe fn defender_status_query() -> Result<IEnumWbemClassObject, PlatformError> {
         let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
             .map_err(|error| {
                 PlatformError::TrustFailure(format!("Defender WMI locator failed: {error}"))
@@ -379,17 +325,21 @@ mod platform {
         .map_err(|error| {
             PlatformError::TrustFailure(format!("Defender WMI proxy setup failed: {error}"))
         })?;
-        let query = BSTR::from("SELECT * FROM MSFT_MpComputerStatus");
-        let enumerator: IEnumWbemClassObject = services
+        services
             .ExecQuery(
                 &BSTR::from("WQL"),
-                &query,
+                &BSTR::from("SELECT * FROM MSFT_MpComputerStatus"),
                 WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
                 None,
             )
             .map_err(|error| {
                 PlatformError::TrustFailure(format!("Defender WMI query failed: {error}"))
-            })?;
+            })
+    }
+
+    unsafe fn defender_status_object(
+        enumerator: &IEnumWbemClassObject,
+    ) -> Result<IWbemClassObject, PlatformError> {
         let mut objects = [None];
         let mut returned = 0_u32;
         enumerator
@@ -403,21 +353,66 @@ mod platform {
                 "Defender WMI provider returned no health instance".into(),
             ));
         }
-        let object = objects[0].take().ok_or_else(|| {
+        objects[0].take().ok_or_else(|| {
             PlatformError::TrustFailure("Defender WMI provider returned an empty instance".into())
-        })?;
-        Ok(DefenderProviderEvidence {
-            antivirus_enabled: bool_property(&object, w!("AntivirusEnabled"))?,
-            antispyware_enabled: bool_property(&object, w!("AntispywareEnabled"))?,
-            behavior_monitor_enabled: bool_property(&object, w!("BehaviorMonitorEnabled"))?,
-            real_time_protection_enabled: bool_property(&object, w!("RealTimeProtectionEnabled"))?,
-            signatures_out_of_date: bool_property(&object, w!("DefenderSignaturesOutOfDate"))?,
-            antivirus_signature_age_days: age_property(&object, w!("AntivirusSignatureAge"))?,
-            quick_scan_age_days: age_property(&object, w!("QuickScanAge"))?,
-            full_scan_age_days: age_property(&object, w!("FullScanAge"))?,
-            tamper_protected: bool_property(&object, w!("IsTamperProtected"))?,
-            reboot_required: bool_property(&object, w!("RebootRequired"))?,
         })
+    }
+
+    unsafe fn defender_properties(
+        object: &IWbemClassObject,
+    ) -> Result<DefenderProviderEvidence, PlatformError> {
+        let (
+            antivirus_enabled,
+            antispyware_enabled,
+            behavior_monitor_enabled,
+            real_time_protection_enabled,
+            signatures_out_of_date,
+        ) = defender_bool_properties(object)?;
+        let (antivirus_signature_age_days, quick_scan_age_days, full_scan_age_days) =
+            defender_age_properties(object)?;
+        Ok(DefenderProviderEvidence {
+            antivirus_enabled,
+            antispyware_enabled,
+            behavior_monitor_enabled,
+            real_time_protection_enabled,
+            signatures_out_of_date,
+            antivirus_signature_age_days,
+            quick_scan_age_days,
+            full_scan_age_days,
+            tamper_protected: bool_property(object, w!("IsTamperProtected"))?,
+            reboot_required: bool_property(object, w!("RebootRequired"))?,
+        })
+    }
+
+    type DefenderBoolProperties = (
+        Option<bool>,
+        Option<bool>,
+        Option<bool>,
+        Option<bool>,
+        Option<bool>,
+    );
+    type DefenderAgeProperties = (Option<u32>, Option<u32>, Option<u32>);
+
+    unsafe fn defender_bool_properties(
+        object: &IWbemClassObject,
+    ) -> Result<DefenderBoolProperties, PlatformError> {
+        Ok((
+            bool_property(object, w!("AntivirusEnabled"))?,
+            bool_property(object, w!("AntispywareEnabled"))?,
+            bool_property(object, w!("BehaviorMonitorEnabled"))?,
+            bool_property(object, w!("RealTimeProtectionEnabled"))?,
+            bool_property(object, w!("DefenderSignaturesOutOfDate"))?,
+        ))
+    }
+
+    unsafe fn defender_age_properties(
+        object: &IWbemClassObject,
+    ) -> Result<DefenderAgeProperties, PlatformError> {
+        Ok((
+            age_property(object, w!("AntivirusSignatureAge"))?,
+            age_property(object, w!("QuickScanAge"))?,
+            age_property(object, w!("FullScanAge"))?,
+        ))
     }
 
     unsafe fn bool_property(
@@ -494,22 +489,21 @@ mod platform {
         let info = storage.assume_init();
         let server_type = info.sv101_type.0;
         let _ = NetApiBufferFree(Some(buffer.cast_const().cast()));
+        Ok(role_from_server_type(server_type, domain_joined))
+    }
+
+    fn role_from_server_type(server_type: u32, domain_joined: bool) -> DomainRole {
         if server_type & SV_TYPE_DOMAIN_CTRL.0 != 0 {
-            Ok(DomainRole::PrimaryDomainController)
-        } else if server_type & SV_TYPE_DOMAIN_BAKCTRL.0 != 0 {
-            Ok(DomainRole::BackupDomainController)
-        } else if server_type & SV_TYPE_SERVER.0 != 0 {
-            Ok(if domain_joined {
-                DomainRole::MemberServer
-            } else {
-                DomainRole::StandaloneServer
-            })
-        } else {
-            Ok(if domain_joined {
-                DomainRole::MemberWorkstation
-            } else {
-                DomainRole::StandaloneWorkstation
-            })
+            return DomainRole::PrimaryDomainController;
+        }
+        if server_type & SV_TYPE_DOMAIN_BAKCTRL.0 != 0 {
+            return DomainRole::BackupDomainController;
+        }
+        match (server_type & SV_TYPE_SERVER.0 != 0, domain_joined) {
+            (true, true) => DomainRole::MemberServer,
+            (true, false) => DomainRole::StandaloneServer,
+            (false, true) => DomainRole::MemberWorkstation,
+            (false, false) => DomainRole::StandaloneWorkstation,
         }
     }
 

@@ -10,6 +10,20 @@ replaceable configuration file.
 #>
 Set-StrictMode -Version Latest
 
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
 function Test-WinGetPhaseSuccess {
   [CmdletBinding()]
   [OutputType([bool])]
@@ -98,46 +112,52 @@ function Initialize-WinGetStagingRoot {
 
   $commonApplicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
   if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
-    if ([string]::IsNullOrWhiteSpace($StagingRoot)) {
-      throw 'A staging root is required for non-Windows helper tests.'
-    }
-    $portableRoot = [System.IO.Path]::GetFullPath($StagingRoot)
-    [System.IO.Directory]::CreateDirectory($portableRoot) | Out-Null
-    return $portableRoot
+    return Initialize-PortableWinGetStagingRoot -StagingRoot $StagingRoot
   }
   if ([string]::IsNullOrWhiteSpace($commonApplicationData)) {
     throw 'CommonApplicationData could not be resolved for WinGet staging.'
   }
 
   $fixedRoot = Join-Path $commonApplicationData 'BaselineOpsForWindows\WinGetConfigStaging'
-  if (-not [string]::IsNullOrWhiteSpace($StagingRoot) -and
-      -not [System.IO.Path]::GetFullPath($StagingRoot).Equals([System.IO.Path]::GetFullPath($fixedRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+  if ((Test-AllConditions -Conditions @({ -not [string]::IsNullOrWhiteSpace($StagingRoot) }, { -not [System.IO.Path]::GetFullPath($StagingRoot).Equals([System.IO.Path]::GetFullPath($fixedRoot), [System.StringComparison]::OrdinalIgnoreCase) }))) {
     throw 'WinGet staging root is fixed under CommonApplicationData.'
   }
 
   $fullRoot = [System.IO.Path]::GetFullPath($fixedRoot)
-  if (Test-Path -LiteralPath $fullRoot) {
-    $rootItem = Get-Item -LiteralPath $fullRoot -Force -ErrorAction Stop
-    if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-      throw 'WinGet staging root is not a regular directory.'
-    }
-    Assert-TrustedWindowsPathAcl -Path $rootItem.FullName -CheckAncestors | Out-Null
-    return $rootItem.FullName
+  if (Test-Path -LiteralPath $fullRoot) { return Get-ExistingWinGetStagingRoot -Path $fullRoot }
+  return New-MissingWinGetStagingRoot -Path $fullRoot
+}
+function Initialize-PortableWinGetStagingRoot {
+  param([AllowEmptyString()][string]$StagingRoot)
+  if ([string]::IsNullOrWhiteSpace($StagingRoot)) { throw 'A staging root is required for non-Windows helper tests.' }
+  $portableRoot = [System.IO.Path]::GetFullPath($StagingRoot)
+  [System.IO.Directory]::CreateDirectory($portableRoot) | Out-Null
+  return $portableRoot
+}
+function Get-ExistingWinGetStagingRoot {
+  param([string]$Path)
+  $rootItem = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+  if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+    throw 'WinGet staging root is not a regular directory.'
   }
-
+  Assert-TrustedWindowsPathAcl -Path $rootItem.FullName -CheckAncestors | Out-Null
+  return $rootItem.FullName
+}
+function New-MissingWinGetStagingRoot {
+  param([string]$Path)
   $missing = New-Object System.Collections.Generic.List[string]
-  $current = $fullRoot
+  $current = $Path
   while (-not (Test-Path -LiteralPath $current)) {
     [void]$missing.Add($current)
     $parent = Split-Path -Path $current -Parent
-    if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $current) {
+    if ((Test-AnyCondition -Conditions @({ [string]::IsNullOrWhiteSpace($parent) }, { $parent -eq $current }))) {
       throw 'WinGet staging root has no existing trusted ancestor.'
     }
     $current = $parent
   }
 
   $existing = Get-Item -LiteralPath $current -Force -ErrorAction Stop
-  if (-not $existing.PSIsContainer -or ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+  if ((Test-AnyCondition -Conditions @({ -not $existing.PSIsContainer }, { ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) }))) {
     throw 'WinGet staging root ancestor is not a regular directory.'
   }
 
@@ -148,8 +168,8 @@ function Initialize-WinGetStagingRoot {
     New-WinGetAdminOnlyDirectory -Path $missing[$i]
     Assert-TrustedWindowsPathAcl -Path $missing[$i] -CheckAncestors | Out-Null
   }
-  Assert-TrustedWindowsPathAcl -Path $fullRoot -CheckAncestors | Out-Null
-  return $fullRoot
+  Assert-TrustedWindowsPathAcl -Path $Path -CheckAncestors | Out-Null
+  return $Path
 }
 
 # Locks the source, copies bounded bytes into protected staging, and retains a
@@ -167,38 +187,19 @@ function New-WinGetStagedConfiguration {
   $stageStream = $null
   $workDirectory = $null
   try {
-    $providerPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SourcePath)
-    $item = Get-Item -LiteralPath $providerPath -Force -ErrorAction Stop
-    if ($item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
-      throw 'WinGet configuration must be a regular file, not a directory or reparse point.'
-    }
+    $item = Get-ValidatedWinGetConfigurationItem -SourcePath $SourcePath
     $extension = [System.IO.Path]::GetExtension($item.Name).ToLowerInvariant()
-    if ($extension -notin @('.yaml', '.yml', '.json')) {
-      throw 'WinGet configuration must use a .yaml, .yml, or .json extension.'
-    }
-    $volumeRoot = [System.IO.Path]::GetPathRoot($item.FullName)
-    if (Test-PathContainsReparsePoint -Path $item.FullName -Root $volumeRoot) {
-      throw 'WinGet configuration path contains a reparse point.'
-    }
 
     # Deny writers and replacement while copying the exact source bytes into
     # the protected staging directory.
     $sourceStream = [System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-    if ($sourceStream.Length -eq 0 -or $sourceStream.Length -gt $MaximumBytes) {
+    if ((Test-AnyCondition -Conditions @({ $sourceStream.Length -eq 0 }, { $sourceStream.Length -gt $MaximumBytes }))) {
       throw "WinGet configuration must contain 1..$MaximumBytes bytes."
     }
-    $bytes = New-Object byte[] ([int]$sourceStream.Length)
-    $offset = 0
-    while ($offset -lt $bytes.Length) {
-      $read = $sourceStream.Read($bytes, $offset, $bytes.Length - $offset)
-      if ($read -le 0) { throw 'WinGet configuration changed or ended while being staged.' }
-      $offset += $read
-    }
+    $bytes = Read-WinGetConfigurationBytes -Stream $sourceStream
 
     $root = Initialize-WinGetStagingRoot -StagingRoot $StagingRoot
-    $workDirectory = Join-Path $root ('run-' + [guid]::NewGuid().ToString('N'))
-    New-WinGetAdminOnlyDirectory -Path $workDirectory
-    Assert-TrustedWindowsPathAcl -Path $workDirectory -CheckAncestors | Out-Null
+    $workDirectory = New-WinGetWorkDirectory -Root $root
     $stagePath = Join-Path $workDirectory ('configuration' + $extension)
 
     # Create and flush with an exclusive writer, then retain a read-only handle.
@@ -212,9 +213,7 @@ function New-WinGetStagedConfiguration {
     Assert-TrustedWindowsPathAcl -Path $stagePath -CheckAncestors | Out-Null
     $stageStream = [System.IO.File]::Open($stagePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
 
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { $contentHash = ([System.BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '') }
-    finally { $sha.Dispose() }
+    $contentHash = Get-WinGetConfigurationHash -Bytes $bytes
 
     return [pscustomobject]@{
       SourcePath = $item.FullName
@@ -226,13 +225,50 @@ function New-WinGetStagedConfiguration {
   } catch {
     if ($null -ne $writeStream) { $writeStream.Dispose() }
     if ($null -ne $stageStream) { $stageStream.Dispose() }
-    if ($workDirectory -and (Test-Path -LiteralPath $workDirectory -PathType Container)) {
+    if ((Test-AllConditions -Conditions @({ $workDirectory }, { (Test-Path -LiteralPath $workDirectory -PathType Container) }))) {
       Remove-Item -LiteralPath $workDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
     throw
   } finally {
     if ($null -ne $sourceStream) { $sourceStream.Dispose() }
   }
+}
+function New-WinGetWorkDirectory {
+  param([string]$Root)
+  $directory = Join-Path $Root ('run-' + [guid]::NewGuid().ToString('N'))
+  New-WinGetAdminOnlyDirectory -Path $directory
+  Assert-TrustedWindowsPathAcl -Path $directory -CheckAncestors | Out-Null
+  return $directory
+}
+function Get-ValidatedWinGetConfigurationItem {
+  param([string]$SourcePath)
+  $providerPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SourcePath)
+  $item = Get-Item -LiteralPath $providerPath -Force -ErrorAction Stop
+  if ($item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+    throw 'WinGet configuration must be a regular file, not a directory or reparse point.'
+  }
+  $extension = [System.IO.Path]::GetExtension($item.Name).ToLowerInvariant()
+  if ($extension -notin @('.yaml', '.yml', '.json')) { throw 'WinGet configuration must use a .yaml, .yml, or .json extension.' }
+  $volumeRoot = [System.IO.Path]::GetPathRoot($item.FullName)
+  if (Test-PathContainsReparsePoint -Path $item.FullName -Root $volumeRoot) { throw 'WinGet configuration path contains a reparse point.' }
+  return $item
+}
+function Read-WinGetConfigurationBytes {
+  param([System.IO.Stream]$Stream)
+  $bytes = New-Object byte[] ([int]$Stream.Length)
+  $offset = 0
+  while ($offset -lt $bytes.Length) {
+    $read = $Stream.Read($bytes, $offset, $bytes.Length - $offset)
+    if ($read -le 0) { throw 'WinGet configuration changed or ended while being staged.' }
+    $offset += $read
+  }
+  return $bytes
+}
+function Get-WinGetConfigurationHash {
+  param([byte[]]$Bytes)
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { return ([System.BitConverter]::ToString($sha.ComputeHash($Bytes))).Replace('-', '') }
+  finally { $sha.Dispose() }
 }
 
 function Remove-WinGetStagedConfiguration {
@@ -244,4 +280,109 @@ function Remove-WinGetStagedConfiguration {
   if ($StagedConfiguration.Directory -and (Test-Path -LiteralPath $StagedConfiguration.Directory -PathType Container)) {
     Remove-Item -LiteralPath $StagedConfiguration.Directory -Recurse -Force -ErrorAction Stop
   }
+}
+
+
+function To-BoolOrDefault {
+  param($Value, [Parameter(Mandatory = $true)][bool]$Default)
+
+  if ($null -eq $Value) { return $Default }
+  if ($Value -is [bool]) { return [bool]$Value }
+
+  $s = [string]$Value
+  if ([string]::IsNullOrWhiteSpace($s)) { return $Default }
+
+  $normalized = $s.Trim().ToLowerInvariant()
+  if (@('true','1') -contains $normalized) { return $true }
+  if (@('false','0') -contains $normalized) { return $false }
+  return $Default
+}
+
+function Get-SummaryObject {
+  param([Parameter(Mandatory)]$Data)
+
+  [pscustomobject]@{
+    ComputerName         = $env:COMPUTERNAME
+    ConfigPath           = $Data.ConfigPathResolved
+    TestOnly             = $Data.TestOnlyEffective
+    AcceptAgreements     = $Data.AcceptAgreementsEffective
+    DisableInteractivity = $Data.DisableInteractivityEffective
+    FailFast             = $Data.FailFastEffective
+    PassThru             = $Data.PassThruEffective
+    QuietConsole         = $Data.QuietConsoleEffective
+    SummaryJsonPath      = (To-StringOrNull $Data.SummaryJsonPathEffective)
+    LogPath              = $Data.LogPathEffective
+    ExtraArgs            = @($Data.ExtraArgsEffective)
+    Timestamp            = Get-Date
+    Results              = @($Data.Results.ToArray())
+    FinalExitCode        = $Data.FinalExitCode
+    ErrorMessage         = (To-StringOrNull $Data.ErrorMessage)
+  }
+}
+
+function Invoke-WinGetConsoleSummary {
+  param([Parameter(Mandatory = $true)][pscustomobject]$Summary)
+
+  if ($Summary.QuietConsole) { return }
+
+  $fields = [ordered]@{
+    TestOnly             = [string]$Summary.TestOnly
+    AcceptAgreements     = [string]$Summary.AcceptAgreements
+    DisableInteractivity = [string]$Summary.DisableInteractivity
+    FailFast             = [string]$Summary.FailFast
+    FinalExitCode        = [string]$Summary.FinalExitCode
+  }
+  if ($Summary.ErrorMessage) { $fields['ErrorMessage'] = $Summary.ErrorMessage }
+
+  $findingsAL = Get-WinGetConsoleFindings
+  Write-ConsoleSummary -Summary $Summary -Findings $findingsAL -CustomFields $fields
+  Write-WinGetPhaseSummary -Summary $Summary
+}
+function Get-WinGetConsoleFindings {
+  $findings = [System.Collections.ArrayList]::new()
+  $findingsVar = Get-Variable -Name Findings -Scope Script -ErrorAction SilentlyContinue
+  if ($findingsVar -and $findingsVar.Value) {
+    foreach ($finding in @($findingsVar.Value.ToArray())) { [void]$findings.Add($finding) }
+  }
+  return $findings
+}
+function Write-WinGetPhaseSummary {
+  param($Summary)
+  if ((Test-AllConditions -Conditions @({ $Summary.Results }, { $Summary.Results.Count -gt 0 }))) {
+    Write-UiLine ''
+    Write-UiLine -Message 'Phases' -Style 'Header'
+    foreach ($r in $Summary.Results) {
+      $line = ("- {0,-8} ExitCode={1,-5} DurationS={2,-8}" -f $r.Phase, $r.ExitCode, $r.DurationS)
+      if ($r.ExitCode -eq 0) {
+        Write-UiLine -Message $line -Style 'Success'
+      } else {
+        Write-UiLine -Message $line -Style 'Error'
+      }
+    }
+  } else {
+    Write-UiLine ''
+    Write-UiLine -Message 'Phases' -Style 'Header'
+    Write-Warn "- (no phases executed)"
+  }
+}
+
+function Write-UserFriendlyFailure {
+  param([Parameter(Mandatory)]$Data)
+
+  if (-not $Data.QuietConsoleEffective) {
+    Write-UiLine -Message ("ERROR: {0}" -f $Data.Message) -Style 'Error'
+    Write-UiLine "Hint: Provide a configuration file with -ConfigPath, or set 'ConfigPath' in the summary JSON passed with -SummaryJsonPath." -Style 'Warning'
+  }
+
+  $safeResults = $Data.Results
+  if (-not $safeResults) { $safeResults = New-Object System.Collections.Generic.List[object] }
+
+  $summaryData = $Data.PSObject.Copy()
+  $summaryData.Results = $safeResults
+  $summaryData.ErrorMessage = $Data.Message
+  $summary = Get-SummaryObject -Data $summaryData
+  $resultToken = if ($Data.ExitCode -eq 2) { 'WARN' } else { 'FAIL' }
+  if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
+  Add-Finding -FindingList $script:Findings -Code 'WINGET-PreflightFailed' -Severity 'Medium' -Message $Data.Message
+  return [pscustomobject]@{ Summary = $summary; Token = $resultToken }
 }

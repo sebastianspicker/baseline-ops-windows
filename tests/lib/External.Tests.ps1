@@ -9,9 +9,8 @@ Describe 'External native command boundary' -Tag 'Security' {
   BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '../../lib/External.psm1') -Force
     $script:NativeHost = (Get-Process -Id $PID -ErrorAction Stop).Path
-  }
 
-  It 'uses a canonical executable, direct process launch, and exact argument boundaries' {
+function Test-ExternalUsesACanonicalExecutableDirectProcessLaunchAndExactArgumentBoundaries {
     $echo = Join-Path $TestDrive 'echo-argv.ps1'
     @'
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Values)
@@ -33,12 +32,7 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Values)
     $source | Should -Match 'FileName = \[string\]\$manifest\.Command'
   }
 
-  It 'rejects control-character command text before a process can spawn' {
-    { Invoke-NativeCommand -Command "$script:NativeHost`n--version" -Arguments @('--version') -ThrowOnError } |
-      Should -Throw '*control characters*'
-  }
-
-  It 'keeps the facade export contract stable while loading focused platform implementations' {
+function Test-ExternalKeepsTheFacadeExportContractStableWhileLoadingFocusedPlatformImplementations {
     $expected = @(
       'Enable-EventLog', 'Ensure-Cmdlet', 'Ensure-Exe', 'Export-EventLog',
       'Export-RegistryKey', 'Get-AuditPolSubcategories', 'Get-EventLogInfo',
@@ -62,7 +56,7 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Values)
     $facade | Should -Match 'Join-Path \$platformRoot ''WindowsOperations\.ps1'''
   }
 
-  It 'resolves required executables through the canonical trust policy' {
+function Test-ExternalResolvesRequiredExecutablesThroughTheCanonicalTrustPolicy {
     Ensure-Exe -Name $script:NativeHost | Should -BeTrue
 
     $source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../lib/platform/Executable.ps1') -Raw
@@ -72,4 +66,16 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Values)
     $timeSyncSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/34-TimeSync-Health.ps1') -Raw
     $timeSyncSource | Should -Not -Match '(?m)^function Ensure-Exe\s*\{'
   }
+}
+
+  It 'uses a canonical executable, direct process launch, and exact argument boundaries' { Test-ExternalUsesACanonicalExecutableDirectProcessLaunchAndExactArgumentBoundaries }
+
+  It 'rejects control-character command text before a process can spawn' {
+    { Invoke-NativeCommand -Command "$script:NativeHost`n--version" -Arguments @('--version') -ThrowOnError } |
+      Should -Throw '*control characters*'
+  }
+
+  It 'keeps the facade export contract stable while loading focused platform implementations' { Test-ExternalKeepsTheFacadeExportContractStableWhileLoadingFocusedPlatformImplementations }
+
+  It 'resolves required executables through the canonical trust policy' { Test-ExternalResolvesRequiredExecutablesThroughTheCanonicalTrustPolicy }
 }

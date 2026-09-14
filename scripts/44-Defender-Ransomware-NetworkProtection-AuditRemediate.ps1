@@ -98,6 +98,15 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Initialize-Capability44Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+    ApplyNetworkProtectionServerPrereqs = $ApplyNetworkProtectionServerPrereqs
+    DisableDatagramProcessingOnWinServer = $DisableDatagramProcessingOnWinServer
+    EnableControlledFolderAccess = $EnableControlledFolderAccess
+    EnableNetworkProtection = $EnableNetworkProtection
+    ExportPath = $ExportPath
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
@@ -106,17 +115,19 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
-  $summary = [pscustomobject]@{
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability44Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
+  $RunState.summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
     Mode         = $Mode
@@ -124,7 +135,7 @@ if (-not $isWindowsHost) {
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
   $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
-  $result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $RunState.summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit (Get-V2ExitCode -Result $unsupportedResult)
@@ -150,19 +161,10 @@ function Get-OsInfo {
 
 function Convert-CfaStateToToken {
   param([Parameter(Mandatory)]$Value)
-  switch ([string]$Value) {
-    '0' { 'Disabled' }
-    '1' { 'Enabled' }
-    '2' { 'AuditMode' }
-    '3' { 'BlockDiskModificationOnly' }
-    '4' { 'AuditDiskModificationOnly' }
-    'Disabled' { 'Disabled' }
-    'Enabled'  { 'Enabled' }
-    'AuditMode' { 'AuditMode' }
-    'BlockDiskModificationOnly' { 'BlockDiskModificationOnly' }
-    'AuditDiskModificationOnly' { 'AuditDiskModificationOnly' }
-    default { [string]$Value }
-  }
+  $tokens = @{ '0' = 'Disabled'; '1' = 'Enabled'; '2' = 'AuditMode'; '3' = 'BlockDiskModificationOnly'; '4' = 'AuditDiskModificationOnly' }
+  $text = [string]$Value
+  if ($tokens.ContainsKey($text)) { return $tokens[$text] }
+  return $text
 }
 
 function Convert-NpStateToToken {
@@ -231,15 +233,9 @@ function Load-ConfigFromJson {
 }
 
 
-function Write-ConsoleReport {
-  param(
-    [Parameter(Mandatory)]$Summary,
-    [Parameter(Mandatory)]$Before,
-    [Parameter(Mandatory)]$After,
-    [object[]]$FindingList = @()
-  )
-
-  $findings = @($FindingList)
+function Write-ConsoleReportSection01 {
+  param([hashtable]$RunState)
+$RunState.findings = @($RunState.FindingList)
 
   $cTitle = [ConsoleColor]::Cyan
   $cInfo  = [ConsoleColor]::Gray
@@ -255,20 +251,20 @@ function Write-ConsoleReport {
   Write-UiLine -Text "Defender Audit/Remediation" -Color $cTitle
   Write-UiLine -Text $headerLine -Color $cDim
 
-  Write-UiLine -Text ("Computer : {0}" -f $Summary.ComputerName) -Color $cInfo
-  Write-UiLine -Text ("OS       : {0}" -f $Summary.OS) -Color $cInfo
-  Write-UiLine -Text ("Mode     : {0}" -f $Summary.Mode) -Color $cInfo
-  Write-UiLine -Text ("Time     : {0}" -f $Summary.Timestamp) -Color $cInfo
+  Write-UiLine -Text ("Computer : {0}" -f $RunState.Summary.ComputerName) -Color $cInfo
+  Write-UiLine -Text ("OS       : {0}" -f $RunState.Summary.OS) -Color $cInfo
+  Write-UiLine -Text ("Mode     : {0}" -f $RunState.Summary.Mode) -Color $cInfo
+  Write-UiLine -Text ("Time     : {0}" -f $RunState.Summary.Timestamp) -Color $cInfo
 
-  $findColor = if ($Summary.FindingsCount -eq 0) { $cOk } elseif ($Summary.FindingsCount -lt 3) { $cWarn } else { $cBad }
-  Write-UiLine -Text ("Findings : {0}" -f $Summary.FindingsCount) -Color $findColor
+  $findColor = if ($RunState.Summary.FindingsCount -eq 0) { $cOk } elseif ($RunState.Summary.FindingsCount -lt 3) { $cWarn } else { $cBad }
+  Write-UiLine -Text ("Findings : {0}" -f $RunState.Summary.FindingsCount) -Color $findColor
 
   Write-UiLine -Text "" -Color $cInfo
   Write-UiLine -Text "Desired configuration:" -Color $cTitle
-  Write-UiLine -Text ("  CFA            : {0}" -f $Summary.DesiredCFA) -Color $cInfo
-  Write-UiLine -Text ("  NP             : {0}" -f $Summary.DesiredNP) -Color $cInfo
-  Write-UiLine -Text ("  NP prereqs     : {0}" -f $Summary.ApplyNPPrereqs) -Color $cInfo
-  Write-UiLine -Text ("  Disable UDP srv: {0}" -f $(if ($Summary.IsServer) { $Summary.DisableDatagram } else { "n/a" })) -Color $cInfo
+  Write-UiLine -Text ("  CFA            : {0}" -f $RunState.Summary.DesiredCFA) -Color $cInfo
+  Write-UiLine -Text ("  NP             : {0}" -f $RunState.Summary.DesiredNP) -Color $cInfo
+  Write-UiLine -Text ("  NP prereqs     : {0}" -f $RunState.Summary.ApplyNPPrereqs) -Color $cInfo
+  Write-UiLine -Text ("  Disable UDP srv: {0}" -f $(if ($RunState.Summary.IsServer) { $RunState.Summary.DisableDatagram } else { "n/a" })) -Color $cInfo
 
   Write-UiLine -Text "" -Color $cInfo
   Write-UiLine -Text "Before -> After:" -Color $cTitle
@@ -279,20 +275,27 @@ function Write-ConsoleReport {
     Write-UiLine -Text ("  {0,-14}: {1} -> {2}" -f $Name, $From, $To) -Color $color
   }
 
-  Write-StateDelta -Name 'CFA' -From $Before.ControlledFolderAccess -To $After.ControlledFolderAccess
-  Write-StateDelta -Name 'NP'  -From $Before.NetworkProtection      -To $After.NetworkProtection
+  Write-StateDelta -Name 'CFA' -From $RunState.Before.ControlledFolderAccess -To $RunState.After.ControlledFolderAccess
+}
 
-  if ($Summary.IsServer) {
-    Write-StateDelta -Name 'NP OnServer'  -From ([string]$Before.AllowNPOnWinServer)   -To ([string]$After.AllowNPOnWinServer)
-    Write-StateDelta -Name 'NP DownLevel' -From ([string]$Before.AllowNPDownLevel)     -To ([string]$After.AllowNPDownLevel)
-    Write-StateDelta -Name 'Datagrams'    -From ([string]$Before.AllowDatagramOnServer)-To ([string]$After.AllowDatagramOnServer)
+function Write-ConsoleReportSection02 {
+  param([hashtable]$RunState)
+Write-StateDelta -Name 'NP'  -From $RunState.Before.NetworkProtection      -To $RunState.After.NetworkProtection
+
+  if ($RunState.Summary.IsServer) {
+    Write-StateDelta -Name 'NP OnServer'  -From ([string]$RunState.Before.AllowNPOnWinServer)   -To ([string]$RunState.After.AllowNPOnWinServer)
+    Write-StateDelta -Name 'NP DownLevel' -From ([string]$RunState.Before.AllowNPDownLevel)     -To ([string]$RunState.After.AllowNPDownLevel)
+    Write-StateDelta -Name 'Datagrams'    -From ([string]$RunState.Before.AllowDatagramOnServer)-To ([string]$RunState.After.AllowDatagramOnServer)
   }
+}
 
-  if ($findings.Count -gt 0) {
+function Write-ConsoleReportSection03 {
+  param([hashtable]$RunState)
+if ($RunState.findings.Count -gt 0) {
     Write-UiLine -Text "" -Color $cInfo
     Write-UiLine -Text "Findings (top 20):" -Color $cTitle
 
-    foreach ($f in ($findings | Select-Object -First 20)) {
+    foreach ($f in ($RunState.findings | Select-Object -First 20)) {
       $sevColor = switch ($f.Severity) {
         'High'   { $cBad }
         'Medium' { $cWarn }
@@ -301,213 +304,256 @@ function Write-ConsoleReport {
       Write-UiLine -Text ("  [{0}] {1}: {2}" -f $f.Severity, $f.Code, $f.Message) -Color $sevColor
     }
 
-    if ($findings.Count -gt 20) {
-      Write-UiLine -Text ("  (Only first 20 shown; total findings: {0})" -f $findings.Count) -Color $cDim
+    if ($RunState.findings.Count -gt 20) {
+      Write-UiLine -Text ("  (Only first 20 shown; total findings: {0})" -f $RunState.findings.Count) -Color $cDim
     }
   }
+}
 
-  if ($Summary.ExportPath) {
+function Write-ConsoleReportSection04 {
+  param([hashtable]$RunState)
+if ($RunState.Summary.ExportPath) {
     Write-UiLine -Text "" -Color $cInfo
-    Write-UiLine -Text ("CSV export : {0}" -f $Summary.ExportPath) -Color $cDim
+    Write-UiLine -Text ("CSV export : {0}" -f $RunState.Summary.ExportPath) -Color $cDim
   }
 
   Write-UiLine -Text "" -Color $cInfo
+}
+
+function Write-ConsoleReport {
+  param(
+    [Parameter(Mandatory)]$Summary,
+    [Parameter(Mandatory)]$Before,
+    [Parameter(Mandatory)]$After,
+    [object[]]$FindingList = @()
+  , [hashtable]$RunState)
+  $RunState.After = $After
+  $RunState.Before = $Before
+  $RunState.FindingList = $FindingList
+  $RunState.Summary = $Summary
+
+    . Write-ConsoleReportSection01 -RunState $RunState
+    . Write-ConsoleReportSection02 -RunState $RunState
+    . Write-ConsoleReportSection03 -RunState $RunState
+    . Write-ConsoleReportSection04 -RunState $RunState
 }
 
 # -----------------------------
 # Preconditions
 # -----------------------------
 
-Require-Admin
+function Invoke-Capability44MainPhase01 {
+  param([hashtable]$RunState)
+  Require-Admin
 
-Ensure-Cmdlet -Name 'Get-MpPreference'
-Ensure-Cmdlet -Name 'Set-MpPreference'
+  Ensure-Cmdlet -Name 'Get-MpPreference'
+  Ensure-Cmdlet -Name 'Set-MpPreference'
 
-# -----------------------------
-# Init + safe defaults
-# -----------------------------
+  # -----------------------------
+  # Init + safe defaults
+  # -----------------------------
 
-$findingList = Get-FindingsList
+  $RunState.findingList = Get-FindingsList
 
-$ConfigJsonPath = Normalize-OptionalPath -Path $ConfigJsonPath
-$ExportPath     = Normalize-OptionalPath -Path $ExportPath
+  $ConfigJsonPath = Normalize-OptionalPath -Path $ConfigJsonPath
+  $RunState.ExportPath     = Normalize-OptionalPath -Path $RunState.ExportPath
 
-$defaults = [pscustomobject]@{
-  EnableControlledFolderAccess          = 'Enabled'
-  EnableNetworkProtection               = 'Enabled'
-  ApplyNetworkProtectionServerPrereqs   = $false
-  DisableDatagramProcessingOnWinServer  = $true
-  ExportPath                            = $null
+  $RunState.defaults = [pscustomobject]@{
+    EnableControlledFolderAccess          = 'Enabled'
+    EnableNetworkProtection               = 'Enabled'
+    ApplyNetworkProtectionServerPrereqs   = $false
+    DisableDatagramProcessingOnWinServer  = $true
+    ExportPath                            = $null
+  }
+
+  # -----------------------------
+  # JSON optional (CLI wins)
+  # -----------------------------
+
+  $cfgResult   = Load-ConfigFromJson -Path $ConfigJsonPath -FindingList $RunState.findingList
+  $RunState.config      = $cfgResult.Config
+  $RunState.findingList = $cfgResult.FindingList
+
+  $RunState.allowedCfa = @('Disabled','Enabled','AuditMode','BlockDiskModificationOnly','AuditDiskModificationOnly')
+  $RunState.allowedNp  = @('Disabled','Enabled','AuditMode')
 }
-
-# -----------------------------
-# JSON optional (CLI wins)
-# -----------------------------
-
-$cfgResult   = Load-ConfigFromJson -Path $ConfigJsonPath -FindingList $findingList
-$config      = $cfgResult.Config
-$findingList = $cfgResult.FindingList
-
-$allowedCfa = @('Disabled','Enabled','AuditMode','BlockDiskModificationOnly','AuditDiskModificationOnly')
-$allowedNp  = @('Disabled','Enabled','AuditMode')
-
-if ($config) {
-  if (-not $PSBoundParameters.ContainsKey('EnableControlledFolderAccess')) {
-    $EnableControlledFolderAccess = Get-SafeToken -Value $config.EnableControlledFolderAccess -Allowed $allowedCfa -Default $defaults.EnableControlledFolderAccess
-  }
-  if (-not $PSBoundParameters.ContainsKey('EnableNetworkProtection')) {
-    $EnableNetworkProtection = Get-SafeToken -Value $config.EnableNetworkProtection -Allowed $allowedNp -Default $defaults.EnableNetworkProtection
-  }
-  if (-not $PSBoundParameters.ContainsKey('ApplyNetworkProtectionServerPrereqs')) {
-    $ApplyNetworkProtectionServerPrereqs = Get-SafeBool -Value $config.ApplyNetworkProtectionServerPrereqs -Default $defaults.ApplyNetworkProtectionServerPrereqs
-  }
-  if (-not $PSBoundParameters.ContainsKey('DisableDatagramProcessingOnWinServer')) {
-    $DisableDatagramProcessingOnWinServer = Get-SafeBool -Value $config.DisableDatagramProcessingOnWinServer -Default $defaults.DisableDatagramProcessingOnWinServer
-  }
-  if (-not $PSBoundParameters.ContainsKey('ExportPath')) {
-    $ExportPath = Normalize-OptionalPath -Path ([string]$config.ExportPath)
-  }
-}
-
-# -----------------------------
-# State (before)
-# -----------------------------
-
-$os = Get-OsInfo
-$isServer = ($os.ProductType -ne 1)
-
-$pref = Get-MpPreference
-
-$before = [pscustomobject]@{
-  PSTypeName             = 'Defender.State'
-  Phase                  = 'Before'
-  ControlledFolderAccess = Convert-CfaStateToToken $pref.EnableControlledFolderAccess
-  NetworkProtection      = Convert-NpStateToToken  $pref.EnableNetworkProtection
-  AllowNPOnWinServer     = $pref.AllowNetworkProtectionOnWinServer
-  AllowNPDownLevel       = $pref.AllowNetworkProtectionDownLevel
-  AllowDatagramOnServer  = $pref.AllowDatagramProcessingOnWinServer
-}
-
-# -----------------------------
-# Audit findings
-# -----------------------------
-
-if ($EnableControlledFolderAccess -ne $before.ControlledFolderAccess) {
-  $findingList = Add-Finding -FindingList $findingList -Code 'DEF-CFA-NotDesired' -Severity 'Medium' -Message (
-    "ControlledFolderAccess is '{0}', desired '{1}'." -f $before.ControlledFolderAccess, $EnableControlledFolderAccess
-  ) -Extra @{ Current = $before.ControlledFolderAccess; Desired = $EnableControlledFolderAccess } -PassThru
-}
-
-if ($EnableNetworkProtection -ne $before.NetworkProtection) {
-  $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-NotDesired' -Severity 'Medium' -Message (
-    "NetworkProtection is '{0}', desired '{1}'." -f $before.NetworkProtection, $EnableNetworkProtection
-  ) -Extra @{ Current = $before.NetworkProtection; Desired = $EnableNetworkProtection } -PassThru
-}
-
-if ($isServer -and $ApplyNetworkProtectionServerPrereqs) {
-  if ($pref.AllowNetworkProtectionOnWinServer -ne $true) {
-    $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-ServerPrereq-Missing' -Severity 'High' -Message (
-      "Windows Server: AllowNetworkProtectionOnWinServer is '{0}', desired '$true'." -f $pref.AllowNetworkProtectionOnWinServer
-    ) -TypeName 'Defender.AuditFinding' -PassThru
-  }
-  if ($null -ne $pref.AllowNetworkProtectionDownLevel -and $pref.AllowNetworkProtectionDownLevel -ne $true) {
-    $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-DownLevelPrereq-Missing' -Severity 'High' -Message (
-      "Windows Server: AllowNetworkProtectionDownLevel is '{0}', desired '$true'." -f $pref.AllowNetworkProtectionDownLevel
-    ) -TypeName 'Defender.AuditFinding' -PassThru
-  }
-}
-
-if ($isServer -and $DisableDatagramProcessingOnWinServer) {
-  if ($null -ne $pref.AllowDatagramProcessingOnWinServer -and $pref.AllowDatagramProcessingOnWinServer -ne $false) {
-    $findingList = Add-Finding -FindingList $findingList -Code 'DEF-NP-DatagramProcessing-NotRecommended' -Severity 'Medium' -Message (
-      "Windows Server: AllowDatagramProcessingOnWinServer is '{0}', recommended '$false'." -f $pref.AllowDatagramProcessingOnWinServer
-    ) -TypeName 'Defender.AuditFinding' -PassThru
-  }
-}
-
-# -----------------------------
-# Remediation
-# -----------------------------
-
-if ($Mode -eq 'Remediate') {
-  if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, "Configure Defender: CFA + NP")) {
-
-    $setParams = @{
-      EnableControlledFolderAccess = $EnableControlledFolderAccess
-      EnableNetworkProtection      = $EnableNetworkProtection
+function Invoke-Capability44MainPhase02 {
+  param([hashtable]$RunState)
+  if ($RunState.config) {
+    if (-not $script:__EntryBoundParameters.ContainsKey('EnableControlledFolderAccess')) {
+      $RunState.EnableControlledFolderAccess = Get-SafeToken -Value $RunState.config.EnableControlledFolderAccess -Allowed $RunState.allowedCfa -Default $RunState.defaults.EnableControlledFolderAccess
     }
-
-    if ($isServer -and $ApplyNetworkProtectionServerPrereqs) {
-      $setParams['AllowNetworkProtectionOnWinServer'] = $true
-      $setParams['AllowNetworkProtectionDownLevel']   = $true
+    if (-not $script:__EntryBoundParameters.ContainsKey('EnableNetworkProtection')) {
+      $RunState.EnableNetworkProtection = Get-SafeToken -Value $RunState.config.EnableNetworkProtection -Allowed $RunState.allowedNp -Default $RunState.defaults.EnableNetworkProtection
     }
-
-    if ($isServer -and $DisableDatagramProcessingOnWinServer) {
-      $setParams['AllowDatagramProcessingOnWinServer'] = $false
+    if (-not $script:__EntryBoundParameters.ContainsKey('ApplyNetworkProtectionServerPrereqs')) {
+      $RunState.ApplyNetworkProtectionServerPrereqs = Get-SafeBool -Value $RunState.config.ApplyNetworkProtectionServerPrereqs -Default $RunState.defaults.ApplyNetworkProtectionServerPrereqs
     }
-
-    Set-MpPreference @setParams
+    if (-not $script:__EntryBoundParameters.ContainsKey('DisableDatagramProcessingOnWinServer')) {
+      $RunState.DisableDatagramProcessingOnWinServer = Get-SafeBool -Value $RunState.config.DisableDatagramProcessingOnWinServer -Default $RunState.defaults.DisableDatagramProcessingOnWinServer
+    }
+    if (-not $script:__EntryBoundParameters.ContainsKey('ExportPath')) {
+      $RunState.ExportPath = Normalize-OptionalPath -Path ([string]$RunState.config.ExportPath)
+    }
   }
 }
+function Invoke-Capability44MainPhase03 {
+  param([hashtable]$RunState)
+  $os = Get-OsInfo
+  $RunState.isServer = ($os.ProductType -ne 1)
 
-# -----------------------------
-# State (after)
-# -----------------------------
+  $pref = Get-MpPreference
 
-$prefAfter = Get-MpPreference
-
-$after = [pscustomobject]@{
-  PSTypeName             = 'Defender.State'
-  Phase                  = 'After'
-  ControlledFolderAccess = Convert-CfaStateToToken $prefAfter.EnableControlledFolderAccess
-  NetworkProtection      = Convert-NpStateToToken  $prefAfter.EnableNetworkProtection
-  AllowNPOnWinServer     = $prefAfter.AllowNetworkProtectionOnWinServer
-  AllowNPDownLevel       = $prefAfter.AllowNetworkProtectionDownLevel
-  AllowDatagramOnServer  = $prefAfter.AllowDatagramProcessingOnWinServer
-}
-
-# -----------------------------
-# Summary + export
-# -----------------------------
-
-$summary = [pscustomobject]@{
-  PSTypeName      = 'Defender.AuditSummary'
-  ComputerName    = $env:COMPUTERNAME
-  OS              = $os.Caption
-  Version         = $os.Version
-  IsServer        = $isServer
-  Mode            = $Mode
-  Timestamp       = (Get-Date)
-  FindingsCount   = $findingList.Count
-  DesiredCFA      = $EnableControlledFolderAccess
-  DesiredNP       = $EnableNetworkProtection
-  ApplyNPPrereqs  = [bool]$ApplyNetworkProtectionServerPrereqs
-  DisableDatagram = [bool]$DisableDatagramProcessingOnWinServer
-  ConfigJsonPath  = $(if ($ConfigJsonPath) { '[configured path]' } else { $null })
-  ExportPath      = $ExportPath
-}
-
-if ($ExportPath) {
-  $dir = Split-Path -Path $ExportPath -Parent
-  if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+  $RunState.before = [pscustomobject]@{
+    PSTypeName             = 'Defender.State'
+    Phase                  = 'Before'
+    ControlledFolderAccess = Convert-CfaStateToToken $pref.EnableControlledFolderAccess
+    NetworkProtection      = Convert-NpStateToToken  $pref.EnableNetworkProtection
+    AllowNPOnWinServer     = $pref.AllowNetworkProtectionOnWinServer
+    AllowNPDownLevel       = $pref.AllowNetworkProtectionDownLevel
+    AllowDatagramOnServer  = $pref.AllowDatagramProcessingOnWinServer
   }
-  $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
+
+  # -----------------------------
+  # Audit findings
+  # -----------------------------
+
+  if ($RunState.EnableControlledFolderAccess -ne $RunState.before.ControlledFolderAccess) {
+    $RunState.findingList = Add-Finding -FindingList $RunState.findingList -Code 'DEF-CFA-NotDesired' -Severity 'Medium' -Message (
+      "ControlledFolderAccess is '{0}', desired '{1}'." -f $RunState.before.ControlledFolderAccess, $RunState.EnableControlledFolderAccess
+    ) -Extra @{ Current = $RunState.before.ControlledFolderAccess; Desired = $RunState.EnableControlledFolderAccess } -PassThru
+  }
+
+  if ($RunState.EnableNetworkProtection -ne $RunState.before.NetworkProtection) {
+    $RunState.findingList = Add-Finding -FindingList $RunState.findingList -Code 'DEF-NP-NotDesired' -Severity 'Medium' -Message (
+      "NetworkProtection is '{0}', desired '{1}'." -f $RunState.before.NetworkProtection, $RunState.EnableNetworkProtection
+    ) -Extra @{ Current = $RunState.before.NetworkProtection; Desired = $RunState.EnableNetworkProtection } -PassThru
+  }
 }
+function Invoke-Capability44MainPhase04 {
+  param([hashtable]$RunState)
+  if ($RunState.isServer -and $RunState.ApplyNetworkProtectionServerPrereqs) {
+    if ($pref.AllowNetworkProtectionOnWinServer -ne $true) {
+      $RunState.findingList = Add-Finding -FindingList $RunState.findingList -Code 'DEF-NP-ServerPrereq-Missing' -Severity 'High' -Message (
+        "Windows Server: AllowNetworkProtectionOnWinServer is '{0}', desired '$true'." -f $pref.AllowNetworkProtectionOnWinServer
+      ) -TypeName 'Defender.AuditFinding' -PassThru
+    }
+    if ($null -ne $pref.AllowNetworkProtectionDownLevel -and $pref.AllowNetworkProtectionDownLevel -ne $true) {
+      $RunState.findingList = Add-Finding -FindingList $RunState.findingList -Code 'DEF-NP-DownLevelPrereq-Missing' -Severity 'High' -Message (
+        "Windows Server: AllowNetworkProtectionDownLevel is '{0}', desired '$true'." -f $pref.AllowNetworkProtectionDownLevel
+      ) -TypeName 'Defender.AuditFinding' -PassThru
+    }
+  }
+}
+function Invoke-Capability44MainPhase05 {
+  param([hashtable]$RunState)
+  if ($RunState.isServer -and $RunState.DisableDatagramProcessingOnWinServer) {
+    if ($null -ne $pref.AllowDatagramProcessingOnWinServer -and $pref.AllowDatagramProcessingOnWinServer -ne $false) {
+      $RunState.findingList = Add-Finding -FindingList $RunState.findingList -Code 'DEF-NP-DatagramProcessing-NotRecommended' -Severity 'Medium' -Message (
+        "Windows Server: AllowDatagramProcessingOnWinServer is '{0}', recommended '$false'." -f $pref.AllowDatagramProcessingOnWinServer
+      ) -TypeName 'Defender.AuditFinding' -PassThru
+    }
+  }
+}
+function Invoke-Capability44MainPhase06 {
+  param([hashtable]$RunState)
+  if ($Mode -eq 'Remediate') {
+    if ($script:__EntryCmdlet.ShouldProcess($env:COMPUTERNAME, "Configure Defender: CFA + NP")) {
 
-# -----------------------------
-# Formatted console output (no pipeline output)
-# -----------------------------
+      $setParams = @{
+        EnableControlledFolderAccess = $RunState.EnableControlledFolderAccess
+        EnableNetworkProtection      = $RunState.EnableNetworkProtection
+      }
 
-Write-ConsoleReport -Summary $summary -Before $before -After $after -FindingList $findingList
+      if ($RunState.isServer -and $RunState.ApplyNetworkProtectionServerPrereqs) {
+        $setParams['AllowNetworkProtectionOnWinServer'] = $true
+        $setParams['AllowNetworkProtectionDownLevel']   = $true
+      }
+
+      if ($RunState.isServer -and $RunState.DisableDatagramProcessingOnWinServer) {
+        $setParams['AllowDatagramProcessingOnWinServer'] = $false
+      }
+
+      Set-MpPreference @setParams
+    }
+  }
+}
+function Invoke-Capability44MainPhase07 {
+  param([hashtable]$RunState)
+  $prefAfter = Get-MpPreference
+
+  $RunState.after = [pscustomobject]@{
+    PSTypeName             = 'Defender.State'
+    Phase                  = 'After'
+    ControlledFolderAccess = Convert-CfaStateToToken $prefAfter.EnableControlledFolderAccess
+    NetworkProtection      = Convert-NpStateToToken  $prefAfter.EnableNetworkProtection
+    AllowNPOnWinServer     = $prefAfter.AllowNetworkProtectionOnWinServer
+    AllowNPDownLevel       = $prefAfter.AllowNetworkProtectionDownLevel
+    AllowDatagramOnServer  = $prefAfter.AllowDatagramProcessingOnWinServer
+  }
+
+  # -----------------------------
+  # Summary + export
+  # -----------------------------
+
+  $RunState.summary = [pscustomobject]@{
+    PSTypeName      = 'Defender.AuditSummary'
+    ComputerName    = $env:COMPUTERNAME
+    OS              = $os.Caption
+    Version         = $os.Version
+    IsServer        = $RunState.isServer
+    Mode            = $Mode
+    Timestamp       = (Get-Date)
+    FindingsCount   = $RunState.findingList.Count
+    DesiredCFA      = $RunState.EnableControlledFolderAccess
+    DesiredNP       = $RunState.EnableNetworkProtection
+    ApplyNPPrereqs  = [bool]$RunState.ApplyNetworkProtectionServerPrereqs
+    DisableDatagram = [bool]$RunState.DisableDatagramProcessingOnWinServer
+    ConfigJsonPath  = $(if ($ConfigJsonPath) { '[configured path]' } else { $null })
+    ExportPath      = $RunState.ExportPath
+  }
+
+  if ($RunState.ExportPath) {
+    $dir = Split-Path -Path $RunState.ExportPath -Parent
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+      New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    }
+    $RunState.summary | Export-Csv -Path $RunState.ExportPath -NoTypeInformation -Encoding UTF8
+  }
+
+  # -----------------------------
+  # Formatted console output (no pipeline output)
+  # -----------------------------
+
+  Write-ConsoleReport -Summary $RunState.summary -Before $RunState.before -After $RunState.after -FindingList $RunState.findingList -RunState $RunState
+}
+function Invoke-Capability44Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability44MainPhase01 -RunState $RunState
+  . Invoke-Capability44MainPhase02 -RunState $RunState
+  . Invoke-Capability44MainPhase03 -RunState $RunState
+  . Invoke-Capability44MainPhase04 -RunState $RunState
+  . Invoke-Capability44MainPhase05 -RunState $RunState
+  . Invoke-Capability44MainPhase06 -RunState $RunState
+  . Invoke-Capability44MainPhase07 -RunState $RunState
+}
+. Invoke-Capability44Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # -----------------------------
 # Pipeline output (objects only)
 # -----------------------------
 
 # V2 output contract
-$resultToken = if ($Strict -and $findingList.Count -gt 0) { 'FAIL' } elseif ($findingList.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $findingList) -Summary $summary -Metadata @{ Before = $before; After = $after }
+function Get-Capability44ResultToken {
+  param([hashtable]$RunState)
+  $resultToken = if ($Strict -and $RunState.findingList.Count -gt 0) { 'FAIL' } elseif ($RunState.findingList.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability44ResultToken -RunState $RunState
+$v2Result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $RunState.findingList) -Summary $RunState.summary -Metadata @{ Before = $RunState.before; After = $RunState.after }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

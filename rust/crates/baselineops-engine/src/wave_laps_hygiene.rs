@@ -21,10 +21,7 @@ impl CapabilityExecutor for WaveLapsHygieneWindowsExecutor {
                 "capability is not implemented by the LAPS hygiene executor",
             );
         }
-        if request.operation == Operation::Apply {
-            return unsupported();
-        }
-        if !matches!(request.operation, Operation::Audit | Operation::Plan) {
+        if !read_only_operation(request.operation) {
             return unsupported();
         }
         let parameters =
@@ -51,6 +48,10 @@ impl CapabilityExecutor for WaveLapsHygieneWindowsExecutor {
             Err(error) => failed(descriptor, &error.to_string()),
         }
     }
+}
+
+const fn read_only_operation(operation: Operation) -> bool {
+    matches!(operation, Operation::Audit | Operation::Plan)
 }
 
 fn unsupported() -> CapabilityOutcome {

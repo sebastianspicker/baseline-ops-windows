@@ -1,8 +1,7 @@
 //! Worker-side recomputation gate for apply authority.
 
 use baselineops_capabilities::{
-    Capability, CapabilityDescriptor, CapabilityExecutor, CapabilityOutcome, CapabilityRequest,
-    ExecutionEnvironment, Operation as CapabilityOperation, adapter_for, lookup,
+    CapabilityDescriptor, CapabilityOutcome, Operation as CapabilityOperation, lookup,
 };
 use baselineops_domain::{
     ObservedStateV3, ObservedValueV3, ProfileStepV3, ProfileV3, Sha256Digest,
@@ -20,15 +19,36 @@ use baselineops_windows::TrustedInstallation;
 /// Fixed-registry production authority retained by the elevated worker.
 pub struct WorkerApplyAuthority {
     session: PlanApprovalSession,
+    intents: crate::native_intents::RetainedIntents,
 }
 
 /// Opaque proof that the production worker approved its retained proposal.
 ///
-/// This token intentionally exposes no plan or scheduler access. The engine will
-/// consume it internally once a fixed native mutation dispatcher is available.
-pub struct ApprovedWorkerApply {
-    #[allow(dead_code)]
+/// This token exposes no plan or scheduler access. It borrows the retained installation
+/// proof until the sealed native dispatcher consumes it exactly once.
+///
+/// ```compile_fail
+/// use baselineops_engine::ApprovedWorkerApply;
+/// fn cannot_outlive_installation(token: ApprovedWorkerApply<'_>) -> ApprovedWorkerApply<'static> {
+///     token
+/// }
+/// ```
+pub struct ApprovedWorkerApply<'installation> {
     verified: VerifiedPlan,
+    intents: crate::native_intents::RetainedIntents,
+    installation: &'installation TrustedInstallation,
+}
+
+impl<'installation> ApprovedWorkerApply<'installation> {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        VerifiedPlan,
+        crate::native_intents::RetainedIntents,
+        &'installation TrustedInstallation,
+    ) {
+        (self.verified, self.intents, self.installation)
+    }
 }
 
 impl WorkerApplyAuthority {
@@ -47,15 +67,80 @@ impl WorkerApplyAuthority {
     /// # Errors
     ///
     /// Returns an error when the digest or live bindings fail worker approval.
-    pub fn approve(
+    pub fn approve<'installation>(
         self,
         digest: Sha256Digest,
         live: &PlanValidationContext,
-        installation: &TrustedInstallation,
-    ) -> Result<ApprovedWorkerApply, ApprovalError> {
-        self.session
-            .approve(digest, live, installation)
-            .map(|verified| ApprovedWorkerApply { verified })
+        installation: &'installation TrustedInstallation,
+    ) -> Result<ApprovedWorkerApply<'installation>, ApprovalError> {
+        let verified = self.session.approve(digest, live, installation)?;
+        validate_apply_eligibility(verified.plan())?;
+        self.intents.validate_execution(verified.plan())?;
+        Ok(ApprovedWorkerApply {
+            verified,
+            intents: self.intents,
+            installation,
+        })
+    }
+
+    #[cfg(test)]
+    fn approve_at_root(
+        self,
+        digest: Sha256Digest,
+        live: &PlanValidationContext,
+        trusted_root: &std::path::Path,
+    ) -> Result<(), ApprovalError> {
+        let verified = self.session.approve_at_root(digest, live, trusted_root)?;
+        validate_apply_eligibility(verified.plan())?;
+        self.intents.validate_execution(verified.plan())?;
+        Ok(())
+    }
+}
+
+fn validate_apply_eligibility(plan: &PlanV3) -> Result<(), ApprovalError> {
+    for action in &plan.actions {
+        validate_action_eligibility(&action.capability)?;
+    }
+    Ok(())
+}
+
+fn validate_action_eligibility(
+    capability: &baselineops_domain::CapabilityId,
+) -> Result<(), ApprovalError> {
+    let descriptor = lookup(capability.as_str()).ok_or_else(|| {
+        ineligible(
+            capability,
+            "the action is absent from the compile-time capability registry",
+        )
+    })?;
+    if descriptor.maturity != baselineops_capabilities::ImplementationMaturity::Implemented {
+        return Err(ineligible(
+            capability,
+            "capability maturity is code_complete; reviewed Windows evidence is open",
+        ));
+    }
+    if !descriptor.apply_eligibility.is_enabled() || !descriptor.operations.apply {
+        return Err(ineligible(
+            capability,
+            "compiled production Apply eligibility is disabled",
+        ));
+    }
+    if descriptor.apply_handler.is_none() {
+        return Err(ineligible(
+            capability,
+            "the sealed worker mutation handler is absent",
+        ));
+    }
+    Ok(())
+}
+
+fn ineligible(
+    capability: &baselineops_domain::CapabilityId,
+    reason: &'static str,
+) -> ApprovalError {
+    ApprovalError::ApplyIneligible {
+        capability_id: capability.to_string(),
+        reason,
     }
 }
 
@@ -71,14 +156,17 @@ pub fn prepare_worker_apply(
     profile: &ProfileV3,
     context: PlanBuildContext,
 ) -> Result<WorkerApplyAuthority, PlanningError> {
+    let plan = rebuild_reviewed_apply_plan(
+        reviewed,
+        profile,
+        context,
+        &RegistryActionDeriver,
+        Utc::now(),
+    )?;
+    let intents = crate::native_intents::RetainedIntents::from_worker_plan(&plan)?;
     Ok(WorkerApplyAuthority {
-        session: PlanApprovalSession::from_worker_plan(rebuild_reviewed_apply_plan(
-            reviewed,
-            profile,
-            context,
-            &RegistryActionDeriver,
-            Utc::now(),
-        )?),
+        session: PlanApprovalSession::from_worker_plan(plan),
+        intents,
     })
 }
 
@@ -106,8 +194,11 @@ pub fn reobserve_profile(
     let mut values = BTreeMap::new();
     for step in &profile.steps {
         values.insert(
-            step.capability_id.clone(),
+            step.step_id,
             ObservedValueV3 {
+                capability: step.capability_id.clone(),
+                parameters_digest: baselineops_domain::canonical_json_digest(&step.parameters)
+                    .map_err(|error| error.to_string())?,
                 observed_at: now,
                 facts: BTreeMap::from([("native_result".into(), observer.observe(step)?)]),
             },
@@ -149,62 +240,7 @@ fn native_audit(
     descriptor: &'static CapabilityDescriptor,
     parameters: &serde_json::Value,
 ) -> CapabilityOutcome {
-    let environment = ExecutionEnvironment {
-        is_windows: cfg!(windows),
-        available_requirements: descriptor.requirements,
-    };
-    let request = CapabilityRequest {
-        operation: CapabilityOperation::Audit,
-        parameters,
-    };
-    let executor: &dyn CapabilityExecutor = match descriptor.id {
-        "v3.defender.health" | "v3.identity.join" => &crate::WaveOneWindowsExecutor,
-        "v3.office-browser.hardening" => &crate::WaveOfficeBrowserWindowsExecutor,
-        "v3.windows-update.policy" => &crate::WaveWindowsUpdateWindowsExecutor,
-        "v3.laps.hygiene" => &crate::WaveLapsHygieneWindowsExecutor,
-        "v3.local-admins.guardrail" => &crate::WaveLocalAdminsWindowsExecutor,
-        "v3.ntlm.client" | "v3.doh.audit" => &crate::WaveTwoWindowsExecutor,
-        "v3.time-sync.health" | "v3.wef.client-readiness" => &crate::WaveWefTimeWindowsExecutor,
-        "v3.network.configuration" | "v3.service-process.inventory" => {
-            &crate::WaveNetworkServicesWindowsExecutor
-        }
-        "v3.firewall.logging" => &crate::WaveFirewallLoggingWindowsExecutor,
-        "v3.advanced-audit-policy" => &crate::WaveAdvancedAuditWindowsExecutor,
-        "v3.security-options.drift" => &crate::WaveSecurityOptionsWindowsExecutor,
-        "v3.lsass.vbs-hardening" | "v3.credential-guard.vbs" | "v3.lsa.protection" => {
-            &crate::WaveBootSecurityWindowsExecutor
-        }
-        "v3.support-bundle.parse" => &crate::SupportBundleParserExecutor,
-        "v3.software.inventory" | "v3.patch.missing" | "v3.eventlog.fast-triage" => {
-            &crate::WaveInventoryWindowsExecutor
-        }
-        "v3.hardware.tpm-posture" | "v3.bitlocker.operations" | "v3.secure-boot.uefi" => {
-            &crate::WaveHardwareTrustWindowsExecutor
-        }
-        "v3.storage.reliability" | "v3.backup.readiness" => {
-            &crate::WaveStorageBackupWindowsExecutor
-        }
-        "v3.remote-surface.audit" | "v3.wdag.readiness" => &crate::WaveRemoteWdagWindowsExecutor,
-        "v3.app-control.audit" => &crate::AppControlWindowsExecutor,
-        "v3.defender.ransomware-network-protection" => {
-            &crate::WaveDefenderRansomwareWindowsExecutor
-        }
-        "v3.client-security-baseline"
-        | "v3.driver-signing.integrity"
-        | "v3.exploit-protection.audit"
-        | "v3.amsi.audit"
-        | "v3.applocker.audit" => &crate::WaveApplicationControlWindowsExecutor,
-        _ => {
-            return CapabilityOutcome::Unsupported {
-                reason: baselineops_capabilities::Unsupported::ExecutorUnavailable {
-                    capability_id: descriptor.id.into(),
-                },
-            };
-        }
-    };
-    adapter_for(descriptor.id)
-        .expect("compile-time catalog IDs are valid")
-        .execute(environment, request, Some(executor))
+    crate::dispatch_native(descriptor, CapabilityOperation::Audit, parameters)
 }
 
 #[cfg(test)]
@@ -214,10 +250,10 @@ mod tests {
         PlanBuildContext, TrustedActionDeriver, approval::PlanApprovalSession, build_plan,
     };
     use baselineops_domain::{
-        ActionId, CapabilityId, ExecutionIntent, HostIdentityV3, InputIdentityV3, JsonMap,
-        ObservedStateV3, ObservedValueV3, OsFamily, PlanValidationContext, PlannedActionV3,
-        ProfileDefaultsV3, ProfileId, ProfileStepV3, RebootRequirement, Reversibility, RiskLevel,
-        SchemaVersion, SourceIdentityV3, SourceKind, ToolIdentityV3,
+        ActionId, CapabilityId, ExecutionIntent, InputIdentityV3, JsonMap, ObservedStateV3,
+        ObservedValueV3, PlanValidationContext, PlannedActionV3, ProfileDefaultsV3, ProfileId,
+        ProfileStepV3, RebootRequirement, Reversibility, RiskLevel, SchemaVersion,
+        SourceIdentityV3, SourceKind, ToolIdentityV3,
     };
     use chrono::Duration;
     use std::collections::BTreeMap;
@@ -234,7 +270,13 @@ mod tests {
     ) {
         let now = Utc::now();
         let capability = capability();
-        let profile = ProfileV3 {
+        let profile = fixture_profile(now, &capability);
+        let context = fixture_context(now, &profile.steps[0]);
+        (profile, context, DeterministicDeriver, now)
+    }
+
+    fn fixture_profile(now: DateTime<Utc>, capability: &CapabilityId) -> ProfileV3 {
+        ProfileV3 {
             schema_version: SchemaVersion::V3,
             id: ProfileId::new(),
             name: "authority test".into(),
@@ -251,32 +293,14 @@ mod tests {
                 continue_on_error: false,
             }],
             metadata: JsonMap::new(),
-        };
+        }
+    }
+
+    fn fixture_context(now: DateTime<Utc>, step: &ProfileStepV3) -> PlanBuildContext {
         let package_digest = Sha256Digest::of_bytes(b"package");
-        let mut host = HostIdentityV3 {
-            host_id: "host".into(),
-            boot_id: "boot".into(),
-            session_id: "session".into(),
-            hostname: "endpoint".into(),
-            os_family: OsFamily::Windows,
-            os_version: "11".into(),
-            architecture: "x86_64".into(),
-            fingerprint: Sha256Digest::of_bytes([]),
-        };
-        host.fingerprint = host.calculated_fingerprint().expect("fingerprint");
-        let mut observed = ObservedStateV3 {
-            captured_at: now,
-            digest: Sha256Digest::of_bytes([]),
-            values: BTreeMap::from([(
-                capability,
-                ObservedValueV3 {
-                    observed_at: now,
-                    facts: BTreeMap::from([("fresh".into(), serde_json::json!(true))]),
-                },
-            )]),
-        };
-        observed.digest = observed.calculated_digest().expect("observation");
-        let context = PlanBuildContext {
+        let host = crate::test_support::host("11");
+        let observed = fixture_observation(now, step);
+        PlanBuildContext {
             intent: ExecutionIntent::Apply,
             host,
             tool: ToolIdentityV3 {
@@ -294,10 +318,29 @@ mod tests {
                 digest: Sha256Digest::of_bytes(b"profile"),
                 size_bytes: 7,
             },
+            resources: Vec::new(),
             observed_state: observed,
             lifetime: Duration::minutes(5),
+        }
+    }
+
+    fn fixture_observation(now: DateTime<Utc>, step: &ProfileStepV3) -> ObservedStateV3 {
+        let mut observed = ObservedStateV3 {
+            captured_at: now,
+            digest: Sha256Digest::of_bytes([]),
+            values: BTreeMap::from([(
+                step.step_id,
+                ObservedValueV3 {
+                    capability: step.capability_id.clone(),
+                    parameters_digest: baselineops_domain::canonical_json_digest(&step.parameters)
+                        .unwrap(),
+                    observed_at: now,
+                    facts: BTreeMap::from([("fresh".into(), serde_json::json!(true))]),
+                },
+            )]),
         };
-        (profile, context, DeterministicDeriver, now)
+        observed.digest = observed.calculated_digest().expect("observation");
+        observed
     }
 
     struct DeterministicDeriver;
@@ -397,17 +440,7 @@ mod tests {
                 live_context(&context, now + Duration::minutes(6)),
             ),
         ];
-        for (name, live) in contexts {
-            let session = PlanApprovalSession::from_worker_plan(
-                build_plan(&profile, context.clone(), &deriver, now).expect("worker plan"),
-            );
-            assert!(
-                session
-                    .approve_at_root(digest, &live, std::path::Path::new("C:\\trusted"))
-                    .is_err(),
-                "{name}"
-            );
-        }
+        assert_rejects_live_changes(&profile, &context, &deriver, now, digest, contexts);
         let session = PlanApprovalSession::from_worker_plan(seed);
         assert!(
             session
@@ -418,6 +451,57 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    fn assert_rejects_live_changes(
+        profile: &ProfileV3,
+        context: &PlanBuildContext,
+        deriver: &DeterministicDeriver,
+        now: DateTime<Utc>,
+        digest: Sha256Digest,
+        contexts: [(&str, PlanValidationContext); 6],
+    ) {
+        for (name, live) in contexts {
+            let session = PlanApprovalSession::from_worker_plan(
+                build_plan(profile, context.clone(), deriver, now).expect("worker plan"),
+            );
+            assert!(
+                session
+                    .approve_at_root(digest, &live, std::path::Path::new("C:\\trusted"))
+                    .is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_authority_validates_digest_before_apply_eligibility() {
+        let (profile, context, deriver, now) = fixture();
+        let plan = build_plan(&profile, context.clone(), &deriver, now).expect("worker plan");
+        let live = live_context(&context, now);
+        let authority = WorkerApplyAuthority {
+            session: PlanApprovalSession::from_worker_plan(plan),
+            intents: crate::native_intents::RetainedIntents::empty_for_test(),
+        };
+        assert!(matches!(
+            authority.approve_at_root(
+                Sha256Digest::of_bytes(b"wrong"),
+                &live,
+                std::path::Path::new("C:\\trusted")
+            ),
+            Err(ApprovalError::DigestMismatch)
+        ));
+
+        let plan = build_plan(&profile, context, &deriver, now).expect("worker plan");
+        let digest = plan.digest();
+        let authority = WorkerApplyAuthority {
+            session: PlanApprovalSession::from_worker_plan(plan),
+            intents: crate::native_intents::RetainedIntents::empty_for_test(),
+        };
+        assert!(matches!(
+            authority.approve_at_root(digest, &live, std::path::Path::new("C:\\trusted")),
+            Err(ApprovalError::ApplyIneligible { .. })
+        ));
     }
 
     struct FixedObserver;
@@ -435,3 +519,7 @@ mod tests {
         assert_ne!(observed.digest, Sha256Digest::of_bytes([]));
     }
 }
+
+#[cfg(test)]
+#[path = "apply_authority/observation_tests.rs"]
+mod observation_binding_tests;

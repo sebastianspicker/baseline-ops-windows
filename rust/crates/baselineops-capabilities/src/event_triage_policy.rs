@@ -35,8 +35,8 @@ pub struct EventLogQueryParameters {
 }
 
 /// A retained event. `message` is optional and intentionally localization-opaque.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct EventLogRecord {
     /// Event provider name from rendered XML.
     pub provider: String,
@@ -55,8 +55,8 @@ pub struct EventLogRecord {
 }
 
 /// Event Log evidence before evaluation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct EventLogObservation {
     /// Retained records or typed query/read errors.
     pub records: Vec<Observation<EventLogRecord>>,

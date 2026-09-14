@@ -66,37 +66,7 @@ pub fn evaluate_software_inventory(
     let mut seen = BTreeSet::new();
     let mut records = Vec::new();
     for record in observation.records.iter().take(MAX_SOFTWARE_RECORDS) {
-        let Observation::Present(record) = record else {
-            incomplete(
-                &mut findings,
-                "INV-SoftwareRecordIncomplete",
-                "software record",
-                record,
-            );
-            continue;
-        };
-        incomplete(
-            &mut findings,
-            "INV-SoftwareNameIncomplete",
-            "software display name",
-            &record.display_name,
-        );
-        incomplete(
-            &mut findings,
-            "INV-SoftwareVersionIncomplete",
-            "software display version",
-            &record.display_version,
-        );
-        incomplete(
-            &mut findings,
-            "INV-SoftwarePublisherIncomplete",
-            "software publisher",
-            &record.publisher,
-        );
-        let identity = identity(record);
-        if seen.insert(identity) {
-            records.push(record.clone());
-        }
+        collect_record(record, &mut seen, &mut records, &mut findings);
     }
     if !observation.enumeration_complete || observation.records.len() > MAX_SOFTWARE_RECORDS {
         findings.push(finding(
@@ -108,6 +78,44 @@ pub fn evaluate_software_inventory(
         observation,
         records,
         findings,
+    }
+}
+
+fn collect_record(
+    observed: &Observation<SoftwareInventoryRecord>,
+    seen: &mut BTreeSet<(String, String, String)>,
+    records: &mut Vec<SoftwareInventoryRecord>,
+    findings: &mut Vec<PolicyFinding>,
+) {
+    let Observation::Present(record) = observed else {
+        incomplete(
+            findings,
+            "INV-SoftwareRecordIncomplete",
+            "software record",
+            observed,
+        );
+        return;
+    };
+    incomplete(
+        findings,
+        "INV-SoftwareNameIncomplete",
+        "software display name",
+        &record.display_name,
+    );
+    incomplete(
+        findings,
+        "INV-SoftwareVersionIncomplete",
+        "software display version",
+        &record.display_version,
+    );
+    incomplete(
+        findings,
+        "INV-SoftwarePublisherIncomplete",
+        "software publisher",
+        &record.publisher,
+    );
+    if seen.insert(identity(record)) {
+        records.push(record.clone());
     }
 }
 

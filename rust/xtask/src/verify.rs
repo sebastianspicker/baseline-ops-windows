@@ -1,17 +1,41 @@
+mod ledger;
+mod oracle;
+
 use crate::Roots;
-use crate::generate::generated_schemas;
+use crate::generate::{generated_parity_summary, generated_schemas};
 use crate::support::{sorted_files, sorted_files_recursive};
 use anyhow::{Context, Result, bail};
 use baselineops_domain::{JsonLoadLimits, ProfileV3};
 use serde::Deserialize;
-use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+fn maturity_name(maturity: baselineops_capabilities::ImplementationMaturity) -> &'static str {
+    match maturity {
+        baselineops_capabilities::ImplementationMaturity::LegacyOnly => "legacy_only",
+        baselineops_capabilities::ImplementationMaturity::InDevelopment => "in_development",
+        baselineops_capabilities::ImplementationMaturity::CodeComplete => "code_complete",
+        baselineops_capabilities::ImplementationMaturity::Implemented => "implemented",
+    }
+}
+
 pub(crate) fn verify(roots: &Roots) -> Result<()> {
-    verify_registry_and_ledger(roots)?;
+    ledger::verify_registry_and_ledger(roots)?;
+    oracle::verify_oracle_inventory(roots)?;
     verify_rust_source_hygiene(roots)?;
+    verify_generated_snapshots(roots)?;
+    verify_example_profiles(roots)?;
+    verify_external_evidence_inventory(roots, false)?;
+    verify_no_shell_contract(roots)
+}
+
+fn verify_generated_snapshots(roots: &Roots) -> Result<()> {
+    verify_schema_snapshots(roots)?;
+    verify_parity_snapshot(roots)
+}
+
+fn verify_schema_snapshots(roots: &Roots) -> Result<()> {
     for (name, expected) in generated_schemas()? {
         let path = roots.rust.join("schemas").join(name);
         let actual = fs::read(&path)
@@ -23,6 +47,21 @@ pub(crate) fn verify(roots: &Roots) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+fn verify_parity_snapshot(roots: &Roots) -> Result<()> {
+    let parity_path = roots.rust.join("ledger/capability-parity.md");
+    if fs::read_to_string(&parity_path)? != generated_parity_summary(roots)? {
+        bail!(
+            "parity summary is stale: {} (run cargo run -p xtask -- generate)",
+            parity_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn verify_example_profiles(roots: &Roots) -> Result<()> {
     for profile in sorted_files(&roots.rust.join("examples/profiles"))? {
         let profile: ProfileV3 =
             baselineops_domain::load_json_file(&profile, JsonLoadLimits::default())?;
@@ -30,8 +69,7 @@ pub(crate) fn verify(roots: &Roots) -> Result<()> {
             .validate()
             .with_context(|| format!("invalid example profile {}", profile.id))?;
     }
-    verify_external_evidence_inventory(roots, false)?;
-    verify_no_shell_contract(roots)
+    Ok(())
 }
 
 pub(crate) fn release_check(
@@ -64,7 +102,8 @@ fn verify_release_identity(
 }
 
 fn verify_capability_closure() -> Result<()> {
-    let incomplete = baselineops_capabilities::list()
+    let registry = baselineops_capabilities::list();
+    let incomplete = registry
         .iter()
         .filter(|descriptor| {
             descriptor.maturity != baselineops_capabilities::ImplementationMaturity::Implemented
@@ -73,7 +112,8 @@ fn verify_capability_closure() -> Result<()> {
         .collect::<Vec<_>>();
     if !incomplete.is_empty() {
         bail!(
-            "release requires all 52 native capabilities to be implemented; incomplete: {}",
+            "release requires all {} native capabilities to be implemented; incomplete: {}",
+            registry.len(),
             incomplete.join(", ")
         );
     }
@@ -111,21 +151,10 @@ fn verify_external_evidence_inventory(roots: &Roots, require_closed: bool) -> Re
         "hardware_secure_boot",
         "hardware_bitlocker",
     ];
-    let path = roots.rust.join("release/evidence-gates.json");
-    let evidence: ReleaseEvidenceFile = serde_json::from_slice(&fs::read(&path)?)?;
-    if evidence.schema_version != 1 || evidence.gates.len() != REQUIRED.len() {
-        bail!("release evidence gate inventory is incomplete");
-    }
+    let evidence = read_evidence_inventory(roots, REQUIRED.len())?;
     let mut open = Vec::new();
     for required in REQUIRED {
-        let gate = evidence
-            .gates
-            .get(required)
-            .with_context(|| format!("release evidence gate is absent: {required}"))?;
-        if gate.evidence.trim().is_empty() {
-            bail!("release evidence gate has no evidence reference: {required}");
-        }
-        if !gate.closed {
+        if !verified_evidence_gate(&evidence, required)?.closed {
             open.push(required);
         }
     }
@@ -135,66 +164,27 @@ fn verify_external_evidence_inventory(roots: &Roots, require_closed: bool) -> Re
     Ok(())
 }
 
-fn verify_registry_and_ledger(roots: &Roots) -> Result<()> {
-    let registry = baselineops_capabilities::list();
-    verify_registry_sequence(registry)?;
-    let ledger_path = roots.rust.join("ledger/capability-parity.json");
-    let ledger: Value = serde_json::from_slice(&fs::read(ledger_path)?)?;
-    let entries = ledger["entries"]
-        .as_array()
-        .context("ledger entries must be an array")?;
-    verify_ledger_alignment(registry, entries)
+fn read_evidence_inventory(roots: &Roots, required_count: usize) -> Result<ReleaseEvidenceFile> {
+    let path = roots.rust.join("release/evidence-gates.json");
+    let evidence: ReleaseEvidenceFile = serde_json::from_slice(&fs::read(&path)?)?;
+    if evidence.schema_version != 1 || evidence.gates.len() != required_count {
+        bail!("release evidence gate inventory is incomplete");
+    }
+    Ok(evidence)
 }
 
-fn verify_registry_sequence(
-    registry: &[baselineops_capabilities::CapabilityDescriptor],
-) -> Result<()> {
-    if registry.len() != 52 {
-        bail!("registry must contain exactly 52 capabilities");
+fn verified_evidence_gate<'a>(
+    evidence: &'a ReleaseEvidenceFile,
+    required: &str,
+) -> Result<&'a ReleaseEvidenceGate> {
+    let gate = evidence
+        .gates
+        .get(required)
+        .with_context(|| format!("release evidence gate is absent: {required}"))?;
+    if gate.evidence.trim().is_empty() {
+        bail!("release evidence gate has no evidence reference: {required}");
     }
-    let mut ids = BTreeSet::new();
-    for (index, descriptor) in registry.iter().enumerate() {
-        if descriptor.legacy_number != u8::try_from(index + 1)? || !ids.insert(descriptor.id) {
-            bail!("registry IDs or legacy numbers are incomplete/duplicated");
-        }
-    }
-    Ok(())
-}
-
-fn verify_ledger_alignment(
-    registry: &[baselineops_capabilities::CapabilityDescriptor],
-    entries: &[Value],
-) -> Result<()> {
-    if entries.len() != 52 {
-        bail!("parity ledger must contain exactly 52 entries");
-    }
-    for (descriptor, entry) in registry.iter().zip(entries) {
-        if entry["number"].as_u64() != Some(u64::from(descriptor.legacy_number))
-            || entry["id"].as_str() != Some(descriptor.id)
-            || entry["script"].as_str() != Some(descriptor.legacy_script)
-        {
-            bail!("parity ledger diverges at capability {}", descriptor.id);
-        }
-        verify_implemented_evidence(descriptor, entry)?;
-    }
-    Ok(())
-}
-
-fn verify_implemented_evidence(
-    descriptor: &baselineops_capabilities::CapabilityDescriptor,
-    entry: &Value,
-) -> Result<()> {
-    if descriptor.maturity != baselineops_capabilities::ImplementationMaturity::Implemented {
-        return Ok(());
-    }
-    let evidence = entry["evidence"].as_str().unwrap_or_default();
-    if entry["status"].as_str() != Some("implemented") || evidence.trim().is_empty() {
-        bail!(
-            "implemented capability lacks closed evidence: {}",
-            descriptor.id
-        );
-    }
-    Ok(())
+    Ok(gate)
 }
 
 fn verify_no_shell_contract(roots: &Roots) -> Result<()> {

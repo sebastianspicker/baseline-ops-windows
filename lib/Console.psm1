@@ -32,6 +32,19 @@ $script:SeverityConfig = @{
   'Debug'    = @{ Color = 'DarkGray'; Rank = -3; Prefix = '[DEBUG]' }
 }
 
+$script:SeverityAliases = @{
+  'critical' = 'Critical'; 'crit' = 'Critical'; 'high' = 'High'; 'error' = 'Error'; 'err' = 'Error'
+  'fail' = 'Fail'; 'failed' = 'Fail'; 'failure' = 'Fail'; 'bad' = 'Fail'; 'danger' = 'Fail'
+  'medium' = 'Medium'; 'med' = 'Medium'; 'warning' = 'Warning'; 'warn' = 'Warning'; 'drift' = 'Warning'; 'changed' = 'Warning'
+  'low' = 'Low'; 'ok' = 'OK'; 'good' = 'OK'; 'success' = 'OK'; 'pass' = 'OK'; 'passed' = 'OK'
+  'skip' = 'Skip'; 'skipped' = 'Skip'; 'debug' = 'Debug'; 'dim' = 'Debug'; 'muted' = 'Debug'
+}
+
+$script:SeverityStatFields = @{
+  'Critical' = 'Critical'; 'High' = 'High'; 'Medium' = 'Medium'; 'Warning' = 'Medium'; 'Low' = 'Low'
+  'Error' = 'Error'; 'Fail' = 'Error'; 'OK' = 'OK'; 'Skip' = 'Skip'; 'Debug' = 'Debug'; 'Info' = 'Info'
+}
+
 <#
 .SYNOPSIS
   Normalizes severity and status aliases to a configured severity name.
@@ -49,19 +62,45 @@ function Resolve-Severity {
 
   if ([string]::IsNullOrWhiteSpace($Severity)) { return 'Info' }
 
-  switch -Regex ($Severity.Trim()) {
-    '^(Critical|Crit)$' { return 'Critical' }
-    '^(High)$' { return 'High' }
-    '^(Error|Err)$' { return 'Error' }
-    '^(Fail|Failed|Failure|Bad|Danger)$' { return 'Fail' }
-    '^(Medium|Med)$' { return 'Medium' }
-    '^(Warning|Warn|Drift|Changed)$' { return 'Warning' }
-    '^(Low)$' { return 'Low' }
-    '^(OK|Good|Success|Pass|Passed)$' { return 'OK' }
-    '^(Skip|Skipped)$' { return 'Skip' }
-    '^(Debug|Dim|Muted)$' { return 'Debug' }
-    default { return 'Info' }
+  $alias = $Severity.Trim().ToLowerInvariant()
+  if ($script:SeverityAliases.ContainsKey($alias)) { return $script:SeverityAliases[$alias] }
+  return 'Info'
+}
+
+<#
+.SYNOPSIS
+  Converts a display color value to a console color.
+#>
+function Resolve-ConsoleColorValue {
+  [CmdletBinding()]
+  param([object]$Color)
+
+  if ($Color -is [ConsoleColor]) { return $Color }
+  if ($Color -is [string]) {
+    try { return [ConsoleColor]$Color } catch { return $null }
   }
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Writes a line through the host UI.
+#>
+function Write-HostConsoleLine {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][object]$HostUi,
+    [AllowNull()][ConsoleColor]$Color,
+    [Parameter(Mandatory)][string]$BackgroundColor,
+    [Parameter(Mandatory)][Alias('Message')][string]$Text,
+    [switch]$NoNewLine
+  )
+
+  if ($NoNewLine) {
+    if ($null -ne $Color) { $HostUi.Write($Color, $BackgroundColor, $Text) } else { $HostUi.Write($Text) }
+    return
+  }
+  if ($null -ne $Color) { $HostUi.WriteLine($Color, $BackgroundColor, $Text) } else { $HostUi.WriteLine($Text) }
 }
 
 <#
@@ -120,6 +159,23 @@ function Get-ConsoleColor {
 
 <#
 .SYNOPSIS
+  Gets one configured display property for a normalized severity.
+#>
+function Get-SeverityDisplayProperty {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Severity,
+    [Parameter(Mandatory)][string]$Property,
+    [Parameter(Mandatory)][object]$Default
+  )
+
+  $normalized = Resolve-Severity -Severity $Severity
+  if ($script:SeverityConfig.ContainsKey($normalized)) { return $script:SeverityConfig[$normalized][$Property] }
+  return $Default
+}
+
+<#
+.SYNOPSIS
   Returns the numeric rank for a severity level (higher = more severe).
 .PARAMETER Severity
   Severity keyword to rank.
@@ -131,11 +187,7 @@ function Get-SeverityRank {
     [string]$Severity
   )
 
-  $normalized = Resolve-Severity -Severity $Severity
-  if ($script:SeverityConfig.ContainsKey($normalized)) {
-    return $script:SeverityConfig[$normalized].Rank
-  }
-  return 0
+  return Get-SeverityDisplayProperty -Severity $Severity -Property 'Rank' -Default 0
 }
 
 <#
@@ -151,11 +203,7 @@ function Get-SeverityPrefix {
     [string]$Severity
   )
 
-  $normalized = Resolve-Severity -Severity $Severity
-  if ($script:SeverityConfig.ContainsKey($normalized)) {
-    return $script:SeverityConfig[$normalized].Prefix
-  }
-  return '[INFO] '
+  return Get-SeverityDisplayProperty -Severity $Severity -Property 'Prefix' -Default '[INFO] '
 }
 
 <#
@@ -175,28 +223,102 @@ function Write-ColoredLine {
     [switch]$NoNewLine
   )
 
-  $fg = if ($Color -is [ConsoleColor]) { $Color } elseif ($Color -is [string]) { 
-    try { [ConsoleColor]$Color } catch { $null }
-  } else { $null }
+  $fg = Resolve-ConsoleColorValue -Color $Color
 
   try {
-    if ($NoNewLine) {
-      if ($null -ne $fg) {
-        $PSCmdlet.Host.UI.Write($fg, $PSCmdlet.Host.UI.RawUI.BackgroundColor, $Text)
-      } else {
-        $PSCmdlet.Host.UI.Write($Text)
-      }
-      return
-    }
-
-    if ($null -ne $fg) {
-      $PSCmdlet.Host.UI.WriteLine($fg, $PSCmdlet.Host.UI.RawUI.BackgroundColor, $Text)
-    } else {
-      $PSCmdlet.Host.UI.WriteLine($Text)
-    }
+    Write-HostConsoleLine -HostUi $PSCmdlet.Host.UI -Color $fg `
+      -BackgroundColor $PSCmdlet.Host.UI.RawUI.BackgroundColor -Text $Text -NoNewLine:$NoNewLine
   } catch {
     Write-Information -MessageData $Text -InformationAction Continue
   }
+}
+
+<#
+.SYNOPSIS
+  Writes standard summary properties.
+#>
+function Write-ConsoleSummaryProperties {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][psobject]$Summary)
+
+  if ($Summary.PSObject.Properties['ComputerName']) { Write-ColoredLine -Text " Computer : $($Summary.ComputerName)" -Color 'Gray' }
+  if ($Summary.PSObject.Properties['Timestamp']) { Write-ColoredLine -Text " Time     : $($Summary.Timestamp)" -Color 'Gray' }
+  if ($Summary.PSObject.Properties['EndTime'] -and $Summary.PSObject.Properties['StartTime']) {
+    $duration = $Summary.EndTime - $Summary.StartTime
+    if ($duration) { Write-ColoredLine -Text " Duration : $($duration.ToString('hh\:mm\:ss'))" -Color 'Gray' }
+  }
+}
+
+<#
+.SYNOPSIS
+  Writes optional summary fields.
+#>
+function Write-ConsoleSummaryCustomFields {
+  [CmdletBinding()]
+  param([hashtable]$CustomFields)
+
+  if ($CustomFields -and $CustomFields.Count -gt 0) {
+    foreach ($key in $CustomFields.Keys) {
+      Write-ColoredLine -Text (" {0} : {1}" -f $key.PadRight(9), $CustomFields[$key]) -Color 'Gray'
+    }
+  }
+}
+
+<#
+.SYNOPSIS
+  Writes the finding list portion of a summary.
+#>
+function Write-ConsoleSummaryFindings {
+  [CmdletBinding()]
+  param([System.Collections.ArrayList]$Findings)
+
+  if (-not $Findings -or $Findings.Count -eq 0) { return }
+  Write-ColoredLine -Text '' -Color 'Gray'
+  Write-ColoredLine -Text ' Findings:' -Color 'White'
+  foreach ($finding in $Findings) {
+    $severity = if ($finding.PSObject.Properties['Severity']) { $finding.Severity } else { 'Info' }
+    $code = if ($finding.PSObject.Properties['Code']) { $finding.Code } else { 'UNKNOWN' }
+    $message = if ($finding.PSObject.Properties['Message']) { $finding.Message } else { '' }
+    Write-FindingLine -Severity $severity -Code $code -Message $message
+  }
+}
+
+<#
+.SYNOPSIS
+  Writes a compact severity breakdown.
+#>
+function Write-ConsoleSeverityBreakdown {
+  [CmdletBinding()]
+  param([System.Collections.ArrayList]$Findings)
+
+  if (-not $Findings -or $Findings.Count -eq 0) { return }
+  $stats = Get-FindingStats -Findings $Findings
+  $labels = [ordered]@{ Critical = 'Critical'; High = 'High'; Medium = 'Med'; Low = 'Low'; Info = 'Info'; Error = 'Error'; OK = 'OK'; Skip = 'Skip'; Debug = 'Debug' }
+  $parts = foreach ($name in $labels.Keys) {
+    if ($stats.$name -gt 0) { '{0}={1}' -f $labels[$name], $stats.$name }
+  }
+  if (@($parts).Count -gt 0) {
+    Write-ColoredLine -Text '' -Color 'Gray'
+    Write-ColoredLine -Text (' Breakdown: ' + ($parts -join ' | ')) -Color 'Gray'
+  }
+}
+
+<#
+.SYNOPSIS
+  Gets the overall result for a collection of findings.
+#>
+function Get-ConsoleSummaryResult {
+  [CmdletBinding()]
+  param([System.Collections.ArrayList]$Findings)
+
+  if (-not $Findings -or $Findings.Count -eq 0) { return 'PASS' }
+  $maxRank = ($Findings | ForEach-Object {
+      $severity = if ($_.PSObject.Properties['Severity']) { $_.Severity } else { 'Info' }
+      Get-SeverityRank -Severity $severity
+    } | Measure-Object -Maximum).Maximum
+  if ($maxRank -ge 3) { return 'FAIL' }
+  if ($maxRank -ge 2) { return 'WARN' }
+  return 'PASS'
 }
 
 <#
@@ -305,76 +427,17 @@ function Write-ConsoleSummary {
   # Header
   Write-DecorativeRule -Title $Title -Width $Width
 
-  # Summary properties
-  if ($Summary.PSObject.Properties['ComputerName']) {
-    Write-ColoredLine -Text " Computer : $($Summary.ComputerName)" -Color 'Gray'
-  }
-  if ($Summary.PSObject.Properties['Timestamp']) {
-    Write-ColoredLine -Text " Time     : $($Summary.Timestamp)" -Color 'Gray'
-  }
-  if ($Summary.PSObject.Properties['EndTime']) {
-    $duration = if ($Summary.PSObject.Properties['StartTime']) {
-      $Summary.EndTime - $Summary.StartTime
-    } else { $null }
-    if ($duration) {
-      Write-ColoredLine -Text " Duration : $($duration.ToString('hh\:mm\:ss'))" -Color 'Gray'
-    }
-  }
+  Write-ConsoleSummaryProperties -Summary $Summary
 
   # Findings count
   $findingsCount = if ($Findings) { $Findings.Count } else { 0 }
   $findingsColor = if ($findingsCount -gt 0) { 'Yellow' } else { 'Green' }
   Write-ColoredLine -Text " Findings : $findingsCount" -Color $findingsColor
 
-  # Custom fields (rendered after standard fields)
-  if ($CustomFields -and $CustomFields.Count -gt 0) {
-    foreach ($key in $CustomFields.Keys) {
-      $value = $CustomFields[$key]
-      $padded = $key.PadRight(9)
-      Write-ColoredLine -Text " $padded : $value" -Color 'Gray'
-    }
-  }
-
-  # Findings list
-  if ($Findings -and $Findings.Count -gt 0) {
-    Write-ColoredLine -Text '' -Color 'Gray'
-    Write-ColoredLine -Text ' Findings:' -Color 'White'
-
-    foreach ($finding in $Findings) {
-      $sev = if ($finding.PSObject.Properties['Severity']) { $finding.Severity } else { 'Info' }
-      $code = if ($finding.PSObject.Properties['Code']) { $finding.Code } else { 'UNKNOWN' }
-      $msg = if ($finding.PSObject.Properties['Message']) { $finding.Message } else { '' }
-      Write-FindingLine -Severity $sev -Code $code -Message $msg
-    }
-  }
-
-  # Severity breakdown line
-  if ($Findings -and $Findings.Count -gt 0) {
-    $stats = Get-FindingStats -Findings $Findings
-    $parts = [System.Collections.ArrayList]::new()
-    if ($stats.Critical -gt 0) { [void]$parts.Add("Critical=$($stats.Critical)") }
-    if ($stats.High -gt 0) { [void]$parts.Add("High=$($stats.High)") }
-    if ($stats.Medium -gt 0) { [void]$parts.Add("Med=$($stats.Medium)") }
-    if ($stats.Low -gt 0) { [void]$parts.Add("Low=$($stats.Low)") }
-    if ($stats.Info -gt 0) { [void]$parts.Add("Info=$($stats.Info)") }
-    if ($stats.Error -gt 0) { [void]$parts.Add("Error=$($stats.Error)") }
-    if ($stats.OK -gt 0) { [void]$parts.Add("OK=$($stats.OK)") }
-    if ($stats.Skip -gt 0) { [void]$parts.Add("Skip=$($stats.Skip)") }
-    if ($stats.Debug -gt 0) { [void]$parts.Add("Debug=$($stats.Debug)") }
-    if ($parts.Count -gt 0) {
-      Write-ColoredLine -Text '' -Color 'Gray'
-      Write-ColoredLine -Text (" Breakdown: " + ($parts -join ' | ')) -Color 'Gray'
-    }
-  }
-
-  # Overall result indicator
-  $overallResult = if ($Findings -and $Findings.Count -gt 0) {
-    $maxRank = ($Findings | ForEach-Object {
-      $s = if ($_.PSObject.Properties['Severity']) { $_.Severity } else { 'Info' }
-      Get-SeverityRank -Severity $s
-    } | Measure-Object -Maximum).Maximum
-    if ($maxRank -ge 3) { 'FAIL' } elseif ($maxRank -ge 2) { 'WARN' } else { 'PASS' }
-  } else { 'PASS' }
+  Write-ConsoleSummaryCustomFields -CustomFields $CustomFields
+  Write-ConsoleSummaryFindings -Findings $Findings
+  Write-ConsoleSeverityBreakdown -Findings $Findings
+  $overallResult = Get-ConsoleSummaryResult -Findings $Findings
   $resultColor = switch ($overallResult) { 'FAIL' { 'Red' }; 'WARN' { 'Yellow' }; default { 'Green' } }
   Write-ColoredLine -Text " Result   : $overallResult" -Color $resultColor
 
@@ -414,20 +477,9 @@ function Get-FindingStats {
   }
 
   foreach ($finding in $findingsList) {
-    $sev = if ($finding.PSObject.Properties['Severity']) { $finding.Severity } else { 'Info' }
-    switch (Resolve-Severity -Severity $sev) {
-      'Critical' { $stats.Critical++; break }
-      'High' { $stats.High++; break }
-      'Medium' { $stats.Medium++; break }
-      'Warning' { $stats.Medium++; break }
-      'Low' { $stats.Low++; break }
-      'Error' { $stats.Error++; break }
-      'Fail' { $stats.Error++; break }
-      'OK' { $stats.OK++; break }
-      'Skip' { $stats.Skip++; break }
-      'Debug' { $stats.Debug++; break }
-      default { $stats.Info++ }
-    }
+    $severity = if ($finding.PSObject.Properties['Severity']) { $finding.Severity } else { 'Info' }
+    $field = $script:SeverityStatFields[(Resolve-Severity -Severity $severity)]
+    if ($field) { $stats[$field]++ } else { $stats.Info++ }
   }
 
   return [pscustomobject]$stats
@@ -443,6 +495,7 @@ $script:ConsoleExportedFunctions = @(
   'Get-SeverityRank'
   'Get-SeverityPrefix'
   'Write-ColoredLine'
+  'Write-HostConsoleLine'
   'Write-DecorativeRule'
   'Write-SummaryHeader'
   'Write-FindingLine'

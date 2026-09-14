@@ -96,6 +96,46 @@ function Write-EventLogEntry {
 
 <#
 .SYNOPSIS
+  Resolves the event source from parameters or compatible caller state.
+#>
+function Resolve-HealthEventSource {
+  [CmdletBinding()]
+  param([string]$Source)
+
+  if (-not [string]::IsNullOrWhiteSpace($Source)) { return $Source }
+  return Get-EventLogSetting -CanonicalName 'EventSource' -DeprecatedName 'EventSourceName' `
+    -DeprecationWarning 'Use EventSource, not EventSourceName (deprecated)'
+}
+
+<#
+.SYNOPSIS
+  Resolves the event log name from parameters or compatible caller state.
+#>
+function Resolve-HealthEventLogName {
+  [CmdletBinding()]
+  param([string]$LogName)
+
+  if (-not [string]::IsNullOrWhiteSpace($LogName)) { return $LogName }
+  return Get-EventLogSetting -CanonicalName 'EventLogName' -DeprecatedName 'EventLog' `
+    -DeprecationWarning 'Use EventLogName, not EventLog (deprecated)'
+}
+
+<#
+.SYNOPSIS
+  Writes an event-log failure warning.
+#>
+function Write-EventLogFailureWarning {
+  [CmdletBinding()]
+  param(
+    [string]$OnErrorMessage,
+    [Parameter(Mandatory)][string]$DefaultMessage
+  )
+
+  if ($OnErrorMessage) { Write-Warning $OnErrorMessage } else { Write-Warning $DefaultMessage }
+}
+
+<#
+.SYNOPSIS
 Ensures a Windows Event Log source is registered.
 .PARAMETER Source
 Event source name to register (alias: SourceName).
@@ -112,21 +152,12 @@ function Ensure-EventSource {
     [string]$OnErrorMessage
   )
 
+  $Source = Resolve-HealthEventSource -Source $Source
+  $LogName = Resolve-HealthEventLogName -LogName $LogName
+  if ([string]::IsNullOrWhiteSpace($LogName)) { $LogName = 'Application' }
   if ([string]::IsNullOrWhiteSpace($Source)) {
-    $Source = Get-EventLogSetting `
-      -CanonicalName 'EventSource' `
-      -DeprecatedName 'EventSourceName' `
-      -DeprecationWarning 'Use EventSource, not EventSourceName (deprecated)'
-  }
-  if ([string]::IsNullOrWhiteSpace($LogName)) {
-    $LogName = Get-EventLogSetting `
-      -CanonicalName 'EventLogName' `
-      -DeprecatedName 'EventLog' `
-      -DeprecationWarning 'Use EventLogName, not EventLog (deprecated)'
-    if ([string]::IsNullOrWhiteSpace($LogName)) { $LogName = 'Application' }
-  }
-  if ([string]::IsNullOrWhiteSpace($Source)) {
-    if ($OnErrorMessage) { Write-Warning $OnErrorMessage } else { Write-Warning 'Ensure-EventSource: -Source or -SourceName is required, or set EventSource in caller scope.' }
+    Write-EventLogFailureWarning -OnErrorMessage $OnErrorMessage `
+      -DefaultMessage 'Ensure-EventSource: -Source or -SourceName is required, or set EventSource in caller scope.'
     return $false
   }
 
@@ -136,7 +167,7 @@ function Ensure-EventSource {
     }
     return $true
   } catch {
-    if ($OnErrorMessage) { Write-Warning $OnErrorMessage } else { Write-Warning $_.Exception.Message }
+    Write-EventLogFailureWarning -OnErrorMessage $OnErrorMessage -DefaultMessage $_.Exception.Message
     return $false
   }
 }
@@ -168,22 +199,12 @@ function Write-HealthEvent {
     [string]$OnErrorMessage
   )
 
-  if (-not $Source) {
-    $Source = Get-EventLogSetting `
-      -CanonicalName 'EventSource' `
-      -DeprecatedName 'EventSourceName' `
-      -DeprecationWarning 'Use EventSource, not EventSourceName (deprecated)'
-  }
-  if (-not $LogName) {
-    $LogName = Get-EventLogSetting `
-      -CanonicalName 'EventLogName' `
-      -DeprecatedName 'EventLog' `
-      -DeprecationWarning 'Use EventLogName, not EventLog (deprecated)'
-  }
+  if (-not $Source) { $Source = Resolve-HealthEventSource -Source $Source }
+  if (-not $LogName) { $LogName = Resolve-HealthEventLogName -LogName $LogName }
 
   if ([string]::IsNullOrWhiteSpace($Source) -or [string]::IsNullOrWhiteSpace($LogName)) {
     $msg = 'Write-HealthEvent: Source or LogName is missing. Set EventSource and EventLogName in caller scope or pass -Source and -LogName.'
-    if ($OnErrorMessage) { Write-Warning $OnErrorMessage } else { Write-Warning $msg }
+    Write-EventLogFailureWarning -OnErrorMessage $OnErrorMessage -DefaultMessage $msg
     return $false
   }
 
@@ -191,7 +212,7 @@ function Write-HealthEvent {
     Write-EventLogEntry -LogName $LogName -Source $Source -Id $Id -Message $Message -Level $Level
     return $true
   } catch {
-    if ($OnErrorMessage) { Write-Warning $OnErrorMessage } else { Write-Warning $_.Exception.Message }
+    Write-EventLogFailureWarning -OnErrorMessage $OnErrorMessage -DefaultMessage $_.Exception.Message
     return $false
   }
 }

@@ -7,16 +7,16 @@ use serde::{Deserialize, Serialize};
 use crate::{PlanId, ProfileId, RunId, Sha256Digest};
 
 use super::{
-    ExecutionIntent, HostIdentityV3, InputIdentityV3, JsonMap, ObservedStateV3, PlannedActionV3,
-    SchemaVersion, SourceIdentityV3, ToolIdentityV3,
+    ExecutionIntent, HostIdentityV3, InputIdentityV3, JsonMap, ObservedStateV3, PlanSchemaVersion,
+    PlannedActionV3, ResourceBindingV3, SourceIdentityV3, ToolIdentityV3,
 };
 
 /// A short-lived execution authority derived from a validated profile.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct PlanV3 {
+pub struct PlanV4 {
     /// Version marker for strict decoding.
-    pub schema_version: SchemaVersion,
+    pub schema_version: PlanSchemaVersion,
     /// Plan identity.
     #[serde(rename = "plan_id")]
     pub id: PlanId,
@@ -38,6 +38,9 @@ pub struct PlanV3 {
     pub source: SourceIdentityV3,
     /// Digest identity for all plan-affecting input.
     pub input: InputIdentityV3,
+    /// Digest-bound, path-free external resource closure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<ResourceBindingV3>,
     /// State snapshot used to make the plan.
     pub observed_state: ObservedStateV3,
     /// Time the plan was issued.
@@ -50,3 +53,6 @@ pub struct PlanV3 {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: JsonMap,
 }
+
+/// Source-compatible Rust name; serialized plans always use schema 4.0.
+pub type PlanV3 = PlanV4;

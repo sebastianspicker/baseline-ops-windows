@@ -172,49 +172,8 @@ pub fn evaluate_support_bundle_parser(
     observation: SupportBundleParserObservation,
 ) -> SupportBundleParserAudit {
     let mut findings = Vec::new();
-    for error in observation.summary.errors.iter().take(MAX_SUMMARY_ITEMS) {
-        findings.push(finding(
-            "SB-ProducerError",
-            FindingStatus::Warning,
-            Severity::Medium,
-            "SupportBundle producer reported an error.",
-            JsonMap::from([("error".into(), json!(bounded(error)))]),
-        ));
-    }
-    for record in observation.summary.records.iter().take(MAX_SUMMARY_ITEMS) {
-        if record.ok == Some(false) {
-            findings.push(finding(
-                "SB-ProducerRecordFailed",
-                FindingStatus::Warning,
-                Severity::Medium,
-                "SupportBundle producer record failed.",
-                JsonMap::from([
-                    ("name".into(), json!(record.name.as_deref().map(bounded))),
-                    (
-                        "detail".into(),
-                        json!(
-                            record
-                                .error
-                                .as_deref()
-                                .or(record.note.as_deref())
-                                .map(bounded)
-                        ),
-                    ),
-                ]),
-            ));
-        }
-    }
-    for proof in &observation.proofs {
-        if !proof.present() {
-            findings.push(finding(
-                "SB-MissingProof",
-                FindingStatus::Warning,
-                Severity::Medium,
-                "Expected support-bundle proof is absent.",
-                JsonMap::from([("file_name".into(), json!(proof.file_name))]),
-            ));
-        }
-    }
+    evaluate_summary(&observation.summary, &mut findings);
+    evaluate_proofs(&observation.proofs, &mut findings);
     if observation.event_logs.is_empty() {
         findings.push(finding(
             "SB-EventEvidenceMissing",
@@ -224,7 +183,65 @@ pub fn evaluate_support_bundle_parser(
             JsonMap::new(),
         ));
     }
-    match &observation.kb_status {
+    evaluate_kb_status(observation.kb_status.as_ref(), &mut findings);
+    SupportBundleParserAudit {
+        observation,
+        findings,
+    }
+}
+
+fn evaluate_summary(summary: &SupportBundleSummary, findings: &mut Vec<PolicyFinding>) {
+    for error in summary.errors.iter().take(MAX_SUMMARY_ITEMS) {
+        findings.push(finding(
+            "SB-ProducerError",
+            FindingStatus::Warning,
+            Severity::Medium,
+            "SupportBundle producer reported an error.",
+            JsonMap::from([("error".into(), json!(bounded(error)))]),
+        ));
+    }
+    for record in summary
+        .records
+        .iter()
+        .take(MAX_SUMMARY_ITEMS)
+        .filter(|record| record.ok == Some(false))
+    {
+        findings.push(finding(
+            "SB-ProducerRecordFailed",
+            FindingStatus::Warning,
+            Severity::Medium,
+            "SupportBundle producer record failed.",
+            JsonMap::from([
+                ("name".into(), json!(record.name.as_deref().map(bounded))),
+                (
+                    "detail".into(),
+                    json!(
+                        record
+                            .error
+                            .as_deref()
+                            .or(record.note.as_deref())
+                            .map(bounded)
+                    ),
+                ),
+            ]),
+        ));
+    }
+}
+
+fn evaluate_proofs(proofs: &[ProofObservation], findings: &mut Vec<PolicyFinding>) {
+    for proof in proofs.iter().filter(|proof| !proof.present()) {
+        findings.push(finding(
+            "SB-MissingProof",
+            FindingStatus::Warning,
+            Severity::Medium,
+            "Expected support-bundle proof is absent.",
+            JsonMap::from([("file_name".into(), json!(proof.file_name))]),
+        ));
+    }
+}
+
+fn evaluate_kb_status(status: Option<&KbStatus>, findings: &mut Vec<PolicyFinding>) {
+    match status {
         None => findings.push(finding(
             "SB-KbEvidenceMissing",
             FindingStatus::Warning,
@@ -252,10 +269,6 @@ pub fn evaluate_support_bundle_parser(
                 ));
             }
         }
-    }
-    SupportBundleParserAudit {
-        observation,
-        findings,
     }
 }
 

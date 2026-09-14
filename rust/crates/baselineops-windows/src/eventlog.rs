@@ -49,76 +49,88 @@ mod platform {
 
     pub(super) fn audit_event_log(parameters: &EventLogQueryParameters) -> EventLogObservation {
         unsafe {
-            let channel = wide(&parameters.channel);
-            let xpath = wide(&parameters.xpath);
-            let query = match EvtQuery(
-                None,
-                PCWSTR(channel.as_ptr()),
-                PCWSTR(xpath.as_ptr()),
-                EvtQueryChannelPath.0 | EvtQueryReverseDirection.0,
-            ) {
+            let query = match open_query(parameters) {
                 Ok(query) => query,
-                Err(error) if code(&error) == ERROR_ACCESS_DENIED.0 => {
-                    return EventLogObservation {
-                        records: vec![Observation::AccessDenied],
-                        enumeration_complete: true,
-                    };
-                }
-                Err(error) => {
-                    return EventLogObservation {
-                        records: vec![Observation::Failed {
-                            exit_code: error.code().0,
-                        }],
-                        enumeration_complete: true,
-                    };
-                }
+                Err(observation) => return failed_query(observation),
             };
             let query = OwnedEventHandle(query);
-            let mut records = Vec::new();
-            let mut complete = true;
-            for _ in 0..parameters.max_records {
-                // `EvtNext` exposes the ABI's raw handle array; immediately wrap the result.
-                let mut raw_handle = [EVT_HANDLE::default().0];
-                let mut returned = 0_u32;
-                match EvtNext(
-                    query.0,
-                    &mut raw_handle,
-                    parameters.timeout_ms,
-                    0,
-                    &raw mut returned,
-                ) {
-                    Ok(()) if returned == 1 => {
-                        let event = OwnedEventHandle(EVT_HANDLE(raw_handle[0]));
-                        records.push(render(event.0, parameters.max_xml_bytes));
-                    }
-                    Ok(()) => break,
-                    Err(error) if code(&error) == ERROR_NO_MORE_ITEMS.0 => break,
-                    Err(error) if code(&error) == ERROR_ACCESS_DENIED.0 => {
-                        records.push(Observation::AccessDenied);
-                        complete = false;
-                        break;
-                    }
-                    Err(_) => {
-                        records.push(Observation::TimedOut);
-                        complete = false;
-                        break;
-                    }
+            enumerate(query.0, parameters)
+        }
+    }
+
+    unsafe fn open_query(
+        parameters: &EventLogQueryParameters,
+    ) -> Result<EVT_HANDLE, Observation<EventLogRecord>> {
+        let channel = wide(&parameters.channel);
+        let xpath = wide(&parameters.xpath);
+        EvtQuery(
+            None,
+            PCWSTR(channel.as_ptr()),
+            PCWSTR(xpath.as_ptr()),
+            EvtQueryChannelPath.0 | EvtQueryReverseDirection.0,
+        )
+        .map_err(|error| {
+            if code(&error) == ERROR_ACCESS_DENIED.0 {
+                Observation::AccessDenied
+            } else {
+                Observation::Failed {
+                    exit_code: error.code().0,
                 }
             }
-            if records.len() == parameters.max_records as usize {
-                complete = false;
+        })
+    }
+
+    fn failed_query(observation: Observation<EventLogRecord>) -> EventLogObservation {
+        EventLogObservation {
+            records: vec![observation],
+            enumeration_complete: true,
+        }
+    }
+
+    unsafe fn enumerate(
+        query: EVT_HANDLE,
+        parameters: &EventLogQueryParameters,
+    ) -> EventLogObservation {
+        let mut records = Vec::new();
+        let mut complete = true;
+        for _ in 0..parameters.max_records {
+            match next_event(query, parameters.timeout_ms) {
+                Ok(Some(event)) => records.push(render(event.0, parameters.max_xml_bytes)),
+                Ok(None) => break,
+                Err(observation) => {
+                    records.push(observation);
+                    complete = false;
+                    break;
+                }
             }
-            EventLogObservation {
-                records,
-                enumeration_complete: complete,
-            }
+        }
+        if records.len() == parameters.max_records as usize {
+            complete = false;
+        }
+        EventLogObservation {
+            records,
+            enumeration_complete: complete,
+        }
+    }
+
+    unsafe fn next_event(
+        query: EVT_HANDLE,
+        timeout_ms: u32,
+    ) -> Result<Option<OwnedEventHandle>, Observation<EventLogRecord>> {
+        let mut raw_handle = [EVT_HANDLE::default().0];
+        let mut returned = 0_u32;
+        match EvtNext(query, &mut raw_handle, timeout_ms, 0, &raw mut returned) {
+            Ok(()) if returned == 1 => Ok(Some(OwnedEventHandle(EVT_HANDLE(raw_handle[0])))),
+            Ok(()) => Ok(None),
+            Err(error) if code(&error) == ERROR_NO_MORE_ITEMS.0 => Ok(None),
+            Err(error) if code(&error) == ERROR_ACCESS_DENIED.0 => Err(Observation::AccessDenied),
+            Err(_) => Err(Observation::TimedOut),
         }
     }
 
     unsafe fn render(handle: EVT_HANDLE, max_bytes: u32) -> Observation<EventLogRecord> {
-        let mut required = 0_u32;
-        let mut property_count = 0_u32;
-        match EvtRender(
+        let (mut required, mut property_count) = (0_u32, 0_u32);
+        if let Err(error) = EvtRender(
             None,
             handle,
             EvtRenderEventXml.0,
@@ -126,14 +138,11 @@ mod platform {
             None,
             &raw mut required,
             &raw mut property_count,
-        ) {
-            Err(error) if code(&error) == ERROR_INSUFFICIENT_BUFFER.0 => {}
-            Err(error) if code(&error) == ERROR_ACCESS_DENIED.0 => {
-                return Observation::AccessDenied;
-            }
-            Err(_) | Ok(()) => return Observation::Unparsed,
+        ) && code(&error) != ERROR_INSUFFICIENT_BUFFER.0
+        {
+            return render_error(&error);
         }
-        if required == 0 || required > max_bytes || !required.is_multiple_of(2) {
+        if !valid_render_length(required, max_bytes) {
             return Observation::Truncated;
         }
         let mut buffer = vec![0_u16; usize::try_from(required / 2).unwrap_or(0)];
@@ -147,17 +156,10 @@ mod platform {
             &raw mut required,
             &raw mut property_count,
         );
-        match status {
-            Ok(()) => {}
-            Err(error) if code(&error) == ERROR_ACCESS_DENIED.0 => {
-                return Observation::AccessDenied;
-            }
-            Err(error) if code(&error) == ERROR_INSUFFICIENT_BUFFER.0 => {
-                return Observation::Truncated;
-            }
-            Err(_) => return Observation::Unparsed,
+        if let Err(error) = status {
+            return render_result_error(&error);
         }
-        if required == 0 || required > capacity || !required.is_multiple_of(2) {
+        if !valid_render_length(required, capacity) {
             return Observation::Truncated;
         }
         let length = usize::try_from(required / 2).unwrap_or(0);
@@ -165,22 +167,59 @@ mod platform {
             return Observation::Unparsed;
         };
         let text = text.trim_end_matches('\0').to_owned();
-        let Some(record) = parse_xml(text) else {
-            return Observation::Unparsed;
-        };
-        Observation::Present(record)
+        parse_xml(text).map_or(Observation::Unparsed, Observation::Present)
+    }
+
+    fn valid_render_length(required: u32, limit: u32) -> bool {
+        required != 0 && required <= limit && required.is_multiple_of(2)
+    }
+    fn render_error(error: &windows::core::Error) -> Observation<EventLogRecord> {
+        if code(error) == ERROR_ACCESS_DENIED.0 {
+            Observation::AccessDenied
+        } else {
+            Observation::Unparsed
+        }
+    }
+    fn render_result_error(error: &windows::core::Error) -> Observation<EventLogRecord> {
+        if code(error) == ERROR_INSUFFICIENT_BUFFER.0 {
+            Observation::Truncated
+        } else {
+            render_error(error)
+        }
     }
 
     fn parse_xml(xml: String) -> Option<EventLogRecord> {
+        let (provider, event_id, level, time_created, record_id) = record_fields(&xml)?;
         Some(EventLogRecord {
-            provider: attribute(&xml, "Provider", "Name")?,
-            event_id: tag(&xml, "EventID")?.parse().ok()?,
-            level: tag(&xml, "Level")?.parse().ok()?,
-            time_created: attribute(&xml, "TimeCreated", "SystemTime")?,
-            record_id: tag(&xml, "EventRecordID")?.parse().ok()?,
+            provider,
+            event_id,
+            level,
+            time_created,
+            record_id,
             xml: Observation::Present(xml),
             message: None,
         })
+    }
+
+    fn record_fields(xml: &str) -> Option<(String, u32, u8, String, u64)> {
+        let (provider, time_created) = text_fields(xml)?;
+        let (event_id, level, record_id) = numeric_fields(xml)?;
+        Some((provider, event_id, level, time_created, record_id))
+    }
+
+    fn text_fields(xml: &str) -> Option<(String, String)> {
+        Some((
+            attribute(xml, "Provider", "Name")?,
+            attribute(xml, "TimeCreated", "SystemTime")?,
+        ))
+    }
+
+    fn numeric_fields(xml: &str) -> Option<(u32, u8, u64)> {
+        Some((
+            tag(xml, "EventID")?.parse().ok()?,
+            tag(xml, "Level")?.parse().ok()?,
+            tag(xml, "EventRecordID")?.parse().ok()?,
+        ))
     }
     fn tag<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
         let start = xml.find(&format!("<{name}>"))? + name.len() + 2;

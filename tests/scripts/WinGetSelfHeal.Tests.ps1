@@ -9,41 +9,29 @@ only to add a missing source is not required when checking an existing source.
 #>
 
 BeforeAll {
+  function Get-WingetTestDefinitions {
+    $definitions = @{}
+    foreach ($name in @('Ensure-PrivateSource', 'Test-WingetSourceOutputContainsName',
+        'Protect-WingetProcessMetadata', 'Get-PrivateSourceResultMetadata', 'Invoke-Winget', 'ConvertFrom-WingetNativeResult', 'Get-WingetEffectiveExitCode', 'Update-WinGetSources')) {
+      $definitions[$name] = $script:Ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+      }, $true)
+    }
+    return $definitions
+  }
   $script:ScriptPath = Join-Path $PSScriptRoot '../../scripts/08-WinGet-SelfHeal.ps1'
   $script:Tokens = $null
   $script:ParseErrors = $null
-  $script:Ast = [System.Management.Automation.Language.Parser]::ParseFile(
-    $script:ScriptPath,
-    [ref]$script:Tokens,
-    [ref]$script:ParseErrors
-  )
-  $script:ScriptSource = Get-Content -LiteralPath $script:ScriptPath -Raw
+  $sourcePaths = @($script:ScriptPath)
+  foreach ($name in @('records', 'winget', 'install', 'runtime')) {
+    $sourcePaths += Join-Path $PSScriptRoot ("../../scripts/internal/08-WinGet-SelfHeal.{0}.ps1" -f $name)
+  }
+  $script:ScriptSource = ($sourcePaths | ForEach-Object { Get-Content -LiteralPath $_ -Raw }) -join "`n"
+  $script:Ast = [System.Management.Automation.Language.Parser]::ParseInput(
+    $script:ScriptSource, [ref]$script:Tokens, [ref]$script:ParseErrors)
 
-  $ensureFunction = $script:Ast.Find({
-    param($node)
-    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-      $node.Name -eq 'Ensure-PrivateSource'
-  }, $true)
-  $sourceOutputFunction = $script:Ast.Find({
-    param($node)
-    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-      $node.Name -eq 'Test-WingetSourceOutputContainsName'
-  }, $true)
-  $processMetadataFunction = $script:Ast.Find({
-    param($node)
-    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-      $node.Name -eq 'Protect-WingetProcessMetadata'
-  }, $true)
-  $privateSourceMetadataFunction = $script:Ast.Find({
-    param($node)
-    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-      $node.Name -eq 'Get-PrivateSourceResultMetadata'
-  }, $true)
-  $invokeWingetFunction = $script:Ast.Find({
-    param($node)
-    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-      $node.Name -eq 'Invoke-Winget'
-  }, $true)
+  $definitions = Get-WingetTestDefinitions
 
   $testModuleSource = @'
 $script:SourcePresent = $true
@@ -90,13 +78,36 @@ function Set-WingetProcessTestOutput {
 function Get-WingetSourceTestState {
   [pscustomobject]@{ AddCalls = $script:AddCalls }
 }
+function Get-CheckRecord { param($Name, $Status, $Message) }
+function Add-Record { param($List, $Record) }
+function Invoke-WingetSourceUpdate {
+  param($WingetPath, [switch]$SupportAcceptSourceAgreements)
+  $script:UpdateCalls++
+  return @{ ExitCode = 0 }
+}
+function Invoke-WingetUpdateFixture {
+  param([bool]$Present, [bool]$Remediate, [bool]$Allow)
+  $script:UpdateCalls = 0
+  $context = [pscustomobject]@{ Allow = $Allow }
+  $context | Add-Member ScriptMethod ShouldProcess { return $this.Allow }
+  $state = @{ WingetPath = if ($Present) { 'winget.exe' } else { $null }
+    Inputs = @{ Remediate = $Remediate; DecisionContext = $context }
+    Records = [Collections.Generic.List[object]]::new()
+    SupportsSourceAgreement = $false }
+  Update-WinGetSources -RunState $state
+  return $script:UpdateCalls
+}
+
 '@
-  $testModuleSource += "`n" + $processMetadataFunction.Extent.Text
-  $testModuleSource += "`n" + $privateSourceMetadataFunction.Extent.Text
-  $testModuleSource += "`n" + $invokeWingetFunction.Extent.Text
-  $testModuleSource += "`n" + $ensureFunction.Extent.Text
-  $testModuleSource += "`n" + $sourceOutputFunction.Extent.Text
-  $testModuleSource += "`nExport-ModuleMember -Function Ensure-PrivateSource,Test-WingetSourceOutputContainsName,Invoke-Winget,Get-PrivateSourceResultMetadata,Set-WingetSourceTestState,Set-WingetProcessTestOutput,Get-WingetSourceTestState"
+  $testModuleSource += "`n" + $definitions['Protect-WingetProcessMetadata'].Extent.Text
+  $testModuleSource += "`n" + $definitions['Get-PrivateSourceResultMetadata'].Extent.Text
+  $testModuleSource += "`n" + $definitions['Get-WingetEffectiveExitCode'].Extent.Text
+  $testModuleSource += "`n" + $definitions['Update-WinGetSources'].Extent.Text
+  $testModuleSource += "`n" + $definitions['ConvertFrom-WingetNativeResult'].Extent.Text
+  $testModuleSource += "`n" + $definitions['Invoke-Winget'].Extent.Text
+  $testModuleSource += "`n" + $definitions['Ensure-PrivateSource'].Extent.Text
+  $testModuleSource += "`n" + $definitions['Test-WingetSourceOutputContainsName'].Extent.Text
+  $testModuleSource += "`nExport-ModuleMember -Function Invoke-WingetUpdateFixture,Ensure-PrivateSource,Test-WingetSourceOutputContainsName,Invoke-Winget,Get-PrivateSourceResultMetadata,Set-WingetSourceTestState,Set-WingetProcessTestOutput,Get-WingetSourceTestState"
   $script:WinGetTestModule = New-Module -Name WinGetSelfHealContract -ScriptBlock ([scriptblock]::Create($testModuleSource))
   Import-Module $script:WinGetTestModule -Force
 }
@@ -106,7 +117,8 @@ AfterAll {
 }
 
 Describe 'WinGet audit boundary' {
-  It 'checks an existing private source without requiring add-only configuration' {
+  BeforeAll {
+function Test-WingetChecksAnExistingPrivateSourceWithoutRequiringAddOnlyConfiguration {
     Set-WingetSourceTestState -Present $true
 
     $present, $detail = Ensure-PrivateSource -WingetPath 'winget.exe' -Name 'corp' -DoIt:$false
@@ -116,7 +128,7 @@ Describe 'WinGet audit boundary' {
     (Get-WingetSourceTestState).AddCalls | Should -Be 0
   }
 
-  It 'does not attempt to add a missing source in audit mode' {
+function Test-WingetDoesNotAttemptToAddAMissingSourceInAuditMode {
     Set-WingetSourceTestState -Present $false
 
     $present, $detail = Ensure-PrivateSource -WingetPath 'winget.exe' -Name 'corp' -Url 'not-a-url' -Type 'unsupported' -DoIt:$false
@@ -126,47 +138,25 @@ Describe 'WinGet audit boundary' {
     (Get-WingetSourceTestState).AddCalls | Should -Be 0
   }
 
-  It 'guards every source update behind remediation mode and ShouldProcess' {
-    $updateCalls = @($script:Ast.FindAll({
-      param($node)
-      $node -is [System.Management.Automation.Language.CommandAst] -and
-        $node.GetCommandName() -eq 'Invoke-WingetSourceUpdate'
-    }, $true))
-
-    $updateCalls.Count | Should -Be 1
-    foreach ($call in $updateCalls) {
-      $ancestor = $call.Parent
-      $remediationGuarded = $false
-      $shouldProcessGuarded = $false
-      while ($null -ne $ancestor) {
-        if ($ancestor -is [System.Management.Automation.Language.IfStatementAst] -and
-            $ancestor.Extent.Text -match 'if\s*\(\$wg\s+-and\s+\$Remediate\)') {
-          $remediationGuarded = $true
+function Test-WingetGuardsEverySourceUpdateBehindRemediationModeAndShouldProcess {
+    foreach ($present in @($false, $true)) {
+      foreach ($remediate in @($false, $true)) {
+        foreach ($allow in @($false, $true)) {
+          $calls = Invoke-WingetUpdateFixture -Present $present -Remediate $remediate -Allow $allow
+          $calls | Should -Be ([int]($present -and $remediate -and $allow))
         }
-        if ($ancestor -is [System.Management.Automation.Language.IfStatementAst] -and
-            $ancestor.Extent.Text -match '\$PSCmdlet\.ShouldProcess') {
-          $shouldProcessGuarded = $true
-        }
-        $ancestor = $ancestor.Parent
       }
-      $remediationGuarded | Should -BeTrue
-      $shouldProcessGuarded | Should -BeTrue
     }
   }
 
-  It 'does not let wrapper configuration grant remediation authority' {
+function Test-WingetDoesNotLetWrapperConfigurationGrantRemediationAuthority {
     $script:ScriptSource | Should -Not -Match 'Get-NestedPropValue\s+-Object\s+\$cfg\s+-Path\s+@\(''VCppRedist'''
     $script:ScriptSource | Should -Not -Match 'Get-NestedPropValue\s+-Object\s+\$cfg\s+-Path\s+@\(''Winget'',''PrivateSourceUrl'''
-    $script:ScriptSource | Should -Match 'PSBoundParameters\.ContainsKey\(''PrivateSourceName''\)'
-    $script:ScriptSource | Should -Match 'PSBoundParameters\.ContainsKey\(''PrivateSourceUrl''\)'
+    $script:ScriptSource | Should -Match '(?:PSBoundParameters|RunState\.Inputs\.BoundParameters)\.ContainsKey\(''PrivateSourceName''\)'
+    $script:ScriptSource | Should -Match '(?:PSBoundParameters|RunState\.Inputs\.BoundParameters)\.ContainsKey\(''PrivateSourceUrl''\)'
   }
 
-  It 'requires endpoint-only private-source URLs and out-of-band authentication' {
-    $script:ScriptSource | Should -Match 'without credentials, query, or fragment'
-    $script:ScriptSource | Should -Match 'Configure source authentication out of band'
-  }
-
-  It 'redacts credential-bearing URLs from WinGet process metadata' {
+function Test-WingetRedactsCredentialBearingURLsFromWinGetProcessMetadata {
     $credentialUrl = 'https://operator:do-not-log@packages.example.test/cache'
     $queryUrl = 'https://packages.example.test/cache?access_token=do-not-log'
     Set-WingetProcessTestOutput -StdOut "Source $credentialUrl" -StdErr "Failed $queryUrl"
@@ -179,7 +169,7 @@ Describe 'WinGet audit boundary' {
     $metadata | Should -Match '\[credential-bearing URL redacted\]'
   }
 
-  It 'omits the private-source endpoint from structured result metadata' {
+function Test-WingetOmitsThePrivateSourceEndpointFromStructuredResultMetadata {
     $credentialUrl = 'https://operator:do-not-log@packages.example.test/cache'
     $metadata = Get-PrivateSourceResultMetadata -Name 'corp' -Type 'Microsoft.Rest'
 
@@ -188,7 +178,7 @@ Describe 'WinGet audit boundary' {
     ($metadata | ConvertTo-Json -Compress) | Should -Not -Match ([regex]::Escape($credentialUrl))
   }
 
-  It 'requires positive source identity evidence' {
+function Test-WingetRequiresPositiveSourceIdentityEvidence {
     $sourceFunction = $script:Ast.Find({
       param($node)
       $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -199,11 +189,33 @@ Describe 'WinGet audit boundary' {
     $sourceFunction.Extent.Text | Should -Match 'Test-WingetSourceOutputContainsName'
   }
 
-  It 'matches only the exact WinGet source name' {
+function Test-WingetMatchesOnlyTheExactWinGetSourceName {
     Test-WingetSourceOutputContainsName -Text "Name Argument`ncorp https://packages.example.test" -Name 'corp' | Should -BeTrue
     Test-WingetSourceOutputContainsName -Text 'Name: CORP' -Name 'corp' | Should -BeTrue
     Test-WingetSourceOutputContainsName -Text 'corporate https://packages.example.test' -Name 'corp' | Should -BeFalse
     Test-WingetSourceOutputContainsName -Text 'corp-prod https://packages.example.test' -Name 'corp' | Should -BeFalse
     Test-WingetSourceOutputContainsName -Text 'mycorp https://packages.example.test' -Name 'corp' | Should -BeFalse
   }
+  }
+
+  It 'checks an existing private source without requiring add-only configuration' { Test-WingetChecksAnExistingPrivateSourceWithoutRequiringAddOnlyConfiguration }
+
+  It 'does not attempt to add a missing source in audit mode' { Test-WingetDoesNotAttemptToAddAMissingSourceInAuditMode }
+
+  It 'guards every source update behind remediation mode and ShouldProcess' { Test-WingetGuardsEverySourceUpdateBehindRemediationModeAndShouldProcess }
+
+  It 'does not let wrapper configuration grant remediation authority' { Test-WingetDoesNotLetWrapperConfigurationGrantRemediationAuthority }
+
+  It 'requires endpoint-only private-source URLs and out-of-band authentication' {
+    $script:ScriptSource | Should -Match 'without credentials, query, or fragment'
+    $script:ScriptSource | Should -Match 'Configure source authentication out of band'
+  }
+
+  It 'redacts credential-bearing URLs from WinGet process metadata' { Test-WingetRedactsCredentialBearingURLsFromWinGetProcessMetadata }
+
+  It 'omits the private-source endpoint from structured result metadata' { Test-WingetOmitsThePrivateSourceEndpointFromStructuredResultMetadata }
+
+  It 'requires positive source identity evidence' { Test-WingetRequiresPositiveSourceIdentityEvidence }
+
+  It 'matches only the exact WinGet source name' { Test-WingetMatchesOnlyTheExactWinGetSourceName }
 }

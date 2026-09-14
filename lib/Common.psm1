@@ -170,6 +170,15 @@ function Ensure-DirectoryForFile {
 .PARAMETER MustExist
   When set, returns $null if the resolved path does not exist on disk.
 #>
+function Resolve-ExistingSanitizedPath {
+  param([Parameter(Mandatory)][string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+  $resolved = [System.IO.Path]::GetFullPath($Path)
+  if (Validation\Test-PathTraversal -Path $resolved) { return $null }
+  return $resolved
+}
+
 function Sanitize-Path {
   [CmdletBinding()]
   param(
@@ -189,14 +198,7 @@ function Sanitize-Path {
       return $null
     }
 
-    if ($MustExist) {
-      if (Test-Path -LiteralPath $expanded) {
-        $resolved = [System.IO.Path]::GetFullPath($expanded)
-        if (Validation\Test-PathTraversal -Path $resolved) { return $null }
-        return $resolved
-      }
-      return $null
-    }
+    if ($MustExist) { return (Resolve-ExistingSanitizedPath -Path $expanded) }
 
     # Normalize and resolve full path; GetFullPath can throw on invalid chars
     return [System.IO.Path]::GetFullPath($expanded)
@@ -235,6 +237,27 @@ function Get-SafeFileName {
   return ($Name -replace '[<>:"/\\|?*\x00-\x1F]', '_')
 }
 
+<#
+.SYNOPSIS
+  Resolves the repository root used by a standalone tool.
+.DESCRIPTION
+  Preserves an explicit root while deriving the parent of the executing tool
+  when no root was supplied, and rejects non-directory results.
+#>
+function Resolve-ToolRepositoryRoot {
+  [CmdletBinding()]
+  param([string]$RootPath = '', [string]$InvocationPath = '', [string]$FallbackPath = '')
+
+  if ([string]::IsNullOrWhiteSpace($RootPath)) {
+    $scriptPath = if ($InvocationPath) { $InvocationPath } else { $FallbackPath }
+    $scriptDirectory = if (Test-Path -LiteralPath $scriptPath -PathType Container) { $scriptPath } else { Split-Path -Parent $scriptPath }
+    $RootPath = Join-Path $scriptDirectory '..'
+  }
+  $resolved = (Resolve-Path -LiteralPath $RootPath -ErrorAction Stop).Path
+  if (-not (Test-Path -LiteralPath $resolved -PathType Container)) { throw "Repository root is not a directory: $resolved" }
+  return $resolved
+}
+
 Export-ModuleMember -Function `
   Get-CallerValue, `
   ConvertTo-ArrayList, `
@@ -244,4 +267,5 @@ Export-ModuleMember -Function `
   Ensure-DirectoryForFile, `
   Sanitize-Path, `
   Has-Property, `
-  Get-SafeFileName
+  Get-SafeFileName, `
+  Resolve-ToolRepositoryRoot

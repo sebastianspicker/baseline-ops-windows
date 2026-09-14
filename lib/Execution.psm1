@@ -34,6 +34,71 @@ function Convert-TokenValue {
 
 <#
 .SYNOPSIS
+  Adds a named argument value while preserving repeated-value behavior.
+#>
+function Add-NamedArgumentValue {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$NamedArguments,
+    [Parameter(Mandatory)][string]$Name,
+    [AllowNull()][object]$Value
+  )
+
+  if ($NamedArguments.ContainsKey($Name)) {
+    $NamedArguments[$Name] = @(@($NamedArguments[$Name]) + $Value)
+    return
+  }
+  $NamedArguments[$Name] = $Value
+}
+
+<#
+.SYNOPSIS
+  Handles one inline named argument token.
+#>
+function Add-InlineArgumentToken {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$NamedArguments,
+    [Parameter(Mandatory)][string]$Token,
+    [Parameter(Mandatory)][string]$Pattern
+  )
+
+  $match = [regex]::Match($Token, $Pattern)
+  if (-not $match.Success) { return $false }
+  Add-NamedArgumentValue -NamedArguments $NamedArguments -Name $match.Groups[1].Value `
+    -Value (Convert-TokenValue -Value $match.Groups[2].Value)
+  return $true
+}
+
+<#
+.SYNOPSIS
+  Handles one named argument token and its optional following value.
+#>
+function Add-OptionArgumentToken {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$NamedArguments,
+    [Parameter(Mandatory)][string[]]$ArgumentTokens,
+    [Parameter(Mandatory)][ref]$Index,
+    [Parameter(Mandatory)][string]$OptionPattern,
+    [Parameter(Mandatory)][string]$InlineValuePattern
+  )
+
+  $token = [string]$ArgumentTokens[$Index.Value]
+  if ($token -notmatch $OptionPattern) { return $false }
+  $name = $token.TrimStart('-')
+  $next = if ($Index.Value + 1 -lt $ArgumentTokens.Count) { [string]$ArgumentTokens[$Index.Value + 1] } else { $null }
+  if ($null -eq $next -or $next -match $OptionPattern -or $next -match $InlineValuePattern) {
+    Add-NamedArgumentValue -NamedArguments $NamedArguments -Name $name -Value $true
+    return $true
+  }
+  Add-NamedArgumentValue -NamedArguments $NamedArguments -Name $name -Value (Convert-TokenValue -Value $next)
+  $Index.Value++
+  return $true
+}
+
+<#
+.SYNOPSIS
   Parses a string array of CLI-style arguments into named and positional tokens.
 .PARAMETER Arguments
   Array of argument strings to tokenize.
@@ -55,46 +120,67 @@ function Convert-ArgumentTokens {
 
   for ($i = 0; $i -lt $argumentTokens.Count; $i++) {
     $token = [string]$argumentTokens[$i]
-
-    if ($token -match $optionWithInlineValuePattern) {
-      $name = $Matches[1]
-      $value = Convert-TokenValue -Value $Matches[2]
-      if ($namedArgs.ContainsKey($name)) {
-        $existing = @($namedArgs[$name])
-        $namedArgs[$name] = @($existing + $value)
-      } else {
-        $namedArgs[$name] = $value
-      }
-      continue
-    }
-
-    if ($token -match $optionPattern) {
-      $name = $token.TrimStart('-')
-      $next = $null
-      if ($i + 1 -lt $argumentTokens.Count) {
-        $next = [string]$argumentTokens[$i + 1]
-      }
-
-      if ($null -eq $next -or $next -match $optionPattern -or $next -match $optionWithInlineValuePattern) {
-        $namedArgs[$name] = $true
-      } else {
-        $value = Convert-TokenValue -Value $next
-        if ($namedArgs.ContainsKey($name)) {
-          $existing = @($namedArgs[$name])
-          $namedArgs[$name] = @($existing + $value)
-        } else {
-          $namedArgs[$name] = $value
-        }
-        $i++
-      }
-    } else {
-      [void]$positionalArgs.Add($token)
-    }
+    if (Add-InlineArgumentToken -NamedArguments $namedArgs -Token $token -Pattern $optionWithInlineValuePattern) { continue }
+    if (Add-OptionArgumentToken -NamedArguments $namedArgs -ArgumentTokens $argumentTokens -Index ([ref]$i `
+        ) -OptionPattern $optionPattern -InlineValuePattern $optionWithInlineValuePattern) { continue }
+    [void]$positionalArgs.Add($token)
   }
 
   return [pscustomobject]@{
     Named = $namedArgs
     Positional = @($positionalArgs)
+  }
+}
+
+<#
+.SYNOPSIS
+  Gets the current global native-command exit code.
+#>
+function Get-GlobalLastExitCode {
+  [CmdletBinding()]
+  param()
+
+  $exitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+  if ($null -eq $exitVariable) { return $null }
+  return $exitVariable.Value
+}
+
+<#
+.SYNOPSIS
+  Resolves a script exit code without treating an unchanged inherited code as failure.
+#>
+function Resolve-ScriptInvocationExitCode {
+  [CmdletBinding()]
+  param(
+    [AllowNull()][object]$PreviousExitCode,
+    [bool]$ScriptSucceeded,
+    [int]$DefaultExitCode
+  )
+
+  $currentExitCode = Get-GlobalLastExitCode
+  $isNewFailure = $null -ne $currentExitCode -and $currentExitCode -ne 0 -and
+    ((-not $ScriptSucceeded) -or $currentExitCode -ne $PreviousExitCode)
+  if ($isNewFailure) { return [int]$currentExitCode }
+  return $DefaultExitCode
+}
+
+<#
+.SYNOPSIS
+  Creates the documented timed-script result object.
+#>
+function New-ScriptTimingResult {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$ScriptPath,
+    [Parameter(Mandatory)][string[]]$Arguments,
+    [Parameter(Mandatory)][long]$DurationMs,
+    [Parameter(Mandatory)][int]$ExitCode,
+    [AllowNull()][object]$ErrorRecord
+  )
+
+  return [pscustomobject]@{
+    ScriptPath = $ScriptPath; Arguments = @($Arguments); DurationMs = $DurationMs; ExitCode = $ExitCode
+    Success = ($ExitCode -eq 0); ErrorMessage = if ($ErrorRecord) { $ErrorRecord.Exception.Message } else { $null }
   }
 }
 
@@ -116,41 +202,22 @@ function Invoke-ScriptWithTiming {
 
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   $err = $null
-  $previousExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
-  $previousExitCode = if ($null -ne $previousExitVariable) { $previousExitVariable.Value } else { $null }
+  $previousExitCode = Get-GlobalLastExitCode
   try {
     & $ScriptPath @Arguments
     $scriptSucceeded = $?
-    $currentExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
-    $currentExitCode = if ($null -ne $currentExitVariable) { $currentExitVariable.Value } else { $null }
-    if ($null -ne $currentExitCode -and $currentExitCode -ne 0 -and ((-not $scriptSucceeded) -or $currentExitCode -ne $previousExitCode)) {
-      $exitCode = [int]$currentExitCode
-    } else {
-      $exitCode = 0
-    }
+    $exitCode = Resolve-ScriptInvocationExitCode -PreviousExitCode $previousExitCode `
+      -ScriptSucceeded $scriptSucceeded -DefaultExitCode 0
   } catch {
-    $currentExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
-    $currentExitCode = if ($null -ne $currentExitVariable) { $currentExitVariable.Value } else { $null }
-    if ($null -ne $currentExitCode -and $currentExitCode -ne 0 -and $currentExitCode -ne $previousExitCode) {
-      $exitCode = [int]$currentExitCode
-    } else {
-      $exitCode = 1
-    }
+    $exitCode = Resolve-ScriptInvocationExitCode -PreviousExitCode $previousExitCode `
+      -ScriptSucceeded $false -DefaultExitCode 1
     $err = $_
   } finally {
     $sw.Stop()
   }
 
-  $result = [pscustomobject]@{
-    ScriptPath         = $ScriptPath
-    Arguments          = @($Arguments)
-    DurationMs         = $sw.ElapsedMilliseconds
-    ExitCode           = $exitCode
-    Success            = ($exitCode -eq 0)
-    ErrorMessage       = if ($err) { $err.Exception.Message } else { $null }
-  }
-
-  return $result
+  return New-ScriptTimingResult -ScriptPath $ScriptPath -Arguments $Arguments -DurationMs $sw.ElapsedMilliseconds `
+    -ExitCode $exitCode -ErrorRecord $err
 }
 
 Export-ModuleMember -Function `

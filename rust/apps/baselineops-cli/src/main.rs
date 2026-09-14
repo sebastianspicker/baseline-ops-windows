@@ -4,6 +4,8 @@
 mod apply;
 mod audit;
 mod plan;
+mod protocol;
+mod resources;
 
 use anyhow::{Context, Result, anyhow, bail};
 use baselineops_capabilities::{Batch, CapabilityDescriptor};
@@ -39,6 +41,12 @@ enum Command {
     /// Ask the protected UAC worker to revalidate and refuse or apply a plan.
     Apply {
         plan_file: PathBuf,
+        /// Rebind every digest-bound external resource as logical-id=path.
+        #[arg(long = "resource", value_name = "LOGICAL-ID=PATH")]
+        resources: Vec<resources::ResourceArgument>,
+        /// Compatibility alias for `--resource support_bundle=DIR`.
+        #[arg(long, value_name = "DIR")]
+        support_dir: Option<PathBuf>,
         /// Exact digest displayed by the worker proposal; required with `--yes`.
         #[arg(long)]
         approve_digest: Option<String>,
@@ -76,6 +84,9 @@ pub(crate) struct Selection {
     /// Local archive directory required by the support-bundle parser.
     #[arg(long, requires = "capability", value_name = "DIR")]
     support_dir: Option<PathBuf>,
+    /// Bind a path without allowing it to become capability authority.
+    #[arg(long = "resource", value_name = "LOGICAL-ID=PATH")]
+    resources: Vec<resources::ResourceArgument>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -141,11 +152,19 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Plan { selection, output } => plan::run(&selection, &output),
         Command::Apply {
             plan_file,
+            resources,
+            support_dir,
             approve_digest,
             yes,
         } => {
             baselineops_windows::collect_host_identity()?;
-            apply(&plan_file, approve_digest.as_deref(), yes)
+            apply(
+                &plan_file,
+                &resources,
+                support_dir.as_deref(),
+                approve_digest.as_deref(),
+                yes,
+            )
         }
         Command::Profile { command } => profile(command),
         Command::Report { command } => report(command),
@@ -164,9 +183,21 @@ fn catalog(command: CatalogCommand) -> Result<ExitCode> {
     Ok(ExitCode::Completed)
 }
 
-fn apply(path: &Path, approve_digest: Option<&str>, yes: bool) -> Result<ExitCode> {
-    let plan: PlanV3 = baselineops_domain::load_json_file(path, JsonLoadLimits::default())?;
+fn apply(
+    path: &Path,
+    resources: &[resources::ResourceArgument],
+    support_dir: Option<&Path>,
+    approve_digest: Option<&str>,
+    yes: bool,
+) -> Result<ExitCode> {
+    let bytes = baselineops_windows::read_bounded_utf8_no_follow(
+        path,
+        baselineops_windows::MAX_INPUT_BYTES,
+    )?;
+    let plan: PlanV3 =
+        baselineops_domain::load_plan_json(bytes.as_bytes(), JsonLoadLimits::default())?;
     plan.validate_structure()?;
+    resources::rebind_plan(&plan, resources, support_dir)?;
     if yes && approve_digest.is_none() {
         bail!(
             "--yes requires --approve-digest from the worker proposal; it never approves a local plan"
@@ -191,30 +222,50 @@ pub(crate) fn resolve_selection(
     selection: &Selection,
 ) -> Result<(Vec<&'static CapabilityDescriptor>, Option<ProfileId>)> {
     if let Some(id) = &selection.capability {
-        return baselineops_capabilities::lookup(id)
-            .map(|descriptor| (vec![descriptor], None))
-            .ok_or_else(|| anyhow!("unknown capability ID: {id}"));
+        return capability_selection(id);
     }
     if let Some(path) = &selection.profile {
-        let profile: ProfileV3 =
-            baselineops_domain::load_json_file(path, JsonLoadLimits::default())?;
-        profile.validate()?;
-        let descriptors = profile
-            .steps
-            .iter()
-            .map(|step| {
-                baselineops_capabilities::lookup(step.capability_id.as_str()).ok_or_else(|| {
-                    anyhow!(
-                        "profile references unknown capability: {}",
-                        step.capability_id
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        return Ok((descriptors, Some(profile.id)));
+        return profile_selection(path);
     }
-    selection
-        .batch
+    batch_selection(selection.batch)
+}
+
+fn capability_selection(
+    id: &str,
+) -> Result<(Vec<&'static CapabilityDescriptor>, Option<ProfileId>)> {
+    baselineops_capabilities::lookup(id)
+        .map(|descriptor| (vec![descriptor], None))
+        .ok_or_else(|| anyhow!("unknown capability ID: {id}"))
+}
+
+fn profile_selection(
+    path: &Path,
+) -> Result<(Vec<&'static CapabilityDescriptor>, Option<ProfileId>)> {
+    let profile: ProfileV3 = baselineops_domain::load_json_file(path, JsonLoadLimits::default())?;
+    profile.validate()?;
+    let descriptors = profile
+        .steps
+        .iter()
+        .map(step_descriptor)
+        .collect::<Result<Vec<_>>>()?;
+    Ok((descriptors, Some(profile.id)))
+}
+
+fn step_descriptor(
+    step: &baselineops_domain::ProfileStepV3,
+) -> Result<&'static CapabilityDescriptor> {
+    baselineops_capabilities::lookup(step.capability_id.as_str()).ok_or_else(|| {
+        anyhow!(
+            "profile references unknown capability: {}",
+            step.capability_id
+        )
+    })
+}
+
+fn batch_selection(
+    batch: Option<BatchArg>,
+) -> Result<(Vec<&'static CapabilityDescriptor>, Option<ProfileId>)> {
+    batch
         .map(|batch| (baselineops_capabilities::select_batch(batch.into()), None))
         .ok_or_else(|| anyhow!("exactly one selector is required"))
 }
@@ -348,6 +399,12 @@ fn print_json(value: &(impl serde::Serialize + ?Sized)) -> Result<()> {
     Ok(())
 }
 fn classify_error(error: &anyhow::Error) -> ExitCode {
+    if matches!(
+        error.downcast_ref::<baselineops_windows::PlatformError>(),
+        Some(baselineops_windows::PlatformError::ElevationCancelled)
+    ) {
+        return ExitCode::Cancelled;
+    }
     if error
         .downcast_ref::<baselineops_windows::PlatformError>()
         .is_some_and(baselineops_windows::PlatformError::is_unsupported_host)
@@ -372,7 +429,7 @@ fn classify_error(error: &anyhow::Error) -> ExitCode {
 mod tests {
     use super::*;
     #[test]
-    fn only_explicit_read_only_native_slices_are_routable() {
+    fn native_acquisition_availability_controls_read_only_audit() {
         assert!(audit::native_audit_supported(
             baselineops_capabilities::lookup("v3.doh.audit").expect("descriptor")
         ));
@@ -391,9 +448,20 @@ mod tests {
         assert!(audit::native_audit_supported(
             baselineops_capabilities::lookup("v3.defender.asr-allowlist").expect("descriptor")
         ));
-        assert!(!audit::native_audit_supported(
-            baselineops_capabilities::lookup("v3.support-bundle.collect").expect("descriptor")
-        ));
+        for number in [9, 11, 12] {
+            let descriptor = baselineops_capabilities::list()
+                .iter()
+                .find(|descriptor| descriptor.legacy_number == number)
+                .unwrap();
+            assert!(!audit::native_audit_supported(descriptor));
+        }
+        assert_eq!(
+            baselineops_capabilities::list()
+                .iter()
+                .filter(|descriptor| audit::native_audit_supported(descriptor))
+                .count(),
+            49
+        );
     }
     #[test]
     fn unsupported_exit_is_stable() {
@@ -417,5 +485,27 @@ mod tests {
             "signature check failed".into()
         ));
         assert_eq!(classify_error(&trust_failure), ExitCode::Rejected);
+    }
+
+    #[test]
+    fn elevation_cancellation_maps_to_exit_five() {
+        let cancelled = anyhow!(baselineops_windows::PlatformError::ElevationCancelled);
+        assert_eq!(classify_error(&cancelled), ExitCode::Cancelled);
+    }
+
+    #[test]
+    fn apply_accepts_the_support_directory_compatibility_alias() {
+        let cli = Cli::try_parse_from([
+            "baselineops",
+            "apply",
+            "plan.json",
+            "--support-dir",
+            "support",
+        ])
+        .expect("apply alias");
+        let Command::Apply { support_dir, .. } = cli.command else {
+            panic!("apply command");
+        };
+        assert_eq!(support_dir, Some(PathBuf::from("support")));
     }
 }

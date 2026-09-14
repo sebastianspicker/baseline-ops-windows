@@ -87,6 +87,25 @@ function Get-ResultItem {
   }
 }
 
+function Read-SanitizedFirewallCatalog {
+  param([AllowNull()][string]$Path)
+  if (-not $Path) { return $null }
+  $sanitized = Sanitize-Path -Path $Path -MustExist
+  if (-not $sanitized) { return $null }
+  return Try-ReadJsonFile -Path $sanitized
+}
+
+function Get-ConfiguredFirewallCatalog {
+  param([AllowNull()][string]$ConfigPath)
+  $config = Read-SanitizedFirewallCatalog -Path $ConfigPath
+  if (-not $config) { return $null }
+  $firewall = Get-ObjProp -Object $config -Name 'Firewall' -Default $null
+  if (-not $firewall) { return $null }
+  $configuredPath = [string](Get-ObjProp -Object $firewall -Name 'CatalogPath' -Default '')
+  if ([string]::IsNullOrWhiteSpace($configuredPath)) { return $null }
+  return Read-SanitizedFirewallCatalog -Path $configuredPath
+}
+
 function Get-EffectiveCatalog {
   [CmdletBinding()]
   param(
@@ -94,35 +113,11 @@ function Get-EffectiveCatalog {
     [AllowNull()][string]$ConfigPath,
     [Parameter(Mandatory)]$DefaultCatalog
   )
-  if ($CatalogPath) {
-    $sanitized = Sanitize-Path -Path $CatalogPath -MustExist
-    if ($sanitized) {
-      $catalog = Try-ReadJsonFile -Path $sanitized
-      if ($catalog) { return $catalog }
-    }
-  }
-  if ($ConfigPath) {
-    $sanitizedConfig = Sanitize-Path -Path $ConfigPath -MustExist
-    if ($sanitizedConfig) {
-      $config = Try-ReadJsonFile -Path $sanitizedConfig
-      if ($config) {
-        $firewall = Get-ObjProp -Object $config -Name 'Firewall' -Default $null
-        $configuredPath = if ($firewall) {
-          [string](Get-ObjProp -Object $firewall -Name 'CatalogPath' -Default '')
-        } else {
-          ''
-        }
-        if (-not [string]::IsNullOrWhiteSpace($configuredPath)) {
-          $sanitizedCatalog = Sanitize-Path -Path $configuredPath -MustExist
-          if ($sanitizedCatalog) {
-            $catalog = Try-ReadJsonFile -Path $sanitizedCatalog
-            if ($catalog) { return $catalog }
-          }
-        }
-      }
-    }
-  }
-  $DefaultCatalog
+  $catalog = Read-SanitizedFirewallCatalog -Path $CatalogPath
+  if ($catalog) { return $catalog }
+  $catalog = Get-ConfiguredFirewallCatalog -ConfigPath $ConfigPath
+  if ($catalog) { return $catalog }
+  return $DefaultCatalog
 }
 
 function Ensure-CatalogDefaults {
@@ -160,4 +155,121 @@ function Get-ProfileProp {
   $property = $ProfileObject.PSObject.Properties[$PropName]
   if ($property) { return $property.Value }
   $Default
+}
+
+
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
+
+
+function Get-FirewallProfileDrift {
+  param($ProfileObject, $Definition)
+  $p = $ProfileObject; $Def = $Definition
+  $drift = @()
+  $desired = @{
+    Enabled = [bool](Get-ObjProp -Object $Def -Name 'Enabled' -Default $true)
+    Inbound = [string](Get-ObjProp -Object $Def -Name 'DefaultInbound' -Default 'Block')
+    Outbound = [string](Get-ObjProp -Object $Def -Name 'DefaultOutbound' -Default 'Allow')
+    Notify = [bool](Get-ObjProp -Object $Def -Name 'NotifyOnListen' -Default $false)
+    LogBlocked = Get-ObjProp -Object $Def -Name 'LogDropped' -Default $null
+    LogAllowed = Get-ObjProp -Object $Def -Name 'LogAllowed' -Default $null
+    LogSize = Get-ObjProp -Object $Def -Name 'LogMaxSizeKB' -Default $null
+    LogFile = Expand-EnvPath ([string](Get-ObjProp -Object $Def -Name 'LogFile' -Default ''))
+  }
+  $actual = @{
+    Enabled = Get-ProfileProp -ProfileObject $p -PropName 'Enabled' -Default $null
+    Inbound = Get-ProfileProp -ProfileObject $p -PropName 'DefaultInboundAction' -Default $null
+    Outbound = Get-ProfileProp -ProfileObject $p -PropName 'DefaultOutboundAction' -Default $null
+    Notify = Get-ProfileProp -ProfileObject $p -PropName 'NotifyOnListen' -Default $null
+    LogBlocked = Get-ProfileProp -ProfileObject $p -PropName 'LogBlocked' -Default $null
+    LogAllowed = Get-ProfileProp -ProfileObject $p -PropName 'LogAllowed' -Default $null
+    LogSize = Get-ProfileProp -ProfileObject $p -PropName 'LogMaxSizeKilobytes' -Default $null
+    LogFile = Expand-EnvPath ([string](Get-ProfileProp -ProfileObject $p -PropName 'LogFileName' -Default ''))
+  }
+  $drift += @(Get-FirewallValueDrift -Actual $actual -Desired $desired -Keys @('Enabled','Inbound','Outbound','Notify'))
+  $drift += @(Get-FirewallValueDrift -Actual $actual -Desired $desired -Keys @('LogBlocked','LogAllowed','LogSize','LogFile') -DesiredMustExist)
+  [pscustomobject]@{ Items = $drift; Desired = $desired; Actual = $actual }
+}
+
+function Get-FirewallValueDrift {
+  param($Actual, $Desired, [string[]]$Keys, [switch]$DesiredMustExist)
+  foreach ($key in $Keys) {
+    if ($DesiredMustExist -and $null -eq $Desired[$key]) { continue }
+    if ($null -eq $Actual[$key]) { continue }
+    if ($Actual[$key] -ne $Desired[$key]) {
+      "$key=$($Actual[$key]) != $($Desired[$key])"
+    }
+  }
+}
+
+function Disable-InboundFirewallRule {
+  param($Rule, [string]$Pattern, [string]$PolicyStore, $DecisionContext, [bool]$Apply)
+  $out = @()
+  if ($Rule.Enabled -ne 'True') { return $out }
+  $out += Get-ResultItem -Category InboundRuleDisable -Target $Pattern -Status Drift -Message 'Inbound rule enabled' -Name $Rule.Name -DisplayName $Rule.DisplayName
+  if (-not $Apply) { return $out }
+  $target = "FirewallRule/$($Rule.Name)"
+  if (-not $DecisionContext.ShouldProcess($target, 'Disable inbound rule')) {
+    $out += Get-ResultItem -Category InboundRuleDisable -Target $Pattern -Status Note -Message 'Remediation skipped by ShouldProcess' -Name $Rule.Name -DisplayName $Rule.DisplayName
+    return $out
+  }
+  try {
+    Set-NetFirewallRule -PolicyStore $PolicyStore -Name $Rule.Name -Enabled False | Out-Null
+    $out += Get-ResultItem -Category InboundRuleDisable -Target $Pattern -Status Changed -Message 'Inbound rule disabled' -Name $Rule.Name -DisplayName $Rule.DisplayName
+  } catch {
+    $out += Get-ResultItem -Category InboundRuleDisable -Target $Pattern -Status Error -Message 'Disable failed' -Detail $_.Exception.Message -Name $Rule.Name -DisplayName $Rule.DisplayName
+  }
+  return $out
+}
+
+function Add-MissingFirewallRuleResult {
+  param($RuleSpec, [string]$TargetId, [string]$PolicyStore, $DecisionContext, [bool]$Apply, [hashtable]$RunState)
+  $out = @(Get-ResultItem -Category EnsureRule -Target $TargetId -Status Drift -Message 'Missing rule' -Name $RuleSpec.Name -DisplayName $RuleSpec.DisplayName)
+  if (-not $Apply) { return $out }
+  $target = "FirewallRule/(create)/$TargetId"
+  if (-not $DecisionContext.ShouldProcess($target, 'New-NetFirewallRule')) {
+    $out += Get-ResultItem -Category EnsureRule -Target $TargetId -Status Note -Message 'Remediation skipped by ShouldProcess' -Name $RuleSpec.Name -DisplayName $RuleSpec.DisplayName
+    return $out
+  }
+  try {
+    New-BaselineFirewallRule -RuleSpec $RuleSpec -LocalPolicyStore $PolicyStore -RunState $RunState
+    $out += Get-ResultItem -Category EnsureRule -Target $TargetId -Status Changed -Message 'Rule created' -Name $RuleSpec.Name -DisplayName $RuleSpec.DisplayName
+  } catch {
+    $out += Get-ResultItem -Category EnsureRule -Target $TargetId -Status Error -Message 'Rule create failed' -Detail $_.Exception.Message -Name $RuleSpec.Name -DisplayName $RuleSpec.DisplayName
+  }
+  return $out
+}
+
+function Add-ExistingFirewallRuleResult {
+  param($Rule, $RuleSpec, [string]$TargetId, [string]$PolicyStore, $DecisionContext, [bool]$Apply, [hashtable]$RunState)
+  $drift = Get-BaselineFirewallRuleDrift -Rule $Rule -RuleSpec $RuleSpec -LocalPolicyStore $PolicyStore -RunState $RunState
+  $need = @($drift.Need)
+  if ($need.Count -eq 0) { return @(Get-ResultItem -Category EnsureRule -Target $TargetId -Status OK -Message 'Rule matches baseline' -Name $Rule.Name -DisplayName $Rule.DisplayName) }
+  $out = @(Get-ResultItem -Category EnsureRule -Target $TargetId -Status Drift -Message 'Rule drift detected' -Detail ($need -join ', ') -Name $Rule.Name -DisplayName $Rule.DisplayName)
+  if (-not $Apply) { return $out }
+  $target = "FirewallRule/$($Rule.Name)"
+  if (-not $DecisionContext.ShouldProcess($target, 'Set-NetFirewallRule / Set-NetFirewallPortFilter')) {
+    $out += Get-ResultItem -Category EnsureRule -Target $TargetId -Status Note -Message 'Remediation skipped by ShouldProcess' -Name $Rule.Name -DisplayName $Rule.DisplayName
+    return $out
+  }
+  try {
+    Set-BaselineFirewallRule -Rule $Rule -RuleSpec $RuleSpec -PortFilter $drift.PortFilter -LocalPolicyStore $PolicyStore -RunState $RunState
+    $out += Get-ResultItem -Category EnsureRule -Target $TargetId -Status Changed -Message 'Rule remediated' -Name $Rule.Name -DisplayName $Rule.DisplayName
+  } catch {
+    $out += Get-ResultItem -Category EnsureRule -Target $TargetId -Status Error -Message 'Rule remediation failed' -Detail $_.Exception.Message -Name $Rule.Name -DisplayName $Rule.DisplayName
+  }
+  return $out
 }

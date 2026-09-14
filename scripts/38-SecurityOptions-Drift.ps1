@@ -74,6 +74,25 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
+function Initialize-Capability38Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+
+  }
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
@@ -82,16 +101,18 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '38-SecurityOptions-Drift.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '38-SecurityOptions-Drift.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability38Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
@@ -109,11 +130,15 @@ if (-not $isWindowsHost) {
 # -------------------------
 # Script-scope state (avoid null method calls under StrictMode)
 # -------------------------
+function Initialize-SecurityOptionsCollections {
+  param()
 $script:Quiet         = [bool]$Quiet
 $script:NoColor       = [bool]$NoColor
 $script:Findings      = Get-FindingsList
 $script:CurrentValues = New-Object System.Collections.Generic.List[object]
 $script:Drift         = New-Object System.Collections.Generic.List[object]
+}
+. Initialize-SecurityOptionsCollections
 
 # -------------------------
 # Console helpers (Get-SeverityColor from lib/Console.psm1; Write-ConsoleSummary)
@@ -156,17 +181,20 @@ function Ensure-RegKey {
 function Normalize-RegistryType {
   param([Parameter(Mandatory)][string]$TypeRaw)
 
-  $t = $TypeRaw.ToString().Trim()
-  switch -Regex ($t) {
-    '^dword$'        { return 'DWord' }
-    '^qword$'        { return 'QWord' }
-    '^string$'       { return 'String' }
-    '^expandstring$' { return 'ExpandString' }
-    '^multistring$'  { return 'MultiString' }
-    '^binary$'       { return 'Binary' }
-    '^unknown$'      { return 'Unknown' }
-    default          { return $null }
-  }
+  $types = @{ dword = 'DWord'; qword = 'QWord'; string = 'String'; expandstring = 'ExpandString'; multistring = 'MultiString'; binary = 'Binary'; unknown = 'Unknown' }
+  $key = $TypeRaw.Trim().ToLowerInvariant()
+  if ($types.ContainsKey($key)) { return $types[$key] }
+  return $null
+}
+function ConvertFrom-HexBytes {
+  param([Parameter(Mandatory)][object]$Value)
+  if ($Value -is [byte[]]) { return $Value }
+  $text = (([string]$Value) -replace '^0x','') -replace '[-\s]',''
+  if ($text.Length -eq 0) { return [byte[]]@() }
+  if (($text.Length % 2) -ne 0) { throw "Binary value has odd hex length: '$Value'." }
+  $bytes = New-Object byte[] ($text.Length / 2)
+  for ($index = 0; $index -lt $bytes.Length; $index++) { $bytes[$index] = [Convert]::ToByte($text.Substring($index * 2, 2), 16) }
+  return $bytes
 }
 
 function Normalize-ValueForType {
@@ -183,18 +211,7 @@ function Normalize-ValueForType {
       return [string[]]@([string]$Value)
     }
     'Binary' {
-      if ($Value -is [byte[]]) { return $Value }
-
-      $s = [string]$Value
-      $s = ($s -replace '^0x','') -replace '[-\s]',''
-      if ($s.Length -eq 0) { return [byte[]]@() }
-      if (($s.Length % 2) -ne 0) { throw "Binary value has odd hex length: '$Value'." }
-
-      $bytes = New-Object byte[] ($s.Length / 2)
-      for ($i = 0; $i -lt $bytes.Length; $i++) {
-        $bytes[$i] = [Convert]::ToByte($s.Substring($i * 2, 2), 16)
-      }
-      return $bytes
+      return (ConvertFrom-HexBytes -Value $Value)
     }
     default { return $Value }
   }
@@ -237,6 +254,14 @@ function Set-Reg {
   New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType $Type -Value $Value -Force | Out-Null
 }
 
+function Compare-OrderedArray {
+  param([object[]]$Current, [object[]]$Desired)
+  if ($Current.Length -ne $Desired.Length) { return $false }
+  for ($index = 0; $index -lt $Current.Length; $index++) {
+    if ($Current[$index] -ne $Desired[$index]) { return $false }
+  }
+  return $true
+}
 function Compare-Value {
   param(
     [Parameter(Mandatory)][string]$Type,
@@ -247,17 +272,13 @@ function Compare-Value {
   if ($Type -eq 'Binary') {
     $c = if ($null -eq $Current) { [byte[]]@() } else { [byte[]]$Current }
     $d = if ($null -eq $Desired) { [byte[]]@() } else { [byte[]]$Desired }
-    if ($c.Length -ne $d.Length) { return $false }
-    for ($i = 0; $i -lt $c.Length; $i++) { if ($c[$i] -ne $d[$i]) { return $false } }
-    return $true
+    return (Compare-OrderedArray -Current $c -Desired $d)
   }
 
   if ($Type -eq 'MultiString') {
     $c = if ($null -eq $Current) { @() } else { [string[]]$Current }
     $d = if ($null -eq $Desired) { @() } else { [string[]]$Desired }
-    if ($c.Length -ne $d.Length) { return $false }
-    for ($i = 0; $i -lt $c.Length; $i++) { if ($c[$i] -ne $d[$i]) { return $false } }
-    return $true
+    return (Compare-OrderedArray -Current $c -Desired $d)
   }
 
   return ($Current -eq $Desired)
@@ -267,221 +288,253 @@ function Compare-Value {
 # Preconditions
 # -------------------------
 
-Require-Admin
+function Invoke-Capability38MainPhase01 {
+  param([hashtable]$RunState)
+  Require-Admin
 
-# -------------------------
-# Built-in baseline checks (always)
-# -------------------------
+  # -------------------------
+  # Built-in baseline checks (always)
+  # -------------------------
 
-$lmPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
-$lmName = 'LmCompatibilityLevel'
-$lmVal  = Get-Reg -Path $lmPath -Name $lmName
+  $lmPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+  $lmName = 'LmCompatibilityLevel'
+  $lmVal  = Get-Reg -Path $lmPath -Name $lmName
 
-$uacPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-$uacName = 'EnableLUA'
-$uacVal  = Get-Reg -Path $uacPath -Name $uacName
+  $uacPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+  $uacName = 'EnableLUA'
+  $uacVal  = Get-Reg -Path $uacPath -Name $uacName
 
-$script:CurrentValues.Add([pscustomobject]@{
-  Path       = $lmPath
-  Name       = $lmName
-  Value      = $lmVal
-  SourceHint = 'LAN Manager auth level'
-}) | Out-Null
+  $script:CurrentValues.Add([pscustomobject]@{
+    Path       = $lmPath
+    Name       = $lmName
+    Value      = $lmVal
+    SourceHint = 'LAN Manager auth level'
+  }) | Out-Null
 
-$script:CurrentValues.Add([pscustomobject]@{
-  Path       = $uacPath
-  Name       = $uacName
-  Value      = $uacVal
-  SourceHint = 'UAC master switch'
-}) | Out-Null
+  $script:CurrentValues.Add([pscustomobject]@{
+    Path       = $uacPath
+    Name       = $uacName
+    Value      = $uacVal
+    SourceHint = 'UAC master switch'
+  }) | Out-Null
 
-if ($null -eq $lmVal) {
-  Add-Finding -FindingList $script:Findings -Code 'SECOPT-LmCompatibilityMissing' -Severity 'Info' -Message 'LmCompatibilityLevel is not set (policy/default may still apply).' -TimestampLocal
-} else {
-  $lmValInt = [int]$lmVal
-  if ($lmValInt -lt 3) {
-    Add-Finding -FindingList $script:Findings -Code 'SECOPT-LmCompatibilityWeak' -Severity 'High' -Message ("LmCompatibilityLevel={0} is low (legacy/NTLM risk)." -f $lmValInt) -Extra @{ Level = $lmValInt } -TimestampLocal
+  if ($null -eq $lmVal) {
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-LmCompatibilityMissing' -Severity 'Info' -Message 'LmCompatibilityLevel is not set (policy/default may still apply).' -TimestampLocal
+  } else {
+    $lmValInt = [int]$lmVal
+    if ($lmValInt -lt 3) {
+      Add-Finding -FindingList $script:Findings -Code 'SECOPT-LmCompatibilityWeak' -Severity 'High' -Message ("LmCompatibilityLevel={0} is low (legacy/NTLM risk)." -f $lmValInt) -Extra @{ Level = $lmValInt } -TimestampLocal
+    }
+  }
+
+  if ($null -eq $uacVal) {
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-UACMissing' -Severity 'Info' -Message 'EnableLUA is not set (policy/default may still apply).' -TimestampLocal
+  } elseif ([int]$uacVal -eq 0) {
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-UACDisabled' -Severity 'High' -Message 'EnableLUA=0 indicates UAC is disabled; changes may require reboot/logoff.' -TimestampLocal
+  }
+
+  # -------------------------
+  # Desired compare / remediate (optional)
+  # -------------------------
+
+  $RunState.desiredLoaded = $false
+  $desired = Convert-ToDesiredObjectSafe -Input $DesiredJson
+  if ($null -ne $desired) { $RunState.desiredLoaded = $true }
+}
+function Invoke-Capability38MainPhase02 {
+  param([hashtable]$RunState)
+  if (-not $RunState.desiredLoaded) {
+    Add-SecurityOptionsUnavailableDesiredFinding
+    return
+  }
+  foreach ($pathProperty in $desired.PSObject.Properties) {
+    Invoke-SecurityOptionsDesiredPath -PathProperty $pathProperty
   }
 }
-
-if ($null -eq $uacVal) {
-  Add-Finding -FindingList $script:Findings -Code 'SECOPT-UACMissing' -Severity 'Info' -Message 'EnableLUA is not set (policy/default may still apply).' -TimestampLocal
-} elseif ([int]$uacVal -eq 0) {
-  Add-Finding -FindingList $script:Findings -Code 'SECOPT-UACDisabled' -Severity 'High' -Message 'EnableLUA=0 indicates UAC is disabled; changes may require reboot/logoff.' -TimestampLocal
-}
-
-# -------------------------
-# Desired compare / remediate (optional)
-# -------------------------
-
-$desiredLoaded = $false
-$desired = Convert-ToDesiredObjectSafe -Input $DesiredJson
-if ($null -ne $desired) { $desiredLoaded = $true }
-
-if (-not $desiredLoaded) {
+function Add-SecurityOptionsUnavailableDesiredFinding {
   if ([string]::IsNullOrWhiteSpace($DesiredJson)) {
     Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredNotProvided' -Severity 'Info' -Message 'No DesiredJson provided; running baseline checks only.' -TimestampLocal
   } else {
     Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredSkipped' -Severity 'Low' -Message 'Desired compare/remediation skipped because desired state is not available.' -TimestampLocal
   }
-} else {
-  foreach ($pathProp in $desired.PSObject.Properties) {
-    $path = [string]$pathProp.Name
-    $vals = $pathProp.Value
-
-    if (-not $vals -or -not $vals.PSObject -or $vals.PSObject.Properties.Count -eq 0) {
-      Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredEmptyPath' -Severity 'Low' -Message ("Desired JSON has no values under path: {0}" -f $path) -TimestampLocal
-      continue
-    }
-
-    foreach ($valProp in $vals.PSObject.Properties) {
-      $name = [string]$valProp.Name
-
-      $typeRaw = $null
-      $valueRaw = $null
-      try {
-        $typeRaw  = [string]$valProp.Value.Type
-        $valueRaw = $valProp.Value.Value
-      } catch {
-        $typeRaw = $null
-      }
-
-      if ([string]::IsNullOrWhiteSpace($typeRaw)) {
-        Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredMalformed' -Severity 'Medium' -Message ("Desired JSON malformed at {0}\{1} (expected Type/Value)." -f $path, $name) -TimestampLocal
-        continue
-      }
-
-      $type = Normalize-RegistryType -TypeRaw $typeRaw
-      if (-not $type) {
-        Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredBadType' -Severity 'Medium' -Message ("Unsupported registry type '{0}' for {1}\{2}." -f $typeRaw, $path, $name) -TimestampLocal
-        continue
-      }
-
-      $want = $null
-      try {
-        $want = Normalize-ValueForType -Type $type -Value $valueRaw
-      } catch {
-        Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredValueInvalid' -Severity 'Medium' -Message ("Desired value invalid for {0}\{1} (Type={2}): {3}" -f $path, $name, $type, $_.Exception.Message) -TimestampLocal
-        continue
-      }
-
-      $have = Get-Reg -Path $path -Name $name
-
-      $haveNorm = $have
-      if ($null -ne $have) {
-        try {
-          $haveNorm = Normalize-ValueForType -Type $type -Value $have
-        } catch {
-          Add-Finding -FindingList $script:Findings -Code 'SECOPT-CurrentNormalizeFailed' -Severity 'Low' -Message ("Could not normalize current value at {0}\{1} (Type={2}): {3}" -f $path, $name, $type, $_.Exception.Message) -TimestampLocal
-          $haveNorm = $have
-        }
-      }
-
-      $isEqual = Compare-Value -Type $type -Current $haveNorm -Desired $want
-      $isDrift = -not $isEqual
-
-      $row = [pscustomobject]@{
-        Path           = $path
-        Name           = $name
-        Type           = $type
-        Desired        = $want
-        Current        = $have
-        Drift          = $isDrift
-        Remediated     = $false
-        RemediateError = $null
-      }
-
-      if ($isDrift) {
-        Add-Finding -FindingList $script:Findings -Code 'SECOPT-Drift' -Severity 'Medium' -Message ("Drift detected: {0}\{1} Current='{2}' Desired='{3}' (Type={4})." -f $path, $name, $have, $want, $type) -Extra @{ Path = $path; Name = $name; Current = $have; Desired = $want; Type = $type } -TimestampLocal
-
-        if ($Mode -eq 'Remediate') {
-          if ($PSCmdlet.ShouldProcess("$path\$name", "Set to '$want' ($type)")) {
-            try {
-              Set-Reg -Path $path -Name $name -Type $type -Value $want
-              $row.Remediated = $true
-            } catch {
-              $row.RemediateError = $_.Exception.Message
-              Add-Finding -FindingList $script:Findings -Code 'SECOPT-RemediateFailed' -Severity 'High' -Message ("Remediation failed at {0}\{1}: {2}" -f $path, $name, $_.Exception.Message) -TimestampLocal
-            }
-          }
-        }
-      }
-
-      $script:Drift.Add($row) | Out-Null
-    }
+}
+function Invoke-SecurityOptionsDesiredPath {
+  param($PathProperty)
+  $path = [string]$PathProperty.Name
+  $values = $PathProperty.Value
+  if (-not $values -or -not $values.PSObject -or $values.PSObject.Properties.Count -eq 0) {
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredEmptyPath' -Severity 'Low' -Message ("Desired JSON has no values under path: {0}" -f $path) -TimestampLocal
+    return
+  }
+  foreach ($valueProperty in $values.PSObject.Properties) {
+    Invoke-SecurityOptionsDesiredValue -Path $path -ValueProperty $valueProperty
   }
 }
-
-# -------------------------
-# Summary + Export
-# -------------------------
-
-$summary = [pscustomobject]@{
-  ComputerName  = $env:COMPUTERNAME
-  Mode          = $Mode
-  DesiredLoaded = $desiredLoaded
-  FindingsCount = $script:Findings.Count
-  DriftItems    = $script:Drift.Count
-  Timestamp     = (Get-Date)
+function Resolve-SecurityOptionsDesiredValue {
+  param([string]$Path, $ValueProperty)
+  $name = [string]$ValueProperty.Name
+  try {
+    $typeRaw = [string]$ValueProperty.Value.Type
+    $valueRaw = $ValueProperty.Value.Value
+  } catch {
+    $typeRaw = $null
+  }
+  if ([string]::IsNullOrWhiteSpace($typeRaw)) {
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredMalformed' -Severity 'Medium' -Message ("Desired JSON malformed at {0}\{1} (expected Type/Value)." -f $Path, $name) -TimestampLocal
+    return $null
+  }
+  $type = Normalize-RegistryType -TypeRaw $typeRaw
+  if (-not $type) {
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredBadType' -Severity 'Medium' -Message ("Unsupported registry type '{0}' for {1}\{2}." -f $typeRaw, $Path, $name) -TimestampLocal
+    return $null
+  }
+  try {
+    $want = Normalize-ValueForType -Type $type -Value $valueRaw
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-DesiredValueInvalid' -Severity 'Medium' -Message ("Desired value invalid for {0}\{1} (Type={2}): {3}" -f $Path, $name, $type, $_.Exception.Message) -TimestampLocal
+    return $null
+  }
+  return [pscustomobject]@{ Name = $name; Type = $type; Value = $want }
 }
-
-if ($ExportPath) {
-  $dir = Split-Path -Path $ExportPath -Parent
-  if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+function Get-NormalizedSecurityOptionCurrentValue {
+  param([string]$Path, [string]$Name, [string]$Type, [AllowNull()]$Value)
+  if ($null -eq $Value) { return $null }
+  try {
+    return Normalize-ValueForType -Type $Type -Value $Value
+  } catch {
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-CurrentNormalizeFailed' -Severity 'Low' -Message ("Could not normalize current value at {0}\{1} (Type={2}): {3}" -f $Path, $Name, $Type, $_.Exception.Message) -TimestampLocal
+    return $Value
+  }
+}
+function Invoke-SecurityOptionsDesiredValue {
+  param([string]$Path, $ValueProperty)
+  $target = Resolve-SecurityOptionsDesiredValue -Path $Path -ValueProperty $ValueProperty
+  if ($null -eq $target) { return }
+  $have = Get-Reg -Path $Path -Name $target.Name
+  $haveNorm = Get-NormalizedSecurityOptionCurrentValue -Path $Path -Name $target.Name -Type $target.Type -Value $have
+  $isDrift = -not (Compare-Value -Type $target.Type -Current $haveNorm -Desired $target.Value)
+  $row = [pscustomobject]@{
+    Path = $Path
+    Name = $target.Name
+    Type = $target.Type
+    Desired = $target.Value
+    Current = $have
+    Drift = $isDrift
+    Remediated = $false
+    RemediateError = $null
+  }
+  if ($isDrift) { Set-SecurityOptionDrift -Row $row }
+  $script:Drift.Add($row) | Out-Null
+}
+function Set-SecurityOptionDrift {
+  param($Row)
+  Add-Finding -FindingList $script:Findings -Code 'SECOPT-Drift' -Severity 'Medium' -Message ("Drift detected: {0}\{1} Current='{2}' Desired='{3}' (Type={4})." -f $Row.Path, $Row.Name, $Row.Current, $Row.Desired, $Row.Type) -Extra @{ Path = $Row.Path; Name = $Row.Name; Current = $Row.Current; Desired = $Row.Desired; Type = $Row.Type } -TimestampLocal
+  if ($Mode -ne 'Remediate') { return }
+  if (-not $script:__EntryCmdlet.ShouldProcess("$($Row.Path)\$($Row.Name)", "Set to '$($Row.Desired)' ($($Row.Type))")) { return }
+  try {
+    Set-Reg -Path $Row.Path -Name $Row.Name -Type $Row.Type -Value $Row.Desired
+    $Row.Remediated = $true
+  } catch {
+    $Row.RemediateError = $_.Exception.Message
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-RemediateFailed' -Severity 'High' -Message ("Remediation failed at {0}\{1}: {2}" -f $Row.Path, $Row.Name, $_.Exception.Message) -TimestampLocal
+  }
+}
+function Invoke-Capability38MainPhase03 {
+  param([hashtable]$RunState)
+  $summary = [pscustomobject]@{
+    ComputerName  = $env:COMPUTERNAME
+    Mode          = $Mode
+    DesiredLoaded = $RunState.desiredLoaded
+    FindingsCount = $script:Findings.Count
+    DriftItems    = $script:Drift.Count
+    Timestamp     = (Get-Date)
   }
 
-  $base   = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
-  $folder = Split-Path -Path $ExportPath -Parent
-  if (-not $folder) { $folder = (Get-Location).Path }
+  if ($ExportPath) {
+    $dir = Split-Path -Path $ExportPath -Parent
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+      New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    }
 
-  $summary              | Export-Csv -Path (Join-Path $folder ($base + "_summary.csv"))   -NoTypeInformation -Encoding UTF8
-  $script:Findings      | Export-Csv -Path (Join-Path $folder ($base + "_findings.csv"))  -NoTypeInformation -Encoding UTF8
-  $script:CurrentValues | Export-Csv -Path (Join-Path $folder ($base + "_current.csv"))   -NoTypeInformation -Encoding UTF8
-  $script:Drift         | Export-Csv -Path (Join-Path $folder ($base + "_drift.csv"))     -NoTypeInformation -Encoding UTF8
+    $base   = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
+    $folder = Split-Path -Path $ExportPath -Parent
+    if (-not $folder) { $folder = (Get-Location).Path }
+
+    $summary              | Export-Csv -Path (Join-Path $folder ($base + "_summary.csv"))   -NoTypeInformation -Encoding UTF8
+    $script:Findings      | Export-Csv -Path (Join-Path $folder ($base + "_findings.csv"))  -NoTypeInformation -Encoding UTF8
+    $script:CurrentValues | Export-Csv -Path (Join-Path $folder ($base + "_current.csv"))   -NoTypeInformation -Encoding UTF8
+    $script:Drift         | Export-Csv -Path (Join-Path $folder ($base + "_drift.csv"))     -NoTypeInformation -Encoding UTF8
+  }
 }
-
-if (-not $script:Quiet) {
-  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
-  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
-    -CustomFields ([ordered]@{
-      Mode          = $Mode
-      DesiredLoaded = $desiredLoaded
-      DriftItems    = $script:Drift.Count
-    })
-  # Current values
-  if ($script:CurrentValues.Count -gt 0) {
+function Invoke-Capability38MainPhase04Step01 {
+  param([hashtable]$RunState)
+$findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
+    Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+      -CustomFields ([ordered]@{
+        Mode          = $Mode
+        DesiredLoaded = $RunState.desiredLoaded
+        DriftItems    = $script:Drift.Count
+      })
+    # Current values
+    if ($script:CurrentValues.Count -gt 0) {
+      Write-UiLine -Text '' -Color 'Gray'
+      Write-UiLine -Text 'Current values:' -Color 'White'
+      foreach ($cv in $script:CurrentValues) {
+        $valText = Format-Value -Value $cv.Value
+        Write-UiLine -Text ("  {0}\{1} = {2} ({3})" -f $cv.Path, $cv.Name, $valText, $cv.SourceHint) -Color 'Gray'
+      }
+    }
+    # Drift (max 10)
+    $RunState.topDrift = $script:Drift | Where-Object { $_.Drift } | Select-Object -First 10
     Write-UiLine -Text '' -Color 'Gray'
-    Write-UiLine -Text 'Current values:' -Color 'White'
-    foreach ($cv in $script:CurrentValues) {
-      $valText = Format-Value -Value $cv.Value
-      Write-UiLine -Text ("  {0}\{1} = {2} ({3})" -f $cv.Path, $cv.Name, $valText, $cv.SourceHint) -Color 'Gray'
+    Write-UiLine -Text 'Drift (max 10):' -Color 'White'
+}
+
+function Invoke-Capability38MainPhase04Step02 {
+  param([hashtable]$RunState)
+if (($RunState.topDrift | Measure-Object).Count -eq 0) {
+      Write-UiLine -Text '  None' -Color 'Green'
+    } else {
+      foreach ($d in $RunState.topDrift) {
+        $cur = Format-Value -Value $d.Current
+        $des = Format-Value -Value $d.Desired
+        $statusColor = if ($d.Remediated -eq $true) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }
+        $suffix = if ($d.RemediateError) { " ERROR: $($d.RemediateError)" } else { '' }
+        Write-UiLine -Text ("  {0}\{1} ({2}) Current={3} Desired={4} Remediated={5}{6}" -f $d.Path, $d.Name, $d.Type, $cur, $des, $d.Remediated, $suffix) -Color $statusColor
+      }
+      if (($script:Drift | Where-Object { $_.Drift } | Measure-Object).Count -gt 10) {
+        $extra = ($script:Drift | Where-Object { $_.Drift } | Measure-Object).Count - 10
+        Write-UiLine -Text "  ... and $extra more drift item(s)" -Color 'DarkYellow'
+      }
     }
-  }
-  # Drift (max 10)
-  $topDrift = $script:Drift | Where-Object { $_.Drift } | Select-Object -First 10
-  Write-UiLine -Text '' -Color 'Gray'
-  Write-UiLine -Text 'Drift (max 10):' -Color 'White'
-  if (($topDrift | Measure-Object).Count -eq 0) {
-    Write-UiLine -Text '  None' -Color 'Green'
-  } else {
-    foreach ($d in $topDrift) {
-      $cur = Format-Value -Value $d.Current
-      $des = Format-Value -Value $d.Desired
-      $statusColor = if ($d.Remediated -eq $true) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }
-      $suffix = if ($d.RemediateError) { " ERROR: $($d.RemediateError)" } else { '' }
-      Write-UiLine -Text ("  {0}\{1} ({2}) Current={3} Desired={4} Remediated={5}{6}" -f $d.Path, $d.Name, $d.Type, $cur, $des, $d.Remediated, $suffix) -Color $statusColor
-    }
-    if (($script:Drift | Where-Object { $_.Drift } | Measure-Object).Count -gt 10) {
-      $extra = ($script:Drift | Where-Object { $_.Drift } | Measure-Object).Count - 10
-      Write-UiLine -Text "  ... and $extra more drift item(s)" -Color 'DarkYellow'
-    }
+}
+
+function Invoke-Capability38MainPhase04 {
+  param([hashtable]$RunState)
+  if (-not $script:Quiet) {
+    . Invoke-Capability38MainPhase04Step01 -RunState $RunState
+. Invoke-Capability38MainPhase04Step02 -RunState $RunState
   }
 }
+function Invoke-Capability38Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability38MainPhase01 -RunState $RunState
+  . Invoke-Capability38MainPhase02 -RunState $RunState
+  . Invoke-Capability38MainPhase03 -RunState $RunState
+  . Invoke-Capability38MainPhase04 -RunState $RunState
+}
+. Invoke-Capability38Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # V2 output contract
-$resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '38-SecurityOptions-Drift.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ CurrentValues = [object[]]$script:CurrentValues; Drift = [object[]]$script:Drift; DesiredLoaded = $desiredLoaded }
+function Get-Capability38ResultToken {
+  $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability38ResultToken
+$v2Result = Get-V2ResultObject -ScriptName '38-SecurityOptions-Drift.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ CurrentValues = [object[]]$script:CurrentValues; Drift = [object[]]$script:Drift; DesiredLoaded = $RunState.desiredLoaded }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

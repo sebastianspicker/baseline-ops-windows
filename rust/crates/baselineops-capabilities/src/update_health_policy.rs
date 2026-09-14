@@ -25,7 +25,7 @@ pub struct UpdateHealthParameters {}
 
 /// Fixed Service Control Manager identities in this bounded foundation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum UpdateHealthService {
     /// Microsoft Update Health Service.
     UpdateHealth,
@@ -72,7 +72,7 @@ pub const FIXED_UPDATE_HEALTH_SERVICES: [UpdateHealthService; 7] = [
 
 /// Exact Task Scheduler identities relevant to Windows Update scheduling.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum UpdateHealthTask {
     /// `\\Microsoft\\Windows\\WindowsUpdate\\Scheduled Start`.
     WindowsUpdateScheduledStart,
@@ -103,7 +103,7 @@ pub const FIXED_UPDATE_HEALTH_TASKS: [UpdateHealthTask; 2] = [
 
 /// Task Scheduler runtime state retained without task-definition export.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum UpdateHealthTaskState {
     /// Task Scheduler supplied no recognized state.
     Unknown,
@@ -118,8 +118,8 @@ pub enum UpdateHealthTaskState {
 }
 
 /// Non-secret, read-only metadata for one exact task.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct UpdateHealthTaskSnapshot {
     /// The scheduler's enabled flag.
     pub enabled: Observation<bool>,
@@ -128,8 +128,8 @@ pub struct UpdateHealthTaskSnapshot {
 }
 
 /// One bounded Windows Update Agent history record.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct UpdateHistoryRecord {
     /// Bounded WUA title, not a package path or external feed item.
     pub title: String,
@@ -140,8 +140,8 @@ pub struct UpdateHistoryRecord {
 }
 
 /// Bounded metadata acquired exclusively from Windows Update Agent COM.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct UpdateAgentMetadata {
     /// WUA's total history count, when available.
     pub total_history_count: u32,
@@ -150,8 +150,8 @@ pub struct UpdateAgentMetadata {
 }
 
 /// Read-only evidence collected for the capability-06 subset.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct UpdateHealthObservation {
     /// Fixed SCM service evidence only.
     pub services: BTreeMap<UpdateHealthService, Observation<ServiceObservation>>,

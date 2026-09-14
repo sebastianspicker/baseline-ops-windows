@@ -17,6 +17,7 @@ baselineops-capabilities.workspace = true
 baselineops-domain.workspace = true
 baselineops-engine.workspace = true
 baselineops-windows.workspace = true
+chrono.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]

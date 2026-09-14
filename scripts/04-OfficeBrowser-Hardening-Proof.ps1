@@ -135,9 +135,9 @@ param(
   [switch]$Strict,
   [string]$ConfigPath
 
-,
-  [ValidateSet('Audit','Remediate')][string]$Mode = 'Audit',
-  [ValidateSet('Console','Json','Csv','None')][string]$OutputFormat = 'Console',
+  ,
+  [ValidateSet('Audit', 'Remediate')][string]$Mode = 'Audit',
+  [ValidateSet('Console', 'Json', 'Csv', 'None')][string]$OutputFormat = 'Console',
   [string]$OutputPath,
   [switch]$PassThru,
   [switch]$Quiet,
@@ -145,6 +145,7 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Import-OfficeBrowserServices {
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
@@ -154,294 +155,107 @@ Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
+}
+. Import-OfficeBrowserServices
+
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+function Get-OfficeBrowserV2Context {
+  param($BoundParameters)
+  return Initialize-V2Context -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -BoundParameters $BoundParameters `
+    -Values @{ Mode = $Mode
+    ConfigPath = $ConfigPath
+    OutputFormat = $OutputFormat
+    OutputPath = $OutputPath
+    PassThru = $PassThru
+    Strict = $Strict
+    Quiet = $Quiet
+    NoColor = $NoColor
+    DeriveRemediate = $true
+  }
+}
+$script:__V2Context = Get-OfficeBrowserV2Context -BoundParameters $PSBoundParameters
 $Remediate = [bool]$script:__V2Context.Remediate
-if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
+if ($script:__V2Context.Quiet) {
+  $InformationPreference = 'SilentlyContinue'
+  $VerbosePreference = 'SilentlyContinue'
+}
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
-  $summary = [pscustomobject]@{
+function Get-OfficeBrowserUnsupportedSummary {
+  return [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
-    Timestamp    = Get-Date
-    Mode         = $Mode
-    Supported    = $false
-    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+    Timestamp = Get-Date
+    Mode = $Mode
+    Supported = $false
+    Notes = @('Skipped: this script is only supported on Windows hosts.')
   }
-  $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
+}
+
+function Write-OfficeBrowserUnsupportedResult {
+  param([string]$UnsupportedResult)
+  $summary = Get-OfficeBrowserUnsupportedSummary
   $result = Get-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
+  if ($PassThru) {
+    $result
+  }
+}
+
+$isWindowsHost = ($env:OS -eq 'Windows_NT')
+if (-not $isWindowsHost) {
+  $unsupportedResult = if ($Strict) {
+    'FAIL'
+  }
+  else {
+    'WARN'
+  }
+  Write-OfficeBrowserUnsupportedResult -UnsupportedResult $unsupportedResult
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
-if (-not $Quiet) { $InformationPreference = 'Continue' }   # Information stream shown by default
+if (-not $Quiet) {
+  $InformationPreference = 'Continue'
+}   # Information stream shown by default
 
 $script:Findings = Get-FindingsList
 
-$EventSource      = 'OfficeBrowser-Hardening'
-$EventLog         = 'Application'
-$DefaultProofPath = Join-Path ([System.IO.Path]::GetTempPath()) 'OfficeBrowser-Hardening-Proof.json'
+function Get-OfficeBrowserResultToken {
+  param($RunState)
+  $resultToken = if (-not $RunState.overallOk) {
+    'FAIL'
+  }
+  elseif ($script:Findings.Count -gt 0) {
+    'WARN'
+  }
+  else {
+    'OK'
+  }
+  return $resultToken
+}
 
-$DefaultCatalogJson = @"
-{
-  "Office": {
-    "VersionMajor": 16,
-    "MacrosMode": "SignedOnly",
-    "BlockMacrosFromInternet": true,
-    "DisableTrustedLocations": true,
-    "ProtectedView": { "Internet": true, "UnsafeLocations": true, "Outlook": true },
-    "AccessVBOM": false
-  },
-  "Edge": {
-    "PolicyHive": "Mandatory",
-    "SmartScreen": true,
-    "PUA": true,
-    "TrackingPrevention": "Balanced",
-    "PasswordManager": false,
-    "AutofillAddress": false,
-    "AutofillCreditCard": false,
-    "SSLVersionMin": "tls1.2",
-    "SyncDisabled": true,
-    "HomePageURL": null,
-    "RestoreOnStartup": 4,
-    "StartupURLs": []
-  },
-  "Firefox": {
-    "Enable": true,
-    "DistributionDir": null,
-    "DisableAppUpdate": true,
-    "DisableTelemetry": true,
-    "PasswordManagerEnabled": false,
-    "TrackingProtection": "strict",
-    "TLSMin": 3,
-    "BlockAllAddonsExcept": [],
-    "InstallAddons": []
-  },
-  "Proof": {
-    "OutFile": null
+function Write-OfficeBrowserV2Result {
+  param($RunState, [string]$ResultToken)
+  $v2Result = Get-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME
+      OverallOk = $runState.overallOk
+      Timestamp = Get-Date
+    }) -Metadata @{ Notes = @($runState.globalNotes) }
+  Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) {
+    $v2Result
   }
 }
-"@
-
-# -----------------------------
-# Utilities
-# -----------------------------
-
-# Test-IsAdmin imported from lib/Common.psm1
-
-
-# Ensure-Key replaced by Ensure-RegistryKey from lib/Registry.psm1
 
 . (Join-Path $PSScriptRoot 'internal/04-OfficeBrowser-Hardening-Proof.helpers.ps1')
-
-function Set-RegValueProof {
-  [CmdletBinding(SupportsShouldProcess = $true)]
-  param(
-    [Parameter(Mandatory)][string]$Product,
-    [Parameter(Mandatory)][string]$Area,
-    [Parameter(Mandatory)][string]$Policy,
-    [Parameter(Mandatory)][string]$Path,
-    [Parameter(Mandatory)][string]$Name,
-    [Parameter(Mandatory)][ValidateSet('DWord','String')][string]$Type,
-    [Parameter(Mandatory)]$Value,
-    [switch]$Remediate
-  )
-
-  # Only ensure key exists when remediating (§2/§17)
-  $expected = Convert-RegValue -Type $Type -Value $Value
-  $cur      = Get-RegValue -Path $Path -Name $Name
-
-  $compliant = ($cur -eq $expected)
-  $changed   = $false
-  $msg       = $null
-
-  if (-not $compliant) {
-    if ($Remediate) {
-      if (-not $PSCmdlet.ShouldProcess("$Path\$Name", "Set $Type value")) {
-        return (Get-ProofItem -Product $Product -Area $Area -Policy $Policy -Target $Path -Name $Name -Type $Type -Expected $expected -Actual $cur -Compliant $false -Changed $false -Message 'Set skipped by confirmation/WhatIf')
-      }
-
-      try {
-        Ensure-RegistryKey -Path $Path
-        New-ItemProperty -Path $Path -Name $Name -PropertyType $Type -Value $expected -Force -ErrorAction Stop | Out-Null
-        $changed = $true
-      } catch {
-        $msg = "Write failed: $($_.Exception.Message)"
-      }
-
-      $cur = Get-RegValue -Path $Path -Name $Name
-      $compliant = ($cur -eq $expected)
-
-      if (-not $msg) {
-        $msg = $(if ($compliant) { 'Set applied' } else { 'Set attempted but differs' })
-      }
-    } else {
-      $compliant = $false
-      $msg = 'Drift detected'
-    }
-  }
-
-  Get-ProofItem -Product $Product -Area $Area -Policy $Policy -Target $Path -Name $Name -Type $Type -Expected $expected -Actual $cur -Compliant $compliant -Changed $changed -Message $msg
+$runState = New-OfficeBrowserRunState -Inputs @{ CatalogPath = $CatalogPath
+  ConfigPath = $ConfigPath
+  Remediate = $Remediate
+  Strict = $Strict
 }
-
-
-function Ensure-Edge {
-  [CmdletBinding(SupportsShouldProcess = $true)]
-  param(
-    [Parameter(Mandatory)][object]$EdgeCfg,
-    [switch]$Remediate
-  )
-
-  $items = New-Object System.Collections.Generic.List[object]
-  $base  = Get-EdgeBaseKey -EdgeCfg $EdgeCfg
-
-  foreach ($policy in Get-EdgePolicyDefinitions -EdgeCfg $EdgeCfg) {
-    $items.Add((Set-RegValueProof -Product 'Edge' -Area $policy.Area -Policy $policy.Policy -Path $base -Name $policy.Name -Type $policy.Type -Value $policy.Value -Remediate:$Remediate)) | Out-Null
-  }
-
-  $hp = Get-TextOrNull $EdgeCfg.HomePageURL
-  if ($hp) {
-    $r = Set-RegValueProof -Product 'Edge' -Area 'UX' -Policy 'HomepageLocation' -Path $base -Name 'HomepageLocation' -Type String -Value $hp -Remediate:$Remediate
-    $items.Add($r) | Out-Null
-
-    $r = Set-RegValueProof -Product 'Edge' -Area 'UX' -Policy 'HomepageIsNewTabPage' -Path $base -Name 'HomepageIsNewTabPage' -Type DWord -Value 0 -Remediate:$Remediate
-    $items.Add($r) | Out-Null
-  }
-
-  if ($null -ne $EdgeCfg.RestoreOnStartup) {
-    $r = Set-RegValueProof -Product 'Edge' -Area 'Startup' -Policy 'RestoreOnStartup' -Path $base -Name 'RestoreOnStartup' -Type DWord -Value ([int]$EdgeCfg.RestoreOnStartup) -Remediate:$Remediate
-    $items.Add($r) | Out-Null
-  }
-
-  $urlsKey = Join-Path $base 'RestoreOnStartupURLs'
-  $desiredUrls = Get-EdgeStartupUrlMap -StartupURLs $EdgeCfg.StartupURLs
-
-  if ($Remediate) {
-    if ($PSCmdlet.ShouldProcess($urlsKey, 'Reset Edge startup URLs')) {
-      Ensure-RegistryKey -Path $urlsKey
-      Clear-EdgeStartupUrlValues -Path $urlsKey
-    }
-
-    foreach ($name in @($desiredUrls.Keys | Sort-Object { [int]$_ })) {
-      $expected = $desiredUrls[$name]
-      if ($PSCmdlet.ShouldProcess("$urlsKey\$name", 'Set Edge startup URL')) {
-        $items.Add((Set-EdgeStartupUrlProof -Path $urlsKey -Name $name -Expected $expected)) | Out-Null
-      } else {
-        $items.Add((Set-EdgeStartupUrlProof -Path $urlsKey -Name $name -Expected $expected -Skipped)) | Out-Null
-      }
-    }
-  } else {
-    $currentUrls = Get-EdgeStartupUrlValues -Path $urlsKey
-    foreach ($item in Get-EdgeStartupUrlAuditProofItems -Path $urlsKey -DesiredUrls $desiredUrls -CurrentUrls $currentUrls) { $items.Add($item) | Out-Null }
-  }
-
-  return $items
-}
-
-
-# -----------------------------
-# Main
-# -----------------------------
-
-if (-not (Ensure-EventSource -Source $EventSource -Log $EventLog)) {
-  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
-}
-
-$isAdmin     = Test-IsAdmin
-$globalNotes = New-Object System.Collections.Generic.List[string]
-$proofPath   = $DefaultProofPath
-$overallOk   = $true
-
-$catalogInfo = Load-Catalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath -DefaultCatalogJson $DefaultCatalogJson
-foreach($n in $catalogInfo.Notes) { $globalNotes.Add($n) | Out-Null }
-
-if (-not $isAdmin) {
-  $globalNotes.Add("Not elevated: HKLM (Edge) and Program Files (Firefox) writes may fail.") | Out-Null
-}
-
-$cat = $catalogInfo.Catalog
-$proofOverride = Get-TextOrNull $cat.Proof.OutFile
-if ($proofOverride) { $proofPath = $proofOverride }
-
-$allItems = New-Object System.Collections.Generic.List[object]
-
-try {
-  foreach($i in (Ensure-Office  -OfficeCfg  $cat.Office  -Remediate:$Remediate)) { $allItems.Add($i) | Out-Null }
-  foreach($i in (Ensure-Edge    -EdgeCfg    $cat.Edge    -Remediate:$Remediate)) { $allItems.Add($i) | Out-Null }
-  foreach($i in (Ensure-Firefox -FirefoxCfg $cat.Firefox -Remediate:$Remediate)) { $allItems.Add($i) | Out-Null }
-} catch {
-  $overallOk = $false
-  $globalNotes.Add("Unhandled error during evaluation: $($_.Exception.Message)") | Out-Null
-}
-
-$allSafe = @($allItems | ForEach-Object { Ensure-ProofItemLike $_ })
-
-$nonCompliant = @($allSafe | Where-Object { (Bool-Prop $_ 'Compliant' $true) -eq $false })
-if ($nonCompliant.Count -gt 0) { $overallOk = $false }
-
-$changedCount = @($allSafe | Where-Object { (Bool-Prop $_ 'Changed' $false) -eq $true }).Count
-
-$proof = [ordered]@{
-  Time      = (Get-Date).ToString("s")
-  Hostname  = $env:COMPUTERNAME
-  Strict    = [bool]$Strict
-  Remediate = [bool]$Remediate
-  IsAdmin   = [bool]$isAdmin
-  Catalog   = [ordered]@{ LoadedFrom = $catalogInfo.LoadedFrom }
-  Notes     = @($globalNotes)
-  Summary   = [ordered]@{
-    TotalItems   = $allSafe.Count
-    NonCompliant = $nonCompliant.Count
-    Changed      = $changedCount
-  }
-  Items     = @($allSafe)
-}
-
-try {
-  Save-Json -InputObject $proof -Path $proofPath -NoBom
-} catch {
-  $overallOk = $false
-  $globalNotes.Add("Failed to write proof JSON: $($_.Exception.Message)") | Out-Null
-}
-
-try {
-  $eventId = 4940
-  $level   = 'Information'
-  if (-not $overallOk -or $Strict) { $eventId = 4950; $level = 'Warning' }
-
-  $msg = @(
-    ("Office/Browser hardening: Ok={0} Strict={1} Remediate={2}" -f $overallOk, [bool]$Strict, [bool]$Remediate),
-    ("TotalItems={0} NonCompliant={1} Changed={2}" -f $proof.Summary.TotalItems, $proof.Summary.NonCompliant, $proof.Summary.Changed),
-    ("Proof JSON: {0}" -f $proofPath)
-  ) -join "`r`n"
-
-  Write-HealthEvent -Id $eventId -Msg $msg -Level $level -Source $EventSource -Log $EventLog
-} catch {
-  Write-Verbose ("Office/browser health event write failed: {0}" -f $_.Exception.Message)
-}
-
-Write-ConsoleSummary -AllItems @($allSafe) -CatalogInfo $catalogInfo -ProofPath $proofPath -IsAdmin $isAdmin -Remediate ([bool]$Remediate) -Strict ([bool]$Strict) -Notes @($globalNotes)
-
-foreach ($nc in @($nonCompliant)) {
-  $prod = if ($nc.PSObject.Properties['Product']) { $nc.Product } else { 'Unknown' }
-  $area = if ($nc.PSObject.Properties['Area']) { $nc.Area } else { '' }
-  $name = if ($nc.PSObject.Properties['Name']) { $nc.Name } else { '' }
-  $msg  = if ($nc.PSObject.Properties['Message']) { $nc.Message } else { ("{0}/{1}/{2} not compliant" -f $prod, $area, $name) }
-  $code = "OB-{0}" -f ($prod -replace '\s','')
-  Add-Finding -FindingList $script:Findings -Code $code -Severity 'Medium' -Message $msg `
-    -Extra @{ Product = $prod; Area = $area; Name = $name }
-}
+Invoke-OfficeBrowserProof -RunState $runState
 
 # V2 output contract
-$resultToken = if (-not $overallOk) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '04-OfficeBrowser-Hardening-Proof.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; OverallOk = $overallOk; Timestamp = Get-Date }) -Metadata @{ Notes = @($globalNotes) }
-Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
-if ($PassThru) { $v2Result }
+$resultToken = Get-OfficeBrowserResultToken -RunState $runState
+Write-OfficeBrowserV2Result -RunState $runState -ResultToken $resultToken
 
 exit (Get-V2ExitCode -Result $resultToken)

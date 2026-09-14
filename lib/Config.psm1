@@ -137,6 +137,128 @@ function Merge-ConfigValues {
 
 <#
 .SYNOPSIS
+  Creates configuration load metadata.
+#>
+function New-ConfigReadMetadata {
+  [CmdletBinding()]
+  param([AllowNull()][string]$Path)
+
+  return [pscustomobject]@{
+    Path                = $Path
+    Provided            = [bool]$Path
+    Loaded              = $false
+    UsedDefaults        = $true
+    UsedDefaultsBecause = $null
+    Error               = $null
+  }
+}
+
+<#
+.SYNOPSIS
+  Copies configuration defaults into a mutable hashtable.
+#>
+function Copy-ConfigDefaults {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][hashtable]$Defaults)
+
+  $config = @{}
+  foreach ($key in $Defaults.Keys) { $config[$key] = $Defaults[$key] }
+  return $config
+}
+
+<#
+.SYNOPSIS
+  Completes a fallback for an absent or invalid configuration path.
+#>
+function Complete-InvalidConfigPathFallback {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$Config,
+    [Parameter(Mandatory)][pscustomobject]$Meta,
+    [AllowNull()][string]$Path,
+    [switch]$AsHashtable,
+    [switch]$ReturnNullWhenMissing,
+    [scriptblock]$OnWarning
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return Complete-ConfigFallback -Config $Config -Meta $Meta -Reason 'No ConfigPath provided.' `
+      -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullWhenMissing
+  }
+  return Complete-ConfigFallback -Config $Config -Meta $Meta `
+    -Reason 'ConfigPath not found or invalid.' -ErrorMessage 'ConfigPath not found or invalid.' `
+    -WarningMessage 'ConfigPath not found or invalid. Using defaults.' `
+    -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullWhenMissing -OnWarning $OnWarning
+}
+
+<#
+.SYNOPSIS
+  Completes a fallback for invalid JSON input.
+#>
+function Complete-InvalidConfigJsonFallback {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$Config,
+    [Parameter(Mandatory)][pscustomobject]$Meta,
+    [Parameter(Mandatory)][pscustomobject]$JsonInput,
+    [switch]$AsHashtable,
+    [switch]$ReturnNullOnError,
+    [scriptblock]$OnWarning
+  )
+
+  if ([string]::IsNullOrWhiteSpace($JsonInput.Text)) {
+    return Complete-ConfigFallback -Config $Config -Meta $Meta `
+      -Reason 'Config file is empty.' -ErrorMessage 'Config file is empty.' `
+      -WarningMessage 'Config file is empty. Using defaults.' `
+      -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
+  }
+  if ($null -ne $JsonInput.ParseError) { throw $JsonInput.ParseError }
+  if ($null -eq $JsonInput.Data) {
+    return Complete-ConfigFallback -Config $Config -Meta $Meta `
+      -Reason 'Config file invalid/unreadable JSON.' -ErrorMessage 'Config file invalid/unreadable JSON.' `
+      -WarningMessage 'Config file invalid/unreadable JSON. Using defaults.' `
+      -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
+  }
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Reads and merges JSON from a validated configuration path.
+#>
+function Read-SanitizedConfigWithDefaults {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][hashtable]$Config,
+    [Parameter(Mandatory)][hashtable]$Defaults,
+    [Parameter(Mandatory)][pscustomobject]$Meta,
+    [switch]$AsHashtable,
+    [switch]$ReturnNullOnError,
+    [scriptblock]$OnWarning
+  )
+
+  try {
+    $jsonInput = JsonInput\Read-BoundedUtf8JsonInput -Path $Path -MaximumBytes 1048576
+    $fallback = Complete-InvalidConfigJsonFallback -Config $Config -Meta $Meta -JsonInput $jsonInput `
+      -AsHashtable:$AsHashtable -ReturnNullOnError:$ReturnNullOnError -OnWarning $OnWarning
+    if ($null -ne $fallback) { return $fallback }
+    $Meta.Loaded = $true
+    $Meta.UsedDefaults = $false
+    $Meta.UsedDefaultsBecause = $null
+    $config = Merge-ConfigValues -Config $Config -Defaults $Defaults -InputObject $jsonInput.Data
+    return New-ConfigReadResult -Config $config -Meta $Meta -AsHashtable:$AsHashtable
+  } catch {
+    $warning = 'Config parse failed, using defaults.'
+    if (-not [string]::IsNullOrWhiteSpace($Path)) { $warning += ' File: ' + (Split-Path -Leaf $Path) }
+    return Complete-ConfigFallback -Config $Config -Meta $Meta -Reason 'Config parse failed.' `
+      -ErrorMessage $_.Exception.Message -WarningMessage $warning `
+      -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
+  }
+}
+
+<#
+.SYNOPSIS
   Reads a JSON config file and merges with default values.
 .PARAMETER Path
   Path to the JSON configuration file.
@@ -164,75 +286,17 @@ function Read-ConfigWithDefaults {
 
   if ($null -eq $Defaults) { $Defaults = @{} }
 
-  $meta = [pscustomobject]@{
-    Path               = $Path
-    Provided           = [bool]$Path
-    Loaded             = $false
-    UsedDefaults       = $true
-    UsedDefaultsBecause= $null
-    Error              = $null
-  }
-
-  $config = @{}
-  foreach ($k in $Defaults.Keys) { $config[$k] = $Defaults[$k] }
+  $meta = New-ConfigReadMetadata -Path $Path
+  $config = Copy-ConfigDefaults -Defaults $Defaults
 
   $sanitized = if ([string]::IsNullOrWhiteSpace($Path)) { $null } else { Sanitize-ConfigPath -Path $Path -MustExist }
   if (-not $sanitized) {
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-      return Complete-ConfigFallback `
-        -Config $config -Meta $meta -Reason 'No ConfigPath provided.' `
-        -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullWhenMissing
-    }
-    return Complete-ConfigFallback `
-      -Config $config -Meta $meta `
-      -Reason 'ConfigPath not found or invalid.' `
-      -ErrorMessage 'ConfigPath not found or invalid.' `
-      -WarningMessage 'ConfigPath not found or invalid. Using defaults.' `
-      -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullWhenMissing -OnWarning $OnWarning
+    return Complete-InvalidConfigPathFallback -Config $config -Meta $meta -Path $Path `
+      -AsHashtable:$AsHashtable -ReturnNullWhenMissing:$ReturnNullWhenMissing -OnWarning $OnWarning
   }
 
-  $Path = $sanitized # Use sanitized path for Get-Content
-
-  try {
-    $jsonInput = JsonInput\Read-BoundedUtf8JsonInput -Path $Path -MaximumBytes 1048576
-    if ([string]::IsNullOrWhiteSpace($jsonInput.Text)) {
-      return Complete-ConfigFallback `
-        -Config $config -Meta $meta `
-        -Reason 'Config file is empty.' -ErrorMessage 'Config file is empty.' `
-        -WarningMessage 'Config file is empty. Using defaults.' `
-        -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
-    }
-
-    if ($null -ne $jsonInput.ParseError) {
-      throw $jsonInput.ParseError
-    }
-
-    $obj = $jsonInput.Data
-    if ($null -eq $obj) {
-      return Complete-ConfigFallback `
-        -Config $config -Meta $meta `
-        -Reason 'Config file invalid/unreadable JSON.' `
-        -ErrorMessage 'Config file invalid/unreadable JSON.' `
-        -WarningMessage 'Config file invalid/unreadable JSON. Using defaults.' `
-        -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
-    }
-
-    $meta.Loaded = $true
-    $meta.UsedDefaults = $false
-    $meta.UsedDefaultsBecause = $null
-    $config = Merge-ConfigValues -Config $config -Defaults $Defaults -InputObject $obj
-    return New-ConfigReadResult -Config $config -Meta $meta -AsHashtable:$AsHashtable
-  } catch {
-    $warning = 'Config parse failed, using defaults.'
-    if (-not [string]::IsNullOrWhiteSpace($Path)) {
-      $warning += ' File: ' + (Split-Path -Leaf $Path)
-    }
-    return Complete-ConfigFallback `
-      -Config $config -Meta $meta `
-      -Reason 'Config parse failed.' -ErrorMessage $_.Exception.Message `
-      -WarningMessage $warning `
-      -AsHashtable:$AsHashtable -ReturnNull:$ReturnNullOnError -OnWarning $OnWarning
-  }
+  return Read-SanitizedConfigWithDefaults -Path $sanitized -Config $config -Defaults $Defaults -Meta $meta `
+    -AsHashtable:$AsHashtable -ReturnNullOnError:$ReturnNullOnError -OnWarning $OnWarning
 }
 
 Export-ModuleMember -Function ConvertTo-Hashtable,Read-ConfigWithDefaults

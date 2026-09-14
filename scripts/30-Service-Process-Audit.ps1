@@ -78,22 +78,43 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
+function Initialize-Capability30Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '30-Service-Process-Audit.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '30-Service-Process-Audit.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability30Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
@@ -119,8 +140,12 @@ function Test-InteractiveHost {
   catch { return $false }
 }
 
+function Initialize-ServiceProcessConsoleState {
+  param()
 $script:IsInteractive = Test-InteractiveHost
 $script:UseColor = (-not $NoColor) -and $script:IsInteractive
+}
+. Initialize-ServiceProcessConsoleState
 
 
 
@@ -152,6 +177,29 @@ function Import-OptionalJsonConfig {
 }
 
 # Defaults used when JSON is missing/unreadable/invalid
+function Apply-ServiceProcessDisplayConfiguration {
+if ($null -ne $jsonCfg.TopN) {
+    $tmp = $jsonCfg.TopN -as [int]
+    if ((Test-AllConditions -Conditions @({ $tmp -ge 1 }, { $tmp -le 1000 }))) { $Config.TopN = $tmp }
+  }
+
+  if ($null -ne $jsonCfg.ExportEnabled)         { $Config.ExportEnabled = [bool]$jsonCfg.ExportEnabled }
+  if ($null -ne $jsonCfg.ShowListsInConsole)    { $Config.ShowListsInConsole = [bool]$jsonCfg.ShowListsInConsole }
+  if ($null -ne $jsonCfg.ShowServicesInConsole) { $Config.ShowServicesInConsole = [bool]$jsonCfg.ShowServicesInConsole }
+}
+
+function Apply-ServiceProcessRankingConfiguration {
+if ($null -ne $jsonCfg.ShowTopCpuInConsole)   { $Config.ShowTopCpuInConsole = [bool]$jsonCfg.ShowTopCpuInConsole }
+  if ($null -ne $jsonCfg.ShowTopRamInConsole)   { $Config.ShowTopRamInConsole = [bool]$jsonCfg.ShowTopRamInConsole }
+
+  if ($null -ne $jsonCfg.ConsoleMaxServices) {
+    $tmp2 = $jsonCfg.ConsoleMaxServices -as [int]
+    if ((Test-AllConditions -Conditions @({ $tmp2 -ge 1 }, { $tmp2 -le 5000 }))) { $Config.ConsoleMaxServices = $tmp2 }
+  }
+}
+
+function Initialize-ServiceProcessConfiguration {
+  param([hashtable]$RunState)
 $Config = [ordered]@{
   TopN                  = $TopN
   ExportEnabled         = [bool](-not [string]::IsNullOrWhiteSpace($ExportPath))
@@ -167,7 +215,7 @@ $configLoad = Import-OptionalJsonConfig -Path $ConfigJsonPath
 $jsonCfg = $configLoad.Data
 $configMeta = $configLoad.Meta
 $configPathProvided = -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)
-$configLoadIssue = $configPathProvided -and -not [bool]$configMeta.Loaded
+$configLoadIssue = (Test-AllConditions -Conditions @({ $configPathProvided }, { -not [bool]$configMeta.Loaded }))
 $findings = @()
 
 if ($configLoadIssue) {
@@ -182,30 +230,19 @@ if ($configLoadIssue) {
 }
 
 if ($null -ne $jsonCfg) {
-  if ($null -ne $jsonCfg.TopN) {
-    $tmp = $jsonCfg.TopN -as [int]
-    if ($tmp -ge 1 -and $tmp -le 1000) { $Config.TopN = $tmp }
-  }
-
-  if ($null -ne $jsonCfg.ExportEnabled)         { $Config.ExportEnabled = [bool]$jsonCfg.ExportEnabled }
-  if ($null -ne $jsonCfg.ShowListsInConsole)    { $Config.ShowListsInConsole = [bool]$jsonCfg.ShowListsInConsole }
-  if ($null -ne $jsonCfg.ShowServicesInConsole) { $Config.ShowServicesInConsole = [bool]$jsonCfg.ShowServicesInConsole }
-  if ($null -ne $jsonCfg.ShowTopCpuInConsole)   { $Config.ShowTopCpuInConsole = [bool]$jsonCfg.ShowTopCpuInConsole }
-  if ($null -ne $jsonCfg.ShowTopRamInConsole)   { $Config.ShowTopRamInConsole = [bool]$jsonCfg.ShowTopRamInConsole }
-
-  if ($null -ne $jsonCfg.ConsoleMaxServices) {
-    $tmp2 = $jsonCfg.ConsoleMaxServices -as [int]
-    if ($tmp2 -ge 1 -and $tmp2 -le 5000) { $Config.ConsoleMaxServices = $tmp2 }
-  }
+  . Apply-ServiceProcessDisplayConfiguration
+. Apply-ServiceProcessRankingConfiguration
 }
 
-$effectiveTopN = [int]$Config.TopN
+$RunState.effectiveTopN = [int]$Config.TopN
 
 if (-not $NoConsole) {
-  if ($null -eq $jsonCfg -and -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)) {
+  if ((Test-AllConditions -Conditions @({ $null -eq $jsonCfg }, { -not [string]::IsNullOrWhiteSpace($ConfigJsonPath) }))) {
     Write-ConsoleInfo ("Config JSON not loaded (using defaults): {0}" -f $ConfigJsonPath)
   }
 }
+}
+. Initialize-ServiceProcessConfiguration -RunState $RunState
 
 # -----------------------------
 # Data collection
@@ -260,153 +297,190 @@ function Resolve-ExportTarget {
 }
 
 # Processes (single pass; property access is defensive)
-$procsRaw = @(Get-Process -ErrorAction SilentlyContinue)
-$procs = @(foreach ($p in $procsRaw) { Get-SafeProcessSnapshot -Process $p })
+function Invoke-Capability30MainPhase01 {
+  param([hashtable]$RunState)
+  $procsRaw = @(Get-Process -ErrorAction SilentlyContinue)
+  $procs = @(foreach ($p in $procsRaw) { Get-SafeProcessSnapshot -Process $p })
 
-$topCpu = $procs | Sort-Object CPU -Descending | Select-Object -First $effectiveTopN
-$topRam = $procs | Sort-Object WorkingSet64 -Descending | Select-Object -First $effectiveTopN
+  $RunState.topCpu = $procs | Sort-Object CPU -Descending | Select-Object -First $RunState.effectiveTopN
+  $RunState.topRam = $procs | Sort-Object WorkingSet64 -Descending | Select-Object -First $RunState.effectiveTopN
 
-# Join map: PID -> process image path (if accessible)
-$procPathById = @{}
-foreach ($p in $procs) {
-  if (-not $procPathById.ContainsKey($p.Id)) { $procPathById[$p.Id] = $p.Path }
-}
-
-# Services via CIM (Win32_Service provides StartMode/StartName/PathName/ProcessId).
-$svc = @(Get-CimInstance -ClassName Win32_Service |
-  Select-Object Name, DisplayName, State, StartMode, StartName, ProcessId, PathName)
-
-$svcEnriched = @(foreach ($s in $svc) {
-  [pscustomobject]@{
-    Name        = $s.Name
-    DisplayName = $s.DisplayName
-    State       = $s.State
-    StartMode   = $s.StartMode
-    StartName   = $s.StartName
-    ProcessId   = $s.ProcessId
-    PathName    = $s.PathName
-    ProcessPath = if ($s.ProcessId -gt 0 -and $procPathById.ContainsKey($s.ProcessId)) { $procPathById[$s.ProcessId] } else { $null }
-  }
-})
-
-$runningServicesCount = ($svcEnriched | Where-Object { $_.State -eq 'Running' } | Measure-Object).Count
-
-# -----------------------------
-# Summary + optional export
-# -----------------------------
-$summary = [pscustomobject]@{
-  ComputerName     = $env:COMPUTERNAME
-  Timestamp        = Get-Date
-  TopN             = $effectiveTopN
-  ProcessCount     = $procs.Count
-  ServiceCount     = $svcEnriched.Count
-  RunningServices  = $runningServicesCount
-  ConfigJsonPath   = if ([string]::IsNullOrWhiteSpace($ConfigJsonPath)) { $null } else { $ConfigJsonPath }
-  ConfigPathProvided = [bool]$configPathProvided
-  ConfigLoaded     = [bool]($null -ne $jsonCfg)
-  ConfigLoadStatus = [string]$configMeta.Status
-  ConfigLoadError  = $configMeta.Error
-  ExportEnabled    = [bool]($Config.ExportEnabled -and -not [string]::IsNullOrWhiteSpace($ExportPath))
-  ExportBasePath   = if ([string]::IsNullOrWhiteSpace($ExportPath)) { $null } else { $ExportPath }
-}
-
-if ($summary.ExportEnabled) {
-  $target = Resolve-ExportTarget -ExportPath $ExportPath
-
-  $summary      | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_summary.csv"))   -NoTypeInformation -Encoding $Config.ExportEncoding
-  $topCpu       | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_topcpu.csv"))    -NoTypeInformation -Encoding $Config.ExportEncoding
-  $topRam       | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_topram.csv"))    -NoTypeInformation -Encoding $Config.ExportEncoding
-  $svcEnriched  | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_services.csv"))  -NoTypeInformation -Encoding $Config.ExportEncoding
-
-  Write-ConsoleInfo ("CSV export written to: {0}\{1}_*.csv" -f $target.Folder, $target.Base)
-}
-
-# -----------------------------
-# Formatted console output
-# -----------------------------
-if (-not $NoConsole) {
-  Write-UiLine ""
-
-  Write-UiRule -Title "Process/Service Audit"
-  Write-ConsoleLine -Message ("Computer : {0}" -f $summary.ComputerName) -Style Header
-  Write-ConsoleLine -Message ("Time     : {0}" -f $summary.Timestamp) -Style Dim
-
-  Write-UiLine ""
-  Write-UiRule -Title "Counts"
-  Write-ConsoleLine -Message ("Processes        : {0}" -f $summary.ProcessCount) -Style Default
-
-  $svcLine = "Services         : {0} (Running: {1})" -f $summary.ServiceCount, $summary.RunningServices
-  if ($summary.RunningServices -gt 0) { Write-ConsoleLine -Message $svcLine -Style Ok } else { Write-ConsoleLine -Message $svcLine -Style Warn }
-
-  Write-ConsoleLine -Message ("TopN             : {0}" -f $summary.TopN) -Style Default
-
-  Write-UiLine ""
-  Write-UiRule -Title "Config"
-  if ($summary.ConfigLoaded) {
-    Write-ConsoleLine -Message "Config loaded    : True" -Style Ok
-  } elseif ($configLoadIssue) {
-    Write-ConsoleLine -Message ("Config loaded    : False ({0}; defaults in use)" -f $summary.ConfigLoadStatus) -Style Warn
-  } else {
-    Write-ConsoleLine -Message "Config loaded    : False (defaults in use)" -Style Warn
+  # Join map: PID -> process image path (if accessible)
+  $procPathById = @{}
+  foreach ($p in $procs) {
+    if (-not $procPathById.ContainsKey($p.Id)) { $procPathById[$p.Id] = $p.Path }
   }
 
-  if ($summary.ConfigJsonPath) {
-    Write-ConsoleLine -Message ("Config JSON path : {0}" -f $summary.ConfigJsonPath) -Style Dim
+  # Services via CIM (Win32_Service provides StartMode/StartName/PathName/ProcessId).
+  $RunState.svc = @(Get-CimInstance -ClassName Win32_Service |
+    Select-Object Name, DisplayName, State, StartMode, StartName, ProcessId, PathName)
+}
+function Invoke-Capability30MainPhase02 {
+  param([hashtable]$RunState)
+  $svcEnriched = @(foreach ($s in $RunState.svc) {
+    [pscustomobject]@{
+      Name        = $s.Name
+      DisplayName = $s.DisplayName
+      State       = $s.State
+      StartMode   = $s.StartMode
+      StartName   = $s.StartName
+      ProcessId   = $s.ProcessId
+      PathName    = $s.PathName
+      ProcessPath = if ($s.ProcessId -gt 0 -and $procPathById.ContainsKey($s.ProcessId)) { $procPathById[$s.ProcessId] } else { $null }
+    }
+  })
+
+  $RunState.runningServicesCount = ($svcEnriched | Where-Object { $_.State -eq 'Running' } | Measure-Object).Count
+}
+function Invoke-Capability30MainPhase03 {
+  param([hashtable]$RunState)
+  $summary = [pscustomobject]@{
+    ComputerName     = $env:COMPUTERNAME
+    Timestamp        = Get-Date
+    TopN             = $RunState.effectiveTopN
+    ProcessCount     = $procs.Count
+    ServiceCount     = $svcEnriched.Count
+    RunningServices  = $RunState.runningServicesCount
+    ConfigJsonPath   = if ([string]::IsNullOrWhiteSpace($ConfigJsonPath)) { $null } else { $ConfigJsonPath }
+    ConfigPathProvided = [bool]$configPathProvided
+    ConfigLoaded     = [bool]($null -ne $jsonCfg)
+    ConfigLoadStatus = [string]$configMeta.Status
+    ConfigLoadError  = $configMeta.Error
+    ExportEnabled    = [bool]($Config.ExportEnabled -and -not [string]::IsNullOrWhiteSpace($ExportPath))
+    ExportBasePath   = if ([string]::IsNullOrWhiteSpace($ExportPath)) { $null } else { $ExportPath }
   }
 
   if ($summary.ExportEnabled) {
-    Write-ConsoleLine -Message "CSV export       : Enabled" -Style Ok
-  } else {
-    Write-ConsoleLine -Message "CSV export       : Disabled" -Style Dim
+    $target = Resolve-ExportTarget -ExportPath $ExportPath
+
+    $summary      | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_summary.csv"))   -NoTypeInformation -Encoding $Config.ExportEncoding
+    $RunState.topCpu       | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_topcpu.csv"))    -NoTypeInformation -Encoding $Config.ExportEncoding
+    $RunState.topRam       | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_topram.csv"))    -NoTypeInformation -Encoding $Config.ExportEncoding
+    $svcEnriched  | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_services.csv"))  -NoTypeInformation -Encoding $Config.ExportEncoding
+
+    Write-ConsoleInfo ("CSV export written to: {0}\{1}_*.csv" -f $target.Folder, $target.Base)
   }
+}
+function Invoke-Capability30MainPhase04Step01 {
+Write-UiLine ""
 
-  if ($Config.ShowListsInConsole) {
-    if ($Config.ShowTopCpuInConsole) {
-      Write-UiLine ""
-      Write-UiRule -Title ("Top CPU (CPU seconds, cumulative) - Top {0}" -f $effectiveTopN)
-      $topCpu |
-        Select-Object Name, Id, CPU, WorkingSet64, StartTime, Path |
-        ForEach-Object {
-          $ws = Format-Bytes $_.WorkingSet64
-          Write-ConsoleLine -Message ("{0,-28} {1,6}  CPU(s): {2,10:N2}  WS: {3,10}  Start: {4}" -f $_.Name, $_.Id, $_.CPU, $ws, $_.StartTime) -Style Default
-        }
+    Write-UiRule -Title "Process/Service Audit"
+    Write-ConsoleLine -Message ("Computer : {0}" -f $summary.ComputerName) -Style Header
+    Write-ConsoleLine -Message ("Time     : {0}" -f $summary.Timestamp) -Style Dim
+
+    Write-UiLine ""
+    Write-UiRule -Title "Counts"
+    Write-ConsoleLine -Message ("Processes        : {0}" -f $summary.ProcessCount) -Style Default
+
+    $svcLine = "Services         : {0} (Running: {1})" -f $summary.ServiceCount, $summary.RunningServices
+    if ($summary.RunningServices -gt 0) { Write-ConsoleLine -Message $svcLine -Style Ok } else { Write-ConsoleLine -Message $svcLine -Style Warn }
+
+    Write-ConsoleLine -Message ("TopN             : {0}" -f $summary.TopN) -Style Default
+
+    Write-UiLine ""
+    Write-UiRule -Title "Config"
+    if ($summary.ConfigLoaded) {
+      Write-ConsoleLine -Message "Config loaded    : True" -Style Ok
+    } elseif ($configLoadIssue) {
+      Write-ConsoleLine -Message ("Config loaded    : False ({0}; defaults in use)" -f $summary.ConfigLoadStatus) -Style Warn
+    } else {
+      Write-ConsoleLine -Message "Config loaded    : False (defaults in use)" -Style Warn
     }
 
-    if ($Config.ShowTopRamInConsole) {
-      Write-UiLine ""
-      Write-UiRule -Title ("Top RAM (WorkingSet) - Top {0}" -f $effectiveTopN)
-      $topRam |
-        Select-Object Name, Id, CPU, WorkingSet64, StartTime, Path |
-        ForEach-Object {
-          $ws = Format-Bytes $_.WorkingSet64
-          Write-ConsoleLine -Message ("{0,-28} {1,6}  WS: {2,10}  CPU(s): {3,10:N2}  Start: {4}" -f $_.Name, $_.Id, $ws, $_.CPU, $_.StartTime) -Style Default
-        }
+    if ($summary.ConfigJsonPath) {
+      Write-ConsoleLine -Message ("Config JSON path : {0}" -f $summary.ConfigJsonPath) -Style Dim
     }
 
-    if ($Config.ShowServicesInConsole) {
-      Write-UiLine ""
-      Write-UiRule -Title ("Services (sample) - showing up to {0}" -f $Config.ConsoleMaxServices)
-
-      $svcSample = $svcEnriched | Select-Object -First $Config.ConsoleMaxServices
-      foreach ($s in $svcSample) {
-        $stateStyle = if ($s.State -eq 'Running') { 'Ok' } else { 'Dim' }
-        Write-ConsoleLine -Message ("[{0}] {1} ({2})  StartMode={3}  Account={4}" -f $s.State, $s.Name, $s.DisplayName, $s.StartMode, $s.StartName) -Style $stateStyle
-      }
-
-      if ($svcEnriched.Count -gt $Config.ConsoleMaxServices) {
-        Write-ConsoleLine -Message ("... truncated: {0} more services not shown (pipeline output still contains all)." -f ($svcEnriched.Count - $Config.ConsoleMaxServices)) -Style Warn
-      }
+    if ($summary.ExportEnabled) {
+      Write-ConsoleLine -Message "CSV export       : Enabled" -Style Ok
+    } else {
+      Write-ConsoleLine -Message "CSV export       : Disabled" -Style Dim
     }
-  }
-
-  Write-UiLine ""
-  Write-UiRule -Title "End"
 }
 
+function Invoke-Capability30MainPhase04Step02Stage01 {
+  param([hashtable]$RunState)
+if ($Config.ShowTopCpuInConsole) {
+        Write-UiLine ""
+        Write-UiRule -Title ("Top CPU (CPU seconds, cumulative) - Top {0}" -f $RunState.effectiveTopN)
+        $RunState.topCpu |
+          Select-Object Name, Id, CPU, WorkingSet64, StartTime, Path |
+          ForEach-Object {
+            $ws = Format-Bytes $_.WorkingSet64
+            Write-ConsoleLine -Message ("{0,-28} {1,6}  CPU(s): {2,10:N2}  WS: {3,10}  Start: {4}" -f $_.Name, $_.Id, $_.CPU, $ws, $_.StartTime) -Style Default
+          }
+      }
+
+      if ($Config.ShowTopRamInConsole) {
+        Write-UiLine ""
+        Write-UiRule -Title ("Top RAM (WorkingSet) - Top {0}" -f $RunState.effectiveTopN)
+        $RunState.topRam |
+          Select-Object Name, Id, CPU, WorkingSet64, StartTime, Path |
+          ForEach-Object {
+            $ws = Format-Bytes $_.WorkingSet64
+            Write-ConsoleLine -Message ("{0,-28} {1,6}  WS: {2,10}  CPU(s): {3,10:N2}  Start: {4}" -f $_.Name, $_.Id, $ws, $_.CPU, $_.StartTime) -Style Default
+          }
+      }
+}
+
+function Invoke-Capability30MainPhase04Step02Stage02 {
+if ($Config.ShowServicesInConsole) {
+        Write-UiLine ""
+        Write-UiRule -Title ("Services (sample) - showing up to {0}" -f $Config.ConsoleMaxServices)
+
+        $svcSample = $svcEnriched | Select-Object -First $Config.ConsoleMaxServices
+        foreach ($s in $svcSample) {
+          $stateStyle = if ($s.State -eq 'Running') { 'Ok' } else { 'Dim' }
+          Write-ConsoleLine -Message ("[{0}] {1} ({2})  StartMode={3}  Account={4}" -f $s.State, $s.Name, $s.DisplayName, $s.StartMode, $s.StartName) -Style $stateStyle
+        }
+
+        if ($svcEnriched.Count -gt $Config.ConsoleMaxServices) {
+          Write-ConsoleLine -Message ("... truncated: {0} more services not shown (pipeline output still contains all)." -f ($svcEnriched.Count - $Config.ConsoleMaxServices)) -Style Warn
+        }
+      }
+}
+
+function Invoke-Capability30MainPhase04Step02 {
+  param([hashtable]$RunState)
+if ($Config.ShowListsInConsole) {
+      . Invoke-Capability30MainPhase04Step02Stage01 -RunState $RunState
+. Invoke-Capability30MainPhase04Step02Stage02
+    }
+}
+
+function Invoke-Capability30MainPhase04Step03 {
+Write-UiLine ""
+    Write-UiRule -Title "End"
+}
+
+function Invoke-Capability30MainPhase04 {
+  param([hashtable]$RunState)
+  if (-not $NoConsole) {
+    . Invoke-Capability30MainPhase04Step01
+. Invoke-Capability30MainPhase04Step02 -RunState $RunState
+. Invoke-Capability30MainPhase04Step03
+  }
+}
+function Invoke-Capability30Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability30MainPhase01 -RunState $RunState
+  . Invoke-Capability30MainPhase02 -RunState $RunState
+  . Invoke-Capability30MainPhase03 -RunState $RunState
+  . Invoke-Capability30MainPhase04 -RunState $RunState
+}
+. Invoke-Capability30Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
+
 # V2 output contract
-$resultToken = if ($configLoadIssue) { 'WARN' } else { 'OK' }
-if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
-$v2Result = Get-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($findings) -Summary $summary -Metadata @{ TopCpu = $topCpu; TopRam = $topRam; Services = $svcEnriched; Config = [pscustomobject]$Config }
+function Get-Capability30ResultToken {
+  $resultToken = if ($configLoadIssue) { 'WARN' } else { 'OK' }
+  if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
+  return $resultToken
+}
+$resultToken = Get-Capability30ResultToken
+$v2Result = Get-V2ResultObject -ScriptName '30-Service-Process-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($findings) -Summary $summary -Metadata @{ TopCpu = $RunState.topCpu; TopRam = $RunState.topRam; Services = $svcEnriched; Config = [pscustomobject]$Config }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

@@ -7,10 +7,16 @@ use super::{
     NativeProcessSpec, ValidatedRequest, read_capped,
 };
 use crate::PlatformError;
+use crate::command_line::quote_argument;
 #[path = "windows/api.rs"]
 mod api;
+#[path = "windows/containment.rs"]
+mod containment;
+#[path = "windows/stdio.rs"]
+mod stdio;
 #[allow(clippy::wildcard_imports)]
 use api::*;
+use containment::{AttributeList, Job};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
@@ -21,6 +27,7 @@ use std::ptr;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
+use stdio::child_stdio;
 
 const CLEANUP_WAIT: Duration = Duration::from_secs(5);
 
@@ -29,9 +36,19 @@ pub(super) fn run(
     policy: &NativeProcessPolicy,
     spec: &NativeProcessSpec,
 ) -> Result<NativeProcessResult, PlatformError> {
+    let mut child = start_child(validated, policy, spec)?;
+    let (stdout_reader, stderr_reader) = start_readers(&mut child, spec.output_limit)?;
+    finish_child(&mut child, stdout_reader, stderr_reader, spec.timeout)
+}
+
+fn start_child(
+    validated: &ValidatedRequest,
+    policy: &NativeProcessPolicy,
+    spec: &NativeProcessSpec,
+) -> Result<ContainedProcess, PlatformError> {
     if matches!(
         &policy.executable_trust,
-        NativeExecutableTrust::ExactDigest { .. }
+        NativeExecutableTrust::ExactDigest(_)
     ) {
         return Err(PlatformError::ProcessRejected(
             "ExactDigest launch is disabled until execution can retain the verified file identity"
@@ -40,6 +57,13 @@ pub(super) fn run(
     }
     let mut child = ContainedProcess::create(validated, policy, spec)?;
     child.resume()?;
+    Ok(child)
+}
+
+fn start_readers(
+    child: &mut ContainedProcess,
+    limit: usize,
+) -> Result<(Reader, Reader), PlatformError> {
     let stdout = match child.take_stdout() {
         Ok(stdout) => stdout,
         Err(error) => {
@@ -54,25 +78,21 @@ pub(super) fn run(
             return Err(error);
         }
     };
-    let limit = spec.output_limit;
-    let stdout_reader = spawn_reader(stdout, limit, "stdout");
-    let stderr_reader = spawn_reader(stderr, limit, "stderr");
-    let exit_code = match child.wait(spec.timeout) {
-        Ok(Some(exit_code)) => exit_code,
-        Ok(None) => {
-            child.terminate_and_wait()?;
-            discard_reader(stdout_reader, "stdout")?;
-            discard_reader(stderr_reader, "stderr")?;
-            return Err(PlatformError::ProcessTimeout {
-                seconds: spec.timeout.as_secs(),
-            });
-        }
-        Err(error) => {
-            child.terminate_and_wait()?;
-            discard_reader(stdout_reader, "stdout")?;
-            discard_reader(stderr_reader, "stderr")?;
-            return Err(error);
-        }
+    Ok((
+        spawn_reader(stdout, limit, "stdout"),
+        spawn_reader(stderr, limit, "stderr"),
+    ))
+}
+
+fn finish_child(
+    child: &mut ContainedProcess,
+    stdout_reader: Reader,
+    stderr_reader: Reader,
+    timeout: Duration,
+) -> Result<NativeProcessResult, PlatformError> {
+    let exit_code = match wait_for_child_exit(child, timeout) {
+        Ok(code) => code,
+        Err(error) => return discard_after_failure(child, stdout_reader, stderr_reader, error),
     };
     // The primary process may exit while descendants still own the pipe writers.
     // End the entire Job before awaiting reader completion.
@@ -84,6 +104,27 @@ pub(super) fn run(
         stdout,
         stderr,
     })
+}
+
+fn wait_for_child_exit(child: &ContainedProcess, timeout: Duration) -> Result<i32, PlatformError> {
+    match child.wait(timeout)? {
+        Some(exit_code) => Ok(exit_code),
+        None => Err(PlatformError::ProcessTimeout {
+            seconds: timeout.as_secs(),
+        }),
+    }
+}
+
+fn discard_after_failure(
+    child: &mut ContainedProcess,
+    stdout: Reader,
+    stderr: Reader,
+    error: PlatformError,
+) -> Result<NativeProcessResult, PlatformError> {
+    child.terminate_and_wait()?;
+    discard_reader(stdout, "stdout")?;
+    discard_reader(stderr, "stderr")?;
+    Err(error)
 }
 
 struct Reader {
@@ -151,113 +192,6 @@ impl Drop for OwnedHandle {
     }
 }
 
-struct AttributeList(Vec<usize>);
-
-impl AttributeList {
-    fn for_handles(handles: &[Handle]) -> Result<Self, PlatformError> {
-        let mut bytes = 0_usize;
-        // The probe must fail with ERROR_INSUFFICIENT_BUFFER; a nonzero size is sufficient.
-        let _ = unsafe { InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &raw mut bytes) };
-        if bytes == 0 {
-            return Err(last_error("InitializeProcThreadAttributeList"));
-        }
-        let words = bytes.div_ceil(size_of::<usize>());
-        let mut storage = vec![0_usize; words];
-        let attributes = storage.as_mut_ptr().cast();
-        if unsafe { InitializeProcThreadAttributeList(attributes, 1, 0, &raw mut bytes) } == 0 {
-            return Err(last_error("InitializeProcThreadAttributeList"));
-        }
-        if unsafe {
-            UpdateProcThreadAttribute(
-                attributes,
-                0,
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                handles.as_ptr().cast(),
-                size_of_val(handles),
-                ptr::null_mut(),
-                ptr::null_mut(),
-            )
-        } == 0
-        {
-            unsafe { DeleteProcThreadAttributeList(attributes) };
-            return Err(last_error("UpdateProcThreadAttribute"));
-        }
-        Ok(Self(storage))
-    }
-
-    fn raw(&mut self) -> *mut core::ffi::c_void {
-        self.0.as_mut_ptr().cast()
-    }
-}
-
-impl Drop for AttributeList {
-    fn drop(&mut self) {
-        unsafe { DeleteProcThreadAttributeList(self.raw()) };
-    }
-}
-
-struct Job(OwnedHandle);
-
-impl Job {
-    fn create() -> Result<Self, PlatformError> {
-        let handle = OwnedHandle::new(
-            unsafe { CreateJobObjectW(ptr::null(), ptr::null()) },
-            "CreateJobObjectW",
-        )?;
-        let limits = JobObjectExtendedLimitInformation {
-            basic_limit_information: JobObjectBasicLimitInformation {
-                per_process_user_time_limit: 0,
-                per_job_user_time_limit: 0,
-                limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                minimum_working_set_size: 0,
-                maximum_working_set_size: 0,
-                active_process_limit: 0,
-                affinity: 0,
-                priority_class: 0,
-                scheduling_class: 0,
-            },
-            io_info: IoCounters {
-                read_operation_count: 0,
-                write_operation_count: 0,
-                other_operation_count: 0,
-                read_transfer_count: 0,
-                write_transfer_count: 0,
-                other_transfer_count: 0,
-            },
-            process_memory_limit: 0,
-            job_memory_limit: 0,
-            peak_process_memory_used: 0,
-            peak_job_memory_used: 0,
-        };
-        if unsafe {
-            SetInformationJobObject(
-                handle.raw(),
-                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-                (&raw const limits).cast(),
-                u32::try_from(size_of_val(&limits)).expect("job limit size"),
-            )
-        } == 0
-        {
-            return Err(last_error("SetInformationJobObject"));
-        }
-        Ok(Self(handle))
-    }
-
-    fn assign(&self, process: Handle) -> Result<(), PlatformError> {
-        if unsafe { AssignProcessToJobObject(self.0.raw(), process) } == 0 {
-            return Err(last_error("AssignProcessToJobObject"));
-        }
-        Ok(())
-    }
-
-    fn terminate(&self) -> Result<(), PlatformError> {
-        if unsafe { TerminateJobObject(self.0.raw(), 1) } == 0 {
-            return Err(last_error("TerminateJobObject"));
-        }
-        Ok(())
-    }
-}
-
 struct ContainedProcess {
     job: Job,
     process: OwnedHandle,
@@ -275,13 +209,54 @@ impl ContainedProcess {
     ) -> Result<Self, PlatformError> {
         let job = Job::create()?;
         let (stdin, stdout, stderr) = child_stdio()?;
-        let inherited = [stdin.raw(), stdout.0.raw(), stderr.0.raw()];
+        let (process, thread) =
+            Self::create_suspended(validated, policy, spec, &stdin, &stdout.0, &stderr.0)?;
+        Self::assign_or_terminate(&job, process.raw())?;
+        drop(stdin);
+        drop(stdout.0);
+        drop(stderr.0);
+        Ok(Self {
+            job,
+            process,
+            thread,
+            stdout: Some(stdout.1),
+            stderr: Some(stderr.1),
+            state: ContainmentState::Assigned,
+        })
+    }
+
+    fn create_suspended(
+        validated: &ValidatedRequest,
+        policy: &NativeProcessPolicy,
+        spec: &NativeProcessSpec,
+        stdin: &OwnedHandle,
+        stdout: &OwnedHandle,
+        stderr: &OwnedHandle,
+    ) -> Result<(OwnedHandle, OwnedHandle), PlatformError> {
+        let inherited = [stdin.raw(), stdout.raw(), stderr.raw()];
         let mut attributes = AttributeList::for_handles(&inherited)?;
-        let executable = wide(validated.executable.as_os_str());
         let mut command_line = wide(OsStr::new(&command_line(&validated.executable, &spec.args)));
-        let working_directory = wide(validated.working_directory.as_os_str());
-        let environment = environment_block(&policy.environment)?;
-        let startup = StartupInfoExW {
+        let startup = Self::startup_info(stdin.raw(), stdout.raw(), stderr.raw(), attributes.raw());
+        let information =
+            Self::create_process_information(validated, policy, &mut command_line, &startup)?;
+        information.into_owned_handles()
+    }
+
+    fn assign_or_terminate(job: &Job, process: Handle) -> Result<(), PlatformError> {
+        if let Err(error) = job.assign(process) {
+            terminate_process_and_wait(process)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn startup_info(
+        stdin: Handle,
+        stdout: Handle,
+        stderr: Handle,
+        attributes: *mut core::ffi::c_void,
+    ) -> StartupInfoExW {
+        StartupInfoExW {
             startup_info: StartupInfoW {
                 cb: u32::try_from(size_of::<StartupInfoExW>()).expect("STARTUPINFOEXW size"),
                 reserved: ptr::null_mut(),
@@ -298,14 +273,25 @@ impl ContainedProcess {
                 show_window: 0,
                 reserved2_count: 0,
                 reserved2: ptr::null_mut(),
-                stdin: stdin.raw(),
-                stdout: stdout.0.raw(),
-                stderr: stderr.0.raw(),
+                stdin,
+                stdout,
+                stderr,
             },
-            attributes: attributes.raw(),
-        };
+            attributes,
+        }
+    }
+
+    fn create_process_information(
+        validated: &ValidatedRequest,
+        policy: &NativeProcessPolicy,
+        command_line: &mut [u16],
+        startup: &StartupInfoExW,
+    ) -> Result<ProcessInformation, PlatformError> {
+        let executable = wide(validated.executable.as_os_str());
+        let working_directory = wide(validated.working_directory.as_os_str());
+        let environment = environment_block(&policy.environment)?;
         let mut information = MaybeUninit::<ProcessInformation>::zeroed();
-        let created = unsafe {
+        if unsafe {
             CreateProcessW(
                 executable.as_ptr(),
                 command_line.as_mut_ptr(),
@@ -318,34 +304,11 @@ impl ContainedProcess {
                 (&raw const startup.startup_info),
                 information.as_mut_ptr(),
             )
-        };
-        if created == 0 {
+        } == 0
+        {
             return Err(last_error("CreateProcessW"));
         }
-        let information = unsafe { information.assume_init() };
-        let process = OwnedHandle::new(information.process, "CreateProcessW process")?;
-        let thread = match OwnedHandle::new(information.thread, "CreateProcessW thread") {
-            Ok(handle) => handle,
-            Err(error) => {
-                terminate_process_and_wait(process.raw())?;
-                return Err(error);
-            }
-        };
-        if let Err(error) = job.assign(process.raw()) {
-            terminate_process_and_wait(process.raw())?;
-            return Err(error);
-        }
-        drop(stdin);
-        drop(stdout.0);
-        drop(stderr.0);
-        Ok(Self {
-            job,
-            process,
-            thread,
-            stdout: Some(stdout.1),
-            stderr: Some(stderr.1),
-            state: ContainmentState::Assigned,
-        })
+        Ok(unsafe { information.assume_init() })
     }
 
     fn resume(&mut self) -> Result<(), PlatformError> {
@@ -413,60 +376,6 @@ impl Drop for ContainedProcess {
             self.state = ContainmentState::Reaped;
         }
     }
-}
-
-type ChildStdio = (
-    OwnedHandle,
-    (OwnedHandle, OwnedHandle),
-    (OwnedHandle, OwnedHandle),
-);
-
-fn child_stdio() -> Result<ChildStdio, PlatformError> {
-    let inherit = SecurityAttributes {
-        length: u32::try_from(size_of::<SecurityAttributes>()).expect("SECURITY_ATTRIBUTES size"),
-        security_descriptor: ptr::null_mut(),
-        inherit_handle: 1,
-    };
-    let nul = [u16::from(b'N'), u16::from(b'U'), u16::from(b'L'), 0];
-    let stdin = OwnedHandle::new(
-        unsafe {
-            CreateFileW(
-                nul.as_ptr(),
-                GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                (&raw const inherit).cast(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                0,
-            )
-        },
-        "CreateFileW NUL",
-    )?;
-    let stdout = pipe(&inherit)?;
-    let stderr = pipe(&inherit)?;
-    Ok((stdin, stdout, stderr))
-}
-
-fn pipe(attributes: &SecurityAttributes) -> Result<(OwnedHandle, OwnedHandle), PlatformError> {
-    let mut read = 0;
-    let mut write = 0;
-    if unsafe {
-        CreatePipe(
-            &raw mut read,
-            &raw mut write,
-            ptr::from_ref(attributes).cast(),
-            0,
-        )
-    } == 0
-    {
-        return Err(last_error("CreatePipe"));
-    }
-    let read = OwnedHandle::new(read, "CreatePipe read")?;
-    let write = OwnedHandle::new(write, "CreatePipe write")?;
-    if unsafe { SetHandleInformation(read.raw(), HANDLE_FLAG_INHERIT, 0) } == 0 {
-        return Err(last_error("SetHandleInformation"));
-    }
-    Ok((write, read))
 }
 
 fn terminate_process_and_wait(process: Handle) -> Result<(), PlatformError> {
@@ -546,27 +455,6 @@ fn command_line(executable: &std::path::Path, args: &[String]) -> String {
         .join(" ")
 }
 
-fn quote_argument(argument: &str) -> String {
-    let mut output = String::from("\"");
-    let mut backslashes = 0_usize;
-    for character in argument.chars() {
-        if character == '\\' {
-            backslashes += 1;
-        } else if character == '\"' {
-            output.push_str(&"\\".repeat(backslashes.saturating_mul(2).saturating_add(1)));
-            output.push(character);
-            backslashes = 0;
-        } else {
-            output.push_str(&"\\".repeat(backslashes));
-            output.push(character);
-            backslashes = 0;
-        }
-    }
-    output.push_str(&"\\".repeat(backslashes.saturating_mul(2)));
-    output.push('\"');
-    output
-}
-
 fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
@@ -576,6 +464,19 @@ fn last_error(operation: &str) -> PlatformError {
         "{operation}: Win32 error {}",
         unsafe { GetLastError() }
     )))
+}
+
+impl ProcessInformation {
+    fn into_owned_handles(self) -> Result<(OwnedHandle, OwnedHandle), PlatformError> {
+        let process = OwnedHandle::new(self.process, "CreateProcessW process")?;
+        match OwnedHandle::new(self.thread, "CreateProcessW thread") {
+            Ok(thread) => Ok((process, thread)),
+            Err(error) => {
+                terminate_process_and_wait(process.raw())?;
+                Err(error)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

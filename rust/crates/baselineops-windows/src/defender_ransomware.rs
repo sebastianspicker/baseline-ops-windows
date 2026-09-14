@@ -37,10 +37,10 @@ mod platform {
     use baselineops_capabilities::{
         ControlledFolderAccessState, NetworkProtectionState, Observation,
     };
-    use windows::Win32::Foundation::{E_ACCESSDENIED, RPC_E_TOO_LATE};
+    use windows::Win32::Foundation::E_ACCESSDENIED;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-        CoInitializeSecurity, CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
+        CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
         RPC_C_IMP_LEVEL_IMPERSONATE,
     };
     use windows::Win32::System::SystemInformation::{GetVersionExW, OSVERSIONINFOEXW};
@@ -104,20 +104,40 @@ mod platform {
     }
 
     unsafe fn provider_evidence_initialized() -> Result<ProviderEvidence, Observation<()>> {
-        if let Err(error) = CoInitializeSecurity(
-            None,
-            -1,
-            None,
-            None,
-            RPC_C_AUTHN_LEVEL_CALL,
-            RPC_C_IMP_LEVEL_IMPERSONATE,
-            None,
-            EOAC_NONE,
-            None,
-        ) && error.code().0 != RPC_E_TOO_LATE.0
-        {
-            return Err(classify(&error));
-        }
+        initialize_security()?;
+        let object = preference_object()?;
+        Ok(ProviderEvidence {
+            controlled_folder_access: enum_property(
+                &object,
+                "EnableControlledFolderAccess",
+                ControlledFolderAccessState::from_wmi,
+            ),
+            network_protection: enum_property(
+                &object,
+                "EnableNetworkProtection",
+                NetworkProtectionState::from_wmi,
+            ),
+            allow_network_protection_on_win_server: bool_property(
+                &object,
+                "AllowNetworkProtectionOnWinServer",
+            ),
+            allow_network_protection_down_level: bool_property(
+                &object,
+                "AllowNetworkProtectionDownLevel",
+            ),
+            allow_datagram_processing_on_win_server: bool_property(
+                &object,
+                "AllowDatagramProcessingOnWinServer",
+            ),
+        })
+    }
+
+    unsafe fn initialize_security() -> Result<(), Observation<()>> {
+        crate::com_security::initialize_wmi_security().map_err(|error| classify(&error))?;
+        Ok(())
+    }
+
+    unsafe fn preference_object() -> Result<IWbemClassObject, Observation<()>> {
         let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
             .map_err(|error| classify(&error))?;
         let empty = BSTR::new();
@@ -143,7 +163,7 @@ mod platform {
             EOAC_NONE,
         )
         .map_err(|error| classify(&error))?;
-        let enumerator: IEnumWbemClassObject = services
+        let query: IEnumWbemClassObject = services
             .ExecQuery(
                 &BSTR::from("WQL"),
                 &BSTR::from(PREFERENCE_QUERY),
@@ -151,6 +171,12 @@ mod platform {
                 None,
             )
             .map_err(|error| classify(&error))?;
+        one_preference(&query)
+    }
+
+    unsafe fn one_preference(
+        enumerator: &IEnumWbemClassObject,
+    ) -> Result<IWbemClassObject, Observation<()>> {
         let mut values = [None];
         let mut returned = 0_u32;
         enumerator
@@ -161,43 +187,17 @@ mod platform {
             return Err(Observation::Missing);
         }
         let object = values[0].take().ok_or(Observation::Unparsed)?;
-        let mut additional_values = [None];
-        let mut additional_returned = 0_u32;
+        let mut extra = [None];
+        let mut extra_returned = 0_u32;
         enumerator
-            .Next(
-                WBEM_INFINITE,
-                &mut additional_values,
-                &raw mut additional_returned,
-            )
+            .Next(WBEM_INFINITE, &mut extra, &raw mut extra_returned)
             .ok()
             .map_err(|error| classify(&error))?;
-        if additional_returned != 0 {
-            return Err(Observation::Unparsed);
+        if extra_returned == 0 {
+            Ok(object)
+        } else {
+            Err(Observation::Unparsed)
         }
-        Ok(ProviderEvidence {
-            controlled_folder_access: enum_property(
-                &object,
-                "EnableControlledFolderAccess",
-                ControlledFolderAccessState::from_wmi,
-            ),
-            network_protection: enum_property(
-                &object,
-                "EnableNetworkProtection",
-                NetworkProtectionState::from_wmi,
-            ),
-            allow_network_protection_on_win_server: bool_property(
-                &object,
-                "AllowNetworkProtectionOnWinServer",
-            ),
-            allow_network_protection_down_level: bool_property(
-                &object,
-                "AllowNetworkProtectionDownLevel",
-            ),
-            allow_datagram_processing_on_win_server: bool_property(
-                &object,
-                "AllowDatagramProcessingOnWinServer",
-            ),
-        })
     }
 
     fn product_type() -> Observation<bool> {

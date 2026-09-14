@@ -1,0 +1,1621 @@
+{
+  "schema_version": 1,
+  "purpose": "Shared executable policy cases evaluated against extracted PowerShell v2 policy functions and native Rust policy functions.",
+  "coverage": {
+    "proof_scope": "partial_policy_behavior",
+    "behavioral_capabilities": [
+      "v3.doh.audit",
+      "v3.powershell.logging",
+      "v3.security-options.drift",
+      "v3.windows-update.policy"
+    ],
+    "structural_only_capability_count": 48
+  },
+  "limitations": [
+    "These cases compare deterministic policy decisions only; they do not provide Windows observer or Apply evidence.",
+    "The other 49 capabilities remain covered only by structural source-closure bindings.",
+    "Windows Update comparisons cover the finite WUfB policy fields implemented by both versions; AllowMU and active hours remain metadata only.",
+    "Security Options comparisons cover desired-state evaluation for the six fixed DWORD fields; v2 built-in baseline findings and Windows registry access are not executed."
+  ],
+  "cases": [
+    {
+      "id": "doh-not-configured",
+      "capability_id": "v3.doh.audit",
+      "observation": {
+        "enable_auto_doh": null,
+        "name_servers": [],
+        "bootstrap_addresses": [],
+        "block_untrusted_doh": null,
+        "server_query_failed": false
+      },
+      "expected": {
+        "mode": "NotConfigured",
+        "finding_codes": [
+          "DOH-NotConfigured"
+        ]
+      },
+      "source_closure_sha256": "d04f419681be2faedd5610e8c28754ee33feba542d73b53924b34204ce7b0c20"
+    },
+    {
+      "id": "doh-explicit-known-blocked",
+      "capability_id": "v3.doh.audit",
+      "observation": {
+        "enable_auto_doh": 1,
+        "name_servers": [
+          "1.1.1.1"
+        ],
+        "bootstrap_addresses": [
+          "1.0.0.1"
+        ],
+        "block_untrusted_doh": 1,
+        "server_query_failed": false
+      },
+      "expected": {
+        "mode": "Enabled (Explicit)",
+        "finding_codes": [
+          "DOH-EnabledExplicit",
+          "DOH-KnownResolver",
+          "DOH-FallbackBlocked"
+        ]
+      },
+      "source_closure_sha256": "d04f419681be2faedd5610e8c28754ee33feba542d73b53924b34204ce7b0c20"
+    },
+    {
+      "id": "doh-explicit-without-server",
+      "capability_id": "v3.doh.audit",
+      "observation": {
+        "enable_auto_doh": 1,
+        "name_servers": [],
+        "bootstrap_addresses": [],
+        "block_untrusted_doh": null,
+        "server_query_failed": false
+      },
+      "expected": {
+        "mode": "Enabled (Explicit)",
+        "finding_codes": [
+          "DOH-EnabledExplicit",
+          "DOH-NoServersConfigured"
+        ]
+      },
+      "source_closure_sha256": "d04f419681be2faedd5610e8c28754ee33feba542d73b53924b34204ce7b0c20"
+    },
+    {
+      "id": "doh-automatic-unknown-fallback",
+      "capability_id": "v3.doh.audit",
+      "observation": {
+        "enable_auto_doh": 2,
+        "name_servers": [
+          "192.0.2.53"
+        ],
+        "bootstrap_addresses": [],
+        "block_untrusted_doh": 0,
+        "server_query_failed": false
+      },
+      "expected": {
+        "mode": "Enabled (Automatic)",
+        "finding_codes": [
+          "DOH-EnabledAutomatic",
+          "DOH-UnknownResolver",
+          "DOH-FallbackAllowed"
+        ]
+      },
+      "source_closure_sha256": "d04f419681be2faedd5610e8c28754ee33feba542d73b53924b34204ce7b0c20"
+    },
+    {
+      "id": "windows-update-default-missing",
+      "capability_id": "v3.windows-update.policy",
+      "comparison_kind": "matched_policy_plan",
+      "execution_mode": "audit",
+      "desired": {
+        "update_source": "wufb",
+        "allow_microsoft_update": true,
+        "deferrals": {
+          "feature_days": 30,
+          "quality_days": 7
+        },
+        "target_release": {
+          "enabled": false,
+          "product_version": "Windows 11",
+          "release": "24H2"
+        },
+        "delivery_optimization": {
+          "download_mode": "http_only"
+        }
+      },
+      "observation": {
+        "use_wsus": {
+          "status": "missing"
+        },
+        "wsus_server": {
+          "status": "missing"
+        },
+        "wsus_status_server": {
+          "status": "missing"
+        },
+        "defer_feature_updates": {
+          "status": "missing"
+        },
+        "defer_feature_days": {
+          "status": "missing"
+        },
+        "defer_quality_updates": {
+          "status": "missing"
+        },
+        "defer_quality_days": {
+          "status": "missing"
+        },
+        "target_release_version": {
+          "status": "missing"
+        },
+        "product_version": {
+          "status": "missing"
+        },
+        "target_release_version_info": {
+          "status": "missing"
+        },
+        "delivery_optimization_mode": {
+          "status": "missing"
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "v2_action": "Detect",
+        "normalized_mutations": [
+          {
+            "field": "defer_feature_days",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 30
+            }
+          },
+          {
+            "field": "defer_feature_updates",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "defer_quality_days",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 7
+            }
+          },
+          {
+            "field": "defer_quality_updates",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "delivery_optimization_mode",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "target_release_version",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "use_wsus",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          }
+        ]
+      },
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b"
+    },
+    {
+      "id": "windows-update-default-compliant",
+      "capability_id": "v3.windows-update.policy",
+      "comparison_kind": "matched_policy_plan",
+      "execution_mode": "audit",
+      "desired": {
+        "update_source": "wufb",
+        "allow_microsoft_update": true,
+        "deferrals": {
+          "feature_days": 30,
+          "quality_days": 7
+        },
+        "target_release": {
+          "enabled": false,
+          "product_version": "Windows 11",
+          "release": "24H2"
+        },
+        "delivery_optimization": {
+          "download_mode": "http_only"
+        }
+      },
+      "observation": {
+        "use_wsus": {
+          "status": "dword",
+          "value": 0
+        },
+        "wsus_server": {
+          "status": "missing"
+        },
+        "wsus_status_server": {
+          "status": "missing"
+        },
+        "defer_feature_updates": {
+          "status": "dword",
+          "value": 1
+        },
+        "defer_feature_days": {
+          "status": "dword",
+          "value": 30
+        },
+        "defer_quality_updates": {
+          "status": "dword",
+          "value": 1
+        },
+        "defer_quality_days": {
+          "status": "dword",
+          "value": 7
+        },
+        "target_release_version": {
+          "status": "dword",
+          "value": 0
+        },
+        "product_version": {
+          "status": "missing"
+        },
+        "target_release_version_info": {
+          "status": "missing"
+        },
+        "delivery_optimization_mode": {
+          "status": "dword",
+          "value": 0
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "v2_action": "None",
+        "normalized_mutations": []
+      },
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b"
+    },
+    {
+      "id": "windows-update-target-release-enable",
+      "capability_id": "v3.windows-update.policy",
+      "comparison_kind": "matched_policy_plan",
+      "execution_mode": "audit",
+      "desired": {
+        "update_source": "wufb",
+        "allow_microsoft_update": false,
+        "deferrals": {
+          "feature_days": 30,
+          "quality_days": 7
+        },
+        "target_release": {
+          "enabled": true,
+          "product_version": "Windows 11",
+          "release": "24H2"
+        },
+        "delivery_optimization": {
+          "download_mode": "http_only"
+        }
+      },
+      "observation": {
+        "use_wsus": {
+          "status": "dword",
+          "value": 0
+        },
+        "wsus_server": {
+          "status": "missing"
+        },
+        "wsus_status_server": {
+          "status": "missing"
+        },
+        "defer_feature_updates": {
+          "status": "dword",
+          "value": 1
+        },
+        "defer_feature_days": {
+          "status": "dword",
+          "value": 30
+        },
+        "defer_quality_updates": {
+          "status": "dword",
+          "value": 1
+        },
+        "defer_quality_days": {
+          "status": "dword",
+          "value": 7
+        },
+        "target_release_version": {
+          "status": "dword",
+          "value": 0
+        },
+        "product_version": {
+          "status": "missing"
+        },
+        "target_release_version_info": {
+          "status": "missing"
+        },
+        "delivery_optimization_mode": {
+          "status": "dword",
+          "value": 0
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "v2_action": "Detect",
+        "normalized_mutations": [
+          {
+            "field": "product_version",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "string",
+              "value": "Windows 11"
+            }
+          },
+          {
+            "field": "target_release_version",
+            "current": {
+              "status": "dword",
+              "value": 0
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "target_release_version_info",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "string",
+              "value": "24H2"
+            }
+          }
+        ]
+      },
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b"
+    },
+    {
+      "id": "windows-update-target-release-disable",
+      "capability_id": "v3.windows-update.policy",
+      "comparison_kind": "matched_policy_plan",
+      "execution_mode": "audit",
+      "desired": {
+        "update_source": "wufb",
+        "allow_microsoft_update": true,
+        "deferrals": {
+          "feature_days": 30,
+          "quality_days": 7
+        },
+        "target_release": {
+          "enabled": false,
+          "product_version": "Windows 11",
+          "release": "24H2"
+        },
+        "delivery_optimization": {
+          "download_mode": "http_only"
+        }
+      },
+      "observation": {
+        "use_wsus": {
+          "status": "dword",
+          "value": 0
+        },
+        "wsus_server": {
+          "status": "missing"
+        },
+        "wsus_status_server": {
+          "status": "missing"
+        },
+        "defer_feature_updates": {
+          "status": "dword",
+          "value": 1
+        },
+        "defer_feature_days": {
+          "status": "dword",
+          "value": 30
+        },
+        "defer_quality_updates": {
+          "status": "dword",
+          "value": 1
+        },
+        "defer_quality_days": {
+          "status": "dword",
+          "value": 7
+        },
+        "target_release_version": {
+          "status": "dword",
+          "value": 1
+        },
+        "product_version": {
+          "status": "string",
+          "value": "Windows 10"
+        },
+        "target_release_version_info": {
+          "status": "string",
+          "value": "22H2"
+        },
+        "delivery_optimization_mode": {
+          "status": "dword",
+          "value": 0
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "v2_action": "Detect",
+        "normalized_mutations": [
+          {
+            "field": "product_version",
+            "current": {
+              "status": "string",
+              "value": "Windows 10"
+            },
+            "desired": {
+              "status": "missing"
+            }
+          },
+          {
+            "field": "target_release_version",
+            "current": {
+              "status": "dword",
+              "value": 1
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "target_release_version_info",
+            "current": {
+              "status": "string",
+              "value": "22H2"
+            },
+            "desired": {
+              "status": "missing"
+            }
+          }
+        ]
+      },
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b"
+    },
+    {
+      "id": "windows-update-remediation-denied",
+      "capability_id": "v3.windows-update.policy",
+      "comparison_kind": "matched_policy_plan",
+      "execution_mode": "remediation_denied",
+      "desired": {
+        "update_source": "wufb",
+        "allow_microsoft_update": true,
+        "deferrals": {
+          "feature_days": 30,
+          "quality_days": 7
+        },
+        "target_release": {
+          "enabled": false,
+          "product_version": "Windows 11",
+          "release": "24H2"
+        },
+        "delivery_optimization": {
+          "download_mode": "http_only"
+        }
+      },
+      "observation": {
+        "use_wsus": {
+          "status": "missing"
+        },
+        "wsus_server": {
+          "status": "missing"
+        },
+        "wsus_status_server": {
+          "status": "missing"
+        },
+        "defer_feature_updates": {
+          "status": "missing"
+        },
+        "defer_feature_days": {
+          "status": "missing"
+        },
+        "defer_quality_updates": {
+          "status": "missing"
+        },
+        "defer_quality_days": {
+          "status": "missing"
+        },
+        "target_release_version": {
+          "status": "missing"
+        },
+        "product_version": {
+          "status": "missing"
+        },
+        "target_release_version_info": {
+          "status": "missing"
+        },
+        "delivery_optimization_mode": {
+          "status": "missing"
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "v2_action": "Skipped",
+        "normalized_mutations": [
+          {
+            "field": "defer_feature_days",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 30
+            }
+          },
+          {
+            "field": "defer_feature_updates",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "defer_quality_days",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 7
+            }
+          },
+          {
+            "field": "defer_quality_updates",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "delivery_optimization_mode",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "target_release_version",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "use_wsus",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          }
+        ],
+        "intentional_safe_parity_difference": "Rust Plan never writes; v2 remediation is run with WhatIf and must report every drift as Skipped."
+      },
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b"
+    },
+    {
+      "id": "windows-update-malformed-deferral",
+      "capability_id": "v3.windows-update.policy",
+      "comparison_kind": "intentional_validation_difference",
+      "execution_mode": "audit",
+      "desired": {
+        "update_source": "wufb",
+        "allow_microsoft_update": true,
+        "deferrals": {
+          "feature_days": "invalid",
+          "quality_days": 7
+        },
+        "target_release": {
+          "enabled": false,
+          "product_version": "Windows 11",
+          "release": "24H2"
+        },
+        "delivery_optimization": {
+          "download_mode": "http_only"
+        }
+      },
+      "observation": {},
+      "expected": {
+        "rust_outcome": "rejected",
+        "v2_action": "Detect",
+        "v2_note": "Deferrals.FeatureDays invalid. Using default 30.",
+        "normalized_mutations": [
+          {
+            "field": "defer_feature_days",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 30
+            }
+          },
+          {
+            "field": "defer_feature_updates",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "defer_quality_days",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 7
+            }
+          },
+          {
+            "field": "defer_quality_updates",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "delivery_optimization_mode",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "target_release_version",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "use_wsus",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          }
+        ],
+        "intentional_safe_parity_difference": "PowerShell v2 defaults a malformed feature deferral to 30; Rust rejects the malformed typed input."
+      },
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b"
+    },
+    {
+      "id": "windows-update-wsus-rejected",
+      "capability_id": "v3.windows-update.policy",
+      "comparison_kind": "intentional_validation_difference",
+      "execution_mode": "audit",
+      "desired": {
+        "update_source": "wsus",
+        "allow_microsoft_update": true,
+        "deferrals": {
+          "feature_days": 30,
+          "quality_days": 7
+        },
+        "target_release": {
+          "enabled": false,
+          "product_version": "Windows 11",
+          "release": "24H2"
+        },
+        "delivery_optimization": {
+          "download_mode": "http_only"
+        }
+      },
+      "v2_overrides": {
+        "wsus_server": "https://wsus.example.invalid",
+        "wsus_status_server": "https://wsus.example.invalid"
+      },
+      "observation": {},
+      "expected": {
+        "rust_outcome": "rejected",
+        "v2_action": "Detect",
+        "normalized_mutations": [
+          {
+            "field": "defer_feature_days",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 30
+            }
+          },
+          {
+            "field": "defer_feature_updates",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "defer_quality_days",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 7
+            }
+          },
+          {
+            "field": "defer_quality_updates",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "delivery_optimization_mode",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "target_release_version",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 0
+            }
+          },
+          {
+            "field": "use_wsus",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "dword",
+              "value": 1
+            }
+          },
+          {
+            "field": "wsus_server",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "string",
+              "value": "https://wsus.example.invalid"
+            }
+          },
+          {
+            "field": "wsus_status_server",
+            "current": {
+              "status": "missing"
+            },
+            "desired": {
+              "status": "string",
+              "value": "https://wsus.example.invalid"
+            }
+          }
+        ],
+        "intentional_safe_parity_difference": "PowerShell v2 permits operator-supplied WSUS URLs; Rust rejects WSUS until bounded server identities and service evidence exist."
+      },
+      "source_closure_sha256": "6766e535612d321ed3fd00ea316584372573ef7dac01ea4785109b82542d351b"
+    },
+    {
+      "id": "security-options-default-compliant",
+      "capability_id": "v3.security-options.drift",
+      "comparison_kind": "matched_policy_plan",
+      "desired": {},
+      "v2_desired": {
+        "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa": {
+          "LmCompatibilityLevel": {
+            "Type": "DWord",
+            "Value": 3
+          },
+          "NoLMHash": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "RestrictAnonymous": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "RestrictAnonymousSAM": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "LimitBlankPasswordUse": {
+            "Type": "DWord",
+            "Value": 1
+          }
+        },
+        "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System": {
+          "EnableLUA": {
+            "Type": "DWord",
+            "Value": 1
+          }
+        }
+      },
+      "observation": {
+        "enable_lua": {
+          "status": "present",
+          "value": 1
+        },
+        "lm_compatibility_level": {
+          "status": "present",
+          "value": 3
+        },
+        "no_lm_hash": {
+          "status": "present",
+          "value": 1
+        },
+        "restrict_anonymous": {
+          "status": "present",
+          "value": 1
+        },
+        "restrict_anonymous_sam": {
+          "status": "present",
+          "value": 1
+        },
+        "limit_blank_password_use": {
+          "status": "present",
+          "value": 1
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "normalized_mutations": [],
+        "v2_finding_codes": [],
+        "v2_outcome": "completed"
+      },
+      "source_closure_sha256": "6867af6d43002f8a702cacf6c3229dd4b4c9d65db3e85b65eb341988a53766ed"
+    },
+    {
+      "id": "security-options-enum-mapping-drift",
+      "capability_id": "v3.security-options.drift",
+      "comparison_kind": "matched_policy_plan",
+      "desired": {
+        "enable_lua": "disabled",
+        "lm_compatibility_level": "send_ntlm_v2_refuse_lm_and_ntlm",
+        "no_lm_hash": "disabled",
+        "restrict_anonymous": "no_anonymous_sam_or_shares",
+        "restrict_anonymous_sam": "disabled",
+        "limit_blank_password_use": "disabled"
+      },
+      "v2_desired": {
+        "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa": {
+          "LmCompatibilityLevel": {
+            "Type": "DWord",
+            "Value": 5
+          },
+          "NoLMHash": {
+            "Type": "DWord",
+            "Value": 0
+          },
+          "RestrictAnonymous": {
+            "Type": "DWord",
+            "Value": 2
+          },
+          "RestrictAnonymousSAM": {
+            "Type": "DWord",
+            "Value": 0
+          },
+          "LimitBlankPasswordUse": {
+            "Type": "DWord",
+            "Value": 0
+          }
+        },
+        "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System": {
+          "EnableLUA": {
+            "Type": "DWord",
+            "Value": 0
+          }
+        }
+      },
+      "observation": {
+        "enable_lua": {
+          "status": "present",
+          "value": 1
+        },
+        "lm_compatibility_level": {
+          "status": "present",
+          "value": 3
+        },
+        "no_lm_hash": {
+          "status": "present",
+          "value": 1
+        },
+        "restrict_anonymous": {
+          "status": "present",
+          "value": 1
+        },
+        "restrict_anonymous_sam": {
+          "status": "present",
+          "value": 1
+        },
+        "limit_blank_password_use": {
+          "status": "present",
+          "value": 1
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "normalized_mutations": [
+          {
+            "field": "enable_lua",
+            "current": {
+              "status": "present",
+              "value": 1
+            },
+            "desired": 0
+          },
+          {
+            "field": "limit_blank_password_use",
+            "current": {
+              "status": "present",
+              "value": 1
+            },
+            "desired": 0
+          },
+          {
+            "field": "lm_compatibility_level",
+            "current": {
+              "status": "present",
+              "value": 3
+            },
+            "desired": 5
+          },
+          {
+            "field": "no_lm_hash",
+            "current": {
+              "status": "present",
+              "value": 1
+            },
+            "desired": 0
+          },
+          {
+            "field": "restrict_anonymous",
+            "current": {
+              "status": "present",
+              "value": 1
+            },
+            "desired": 2
+          },
+          {
+            "field": "restrict_anonymous_sam",
+            "current": {
+              "status": "present",
+              "value": 1
+            },
+            "desired": 0
+          }
+        ],
+        "v2_finding_codes": [
+          "SECOPT-Drift",
+          "SECOPT-Drift",
+          "SECOPT-Drift",
+          "SECOPT-Drift",
+          "SECOPT-Drift",
+          "SECOPT-Drift"
+        ],
+        "v2_outcome": "completed"
+      },
+      "source_closure_sha256": "6867af6d43002f8a702cacf6c3229dd4b4c9d65db3e85b65eb341988a53766ed"
+    },
+    {
+      "id": "security-options-partial-missing",
+      "capability_id": "v3.security-options.drift",
+      "comparison_kind": "intentional_validation_difference",
+      "desired": {},
+      "v2_desired": {
+        "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa": {
+          "LmCompatibilityLevel": {
+            "Type": "DWord",
+            "Value": 3
+          },
+          "NoLMHash": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "RestrictAnonymous": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "RestrictAnonymousSAM": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "LimitBlankPasswordUse": {
+            "Type": "DWord",
+            "Value": 1
+          }
+        },
+        "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System": {
+          "EnableLUA": {
+            "Type": "DWord",
+            "Value": 1
+          }
+        }
+      },
+      "observation": {
+        "enable_lua": {
+          "status": "present",
+          "value": 1
+        },
+        "lm_compatibility_level": {
+          "status": "present",
+          "value": 3
+        },
+        "no_lm_hash": {
+          "status": "missing"
+        },
+        "restrict_anonymous": {
+          "status": "missing"
+        },
+        "restrict_anonymous_sam": {
+          "status": "missing"
+        },
+        "limit_blank_password_use": {
+          "status": "missing"
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "normalized_mutations": [
+          {
+            "field": "limit_blank_password_use",
+            "current": {
+              "status": "missing"
+            },
+            "desired": 1
+          },
+          {
+            "field": "no_lm_hash",
+            "current": {
+              "status": "missing"
+            },
+            "desired": 1
+          },
+          {
+            "field": "restrict_anonymous",
+            "current": {
+              "status": "missing"
+            },
+            "desired": 1
+          },
+          {
+            "field": "restrict_anonymous_sam",
+            "current": {
+              "status": "missing"
+            },
+            "desired": 1
+          }
+        ],
+        "v2_finding_codes": [],
+        "v2_outcome": "error",
+        "v2_error_type": "System.Management.Automation.ParameterBindingValidationException",
+        "intentional_safe_parity_difference": "PowerShell v2 terminates when a missing registry value reaches its mandatory Current comparison parameter; Rust retains typed missing evidence and proposes only the four missing fixed fields.",
+        "v2_normalized_mutations": []
+      },
+      "source_closure_sha256": "6867af6d43002f8a702cacf6c3229dd4b4c9d65db3e85b65eb341988a53766ed"
+    },
+    {
+      "id": "security-options-access-denied",
+      "capability_id": "v3.security-options.drift",
+      "comparison_kind": "intentional_validation_difference",
+      "desired": {},
+      "v2_desired": {
+        "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa": {
+          "LmCompatibilityLevel": {
+            "Type": "DWord",
+            "Value": 3
+          },
+          "NoLMHash": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "RestrictAnonymous": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "RestrictAnonymousSAM": {
+            "Type": "DWord",
+            "Value": 1
+          },
+          "LimitBlankPasswordUse": {
+            "Type": "DWord",
+            "Value": 1
+          }
+        },
+        "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System": {
+          "EnableLUA": {
+            "Type": "DWord",
+            "Value": 1
+          }
+        }
+      },
+      "observation": {
+        "enable_lua": {
+          "status": "present",
+          "value": 1
+        },
+        "lm_compatibility_level": {
+          "status": "present",
+          "value": 3
+        },
+        "no_lm_hash": {
+          "status": "access_denied"
+        },
+        "restrict_anonymous": {
+          "status": "present",
+          "value": 1
+        },
+        "restrict_anonymous_sam": {
+          "status": "present",
+          "value": 1
+        },
+        "limit_blank_password_use": {
+          "status": "present",
+          "value": 1
+        }
+      },
+      "expected": {
+        "rust_outcome": "rejected",
+        "normalized_mutations": [],
+        "v2_finding_codes": [],
+        "intentional_safe_parity_difference": "PowerShell v2 collapses the denied registry read to null and then terminates in value comparison; Rust preserves access_denied and rejects the semantic plan because the prestate is unreadable.",
+        "v2_outcome": "error",
+        "v2_error_type": "System.Management.Automation.ParameterBindingValidationException"
+      },
+      "source_closure_sha256": "6867af6d43002f8a702cacf6c3229dd4b4c9d65db3e85b65eb341988a53766ed"
+    },
+    {
+      "id": "security-options-malformed-desired",
+      "capability_id": "v3.security-options.drift",
+      "comparison_kind": "intentional_validation_difference",
+      "desired": {
+        "enable_lua": 1
+      },
+      "v2_desired": {
+        "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System": {
+          "EnableLUA": {
+            "Value": 1
+          }
+        }
+      },
+      "observation": {
+        "enable_lua": {
+          "status": "present",
+          "value": 1
+        },
+        "lm_compatibility_level": {
+          "status": "present",
+          "value": 3
+        },
+        "no_lm_hash": {
+          "status": "present",
+          "value": 1
+        },
+        "restrict_anonymous": {
+          "status": "present",
+          "value": 1
+        },
+        "restrict_anonymous_sam": {
+          "status": "present",
+          "value": 1
+        },
+        "limit_blank_password_use": {
+          "status": "present",
+          "value": 1
+        }
+      },
+      "expected": {
+        "rust_outcome": "rejected",
+        "normalized_mutations": [],
+        "v2_finding_codes": [
+          "SECOPT-DesiredMalformed"
+        ],
+        "intentional_safe_parity_difference": "PowerShell v2 reports and skips a desired entry without Type; Rust rejects the malformed enum-only desired state before planning.",
+        "v2_outcome": "completed"
+      },
+      "source_closure_sha256": "6867af6d43002f8a702cacf6c3229dd4b4c9d65db3e85b65eb341988a53766ed"
+    },
+    {
+      "id": "powershell-logging-default-compliant",
+      "capability_id": "v3.powershell.logging",
+      "comparison_kind": "intentional_observability_difference",
+      "desired": {
+        "replace_module_names": true
+      },
+      "observation": {
+        "hklm": {
+          "enable_transcription": {
+            "status": "value",
+            "value": 1
+          },
+          "transcript_output_directory": {
+            "status": "value",
+            "value": "C:\\ProgramData\\PowerShellTranscripts"
+          },
+          "enable_invocation_header": {
+            "status": "value",
+            "value": 1
+          },
+          "enable_script_block_logging": {
+            "status": "value",
+            "value": 1
+          },
+          "enable_script_block_invocation_logging": {
+            "status": "value",
+            "value": 0
+          },
+          "enable_module_logging": {
+            "status": "value",
+            "value": 1
+          },
+          "module_names": {
+            "values": {
+              "1": "*"
+            },
+            "complete": true
+          }
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "normalized_mutations": [],
+        "v2_outcome": "completed",
+        "v2_finding_codes": [
+          "PSLOG-Recommend-ProtectedEventLogging"
+        ],
+        "v2_normalized_module_names": [
+          "*"
+        ],
+        "intentional_safe_parity_difference": "PowerShell v2 emits a general Protected Event Logging advisory whenever Script Block Logging is targeted in Audit mode; the Rust semantic planner represents only concrete policy drift."
+      },
+      "source_closure_sha256": "acbccb183c3e4aeb6aa5067c8eb40be334734d6774c90808d3b3e418b3e8142f"
+    },
+    {
+      "id": "powershell-logging-default-drifted",
+      "capability_id": "v3.powershell.logging",
+      "comparison_kind": "intentional_coverage_difference",
+      "desired": {
+        "replace_module_names": true
+      },
+      "observation": {
+        "hklm": {
+          "enable_transcription": {
+            "status": "value",
+            "value": 0
+          },
+          "transcript_output_directory": {
+            "status": "missing"
+          },
+          "enable_invocation_header": {
+            "status": "value",
+            "value": 0
+          },
+          "enable_script_block_logging": {
+            "status": "value",
+            "value": 0
+          },
+          "enable_script_block_invocation_logging": {
+            "status": "value",
+            "value": 0
+          },
+          "enable_module_logging": {
+            "status": "value",
+            "value": 0
+          },
+          "module_names": {
+            "values": {},
+            "complete": true
+          }
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "normalized_mutations": [
+          {
+            "field": "enable_invocation_header",
+            "type": "dword",
+            "value": 1
+          },
+          {
+            "field": "enable_module_logging",
+            "type": "dword",
+            "value": 1
+          },
+          {
+            "field": "enable_script_block_logging",
+            "type": "dword",
+            "value": 1
+          },
+          {
+            "field": "enable_transcription",
+            "type": "dword",
+            "value": 1
+          },
+          {
+            "field": "module_names",
+            "type": "numbered_strings",
+            "value": [
+              {
+                "name": 1,
+                "value": "*"
+              }
+            ]
+          },
+          {
+            "field": "transcript_output_directory",
+            "type": "string",
+            "value": "C:\\ProgramData\\PowerShellTranscripts"
+          }
+        ],
+        "v2_outcome": "completed",
+        "v2_finding_codes": [
+          "PSLOG-TranscriptionOff",
+          "PSLOG-InvocationHeaderOff",
+          "PSLOG-ScriptBlockOff",
+          "PSLOG-ModuleLoggingOff",
+          "PSLOG-Recommend-ProtectedEventLogging"
+        ],
+        "v2_normalized_module_names": [
+          "*"
+        ],
+        "intentional_safe_parity_difference": "PowerShell v2 audit reports disabled enablement switches but does not evaluate transcript-directory or ModuleNames drift; Rust proposes those additional fixed, rollback-bound changes."
+      },
+      "source_closure_sha256": "acbccb183c3e4aeb6aa5067c8eb40be334734d6774c90808d3b3e418b3e8142f"
+    },
+    {
+      "id": "powershell-logging-default-missing",
+      "capability_id": "v3.powershell.logging",
+      "comparison_kind": "intentional_coverage_difference",
+      "desired": {
+        "replace_module_names": true
+      },
+      "observation": {
+        "hklm": {
+          "enable_transcription": {
+            "status": "missing"
+          },
+          "transcript_output_directory": {
+            "status": "missing"
+          },
+          "enable_invocation_header": {
+            "status": "missing"
+          },
+          "enable_script_block_logging": {
+            "status": "missing"
+          },
+          "enable_script_block_invocation_logging": {
+            "status": "missing"
+          },
+          "enable_module_logging": {
+            "status": "missing"
+          },
+          "module_names": {
+            "values": {},
+            "complete": true
+          }
+        }
+      },
+      "expected": {
+        "rust_outcome": "planned",
+        "normalized_mutations": [
+          {
+            "field": "enable_invocation_header",
+            "type": "dword",
+            "value": 1
+          },
+          {
+            "field": "enable_module_logging",
+            "type": "dword",
+            "value": 1
+          },
+          {
+            "field": "enable_script_block_invocation_logging",
+            "type": "dword",
+            "value": 0
+          },
+          {
+            "field": "enable_script_block_logging",
+            "type": "dword",
+            "value": 1
+          },
+          {
+            "field": "enable_transcription",
+            "type": "dword",
+            "value": 1
+          },
+          {
+            "field": "module_names",
+            "type": "numbered_strings",
+            "value": [
+              {
+                "name": 1,
+                "value": "*"
+              }
+            ]
+          },
+          {
+            "field": "transcript_output_directory",
+            "type": "string",
+            "value": "C:\\ProgramData\\PowerShellTranscripts"
+          }
+        ],
+        "v2_outcome": "completed",
+        "v2_finding_codes": [
+          "PSLOG-TranscriptionOff",
+          "PSLOG-InvocationHeaderOff",
+          "PSLOG-ScriptBlockOff",
+          "PSLOG-ModuleLoggingOff",
+          "PSLOG-Recommend-ProtectedEventLogging"
+        ],
+        "v2_normalized_module_names": [
+          "*"
+        ],
+        "intentional_safe_parity_difference": "PowerShell v2 treats missing enablement values as off and omits checks for a missing disabled invocation flag, transcript directory, and ModuleNames; Rust retains every missing fixed field and proposes a complete guarded policy baseline."
+      },
+      "source_closure_sha256": "acbccb183c3e4aeb6aa5067c8eb40be334734d6774c90808d3b3e418b3e8142f"
+    },
+    {
+      "id": "powershell-logging-access-denied",
+      "capability_id": "v3.powershell.logging",
+      "comparison_kind": "intentional_validation_difference",
+      "desired": {
+        "replace_module_names": true
+      },
+      "observation": {
+        "hklm": {
+          "status": "access_denied"
+        }
+      },
+      "v2_read_error": "access_denied",
+      "expected": {
+        "rust_outcome": "rejected",
+        "normalized_mutations": [],
+        "v2_outcome": "error",
+        "v2_error_type": "System.UnauthorizedAccessException",
+        "v2_finding_codes": [],
+        "v2_normalized_module_names": [],
+        "intentional_safe_parity_difference": "PowerShell v2 propagates an access-denied registry read from its snapshot function; Rust rejects the unrepresentable typed snapshot before planning, so neither implementation derives a mutation from unreadable prestate."
+      },
+      "source_closure_sha256": "acbccb183c3e4aeb6aa5067c8eb40be334734d6774c90808d3b3e418b3e8142f"
+    },
+    {
+      "id": "powershell-logging-malformed-module-names",
+      "capability_id": "v3.powershell.logging",
+      "comparison_kind": "intentional_validation_difference",
+      "desired": {
+        "module_names": [
+          ""
+        ],
+        "replace_module_names": true
+      },
+      "observation": {
+        "hklm": {
+          "enable_transcription": {
+            "status": "value",
+            "value": 1
+          },
+          "transcript_output_directory": {
+            "status": "value",
+            "value": "C:\\ProgramData\\PowerShellTranscripts"
+          },
+          "enable_invocation_header": {
+            "status": "value",
+            "value": 1
+          },
+          "enable_script_block_logging": {
+            "status": "value",
+            "value": 1
+          },
+          "enable_script_block_invocation_logging": {
+            "status": "value",
+            "value": 0
+          },
+          "enable_module_logging": {
+            "status": "value",
+            "value": 1
+          },
+          "module_names": {
+            "values": {
+              "1": "*"
+            },
+            "complete": true
+          }
+        }
+      },
+      "v2_module_names": [
+        " ",
+        ""
+      ],
+      "expected": {
+        "rust_outcome": "rejected",
+        "normalized_mutations": [],
+        "v2_outcome": "completed",
+        "v2_finding_codes": [
+          "PSLOG-Recommend-ProtectedEventLogging"
+        ],
+        "v2_normalized_module_names": [
+          "*"
+        ],
+        "intentional_safe_parity_difference": "PowerShell v2 normalizes an empty ModuleNames input to the wildcard default; Rust rejects empty module names rather than silently broadening logging scope."
+      },
+      "source_closure_sha256": "acbccb183c3e4aeb6aa5067c8eb40be334734d6774c90808d3b3e418b3e8142f"
+    }
+  ]
+}

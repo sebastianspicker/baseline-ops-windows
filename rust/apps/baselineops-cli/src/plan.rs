@@ -3,41 +3,65 @@
 use crate::{Selection, resolve_selection, unsupported_response};
 use anyhow::{Context, Result, anyhow, bail};
 use baselineops_domain::{
-    ExecutionIntent, ExitCode, InputIdentityV3, JsonLoadLimits, ObservedStateV3, ObservedValueV3,
-    ProfileV3, SourceIdentityV3, SourceKind, ToolIdentityV3,
+    ExecutionIntent, ExitCode, InputIdentityV3, JsonLoadLimits, ObservedStateV3, ProfileV3,
+    SourceIdentityV3, SourceKind, ToolIdentityV3,
 };
 use baselineops_engine::{InstalledPackageExpectation, verify_installed_package};
 use baselineops_engine::{PlanBuildContext, RegistryActionDeriver, build_plan};
 use chrono::{Duration, Utc};
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 pub(crate) fn run(selection: &Selection, output: &Path) -> Result<ExitCode> {
-    if output.as_os_str().is_empty() {
-        bail!("plan output path is empty");
-    }
+    require_output(output)?;
     if !cfg!(windows) {
         return unsupported_response("plan", &["Windows protected worker"]);
     }
-    let profile_path = selection.profile.as_ref().ok_or_else(|| {
+    let (profile_path, bytes, profile) = load_profile(selection)?;
+    let (descriptors, _) = resolve_selection(selection)?;
+    let context = build_context(selection, &profile_path, &bytes, &profile, &descriptors)?;
+    persist_or_report(
+        build_plan(&profile, context, &RegistryActionDeriver, Utc::now()),
+        output,
+        &descriptors,
+    )
+}
+
+fn require_output(output: &Path) -> Result<()> {
+    if output.as_os_str().is_empty() {
+        bail!("plan output path is empty");
+    }
+    Ok(())
+}
+
+fn load_profile(selection: &Selection) -> Result<(std::path::PathBuf, Vec<u8>, ProfileV3)> {
+    let path = selection.profile.as_ref().ok_or_else(|| {
         anyhow!("plan requires a profile so source and input bindings can be retained")
     })?;
-    let profile_path = std::fs::canonicalize(profile_path)?;
-    let bytes = baselineops_windows::read_bounded_utf8(
-        &profile_path,
+    let path = crate::resources::resolve_input_file(path)?;
+    let bytes = baselineops_windows::read_bounded_utf8_no_follow(
+        &path,
         baselineops_windows::MAX_INPUT_BYTES,
     )?
     .into_bytes();
     let profile: ProfileV3 = baselineops_domain::load_json(&bytes, JsonLoadLimits::default())?;
     profile.validate()?;
-    let (descriptors, _) = resolve_selection(selection)?;
-    let host = baselineops_windows::collect_host_identity()?;
-    let observed_state = observe(&profile, &descriptors)?;
-    let digest = baselineops_domain::Sha256Digest::of_bytes(&bytes);
-    let executable = std::env::current_exe()?;
-    let package_digest = installed_package_digest(&executable)?;
-    let context = PlanBuildContext {
+    Ok((path, bytes, profile))
+}
+
+fn build_context(
+    selection: &Selection,
+    path: &Path,
+    bytes: &[u8],
+    profile: &ProfileV3,
+    descriptors: &[&'static baselineops_capabilities::CapabilityDescriptor],
+) -> Result<PlanBuildContext> {
+    let digest = baselineops_domain::Sha256Digest::of_bytes(bytes);
+    let resources = crate::resources::bind_selection(selection)?;
+    let observed_state = observe(profile, descriptors)?;
+    let package_digest = current_package_digest()?;
+    Ok(PlanBuildContext {
         intent: ExecutionIntent::Apply,
-        host,
+        host: baselineops_windows::collect_host_identity()?,
         tool: ToolIdentityV3 {
             name: "baselineops".into(),
             version: env!("CARGO_PKG_VERSION").into(),
@@ -46,17 +70,26 @@ pub(crate) fn run(selection: &Selection, output: &Path) -> Result<ExitCode> {
         package_digest,
         source: SourceIdentityV3 {
             kind: SourceKind::LocalFile,
-            locator: profile_path.display().to_string(),
+            locator: path.display().to_string(),
             digest,
         },
-        input: InputIdentityV3 {
-            digest,
-            size_bytes: u64::try_from(bytes.len())?,
-        },
+        input: InputIdentityV3::from_resources(digest, u64::try_from(bytes.len())?, &resources)?,
+        resources,
         observed_state,
         lifetime: Duration::minutes(5),
-    };
-    match build_plan(&profile, context, &RegistryActionDeriver, Utc::now()) {
+    })
+}
+
+fn current_package_digest() -> Result<baselineops_domain::Sha256Digest> {
+    installed_package_digest(&std::env::current_exe()?)
+}
+
+fn persist_or_report(
+    plan: Result<baselineops_engine::WorkerPlan, baselineops_engine::PlanningError>,
+    output: &Path,
+    descriptors: &[&'static baselineops_capabilities::CapabilityDescriptor],
+) -> Result<ExitCode> {
+    match plan {
         Ok(worker_plan) => {
             let body = serde_json::to_vec_pretty(worker_plan.proposal())?;
             baselineops_windows::atomic_write(output, &body)?;
@@ -109,33 +142,12 @@ fn installed_package_digest(executable: &Path) -> Result<baselineops_domain::Sha
 
 fn observe(
     profile: &ProfileV3,
-    descriptors: &[&'static baselineops_capabilities::CapabilityDescriptor],
+    _descriptors: &[&'static baselineops_capabilities::CapabilityDescriptor],
 ) -> Result<ObservedStateV3> {
-    let mut values = BTreeMap::new();
-    for step in &profile.steps {
-        let descriptor = descriptors
-            .iter()
-            .copied()
-            .find(|descriptor| descriptor.id == step.capability_id.as_str())
-            .ok_or_else(|| anyhow!("profile descriptor is unavailable"))?;
-        let parameters = serde_json::to_value(&step.parameters)?;
-        let outcome = crate::audit::dispatch_native_audit(descriptor, &parameters);
-        let baselineops_capabilities::CapabilityOutcome::Completed { result } = outcome else {
-            bail!("trusted observation failed for {}", descriptor.id)
-        };
-        values.insert(
-            step.capability_id.clone(),
-            ObservedValueV3 {
-                observed_at: Utc::now(),
-                facts: BTreeMap::from([("native_result".into(), result)]),
-            },
-        );
-    }
-    let mut observed = ObservedStateV3 {
-        captured_at: Utc::now(),
-        digest: baselineops_domain::Sha256Digest::of_bytes([]),
-        values,
-    };
-    observed.digest = observed.calculated_digest()?;
-    Ok(observed)
+    baselineops_engine::reobserve_profile(
+        profile,
+        &baselineops_engine::NativeObservationSource,
+        Utc::now(),
+    )
+    .map_err(|error| anyhow!(error))
 }

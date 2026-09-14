@@ -134,6 +134,10 @@ mod platform {
         if status != ERROR_SUCCESS {
             return Observation::Unparsed;
         }
+        read_rdp_enabled(key, &name)
+    }
+
+    fn read_rdp_enabled(key: HKEY, name: &[u16]) -> Observation<bool> {
         let mut kind = REG_VALUE_TYPE::default();
         let mut size = 4_u32;
         let mut bytes = [0_u8; 4];
@@ -248,17 +252,7 @@ mod platform {
     }
 
     fn rows<T>(buffer: &TcpTableBuffer) -> Result<&[T], ()> {
-        let allocation = buffer
-            .storage
-            .len()
-            .checked_mul(size_of::<usize>())
-            .ok_or(())?;
-        if buffer.bytes > allocation || buffer.bytes < size_of::<u32>() {
-            return Err(());
-        }
-        let bytes = unsafe {
-            std::slice::from_raw_parts(buffer.storage.as_ptr().cast::<u8>(), buffer.bytes)
-        };
+        let bytes = table_bytes(buffer)?;
         let count = u32::from_ne_bytes(bytes[..size_of::<u32>()].try_into().map_err(|_| ())?);
         let rows = bytes.as_ptr().wrapping_add(size_of::<u32>());
         let count = checked_table_rows(
@@ -276,6 +270,20 @@ mod platform {
             return Err(());
         }
         Ok(unsafe { std::slice::from_raw_parts(rows.cast::<T>(), count) })
+    }
+
+    fn table_bytes(buffer: &TcpTableBuffer) -> Result<&[u8], ()> {
+        let allocation = buffer
+            .storage
+            .len()
+            .checked_mul(size_of::<usize>())
+            .ok_or(())?;
+        if buffer.bytes > allocation || buffer.bytes < size_of::<u32>() {
+            return Err(());
+        }
+        Ok(unsafe {
+            std::slice::from_raw_parts(buffer.storage.as_ptr().cast::<u8>(), buffer.bytes)
+        })
     }
 
     fn wide(value: &str) -> Vec<u16> {

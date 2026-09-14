@@ -1,12 +1,48 @@
-use baselineops_domain::{PlanId, ResultId, Sha256Digest, canonical_json_bytes};
+use baselineops_domain::{ActionStatus, PlanId, ResultId, Sha256Digest, canonical_json_bytes};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-const JOURNAL_MAGIC: &[u8] = b"BASELINEOPS-JOURNAL-V1\n";
+mod lifecycle;
+mod reader;
+mod storage;
+
+use lifecycle::Lifecycle;
+
+use reader::parse_journal;
+
+const JOURNAL_MAGIC: &[u8] = b"BASELINEOPS-JOURNAL-V2\n";
 const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
+const DEFAULT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const DEFAULT_MAX_RECORDS: usize = 4096;
+
+/// Resource limits applied while creating, appending, reading, and recovering a journal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JournalLimits {
+    /// Maximum complete file size, including the journal marker and frame prefixes.
+    pub max_bytes: u64,
+    /// Maximum number of complete records.
+    pub max_records: usize,
+}
+
+impl JournalLimits {
+    /// Constructs explicit journal limits for a trusted caller.
+    #[must_use]
+    pub const fn new(max_bytes: u64, max_records: usize) -> Self {
+        Self {
+            max_bytes,
+            max_records,
+        }
+    }
+}
+
+impl Default for JournalLimits {
+    fn default() -> Self {
+        Self::new(DEFAULT_MAX_BYTES, DEFAULT_MAX_RECORDS)
+    }
+}
 
 /// Mutation-boundary event retained in the protected worker run directory.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -30,8 +66,8 @@ pub enum JournalEvent {
     ActionFinished {
         /// Stable action identifier.
         action_id: String,
-        /// Capability-defined terminal status.
-        status: String,
+        /// Typed terminal status; only success permits another action.
+        status: ActionStatus,
         /// Digest of post-state or action receipt.
         receipt_digest: Sha256Digest,
     },
@@ -39,7 +75,8 @@ pub enum JournalEvent {
     RunFinished {
         /// Result identity.
         result_id: ResultId,
-        /// Digest of the final result envelope.
+        /// Digest of the retained result document, before adding this terminal journal anchor
+        /// and the document's own artifact reference to the broker envelope.
         result_digest: Sha256Digest,
     },
 }
@@ -63,9 +100,13 @@ pub struct JournalRecord {
 /// Append-only writer for a tamper-evident journal.
 pub struct Journal {
     path: PathBuf,
-    file: File,
+    file: storage::Storage,
     next_sequence: u64,
     previous_hash: Sha256Digest,
+    current_bytes: u64,
+    limits: JournalLimits,
+    lifecycle: Lifecycle,
+    write_failed: bool,
 }
 
 /// Verified journal contents and the chain anchor needed to detect truncation.
@@ -85,102 +126,197 @@ pub struct JournalRecovery {
 }
 
 impl Journal {
-    /// Create a new journal without replacing an existing run file.
+    /// Create a journal through a worker-owned directory capability.
+    ///
+    /// The sink retains its directory protection for the writer's lifetime and enforces
+    /// the platform's byte quota. No caller-provided path is opened by this constructor.
+    /// This creates output storage only; it does not grant capability execution authority.
     ///
     /// # Errors
     ///
-    /// Returns an I/O error when the new journal cannot be created, written, or synced.
+    /// Returns an error for unsupported platforms, failed protection/creation, or durability.
+    pub fn create_protected(
+        run: &mut baselineops_windows::ProtectedRunDirectory,
+    ) -> Result<Self, JournalError> {
+        let file = run.create_journal()?;
+        let path = file.path().to_path_buf();
+        Self::initialize(
+            path,
+            storage::Storage::Protected(file),
+            JournalLimits::new(
+                baselineops_windows::MAX_JOURNAL_BYTES as u64,
+                DEFAULT_MAX_RECORDS,
+            ),
+        )
+    }
+
+    /// Create a local journal using the default limits.
+    ///
+    /// This path-based API provides integrity and durability, not Windows output authority.
+    /// Production worker creation must use [`Self::create_protected`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the journal cannot be created, written, or synced.
     pub fn create(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::create_with_limits(path, JournalLimits::default()).map_err(JournalError::into_io)
+    }
+
+    /// Create a new journal with caller-selected resource limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before creating the file if its marker exceeds `limits`.
+    pub fn create_with_limits(
+        path: impl AsRef<Path>,
+        limits: JournalLimits,
+    ) -> Result<Self, JournalError> {
+        ensure_size_limit(JOURNAL_MAGIC.len() as u64, limits)?;
         let path = path.as_ref().to_path_buf();
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)?;
+        Self::initialize(path, file.into(), limits)
+    }
+
+    fn initialize(
+        path: PathBuf,
+        mut file: storage::Storage,
+        limits: JournalLimits,
+    ) -> Result<Self, JournalError> {
         file.write_all(JOURNAL_MAGIC)?;
-        file.sync_all()?;
+        file.synchronize()?;
         Ok(Self {
             path,
             file,
             next_sequence: 0,
             previous_hash: Sha256Digest::of_bytes([]),
+            current_bytes: JOURNAL_MAGIC.len() as u64,
+            limits,
+            lifecycle: Lifecycle::default(),
+            write_failed: false,
         })
     }
 
-    /// Open an existing journal after validating every complete record.
+    /// Open an existing local journal after validating complete records with default limits.
+    ///
+    /// This verifies content integrity, not the path's Windows protection. It is not an
+    /// execution-recovery authority and cannot reopen an interrupted action for retry.
     ///
     /// # Errors
     ///
-    /// Returns an error for a missing or altered journal, including an incomplete
-    /// trailing frame. Use [`Self::recover`] only after a crash boundary is known.
+    /// Returns an error for invalid framing, chain integrity, lifecycle, limits, or file access.
+    /// An unmatched action start requires explicit action recovery and cannot be reopened.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
+        Self::open_with_limits(path, JournalLimits::default())
+    }
+
+    /// Open an existing journal after validating every complete record with explicit limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid framing, chain integrity, lifecycle, limits, or file access.
+    /// An unmatched action start requires explicit action recovery and cannot be reopened.
+    pub fn open_with_limits(
+        path: impl AsRef<Path>,
+        limits: JournalLimits,
+    ) -> Result<Self, JournalError> {
         let path = path.as_ref().to_path_buf();
-        let snapshot = Self::read(&path)?;
+        let parsed = complete_parse(&path, limits)?;
+        let lifecycle = Lifecycle::from_snapshot(&parsed.snapshot)?;
+        lifecycle.require_resumable()?;
         let file = OpenOptions::new().append(true).open(&path)?;
         Ok(Self {
             path,
-            file,
-            next_sequence: u64::try_from(snapshot.records.len())
-                .map_err(|_| JournalError::SequenceOverflow)?,
-            previous_hash: snapshot.terminal_hash,
+            file: file.into(),
+            next_sequence: parsed.next_sequence,
+            previous_hash: parsed.snapshot.terminal_hash,
+            current_bytes: parsed.valid_bytes,
+            limits,
+            lifecycle,
+            write_failed: false,
         })
     }
 
-    /// Read and verify a complete journal without granting append authority.
+    /// Read and verify a complete journal with default resource limits.
     ///
     /// # Errors
     ///
-    /// Detects framing edits, reordered records, hash edits, and incomplete trailing frames.
+    /// Returns an error for invalid framing, chain integrity, limits, or file access.
     pub fn read(path: impl AsRef<Path>) -> Result<JournalSnapshot, JournalError> {
-        let bytes = read_all(path)?;
-        let parsed = parse_journal(&bytes)?;
-        if parsed.trailing_bytes != 0 {
-            return Err(JournalError::IncompleteFrame);
-        }
-        Ok(parsed.snapshot)
+        Self::read_with_limits(path, JournalLimits::default())
     }
 
-    /// Verify a journal against an independently retained terminal hash.
-    ///
-    /// A hash chain detects edits and reordering by itself. Supplying the retained
-    /// terminal hash additionally detects a valid-prefix truncation.
+    /// Read and verify a complete journal with caller-selected resource limits.
     ///
     /// # Errors
     ///
-    /// Returns an error when framing or chain integrity fails, or when the retained
-    /// terminal anchor proves the journal has been truncated.
+    /// Returns an error for invalid framing, chain integrity, limits, or file access.
+    pub fn read_with_limits(
+        path: impl AsRef<Path>,
+        limits: JournalLimits,
+    ) -> Result<JournalSnapshot, JournalError> {
+        Ok(complete_parse(path.as_ref(), limits)?.snapshot)
+    }
+
+    /// Verify a journal against a terminal hash using default resource limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when parsing fails or the terminal hash differs.
     pub fn verify(
         path: impl AsRef<Path>,
         expected_terminal_hash: Sha256Digest,
     ) -> Result<JournalSnapshot, JournalError> {
-        let snapshot = Self::read(path)?;
+        Self::verify_with_limits(path, expected_terminal_hash, JournalLimits::default())
+    }
+
+    /// Verify a journal against a terminal hash using caller-selected resource limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when parsing fails or the terminal hash differs.
+    pub fn verify_with_limits(
+        path: impl AsRef<Path>,
+        expected_terminal_hash: Sha256Digest,
+        limits: JournalLimits,
+    ) -> Result<JournalSnapshot, JournalError> {
+        let snapshot = Self::read_with_limits(path, limits)?;
         if snapshot.terminal_hash != expected_terminal_hash {
             return Err(JournalError::TerminalHashMismatch);
         }
         Ok(snapshot)
     }
 
-    /// Truncate only an incomplete trailing frame, then reopen a verified append writer.
+    /// Recover an incomplete final frame using default resource limits.
     ///
     /// # Errors
     ///
-    /// Never repairs a complete malformed, reordered, or hash-edited record. Those
-    /// conditions are evidence tampering rather than recoverable interruption.
+    /// Returns an error for an invalid complete frame, file failure, or interrupted action.
+    /// Frame repair does not authorize retrying or rolling back a mutation.
     pub fn recover(path: impl AsRef<Path>) -> Result<(Self, JournalRecovery), JournalError> {
+        Self::recover_with_limits(path, JournalLimits::default())
+    }
+
+    /// Recover an incomplete final frame using caller-selected resource limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid complete frame, exceeded limit, file failure, or
+    /// interrupted action. An unmatched action start prevents truncation and reopening.
+    pub fn recover_with_limits(
+        path: impl AsRef<Path>,
+        limits: JournalLimits,
+    ) -> Result<(Self, JournalRecovery), JournalError> {
         let path = path.as_ref().to_path_buf();
-        let bytes = read_all(&path)?;
-        let parsed = parse_journal(&bytes)?;
+        let parsed = parse_journal(&path, limits)?;
+        Lifecycle::from_snapshot(&parsed.snapshot)?.validate_recovery(parsed.trailing_bytes)?;
+        truncate_incomplete_frame(&path, parsed.valid_bytes, parsed.trailing_bytes)?;
         let recovery = JournalRecovery {
-            truncated_bytes: u64::try_from(parsed.trailing_bytes)
-                .map_err(|_| JournalError::SequenceOverflow)?,
+            truncated_bytes: parsed.trailing_bytes,
         };
-        if parsed.trailing_bytes != 0 {
-            let length = u64::try_from(bytes.len() - parsed.trailing_bytes)
-                .map_err(|_| JournalError::SequenceOverflow)?;
-            let file = OpenOptions::new().write(true).open(&path)?;
-            file.set_len(length)?;
-            file.sync_all()?;
-        }
-        let journal = Self::open(path)?;
+        let journal = Self::open_with_limits(path, limits)?;
         Ok((journal, recovery))
     }
 
@@ -188,31 +324,47 @@ impl Journal {
     ///
     /// # Errors
     ///
-    /// Returns an error when canonical serialization, record sizing, writing, or
-    /// durable synchronization fails.
+    /// Returns an error before writing when a limit would be exceeded, or on serialization,
+    /// writing, or durable synchronization failure.
     pub fn append(
         &mut self,
         timestamp: DateTime<Utc>,
         payload: JournalEvent,
     ) -> Result<JournalRecord, JournalError> {
-        let hash_payload = (&self.next_sequence, timestamp, self.previous_hash, &payload);
-        let record_hash = Sha256Digest::of_bytes(canonical_json_bytes(&hash_payload)?);
-        let record = JournalRecord {
-            sequence: self.next_sequence,
-            timestamp,
-            previous_hash: self.previous_hash,
-            payload,
-            record_hash,
-        };
-        let bytes = canonical_json_bytes(&record)?;
-        let length = u32::try_from(bytes.len()).map_err(|_| JournalError::RecordTooLarge)?;
-        self.file.write_all(&length.to_le_bytes())?;
-        self.file.write_all(&bytes)?;
-        self.file.flush()?;
-        self.file.sync_all()?;
-        self.previous_hash = record_hash;
-        self.next_sequence = self.next_sequence.saturating_add(1);
+        if self.write_failed {
+            return Err(JournalError::WriteFailed);
+        }
+        ensure_record_limit(self.next_sequence, self.limits)?;
+        let next_sequence = self
+            .next_sequence
+            .checked_add(1)
+            .ok_or(JournalError::SequenceOverflow)?;
+        let record = journal_record(self.next_sequence, self.previous_hash, timestamp, payload)?;
+        let next_bytes = self.write_next_record(&record)?;
+        self.lifecycle.accept(&record.payload);
+        self.previous_hash = record.record_hash;
+        self.next_sequence = next_sequence;
+        self.current_bytes = next_bytes;
         Ok(record)
+    }
+
+    fn write_next_record(&mut self, record: &JournalRecord) -> Result<u64, JournalError> {
+        let bytes = canonical_json_bytes(record)?;
+        let next_bytes = self.next_frame_end(bytes.len())?;
+        self.lifecycle.validate(&record.payload)?;
+        write_durable_record(&mut self.file, &mut self.write_failed, &bytes)?;
+        Ok(next_bytes)
+    }
+
+    fn next_frame_end(&self, length: usize) -> Result<u64, JournalError> {
+        let frame_bytes = frame_size(length)?;
+        let next_bytes = self.current_bytes.checked_add(frame_bytes).ok_or(
+            JournalError::JournalSizeLimitExceeded {
+                limit: self.limits.max_bytes,
+            },
+        )?;
+        ensure_size_limit(next_bytes, self.limits)?;
+        Ok(next_bytes)
     }
 
     /// Terminal chain hash. It is meaningful only when retained independently.
@@ -226,107 +378,181 @@ impl Journal {
     }
 }
 
-struct ParsedJournal {
-    snapshot: JournalSnapshot,
-    trailing_bytes: usize,
+fn complete_parse(
+    path: &Path,
+    limits: JournalLimits,
+) -> Result<reader::ParsedJournal, JournalError> {
+    let parsed = parse_journal(path, limits)?;
+    if parsed.trailing_bytes != 0 {
+        return Err(JournalError::IncompleteFrame);
+    }
+    Ok(parsed)
 }
 
-fn read_all(path: impl AsRef<Path>) -> Result<Vec<u8>, JournalError> {
-    let mut bytes = Vec::new();
-    OpenOptions::new()
-        .read(true)
-        .open(path)?
-        .read_to_end(&mut bytes)?;
-    Ok(bytes)
+fn ensure_size_limit(bytes: u64, limits: JournalLimits) -> Result<(), JournalError> {
+    if bytes > limits.max_bytes {
+        return Err(JournalError::JournalSizeLimitExceeded {
+            limit: limits.max_bytes,
+        });
+    }
+    Ok(())
 }
 
-fn parse_journal(bytes: &[u8]) -> Result<ParsedJournal, JournalError> {
-    if !bytes.starts_with(JOURNAL_MAGIC) {
-        return Err(JournalError::BadMagic);
+fn ensure_record_limit(sequence: u64, limits: JournalLimits) -> Result<(), JournalError> {
+    let count = usize::try_from(sequence).map_err(|_| JournalError::SequenceOverflow)?;
+    if count >= limits.max_records {
+        return Err(JournalError::JournalRecordLimitExceeded {
+            limit: limits.max_records,
+        });
     }
-    let mut offset = JOURNAL_MAGIC.len();
-    let mut records = Vec::new();
-    let mut previous_hash = Sha256Digest::of_bytes([]);
-    let mut sequence = 0_u64;
-    while offset < bytes.len() {
-        let remaining = bytes.len() - offset;
-        if remaining < 4 {
-            return Ok(ParsedJournal {
-                snapshot: JournalSnapshot {
-                    records,
-                    terminal_hash: previous_hash,
-                },
-                trailing_bytes: remaining,
-            });
-        }
-        let length = u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("length"));
-        let length = usize::try_from(length).map_err(|_| JournalError::RecordTooLarge)?;
-        if length == 0 || length > MAX_RECORD_BYTES {
-            return Err(JournalError::RecordTooLarge);
-        }
-        let frame_end = offset
-            .checked_add(4 + length)
-            .ok_or(JournalError::RecordTooLarge)?;
-        if frame_end > bytes.len() {
-            return Ok(ParsedJournal {
-                snapshot: JournalSnapshot {
-                    records,
-                    terminal_hash: previous_hash,
-                },
-                trailing_bytes: remaining,
-            });
-        }
-        let record = serde_json::from_slice::<JournalRecord>(&bytes[offset + 4..frame_end])
-            .map_err(JournalError::InvalidRecord)?;
-        if record.sequence != sequence {
-            return Err(JournalError::SequenceMismatch);
-        }
-        if record.previous_hash != previous_hash {
-            return Err(JournalError::PreviousHashMismatch);
-        }
-        let hash_payload = (
-            record.sequence,
-            record.timestamp,
-            record.previous_hash,
-            &record.payload,
-        );
-        if Sha256Digest::of_bytes(canonical_json_bytes(&hash_payload)?) != record.record_hash {
-            return Err(JournalError::RecordHashMismatch);
-        }
-        previous_hash = record.record_hash;
-        records.push(record);
-        sequence = sequence
-            .checked_add(1)
-            .ok_or(JournalError::SequenceOverflow)?;
-        offset = frame_end;
+    Ok(())
+}
+
+fn frame_size(record_bytes: usize) -> Result<u64, JournalError> {
+    if record_bytes == 0 || record_bytes > MAX_RECORD_BYTES {
+        return Err(JournalError::RecordTooLarge);
     }
-    Ok(ParsedJournal {
-        snapshot: JournalSnapshot {
-            records,
-            terminal_hash: previous_hash,
-        },
-        trailing_bytes: 0,
+    u64::try_from(4 + record_bytes).map_err(|_| JournalError::RecordTooLarge)
+}
+
+fn truncate_incomplete_frame(
+    path: &Path,
+    valid_bytes: u64,
+    trailing_bytes: u64,
+) -> Result<(), JournalError> {
+    if trailing_bytes == 0 {
+        return Ok(());
+    }
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(valid_bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn journal_record(
+    sequence: u64,
+    previous_hash: Sha256Digest,
+    timestamp: DateTime<Utc>,
+    payload: JournalEvent,
+) -> Result<JournalRecord, JournalError> {
+    let record_hash = Sha256Digest::of_bytes(canonical_json_bytes(&(
+        sequence,
+        timestamp,
+        previous_hash,
+        &payload,
+    ))?);
+    Ok(JournalRecord {
+        sequence,
+        timestamp,
+        previous_hash,
+        payload,
+        record_hash,
     })
 }
 
-/// Journal append failures.
+trait DurableWrite: Write {
+    fn synchronize(&mut self) -> io::Result<()>;
+}
+
+impl DurableWrite for File {
+    fn synchronize(&mut self) -> io::Result<()> {
+        self.sync_all()
+    }
+}
+
+fn write_durable_record(
+    file: &mut impl DurableWrite,
+    write_failed: &mut bool,
+    bytes: &[u8],
+) -> Result<(), JournalError> {
+    if *write_failed {
+        return Err(JournalError::WriteFailed);
+    }
+    *write_failed = true;
+    write_record(file, bytes)?;
+    *write_failed = false;
+    Ok(())
+}
+
+fn write_record(file: &mut impl DurableWrite, bytes: &[u8]) -> Result<(), JournalError> {
+    let length = u32::try_from(bytes.len()).map_err(|_| JournalError::RecordTooLarge)?;
+    file.write_all(&length.to_le_bytes())?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    file.synchronize()?;
+    Ok(())
+}
+
+fn validate_record(
+    record: &JournalRecord,
+    sequence: u64,
+    previous_hash: Sha256Digest,
+) -> Result<(), JournalError> {
+    if record.sequence != sequence {
+        return Err(JournalError::SequenceMismatch);
+    }
+    if record.previous_hash != previous_hash {
+        return Err(JournalError::PreviousHashMismatch);
+    }
+    let hash_payload = (
+        record.sequence,
+        record.timestamp,
+        record.previous_hash,
+        &record.payload,
+    );
+    if Sha256Digest::of_bytes(canonical_json_bytes(&hash_payload)?) != record.record_hash {
+        return Err(JournalError::RecordHashMismatch);
+    }
+    Ok(())
+}
+
+/// Journal append and verification failures.
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
+    /// The Windows protected-output boundary failed closed.
+    #[error(transparent)]
+    Protection(#[from] baselineops_windows::PlatformError),
     /// File operation failed.
     #[error(transparent)]
     Io(#[from] io::Error),
     /// Canonical serialization failed.
     #[error(transparent)]
     Domain(#[from] baselineops_domain::DomainError),
-    /// A record exceeded the 32-bit framing limit.
+    /// An earlier write or durability operation failed; this writer cannot be reused.
+    #[error("journal writer is unusable after a write or synchronization failure")]
+    WriteFailed,
+    /// A correctly hashed record violates sequential execution boundaries.
+    #[error("journal execution lifecycle is invalid: {0}")]
+    InvalidLifecycle(&'static str),
+    /// A durable action start has no terminal receipt; reopening cannot retry it.
+    #[error("journal contains interrupted action {0}; explicit action recovery is required")]
+    ActionRecoveryRequired(String),
+    /// A frame exceeded the fixed 4 MiB record limit or its framing range.
     #[error("journal record exceeded the framing limit")]
     RecordTooLarge,
+    /// The journal exceeds its configured byte quota.
+    #[error("journal exceeds the configured byte limit of {limit}")]
+    JournalSizeLimitExceeded {
+        /// Configured maximum file size.
+        limit: u64,
+    },
+    /// The journal exceeds its configured record quota.
+    #[error("journal exceeds the configured record limit of {limit}")]
+    JournalRecordLimitExceeded {
+        /// Configured maximum record count.
+        limit: usize,
+    },
     /// The file did not begin with the exact journal marker.
-    #[error("journal magic is invalid")]
+    #[error(
+        "journal marker is invalid or unsupported; preserve older journals for manual recovery"
+    )]
     BadMagic,
     /// The final frame is incomplete and must be recovered explicitly.
     #[error("journal ends with an incomplete frame")]
     IncompleteFrame,
+    /// A frame used an alternate encoding that the canonical writer never emits.
+    #[error("journal record encoding is not canonical")]
+    NonCanonicalRecord,
     /// A complete frame could not be parsed as a strict journal record.
     #[error("journal record is invalid: {0}")]
     InvalidRecord(serde_json::Error),
@@ -347,122 +573,15 @@ pub enum JournalError {
     TerminalHashMismatch,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn journal_hash_chain_advances_and_file_is_nonempty() {
-        let root = tempfile::tempdir().expect("root");
-        let path = root.path().join("apply.journal");
-        let mut journal = Journal::create(&path).expect("journal");
-        let initial = journal.terminal_hash();
-        let record = journal
-            .append(
-                Utc::now(),
-                JournalEvent::PlanApproved {
-                    plan_id: PlanId::new(),
-                    plan_digest: Sha256Digest::of_bytes(b"plan"),
-                },
-            )
-            .expect("append");
-        assert_eq!(record.previous_hash, initial);
-        assert_eq!(journal.terminal_hash(), record.record_hash);
-        assert!(std::fs::metadata(path).expect("metadata").len() > JOURNAL_MAGIC.len() as u64);
-    }
-
-    #[test]
-    fn verification_detects_edit_reorder_and_prefix_truncation() {
-        let root = tempfile::tempdir().expect("root");
-        let path = root.path().join("apply.journal");
-        let mut journal = Journal::create(&path).expect("journal");
-        for label in ["first", "second"] {
-            journal
-                .append(
-                    Utc::now(),
-                    JournalEvent::ActionStarted {
-                        action_id: label.into(),
-                        pre_state_digest: Sha256Digest::of_bytes(label),
-                    },
-                )
-                .expect("append");
+impl JournalError {
+    fn into_io(self) -> io::Error {
+        match self {
+            Self::Io(error) => error,
+            other => io::Error::new(io::ErrorKind::InvalidInput, other),
         }
-        let terminal = journal.terminal_hash();
-        Journal::verify(&path, terminal).expect("valid journal");
-        let original = std::fs::read(&path).expect("bytes");
-        let first_length = u32::from_le_bytes(
-            original[JOURNAL_MAGIC.len()..JOURNAL_MAGIC.len() + 4]
-                .try_into()
-                .expect("first length"),
-        );
-        let first_end = JOURNAL_MAGIC.len() + 4 + usize::try_from(first_length).expect("length");
-        let mut reordered = JOURNAL_MAGIC.to_vec();
-        reordered.extend_from_slice(&original[first_end..]);
-        reordered.extend_from_slice(&original[JOURNAL_MAGIC.len()..first_end]);
-        let reordered_path = root.path().join("reordered.journal");
-        std::fs::write(&reordered_path, reordered).expect("reorder");
-        assert!(matches!(
-            Journal::read(reordered_path),
-            Err(JournalError::SequenceMismatch)
-        ));
-        let mut bytes = std::fs::read(&path).expect("bytes");
-        *bytes.last_mut().expect("last") ^= 1;
-        std::fs::write(&path, bytes).expect("edit");
-        assert!(matches!(
-            Journal::read(&path),
-            Err(JournalError::InvalidRecord(_) | JournalError::RecordHashMismatch)
-        ));
-
-        let path = root.path().join("truncated.journal");
-        let mut journal = Journal::create(&path).expect("journal");
-        journal
-            .append(
-                Utc::now(),
-                JournalEvent::PlanApproved {
-                    plan_id: PlanId::new(),
-                    plan_digest: Sha256Digest::of_bytes(b"plan"),
-                },
-            )
-            .expect("append");
-        let expected = journal.terminal_hash();
-        let bytes = std::fs::read(&path).expect("bytes");
-        std::fs::write(&path, &bytes[..JOURNAL_MAGIC.len()]).expect("truncate");
-        assert!(matches!(
-            Journal::verify(&path, expected),
-            Err(JournalError::TerminalHashMismatch)
-        ));
-    }
-
-    #[test]
-    fn recovery_only_removes_an_incomplete_last_frame() {
-        let root = tempfile::tempdir().expect("root");
-        let path = root.path().join("recover.journal");
-        let mut journal = Journal::create(&path).expect("journal");
-        journal
-            .append(
-                Utc::now(),
-                JournalEvent::PlanApproved {
-                    plan_id: PlanId::new(),
-                    plan_digest: Sha256Digest::of_bytes(b"plan"),
-                },
-            )
-            .expect("append");
-        let length_before = std::fs::metadata(&path).expect("metadata").len();
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .expect("append file");
-        file.write_all(&[5, 0, 0, 0, 1, 2]).expect("partial frame");
-        file.sync_all().expect("sync");
-        assert!(matches!(
-            Journal::read(&path),
-            Err(JournalError::IncompleteFrame)
-        ));
-        let (_, recovery) = Journal::recover(&path).expect("recovered");
-        assert_eq!(recovery.truncated_bytes, 6);
-        assert_eq!(
-            std::fs::metadata(path).expect("metadata").len(),
-            length_before
-        );
     }
 }
+
+#[cfg(test)]
+#[path = "journal_tests.rs"]
+mod tests;

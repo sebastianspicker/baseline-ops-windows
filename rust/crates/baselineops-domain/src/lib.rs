@@ -20,16 +20,20 @@ pub use canonical::{
     Sha256Digest, canonical_json_bytes, canonical_json_digest, canonical_json_value,
 };
 pub use error::{DomainError, DomainResult};
-pub use ids::{ActionId, ArtifactId, CapabilityId, FindingId, PlanId, ProfileId, ResultId, RunId};
+pub use ids::{
+    ActionId, ArtifactId, CapabilityId, FindingId, LogicalResourceId, PlanId, ProfileId, ResultId,
+    RunId,
+};
 pub use load::{JsonLoadLimits, load_json, load_json_file, load_plan_json, load_profile_json};
 pub use model::{
-    ActionKind, ActionResultV3, ActionStatus, ArtifactKind, ArtifactV3, CapabilityStatus,
-    ExecutionIntent, ExecutionStatus, ExitCode, FindingStatus, FindingV3, HostIdentity,
-    HostIdentityV3, ImplementationStatus, InputIdentityV3, JsonMap, ObservedStateV3,
-    ObservedValueV3, Operation, OsFamily, PlanV3, PlannedActionV3, PreconditionKind,
-    PreconditionV3, Privilege, ProfileDefaultsV3, ProfileStepV3, ProfileV3, RebootRequirement,
-    ResultStatus, ResultV3, Reversibility, RiskLevel, SchemaVersion, Severity, SourceIdentityV3,
-    SourceKind, ToolIdentityV3,
+    ActionKind, ActionReceiptV3, ActionResultV3, ActionStatus, ArtifactKind, ArtifactV3,
+    CapabilityStatus, ExecutionIntent, ExecutionStatus, ExitCode, FindingStatus, FindingV3,
+    HostIdentity, HostIdentityV3, ImplementationStatus, InputIdentityV3, JsonMap, ObservedStateV3,
+    ObservedValueV3, Operation, OsFamily, PlanSchemaVersion, PlanV3, PlanV4, PlannedActionV3,
+    PreconditionKind, PreconditionV3, Privilege, ProfileDefaultsV3, ProfileStepV3, ProfileV3,
+    RebootRequirement, ResourceBindingV3, ResourceKind, ResultStatus, ResultV3, Reversibility,
+    RiskLevel, SchemaVersion, Severity, SourceIdentityV3, SourceKind, ToolIdentityV3,
+    WorkerResultV3,
 };
 pub use validate::{PlanValidationContext, ProfileValidation, TopologicalOrder, VerifiedPlan};
 

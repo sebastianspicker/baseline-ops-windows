@@ -214,7 +214,33 @@ fn evaluate_secure_boot_findings(
     required: bool,
 ) -> Vec<PolicyFinding> {
     let mut findings = Vec::new();
-    let is_uefi = match &observation.firmware {
+    let is_uefi = evaluate_firmware(&observation.firmware, &mut findings);
+    if is_uefi && required {
+        evaluate_enabled(
+            &mut findings,
+            "SB-Disabled",
+            "Secure Boot is disabled on this UEFI system.",
+            &observation.uefi_secure_boot_enabled,
+            "SB-SecureBootStateIncomplete",
+            Severity::High,
+        );
+        evaluate_enabled(
+            &mut findings,
+            "SB-PlatformNotEnabled",
+            "Platform Secure Boot is not enabled.",
+            &observation.platform_secure_boot_enabled,
+            "SB-PlatformStateIncomplete",
+            Severity::Medium,
+        );
+    }
+    findings
+}
+
+fn evaluate_firmware(
+    firmware: &Observation<FirmwareType>,
+    findings: &mut Vec<PolicyFinding>,
+) -> bool {
+    match firmware {
         Observation::Present(FirmwareType::Uefi) => true,
         Observation::Present(FirmwareType::LegacyBios) => {
             findings.push(finding(
@@ -238,26 +264,7 @@ fn evaluate_secure_boot_findings(
             findings.push(incomplete("SB-FirmwareIncomplete", value, Severity::High));
             false
         }
-    };
-    if is_uefi && required {
-        evaluate_enabled(
-            &mut findings,
-            "SB-Disabled",
-            "Secure Boot is disabled on this UEFI system.",
-            &observation.uefi_secure_boot_enabled,
-            "SB-SecureBootStateIncomplete",
-            Severity::High,
-        );
-        evaluate_enabled(
-            &mut findings,
-            "SB-PlatformNotEnabled",
-            "Platform Secure Boot is not enabled.",
-            &observation.platform_secure_boot_enabled,
-            "SB-PlatformStateIncomplete",
-            Severity::Medium,
-        );
     }
-    findings
 }
 
 fn evaluate_enabled(

@@ -14,8 +14,8 @@ use serde_json::json;
 pub struct RemoteSurfacePolicy {}
 
 /// A fixed local TCP port and the count of bound endpoints observed for it.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct TcpListenerObservation {
     /// Fixed local TCP port associated with one remote surface.
     pub port: u16,
@@ -24,8 +24,8 @@ pub struct TcpListenerObservation {
 }
 
 /// Native evidence for `WinRM`, `OpenSSH`, `RDP`, and `SMB`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct RemoteSurfaceObservation {
     /// `WinRM` service state; it does not establish remote reachability.
     pub winrm_service: Observation<ServiceObservation>,

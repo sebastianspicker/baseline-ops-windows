@@ -81,6 +81,25 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
+function Initialize-Capability29Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
@@ -90,16 +109,18 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '29-Network-Config-Audit.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '29-Network-Config-Audit.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability29Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
@@ -108,9 +129,9 @@ if (-not $isWindowsHost) {
     Notes        = @('Skipped: this script is only supported on Windows hosts.')
   }
   $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
-  $result = Get-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
-  Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
-  if ($PassThru) { $result }
+  $RunState.result = Get-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  Write-ResultObject -ResultObject $RunState.result -OutputFormat $OutputFormat -OutputPath $OutputPath
+  if ($PassThru) { $RunState.result }
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
@@ -187,26 +208,9 @@ function Import-JsonConfigOrDefault {
 
     $json = $raw | ConvertFrom-Json
 
-    $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'FilterWhenNotIncludeHidden'
-    if ($null -ne $v) { $cfg.FilterWhenNotIncludeHidden = [bool]$v }
-
+    Set-NetworkBooleanConfig -Config $cfg -Json $json
     $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'CsvEncoding'
-    if ($null -ne $v -and -not [string]::IsNullOrWhiteSpace([string]$v)) { $cfg.CsvEncoding = [string]$v }
-
-    $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'CsvUseCultureDelimiter'
-    if ($null -ne $v) { $cfg.CsvUseCultureDelimiter = [bool]$v }
-
-    $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'ConsoleSummary'
-    if ($null -ne $v) { $cfg.ConsoleSummary = [bool]$v }
-
-    $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'ConsoleShowInterfaces'
-    if ($null -ne $v) { $cfg.ConsoleShowInterfaces = [bool]$v }
-
-    $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'ConsoleShowIssuesTable'
-    if ($null -ne $v) { $cfg.ConsoleShowIssuesTable = [bool]$v }
-
-    $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'ConsoleUseInformation'
-    if ($null -ne $v) { $cfg.ConsoleUseInformation = [bool]$v }
+    if ((Test-AllConditions -Conditions @({ $null -ne $v }, { -not [string]::IsNullOrWhiteSpace([string]$v) }))) { $cfg.CsvEncoding = [string]$v }
 
     $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'ConsoleWidthHint'
     if ($null -ne $v) { $cfg.ConsoleWidthHint = [int]$v }
@@ -215,6 +219,13 @@ function Import-JsonConfigOrDefault {
   }
   catch {
     return $cfg
+  }
+}
+function Set-NetworkBooleanConfig {
+  param($Config, $Json)
+  foreach ($name in @('FilterWhenNotIncludeHidden','CsvUseCultureDelimiter','ConsoleSummary','ConsoleShowInterfaces','ConsoleShowIssuesTable','ConsoleUseInformation')) {
+    $value = Get-OptionalPropertyValue -InputObject $Json -PropertyName $name
+    if ($null -ne $value) { $Config.$name = [bool]$value }
   }
 }
 
@@ -262,128 +273,171 @@ function Write-ConsoleInterfaces {
 }
 
 # --- Main ---
-Ensure-Cmdlet -Name 'Get-NetIPConfiguration'
+function Invoke-Capability29MainPhase01 {
+  param([hashtable]$RunState)
+  Ensure-Cmdlet -Name 'Get-NetIPConfiguration'
 
-$config = Import-JsonConfigOrDefault -JsonPath $JsonPath
+  $RunState.config = Import-JsonConfigOrDefault -JsonPath $JsonPath
 
-# Get-NetIPConfiguration without parameters returns non-virtual connected interfaces;
-# -All returns all interfaces (including virtual/loopback/disconnected).
-$netCfg = if ($IncludeHidden) { Get-NetIPConfiguration -All } else { Get-NetIPConfiguration }
-
-if (-not $IncludeHidden -and $config.FilterWhenNotIncludeHidden) {
-  $netCfg = $netCfg | Where-Object {
-    $_.IPv4Address -or $_.IPv6Address -or $_.IPv4DefaultGateway -or $_.IPv6DefaultGateway -or $_.DNSServer
-  }
+  # Get-NetIPConfiguration without parameters returns non-virtual connected interfaces;
+  # -All returns all interfaces (including virtual/loopback/disconnected).
+  $RunState.netCfg = if ($IncludeHidden) { Get-NetIPConfiguration -All } else { Get-NetIPConfiguration }
 }
-
-$interfaces = $netCfg | ForEach-Object {
-  $ipv4 = if ($_.IPv4Address) { ($_.IPv4Address | ForEach-Object { $_.IPAddress }) -join ', ' } else { $null }
-  $ipv6 = if ($_.IPv6Address) { ($_.IPv6Address | ForEach-Object { $_.IPAddress }) -join ', ' } else { $null }
-
-  $gw4 = if ($_.IPv4DefaultGateway) { $_.IPv4DefaultGateway.NextHop } else { $null }
-  $gw6 = if ($_.IPv6DefaultGateway) { $_.IPv6DefaultGateway.NextHop } else { $null }
-
-  $dns = if ($_.DNSServer -and $_.DNSServer.ServerAddresses) { ($_.DNSServer.ServerAddresses -join ', ') } else { $null }
-
-  $profileName = if ($_.NetProfile) { $_.NetProfile.Name } else { $null }
-
-  # DnsSuffix is not guaranteed on all objects -> safe lookup.
-  $dnsSuffix = Get-OptionalPropertyValue -InputObject $_ -PropertyName 'DnsSuffix'
-
-  [pscustomobject]@{
-    InterfaceAlias        = $_.InterfaceAlias
-    InterfaceIndex        = $_.InterfaceIndex
-    InterfaceDescription  = $_.InterfaceDescription
-    NetProfileName        = $profileName
-    IPv4Address           = $ipv4
-    IPv6Address           = $ipv6
-    IPv4Gateway           = $gw4
-    IPv6Gateway           = $gw6
-    DnsServers            = $dns
-    DnsSuffix             = $dnsSuffix
-  }
-}
-
-$summary = [pscustomobject]@{
-  ComputerName          = $env:COMPUTERNAME
-  InterfacesCount       = @($interfaces).Count
-  InterfacesWithGateway = @($interfaces | Where-Object { $_.IPv4Gateway -or $_.IPv6Gateway }).Count
-  InterfacesWithDNS     = @($interfaces | Where-Object { $_.DnsServers }).Count
-  Timestamp             = Get-Date
-}
-
-if ($ExportPath) {
-  $target = Resolve-ExportFolderAndBase -ExportPath $ExportPath
-
-  if (-not (Test-Path -Path $target.Folder)) {
-    New-Item -Path $target.Folder -ItemType Directory -Force | Out-Null
-  }
-
-  # Do not format objects before Export-Csv; select properties instead.
-  if ($config.CsvUseCultureDelimiter) {
-    $summary    | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_summary.csv"))    -NoTypeInformation -Encoding $config.CsvEncoding -UseCulture
-    $interfaces | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_interfaces.csv")) -NoTypeInformation -Encoding $config.CsvEncoding -UseCulture
-  }
-  else {
-    $summary    | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_summary.csv"))    -NoTypeInformation -Encoding $config.CsvEncoding
-    $interfaces | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_interfaces.csv")) -NoTypeInformation -Encoding $config.CsvEncoding
-  }
-}
-
-if (-not $Quiet -and $config.ConsoleSummary) {
-  $findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
-  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
-    -CustomFields ([ordered]@{
-      InterfacesTotal       = $summary.InterfacesCount
-      InterfacesWithGateway = $summary.InterfacesWithGateway
-      InterfacesWithDNS     = $summary.InterfacesWithDNS
-    })
-  # Interfaces table
-  if ($config.ConsoleShowInterfaces) {
-    Write-ConsoleInterfaces -Interfaces $interfaces -Config $config
-    Write-ConsoleLine -Text "" -Config $config
-  }
-  # Issues table
-  if ($config.ConsoleShowIssuesTable) {
-    $issues = @(
-      $interfaces | Where-Object {
-        (-not $_.DnsServers) -or
-        ((-not $_.IPv4Gateway) -and (-not $_.IPv6Gateway))
-      }
-    )
-    if ($issues.Count -eq 0) {
-      Write-ConsoleLine -Text "No obvious issues detected (missing DNS and/or gateway)." -Color Green -Config $config
-    } else {
-      Write-ConsoleLine -Text ("Potential issues: {0} interface(s) missing DNS and/or gateway" -f $issues.Count) -Color Yellow -Config $config
-      $issueRows = @($issues | Select-Object InterfaceAlias, InterfaceIndex, IPv4Address, IPv6Address, IPv4Gateway, IPv6Gateway, DnsServers)
-      $issuesText = To-ConsoleTableText -InputObjects $issueRows -Width $config.ConsoleWidthHint
-      if ($config.ConsoleUseInformation) { Write-Information -InformationAction Continue -MessageData $issuesText }
-      else { Write-UiLine $issuesText }
+function Invoke-Capability29MainPhase02 {
+  param([hashtable]$RunState)
+  if (-not $IncludeHidden -and $RunState.config.FilterWhenNotIncludeHidden) {
+    $RunState.netCfg = $RunState.netCfg | Where-Object {
+      $_.IPv4Address -or $_.IPv6Address -or $_.IPv4DefaultGateway -or $_.IPv6DefaultGateway -or $_.DNSServer
     }
   }
 }
+function Invoke-Capability29MainPhase03 {
+  param([hashtable]$RunState)
+  $RunState.interfaces = $RunState.netCfg | ForEach-Object {
+    $ipv4 = if ($_.IPv4Address) { ($_.IPv4Address | ForEach-Object { $_.IPAddress }) -join ', ' } else { $null }
+    $ipv6 = if ($_.IPv6Address) { ($_.IPv6Address | ForEach-Object { $_.IPAddress }) -join ', ' } else { $null }
 
-$result = [pscustomobject]@{
-  Summary    = $summary
-  Interfaces = $interfaces
+    $gw4 = if ($_.IPv4DefaultGateway) { $_.IPv4DefaultGateway.NextHop } else { $null }
+    $gw6 = if ($_.IPv6DefaultGateway) { $_.IPv6DefaultGateway.NextHop } else { $null }
+
+    $dns = if ((Test-AllConditions -Conditions @({ $_.DNSServer }, { $_.DNSServer.ServerAddresses }))) { ($_.DNSServer.ServerAddresses -join ', ') } else { $null }
+
+    $profileName = if ($_.NetProfile) { $_.NetProfile.Name } else { $null }
+
+    # DnsSuffix is not guaranteed on all objects -> safe lookup.
+    $dnsSuffix = Get-OptionalPropertyValue -InputObject $_ -PropertyName 'DnsSuffix'
+
+    [pscustomobject]@{
+      InterfaceAlias        = $_.InterfaceAlias
+      InterfaceIndex        = $_.InterfaceIndex
+      InterfaceDescription  = $_.InterfaceDescription
+      NetProfileName        = $profileName
+      IPv4Address           = $ipv4
+      IPv6Address           = $ipv6
+      IPv4Gateway           = $gw4
+      IPv6Gateway           = $gw6
+      DnsServers            = $dns
+      DnsSuffix             = $dnsSuffix
+    }
+  }
+}
+function Invoke-Capability29MainPhase04 {
+  param([hashtable]$RunState)
+  $summary = [pscustomobject]@{
+    ComputerName          = $env:COMPUTERNAME
+    InterfacesCount       = @($RunState.interfaces).Count
+    InterfacesWithGateway = @($RunState.interfaces | Where-Object { $_.IPv4Gateway -or $_.IPv6Gateway }).Count
+    InterfacesWithDNS     = @($RunState.interfaces | Where-Object { $_.DnsServers }).Count
+    Timestamp             = Get-Date
+  }
+
+  if ($ExportPath) {
+    $target = Resolve-ExportFolderAndBase -ExportPath $ExportPath
+
+    if (-not (Test-Path -Path $target.Folder)) {
+      New-Item -Path $target.Folder -ItemType Directory -Force | Out-Null
+    }
+
+    # Do not format objects before Export-Csv; select properties instead.
+    if ($RunState.config.CsvUseCultureDelimiter) {
+      $summary    | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_summary.csv"))    -NoTypeInformation -Encoding $RunState.config.CsvEncoding -UseCulture
+      $RunState.interfaces | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_interfaces.csv")) -NoTypeInformation -Encoding $RunState.config.CsvEncoding -UseCulture
+    }
+    else {
+      $summary    | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_summary.csv"))    -NoTypeInformation -Encoding $RunState.config.CsvEncoding
+      $RunState.interfaces | Export-Csv -Path (Join-Path $target.Folder ($target.Base + "_interfaces.csv")) -NoTypeInformation -Encoding $RunState.config.CsvEncoding
+    }
+  }
+}
+function Invoke-Capability29MainPhase05Step01 {
+  param([hashtable]$RunState)
+$findingsAL = ConvertTo-ArrayList -InputObject $script:Findings
+    Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
+      -CustomFields ([ordered]@{
+        InterfacesTotal       = $summary.InterfacesCount
+        InterfacesWithGateway = $summary.InterfacesWithGateway
+        InterfacesWithDNS     = $summary.InterfacesWithDNS
+      })
+    # Interfaces table
+    if ($RunState.config.ConsoleShowInterfaces) {
+      Write-ConsoleInterfaces -Interfaces $RunState.interfaces -Config $RunState.config
+      Write-ConsoleLine -Text "" -Config $RunState.config
+    }
 }
 
-$issueInterfaces = @($interfaces | Where-Object {
-  (-not $_.DnsServers) -or ((-not $_.IPv4Gateway) -and (-not $_.IPv6Gateway))
-})
-foreach ($iface in $issueInterfaces) {
-  $issueType = @()
-  if (-not $iface.DnsServers) { $issueType += 'missing DNS' }
-  if (-not $iface.IPv4Gateway -and -not $iface.IPv6Gateway) { $issueType += 'missing gateway' }
-  Add-Finding -FindingList $script:Findings -Code 'NET-InterfaceIssue' -Severity 'Medium' `
-    -Message ("Interface '{0}' has {1}" -f $iface.InterfaceAlias, ($issueType -join ' and ')) `
-    -Extra @{ InterfaceAlias = $iface.InterfaceAlias; InterfaceIndex = $iface.InterfaceIndex; IPv4Address = $iface.IPv4Address; DnsServers = $iface.DnsServers }
+function Invoke-Capability29MainPhase05Step02 {
+  param([hashtable]$RunState)
+if ($RunState.config.ConsoleShowIssuesTable) {
+      $issues = @(
+        $RunState.interfaces | Where-Object {
+          (-not $_.DnsServers) -or
+          ((-not $_.IPv4Gateway) -and (-not $_.IPv6Gateway))
+        }
+      )
+      if ($issues.Count -eq 0) {
+        Write-ConsoleLine -Text "No obvious issues detected (missing DNS and/or gateway)." -Color Green -Config $RunState.config
+      } else {
+        Write-ConsoleLine -Text ("Potential issues: {0} interface(s) missing DNS and/or gateway" -f $issues.Count) -Color Yellow -Config $RunState.config
+        $issueRows = @($issues | Select-Object InterfaceAlias, InterfaceIndex, IPv4Address, IPv6Address, IPv4Gateway, IPv6Gateway, DnsServers)
+        $issuesText = To-ConsoleTableText -InputObjects $issueRows -Width $RunState.config.ConsoleWidthHint
+        if ($RunState.config.ConsoleUseInformation) { Write-Information -InformationAction Continue -MessageData $issuesText }
+        else { Write-UiLine $issuesText }
+      }
+    }
 }
+
+function Invoke-Capability29MainPhase05 {
+  param([hashtable]$RunState)
+  if (-not $Quiet -and $RunState.config.ConsoleSummary) {
+    . Invoke-Capability29MainPhase05Step01 -RunState $RunState
+. Invoke-Capability29MainPhase05Step02 -RunState $RunState
+  }
+}
+function Invoke-Capability29MainPhase06 {
+  param([hashtable]$RunState)
+  $RunState.result = [pscustomobject]@{
+    Summary    = $summary
+    Interfaces = $RunState.interfaces
+  }
+
+  $RunState.issueInterfaces = @($RunState.interfaces | Where-Object {
+    (-not $_.DnsServers) -or ((-not $_.IPv4Gateway) -and (-not $_.IPv6Gateway))
+  })
+}
+function Invoke-Capability29MainPhase07 {
+  param([hashtable]$RunState)
+  foreach ($iface in $RunState.issueInterfaces) {
+    $issueType = @()
+    if (-not $iface.DnsServers) { $issueType += 'missing DNS' }
+    if (-not $iface.IPv4Gateway -and -not $iface.IPv6Gateway) { $issueType += 'missing gateway' }
+    Add-Finding -FindingList $script:Findings -Code 'NET-InterfaceIssue' -Severity 'Medium' `
+      -Message ("Interface '{0}' has {1}" -f $iface.InterfaceAlias, ($issueType -join ' and ')) `
+      -Extra @{ InterfaceAlias = $iface.InterfaceAlias; InterfaceIndex = $iface.InterfaceIndex; IPv4Address = $iface.IPv4Address; DnsServers = $iface.DnsServers }
+  }
+}
+function Invoke-Capability29Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability29MainPhase01 -RunState $RunState
+  . Invoke-Capability29MainPhase02 -RunState $RunState
+  . Invoke-Capability29MainPhase03 -RunState $RunState
+  . Invoke-Capability29MainPhase04 -RunState $RunState
+  . Invoke-Capability29MainPhase05 -RunState $RunState
+  . Invoke-Capability29MainPhase06 -RunState $RunState
+  . Invoke-Capability29MainPhase07 -RunState $RunState
+}
+. Invoke-Capability29Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # V2 output contract
-$resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
-$v2Result = Get-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $result.Summary -Metadata @{ Interfaces = $result.Interfaces }
+function Get-Capability29ResultToken {
+  $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
+  return $resultToken
+}
+$resultToken = Get-Capability29ResultToken
+$v2Result = Get-V2ResultObject -ScriptName '29-Network-Config-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $RunState.result.Summary -Metadata @{ Interfaces = $RunState.result.Interfaces }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

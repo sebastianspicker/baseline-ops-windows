@@ -159,10 +159,8 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '23-BitLocker-Operations-Audit.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
@@ -186,6 +184,20 @@ if (-not $isWindowsHost) {
 
 # Ensure-Cmdlet imported from lib/External.psm1
 
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
 function Normalize-MountPoint {
   param(
     [Parameter(Mandatory)]
@@ -237,27 +249,44 @@ function Import-JsonConfigOrDefault {
     # ConvertFrom-Json should be guarded via try/catch for invalid JSON.
     $parsed = $raw | ConvertFrom-Json
 
-    if ($null -ne $parsed.SummaryToHost)                   { $cfg.SummaryToHost                  = [bool]$parsed.SummaryToHost }
-    if ($null -ne $parsed.PrettyConsole)                   { $cfg.PrettyConsole                  = [bool]$parsed.PrettyConsole }
-
-    if ($null -ne $parsed.IncludeManageBdeTextDefault)     { $cfg.IncludeManageBdeTextDefault    = [bool]$parsed.IncludeManageBdeTextDefault }
-    if ($null -ne $parsed.ExportEnabledDefault)            { $cfg.ExportEnabledDefault           = [bool]$parsed.ExportEnabledDefault }
-    if ($null -ne $parsed.ExportPathDefault -and -not [string]::IsNullOrWhiteSpace([string]$parsed.ExportPathDefault)) {
+    Set-BitLockerBooleanConfigDefaults -Defaults $cfg -Parsed $parsed
+    if (Test-BitLockerExportPath -Value $parsed.ExportPathDefault) {
       $cfg.ExportPathDefault = [string]$parsed.ExportPathDefault
     }
 
-    if ($null -ne $parsed.ManageBdeMaxChars) {
-      $n = 0
-      if ([int]::TryParse([string]$parsed.ManageBdeMaxChars, [ref]$n) -and $n -ge 0) { $cfg.ManageBdeMaxChars = $n }
-    }
-
-    if ($null -ne $parsed.IncludeProtectorCount)           { $cfg.IncludeProtectorCount          = [bool]$parsed.IncludeProtectorCount }
-    if ($null -ne $parsed.IncludeKeyProtectorIds)          { $cfg.IncludeKeyProtectorIds         = [bool]$parsed.IncludeKeyProtectorIds }
-    if ($null -ne $parsed.UseManageBdeProtectionExitCode)  { $cfg.UseManageBdeProtectionExitCode = [bool]$parsed.UseManageBdeProtectionExitCode }
+    Set-BitLockerManageBdeLimit -Defaults $cfg -Parsed $parsed
 
     return $cfg
   } catch {
     return $cfg
+  }
+}
+function Test-BitLockerExportPath {
+  param([AllowNull()]$Value)
+  if ($null -eq $Value) { return $false }
+  return (-not [string]::IsNullOrWhiteSpace([string]$Value))
+}
+function Set-BitLockerManageBdeLimit {
+  param($Defaults, $Parsed)
+  if ($null -eq $Parsed.ManageBdeMaxChars) { return }
+  $value = 0
+  if ([int]::TryParse([string]$Parsed.ManageBdeMaxChars, [ref]$value) -and $value -ge 0) {
+    $Defaults.ManageBdeMaxChars = $value
+  }
+}
+function Set-BitLockerBooleanConfigDefaults {
+  param($Defaults, $Parsed)
+  foreach ($name in @(
+      'SummaryToHost',
+      'PrettyConsole',
+      'IncludeManageBdeTextDefault',
+      'ExportEnabledDefault',
+      'IncludeProtectorCount',
+      'IncludeKeyProtectorIds',
+      'UseManageBdeProtectionExitCode'
+    )) {
+    $property = $Parsed.PSObject.Properties[$name]
+    if ($null -ne $property) { $Defaults.$name = [bool]$property.Value }
   }
 }
 
@@ -291,6 +320,77 @@ function Get-StatusColor {
 }
 
 
+function Write-SummaryToConsoleSection01 {
+  param([hashtable]$RunState)
+$titleColor = if ($RunState.PrettyConsole) { [ConsoleColor]::White } else { [ConsoleColor]::Gray }
+  $lineColor  = if ($RunState.PrettyConsole) { [ConsoleColor]::DarkGray } else { [ConsoleColor]::Gray }
+
+  Write-UiLine ""
+  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
+  Write-UiLine "BitLocker audit summary" -ForegroundColor $titleColor
+  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
+
+  Write-KeyValue -Key 'ComputerName'         -Value $RunState.Result.ComputerName -ValueColor ([ConsoleColor]::Gray)
+  Write-KeyValue -Key 'MountPoint'           -Value $RunState.Result.MountPoint -ValueColor ([ConsoleColor]::Gray)
+
+  Write-KeyValue -Key 'VolumeType'           -Value $RunState.Result.VolumeType -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'VolumeStatus'         -Value $RunState.Result.VolumeStatus -ValueColor (Get-StatusColor -Value $RunState.Result.VolumeStatus)
+  Write-KeyValue -Key 'ProtectionStatus'     -Value $RunState.Result.ProtectionStatus -ValueColor (Get-StatusColor -Value $RunState.Result.ProtectionStatus)
+  Write-KeyValue -Key 'EncryptionPercentage' -Value $RunState.Result.EncryptionPercentage -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'EncryptionMethod'     -Value $RunState.Result.EncryptionMethod -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'LockStatus'           -Value $RunState.Result.LockStatus -ValueColor ([ConsoleColor]::Cyan)
+  Write-KeyValue -Key 'AutoUnlockEnabled'    -Value $RunState.Result.AutoUnlockEnabled -ValueColor ([ConsoleColor]::Cyan)
+
+  Write-KeyValue -Key 'KeyProtectorTypes'    -Value $RunState.Result.KeyProtectorTypes -ValueColor ([ConsoleColor]::Cyan)
+  if ($null -ne $RunState.Result.KeyProtectorCount) {
+    $countColor = if ($RunState.Result.KeyProtectorCount -gt 0) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }
+    Write-KeyValue -Key 'KeyProtectorCount'  -Value $RunState.Result.KeyProtectorCount -ValueColor $countColor
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($RunState.Result.Findings)) {
+    Write-UiLine ("-" * 60) -ForegroundColor $lineColor
+    Write-KeyValue -Key 'Finding(s)' -Value $RunState.Result.Findings -ValueColor ([ConsoleColor]::Yellow) -KeyWidth 28
+  }
+
+  Write-UiLine ("-" * 60) -ForegroundColor $lineColor
+}
+
+function Write-SummaryToConsoleSection02 {
+  param([hashtable]$RunState)
+$gbvState = if ([string]::IsNullOrWhiteSpace($RunState.Result.GetBitLockerVolumeError)) { 'OK' } else { 'ERROR' }
+  $gbvColor = if ($gbvState -eq 'OK') { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
+  Write-KeyValue -Key 'Get-BitLockerVolume' -Value $gbvState -ValueColor $gbvColor
+  if (-not [string]::IsNullOrWhiteSpace($RunState.Result.GetBitLockerVolumeError)) {
+    Write-KeyValue -Key 'GBV error' -Value $RunState.Result.GetBitLockerVolumeError -ValueColor ([ConsoleColor]::Red)
+  }
+
+  $mbState = if ([string]::IsNullOrWhiteSpace($RunState.Result.ManageBdeError)) { 'OK' } else { 'ERROR' }
+  $mbColor = if ($mbState -eq 'OK') { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
+  Write-KeyValue -Key 'manage-bde' -Value $mbState -ValueColor $mbColor
+}
+
+function Write-SummaryToConsoleSection03 {
+  param([hashtable]$RunState)
+if (-not [string]::IsNullOrWhiteSpace($RunState.Result.ManageBdeError)) {
+    Write-KeyValue -Key 'manage-bde error' -Value $RunState.Result.ManageBdeError -ValueColor ([ConsoleColor]::Red)
+  }
+
+  if ($null -ne $RunState.Result.ManageBdeProtectionExitCode) {
+    $exitColor = if ($RunState.Result.ManageBdeProtectionExitCode -in 0,1) { [ConsoleColor]::Cyan } else { [ConsoleColor]::Yellow }
+    Write-KeyValue -Key 'mb protect exit' -Value $RunState.Result.ManageBdeProtectionExitCode -ValueColor $exitColor
+    Write-KeyValue -Key 'mb protected'    -Value $RunState.Result.ManageBdeIsProtected -ValueColor ([ConsoleColor]::Cyan)
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($RunState.EffectiveExportPath)) {
+    Write-KeyValue -Key 'CSV export' -Value $RunState.EffectiveExportPath -ValueColor ([ConsoleColor]::Gray)
+  }
+
+  Write-KeyValue -Key 'Timestamp' -Value $RunState.Result.Timestamp -ValueColor ([ConsoleColor]::Gray)
+
+  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
+  Write-UiLine ""
+}
+
 function Write-SummaryToConsole {
   param(
     [Parameter(Mandatory)]
@@ -300,246 +400,275 @@ function Write-SummaryToConsole {
     [string]$EffectiveExportPath,
 
     [bool]$PrettyConsole
-  )
+  , [hashtable]$RunState)
+  $RunState.EffectiveExportPath = $EffectiveExportPath
+  $RunState.PrettyConsole = $PrettyConsole
+  $RunState.Result = $Result
 
-  $titleColor = if ($PrettyConsole) { [ConsoleColor]::White } else { [ConsoleColor]::Gray }
-  $lineColor  = if ($PrettyConsole) { [ConsoleColor]::DarkGray } else { [ConsoleColor]::Gray }
-
-  Write-UiLine ""
-  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
-  Write-UiLine "BitLocker audit summary" -ForegroundColor $titleColor
-  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
-
-  Write-KeyValue -Key 'ComputerName'         -Value $Result.ComputerName -ValueColor ([ConsoleColor]::Gray)
-  Write-KeyValue -Key 'MountPoint'           -Value $Result.MountPoint -ValueColor ([ConsoleColor]::Gray)
-
-  Write-KeyValue -Key 'VolumeType'           -Value $Result.VolumeType -ValueColor ([ConsoleColor]::Cyan)
-  Write-KeyValue -Key 'VolumeStatus'         -Value $Result.VolumeStatus -ValueColor (Get-StatusColor -Value $Result.VolumeStatus)
-  Write-KeyValue -Key 'ProtectionStatus'     -Value $Result.ProtectionStatus -ValueColor (Get-StatusColor -Value $Result.ProtectionStatus)
-  Write-KeyValue -Key 'EncryptionPercentage' -Value $Result.EncryptionPercentage -ValueColor ([ConsoleColor]::Cyan)
-  Write-KeyValue -Key 'EncryptionMethod'     -Value $Result.EncryptionMethod -ValueColor ([ConsoleColor]::Cyan)
-  Write-KeyValue -Key 'LockStatus'           -Value $Result.LockStatus -ValueColor ([ConsoleColor]::Cyan)
-  Write-KeyValue -Key 'AutoUnlockEnabled'    -Value $Result.AutoUnlockEnabled -ValueColor ([ConsoleColor]::Cyan)
-
-  Write-KeyValue -Key 'KeyProtectorTypes'    -Value $Result.KeyProtectorTypes -ValueColor ([ConsoleColor]::Cyan)
-  if ($null -ne $Result.KeyProtectorCount) {
-    $countColor = if ($Result.KeyProtectorCount -gt 0) { [ConsoleColor]::Green } else { [ConsoleColor]::Yellow }
-    Write-KeyValue -Key 'KeyProtectorCount'  -Value $Result.KeyProtectorCount -ValueColor $countColor
-  }
-
-  if (-not [string]::IsNullOrWhiteSpace($Result.Findings)) {
-    Write-UiLine ("-" * 60) -ForegroundColor $lineColor
-    Write-KeyValue -Key 'Finding(s)' -Value $Result.Findings -ValueColor ([ConsoleColor]::Yellow) -KeyWidth 28
-  }
-
-  Write-UiLine ("-" * 60) -ForegroundColor $lineColor
-
-  $gbvState = if ([string]::IsNullOrWhiteSpace($Result.GetBitLockerVolumeError)) { 'OK' } else { 'ERROR' }
-  $gbvColor = if ($gbvState -eq 'OK') { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
-  Write-KeyValue -Key 'Get-BitLockerVolume' -Value $gbvState -ValueColor $gbvColor
-  if (-not [string]::IsNullOrWhiteSpace($Result.GetBitLockerVolumeError)) {
-    Write-KeyValue -Key 'GBV error' -Value $Result.GetBitLockerVolumeError -ValueColor ([ConsoleColor]::Red)
-  }
-
-  $mbState = if ([string]::IsNullOrWhiteSpace($Result.ManageBdeError)) { 'OK' } else { 'ERROR' }
-  $mbColor = if ($mbState -eq 'OK') { [ConsoleColor]::Green } else { [ConsoleColor]::Red }
-  Write-KeyValue -Key 'manage-bde' -Value $mbState -ValueColor $mbColor
-  if (-not [string]::IsNullOrWhiteSpace($Result.ManageBdeError)) {
-    Write-KeyValue -Key 'manage-bde error' -Value $Result.ManageBdeError -ValueColor ([ConsoleColor]::Red)
-  }
-
-  if ($null -ne $Result.ManageBdeProtectionExitCode) {
-    $exitColor = if ($Result.ManageBdeProtectionExitCode -in 0,1) { [ConsoleColor]::Cyan } else { [ConsoleColor]::Yellow }
-    Write-KeyValue -Key 'mb protect exit' -Value $Result.ManageBdeProtectionExitCode -ValueColor $exitColor
-    Write-KeyValue -Key 'mb protected'    -Value $Result.ManageBdeIsProtected -ValueColor ([ConsoleColor]::Cyan)
-  }
-
-  if (-not [string]::IsNullOrWhiteSpace($EffectiveExportPath)) {
-    Write-KeyValue -Key 'CSV export' -Value $EffectiveExportPath -ValueColor ([ConsoleColor]::Gray)
-  }
-
-  Write-KeyValue -Key 'Timestamp' -Value $Result.Timestamp -ValueColor ([ConsoleColor]::Gray)
-
-  Write-UiLine ("=" * 60) -ForegroundColor $lineColor
-  Write-UiLine ""
+    . Write-SummaryToConsoleSection01 -RunState $RunState
+    . Write-SummaryToConsoleSection02 -RunState $RunState
+    . Write-SummaryToConsoleSection03 -RunState $RunState
 }
 
 # -------------------------
 # Pre-flight
 # -------------------------
-Require-Admin
+function Invoke-Capability23MainPhase01 {
+  param([hashtable]$RunState)
+  Require-Admin
 
-$cfg = Import-JsonConfigOrDefault -Path $ConfigPath
-$mp  = Normalize-MountPoint -Value $MountPoint
+  $cfg = Import-JsonConfigOrDefault -Path $ConfigPath
+  $mp  = Normalize-MountPoint -Value $MountPoint
 
-Ensure-Cmdlet -Name 'Get-BitLockerVolume'
+  Ensure-Cmdlet -Name 'Get-BitLockerVolume'
 
-$effectiveIncludeManageBdeText = $IncludeManageBdeText.IsPresent -or $cfg.IncludeManageBdeTextDefault
+  $RunState.effectiveIncludeManageBdeText = $IncludeManageBdeText.IsPresent -or $cfg.IncludeManageBdeTextDefault
 
-$effectiveExportPath = $ExportPath
-if ([string]::IsNullOrWhiteSpace($effectiveExportPath) -and $cfg.ExportEnabledDefault) {
-  $effectiveExportPath = $cfg.ExportPathDefault
-}
-
-# -------------------------
-# Data collection (primary): Get-BitLockerVolume
-# -------------------------
-$vol = $null
-$gbvErrorText = $null
-try {
-  $vol = Get-BitLockerVolume -MountPoint $mp  # Structured source.
-} catch {
-  $gbvErrorText = $_.Exception.Message
-}
-
-$keyProtectorTypes = @()
-$keyProtectorIds   = @()
-
-if ($vol -and $vol.KeyProtector) {
-  foreach ($kp in $vol.KeyProtector) {
-    if ($kp -and $kp.KeyProtectorType) { $keyProtectorTypes += [string]$kp.KeyProtectorType }
-    if ($cfg.IncludeKeyProtectorIds -and $kp -and $kp.KeyProtectorId) { $keyProtectorIds += [string]$kp.KeyProtectorId }
+  $RunState.effectiveExportPath = $ExportPath
+  if ([string]::IsNullOrWhiteSpace($RunState.effectiveExportPath) -and $cfg.ExportEnabledDefault) {
+    $RunState.effectiveExportPath = $cfg.ExportPathDefault
   }
-  $keyProtectorTypes = $keyProtectorTypes | Select-Object -Unique
-  $keyProtectorIds   = $keyProtectorIds   | Select-Object -Unique
-}
 
-$keyProtectorCount = $null
-if ($cfg.IncludeProtectorCount) {
-  $keyProtectorCount = $(if ($vol -and $vol.KeyProtector) { @($vol.KeyProtector).Count } else { 0 })
-}
-
-# -------------------------
-# Data collection (secondary): manage-bde
-# -------------------------
-$manageBdeText = $null
-$manageBdeErrorText = $null
-try {
-  $manageBdeStatus = Invoke-NativeCommand -Command 'manage-bde.exe' -Arguments @('-status',$mp) -CaptureOutput -Quiet -TimeoutSeconds 60 -MaxOutputBytes 1048576
-  if ($null -eq $manageBdeStatus -or -not $manageBdeStatus.Success -or $manageBdeStatus.TimedOut -or $manageBdeStatus.OutputTruncated -or $manageBdeStatus.StderrTruncated) { throw 'manage-bde status timed out, failed, or produced truncated output.' }
-  $manageBdeText = $manageBdeStatus.Output.Trim()  # Documented.
-} catch {
-  $manageBdeErrorText = $_.Exception.Message
-  $manageBdeText = $null
-}
-
-if ($effectiveIncludeManageBdeText -and $null -ne $manageBdeText) {
-  $manageBdeText = Truncate-Text -Text $manageBdeText -MaxChars $cfg.ManageBdeMaxChars
-}
-
-# manage-bde -status -protectionaserrorlevel: expected 0 (protected) or 1 (unprotected).
-$manageBdeProtectionExitCode = $null
-$manageBdeIsProtected = $null
-$manageBdeProtectionCheckError = $null
-
-if ($cfg.UseManageBdeProtectionExitCode) {
+  # -------------------------
+  # Data collection (primary): Get-BitLockerVolume
+  # -------------------------
+  $RunState.vol = $null
+  $RunState.gbvErrorText = $null
   try {
-    $manageBdeProtection = Invoke-NativeCommand -Command 'manage-bde.exe' -Arguments @('-status',$mp,'-protectionaserrorlevel') -CaptureOutput -Quiet -TimeoutSeconds 60 -MaxOutputBytes 65536
-    if ($null -eq $manageBdeProtection -or $manageBdeProtection.TimedOut -or $manageBdeProtection.OutputTruncated -or $manageBdeProtection.StderrTruncated) { throw 'manage-bde protection check timed out or produced truncated output.' }
-    $manageBdeProtectionExitCode = $manageBdeProtection.ExitCode
-
-    if ($manageBdeProtectionExitCode -eq 0) { $manageBdeIsProtected = $true }
-    elseif ($manageBdeProtectionExitCode -eq 1) { $manageBdeIsProtected = $false }
-    else {
-      $manageBdeIsProtected = $null
-      $manageBdeProtectionCheckError = "Unexpected exit code from manage-bde -protectionaserrorlevel: $manageBdeProtectionExitCode (expected 0 or 1)."
-    }
+    $RunState.vol = Get-BitLockerVolume -MountPoint $mp  # Structured source.
   } catch {
-    $manageBdeProtectionCheckError = $_.Exception.Message
+    $RunState.gbvErrorText = $_.Exception.Message
+  }
+
+  $RunState.keyProtectorTypes = @()
+  $RunState.keyProtectorIds   = @()
+}
+function Invoke-Capability23MainPhase02Step01 {
+  param([hashtable]$RunState)
+foreach ($kp in $RunState.vol.KeyProtector) {
+      if ($kp -and $kp.KeyProtectorType) { $RunState.keyProtectorTypes += [string]$kp.KeyProtectorType }
+      if ($cfg.IncludeKeyProtectorIds -and $kp -and $kp.KeyProtectorId) { $RunState.keyProtectorIds += [string]$kp.KeyProtectorId }
+    }
+}
+
+function Invoke-Capability23MainPhase02Step02 {
+  param([hashtable]$RunState)
+$RunState.keyProtectorTypes = $RunState.keyProtectorTypes | Select-Object -Unique
+    $RunState.keyProtectorIds   = $RunState.keyProtectorIds   | Select-Object -Unique
+}
+
+function Invoke-Capability23MainPhase02 {
+  param([hashtable]$RunState)
+  if ($RunState.vol -and $RunState.vol.KeyProtector) {
+    . Invoke-Capability23MainPhase02Step01 -RunState $RunState
+. Invoke-Capability23MainPhase02Step02 -RunState $RunState
   }
 }
+function Invoke-Capability23MainPhase03 {
+  param([hashtable]$RunState)
+  $RunState.keyProtectorCount = $null
+  if ($cfg.IncludeProtectorCount) {
+    $RunState.keyProtectorCount = $(if ($RunState.vol -and $RunState.vol.KeyProtector) { @($RunState.vol.KeyProtector).Count } else { 0 })
+  }
 
-# -------------------------
-# Findings
-# -------------------------
-$findings = Get-FindingsList
-
-if ($vol) {
-  if ($vol.VolumeStatus -eq 'FullyEncrypted' -and $vol.ProtectionStatus -eq 'Off') {
-    Add-Finding -FindingList $findings -Code 'BLKR-ProtectionSuspended' -Severity 'High' -Message "Volume is fully encrypted but protection is OFF (likely suspended)."
-  }
-  if (($vol.VolumeType -eq 'OperatingSystem') -and ($keyProtectorCount -eq 0)) {
-    Add-Finding -FindingList $findings -Code 'BLKR-NoKeyProtectors' -Severity 'High' -Message "No key protectors detected for OS volume (unexpected configuration or query failure)."
-  }
-} else {
-  if (-not [string]::IsNullOrWhiteSpace($gbvErrorText)) {
-    Add-Finding -FindingList $findings -Code 'BLKR-GetBitLockerVolumeFailed' -Severity 'Medium' -Message "Get-BitLockerVolume failed; rely on manage-bde output for troubleshooting."
-  }
+  # -------------------------
+  # Data collection (secondary): manage-bde
+  # -------------------------
+  $RunState.manageBdeText = $null
+  $RunState.manageBdeErrorText = $null
 }
-
-if ($cfg.UseManageBdeProtectionExitCode -and -not [string]::IsNullOrWhiteSpace($manageBdeProtectionCheckError)) {
-  Add-Finding -FindingList $findings -Code 'BLKR-ManageBdeProtectionCheckIssue' -Severity 'Medium' -Message ("manage-bde protection check issue: " + $manageBdeProtectionCheckError)
-}
-
-if ($cfg.UseManageBdeProtectionExitCode -and ($null -ne $manageBdeIsProtected) -and $vol) {
-  $psProtected =
-    if ($vol.ProtectionStatus -eq 'On') { $true }
-    elseif ($vol.ProtectionStatus -eq 'Off') { $false }
-    else { $null }
-
-  if (($null -ne $psProtected) -and ($psProtected -ne $manageBdeIsProtected)) {
-    Add-Finding -FindingList $findings -Code 'BLKR-ProtectionStateMismatch' -Severity 'Medium' -Message "Protection state mismatch between Get-BitLockerVolume and manage-bde exit code."
+function Invoke-Capability23MainPhase04 {
+  param([hashtable]$RunState)
+  try {
+    $manageBdeStatus = Invoke-NativeCommand -Command 'manage-bde.exe' -Arguments @('-status',$mp) -CaptureOutput -Quiet -TimeoutSeconds 60 -MaxOutputBytes 1048576
+    if ($null -eq $manageBdeStatus -or -not $manageBdeStatus.Success -or $manageBdeStatus.TimedOut -or $manageBdeStatus.OutputTruncated -or $manageBdeStatus.StderrTruncated) { throw 'manage-bde status timed out, failed, or produced truncated output.' }
+    $RunState.manageBdeText = $manageBdeStatus.Output.Trim()  # Documented.
+  } catch {
+    $RunState.manageBdeErrorText = $_.Exception.Message
+    $RunState.manageBdeText = $null
   }
 }
-
-# -------------------------
-# Result object (pipeline output only)
-# -------------------------
-$result = [pscustomobject]@{
-  ComputerName                = $env:COMPUTERNAME
-  MountPoint                  = $mp
-  Timestamp                   = (Get-Date)
-
-  VolumeType                  = $(if ($vol) { $vol.VolumeType } else { $null })
-  VolumeStatus                = $(if ($vol) { $vol.VolumeStatus } else { $null })
-  ProtectionStatus            = $(if ($vol) { $vol.ProtectionStatus } else { $null })
-  EncryptionPercentage        = $(if ($vol) { $vol.EncryptionPercentage } else { $null })
-  AutoUnlockEnabled           = $(if ($vol) { $vol.AutoUnlockEnabled } else { $null })
-
-  EncryptionMethod            = $(if ($vol) { $vol.EncryptionMethod } else { $null })
-  LockStatus                  = $(if ($vol) { $vol.LockStatus } else { $null })
-  CapacityGB                  = $(if ($vol) { $vol.CapacityGB } else { $null })
-  MetadataVersion             = $(if ($vol) { $vol.MetadataVersion } else { $null })
-
-  KeyProtectorTypes           = ($keyProtectorTypes -join ', ')
-  KeyProtectorCount           = $keyProtectorCount
-  KeyProtectorIds             = $(if ($cfg.IncludeKeyProtectorIds) { ($keyProtectorIds -join ', ') } else { $null })
-
-  GetBitLockerVolumeError     = $gbvErrorText
-  ManageBdeError              = $manageBdeErrorText
-
-  ManageBdeProtectionExitCode = $manageBdeProtectionExitCode
-  ManageBdeIsProtected        = $manageBdeIsProtected
-
-  Findings                    = $(if ($findings.Count -gt 0) { (($findings | ForEach-Object { $_.Message }) -join ' | ') } else { '' })
-}
-
-if ($effectiveIncludeManageBdeText) {
-  $result | Add-Member -NotePropertyName ManageBdeStatusText -NotePropertyValue $manageBdeText
-}
-
-# -------------------------
-# Optional CSV export
-# -------------------------
-if (-not [string]::IsNullOrWhiteSpace($effectiveExportPath)) {
-  $dir = Split-Path -Path $effectiveExportPath -Parent
-  if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+function Invoke-Capability23MainPhase05 {
+  param([hashtable]$RunState)
+  if ($RunState.effectiveIncludeManageBdeText -and $null -ne $RunState.manageBdeText) {
+    $RunState.manageBdeText = Truncate-Text -Text $RunState.manageBdeText -MaxChars $cfg.ManageBdeMaxChars
   }
-  $result | Export-Csv -Path $effectiveExportPath -NoTypeInformation -Encoding UTF8
+
+  # manage-bde -status -protectionaserrorlevel: expected 0 (protected) or 1 (unprotected).
+  $RunState.manageBdeProtectionExitCode = $null
+  $RunState.manageBdeIsProtected = $null
+  $RunState.manageBdeProtectionCheckError = $null
+}
+function Invoke-Capability23MainPhase06Step01 {
+  param([hashtable]$RunState)
+$manageBdeProtection = Invoke-NativeCommand -Command 'manage-bde.exe' -Arguments @('-status',$mp,'-protectionaserrorlevel') -CaptureOutput -Quiet -TimeoutSeconds 60 -MaxOutputBytes 65536
+      if ($null -eq $manageBdeProtection -or $manageBdeProtection.TimedOut -or $manageBdeProtection.OutputTruncated -or $manageBdeProtection.StderrTruncated) { throw 'manage-bde protection check timed out or produced truncated output.' }
+      $RunState.manageBdeProtectionExitCode = $manageBdeProtection.ExitCode
 }
 
-# -------------------------
-# Console summary (no pipeline pollution)
-# -------------------------
-if ($cfg.SummaryToHost) {
-  # Write-UiLine supports ForegroundColor/BackgroundColor for console output.
-  Write-SummaryToConsole -Result $result -EffectiveExportPath $effectiveExportPath -PrettyConsole $cfg.PrettyConsole
+function Invoke-Capability23MainPhase06Step02 {
+  param([hashtable]$RunState)
+if ($RunState.manageBdeProtectionExitCode -eq 0) { $RunState.manageBdeIsProtected = $true }
+      elseif ($RunState.manageBdeProtectionExitCode -eq 1) { $RunState.manageBdeIsProtected = $false }
+      else {
+        $RunState.manageBdeIsProtected = $null
+        $RunState.manageBdeProtectionCheckError = "Unexpected exit code from manage-bde -protectionaserrorlevel: $($RunState.manageBdeProtectionExitCode) (expected 0 or 1)."
+      }
 }
+
+function Invoke-Capability23MainPhase06 {
+  param([hashtable]$RunState)
+  if ($cfg.UseManageBdeProtectionExitCode) {
+    try {
+      . Invoke-Capability23MainPhase06Step01 -RunState $RunState
+. Invoke-Capability23MainPhase06Step02 -RunState $RunState
+    } catch {
+      $RunState.manageBdeProtectionCheckError = $_.Exception.Message
+    }
+  }
+}
+function Invoke-Capability23MainPhase07 {
+  param([hashtable]$RunState)
+  $RunState.findings = Get-FindingsList
+}
+function Invoke-Capability23MainPhase08 {
+  param([hashtable]$RunState)
+  if ($RunState.vol) {
+    if ($RunState.vol.VolumeStatus -eq 'FullyEncrypted' -and $RunState.vol.ProtectionStatus -eq 'Off') {
+      Add-Finding -FindingList $RunState.findings -Code 'BLKR-ProtectionSuspended' -Severity 'High' -Message "Volume is fully encrypted but protection is OFF (likely suspended)."
+    }
+    if (($RunState.vol.VolumeType -eq 'OperatingSystem') -and ($RunState.keyProtectorCount -eq 0)) {
+      Add-Finding -FindingList $RunState.findings -Code 'BLKR-NoKeyProtectors' -Severity 'High' -Message "No key protectors detected for OS volume (unexpected configuration or query failure)."
+    }
+  } else {
+    if (-not [string]::IsNullOrWhiteSpace($RunState.gbvErrorText)) {
+      Add-Finding -FindingList $RunState.findings -Code 'BLKR-GetBitLockerVolumeFailed' -Severity 'Medium' -Message "Get-BitLockerVolume failed; rely on manage-bde output for troubleshooting."
+    }
+  }
+}
+function Invoke-Capability23MainPhase09 {
+  param([hashtable]$RunState)
+  if ($cfg.UseManageBdeProtectionExitCode -and -not [string]::IsNullOrWhiteSpace($RunState.manageBdeProtectionCheckError)) {
+    Add-Finding -FindingList $RunState.findings -Code 'BLKR-ManageBdeProtectionCheckIssue' -Severity 'Medium' -Message ("manage-bde protection check issue: " + $RunState.manageBdeProtectionCheckError)
+  }
+}
+function Invoke-Capability23MainPhase10 {
+  param([hashtable]$RunState)
+  if ((Test-AllConditions -Conditions @({ $cfg.UseManageBdeProtectionExitCode }, { ($null -ne $RunState.manageBdeIsProtected) })) -and $RunState.vol) {
+    $psProtected =
+      if ($RunState.vol.ProtectionStatus -eq 'On') { $true }
+      elseif ($RunState.vol.ProtectionStatus -eq 'Off') { $false }
+      else { $null }
+
+    if ((Test-AllConditions -Conditions @({ ($null -ne $psProtected) }, { ($psProtected -ne $RunState.manageBdeIsProtected) }))) {
+      Add-Finding -FindingList $RunState.findings -Code 'BLKR-ProtectionStateMismatch' -Severity 'Medium' -Message "Protection state mismatch between Get-BitLockerVolume and manage-bde exit code."
+    }
+  }
+}
+function Invoke-Capability23MainPhase11 {
+  param([hashtable]$RunState)
+  $RunState.result = [pscustomobject]@{
+    ComputerName                = $env:COMPUTERNAME
+    MountPoint                  = $mp
+    Timestamp                   = (Get-Date)
+
+    VolumeType                  = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'VolumeType'
+    VolumeStatus                = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'VolumeStatus'
+    ProtectionStatus            = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'ProtectionStatus'
+    EncryptionPercentage        = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'EncryptionPercentage'
+    AutoUnlockEnabled           = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'AutoUnlockEnabled'
+
+    EncryptionMethod            = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'EncryptionMethod'
+    LockStatus                  = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'LockStatus'
+    CapacityGB                  = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'CapacityGB'
+    MetadataVersion             = Get-BitLockerVolumeProperty -Volume $RunState.vol -Name 'MetadataVersion'
+
+    KeyProtectorTypes           = ($RunState.keyProtectorTypes -join ', ')
+    KeyProtectorCount           = $RunState.keyProtectorCount
+    KeyProtectorIds             = Get-BitLockerProtectorIds -Include $cfg.IncludeKeyProtectorIds -Ids $RunState.keyProtectorIds
+
+    GetBitLockerVolumeError     = $RunState.gbvErrorText
+    ManageBdeError              = $RunState.manageBdeErrorText
+
+    ManageBdeProtectionExitCode = $RunState.manageBdeProtectionExitCode
+    ManageBdeIsProtected        = $RunState.manageBdeIsProtected
+
+    Findings                    = Get-BitLockerFindingText -Findings $RunState.findings
+  }
+}
+function Get-BitLockerVolumeProperty {
+  param([AllowNull()]$Volume, [string]$Name)
+  if (-not $Volume) { return $null }
+  return $Volume.$Name
+}
+function Get-BitLockerProtectorIds {
+  param([bool]$Include, [object[]]$Ids)
+  if (-not $Include) { return $null }
+  return ($Ids -join ', ')
+}
+function Get-BitLockerFindingText {
+  param([object[]]$Findings)
+  if ($Findings.Count -eq 0) { return '' }
+  return (($Findings | ForEach-Object { $_.Message }) -join ' | ')
+}
+function Invoke-Capability23MainPhase12 {
+  param([hashtable]$RunState)
+  if ($RunState.effectiveIncludeManageBdeText) {
+    $RunState.result | Add-Member -NotePropertyName ManageBdeStatusText -NotePropertyValue $RunState.manageBdeText
+  }
+
+  # -------------------------
+  # Optional CSV export
+  # -------------------------
+  if (-not [string]::IsNullOrWhiteSpace($RunState.effectiveExportPath)) {
+    $dir = Split-Path -Path $RunState.effectiveExportPath -Parent
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+      New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    }
+    $RunState.result | Export-Csv -Path $RunState.effectiveExportPath -NoTypeInformation -Encoding UTF8
+  }
+
+  # -------------------------
+  # Console summary (no pipeline pollution)
+  # -------------------------
+  if ($cfg.SummaryToHost) {
+    # Write-UiLine supports ForegroundColor/BackgroundColor for console output.
+    Write-SummaryToConsole -Result $RunState.result -EffectiveExportPath $RunState.effectiveExportPath -PrettyConsole $cfg.PrettyConsole -RunState $RunState
+  }
+}
+function Invoke-Capability23Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation)
+  $RunState = @{
+
+  }
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability23MainPhase01 -RunState $RunState
+  . Invoke-Capability23MainPhase02 -RunState $RunState
+  . Invoke-Capability23MainPhase03 -RunState $RunState
+  . Invoke-Capability23MainPhase04 -RunState $RunState
+  . Invoke-Capability23MainPhase05 -RunState $RunState
+  . Invoke-Capability23MainPhase06 -RunState $RunState
+  . Invoke-Capability23MainPhase07 -RunState $RunState
+  . Invoke-Capability23MainPhase08 -RunState $RunState
+  . Invoke-Capability23MainPhase09 -RunState $RunState
+  . Invoke-Capability23MainPhase10 -RunState $RunState
+  . Invoke-Capability23MainPhase11 -RunState $RunState
+  . Invoke-Capability23MainPhase12 -RunState $RunState
+  $script:RunState = $RunState
+}
+
+. Invoke-Capability23Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation
 
 # V2 output contract
-$resultToken = if ($Strict -and $findings.Count -gt 0) { 'FAIL' } elseif ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '23-BitLocker-Operations-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $findings) -Summary $result -Metadata @{}
+function Get-Capability23ResultToken {
+  param([hashtable]$RunState)
+  $resultToken = if ($Strict -and $RunState.findings.Count -gt 0) { 'FAIL' } elseif ($RunState.findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability23ResultToken -RunState $RunState
+$v2Result = Get-V2ResultObject -ScriptName '23-BitLocker-Operations-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $RunState.findings) -Summary $RunState.result -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

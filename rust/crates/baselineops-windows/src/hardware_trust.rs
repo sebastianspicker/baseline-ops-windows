@@ -66,12 +66,10 @@ mod platform {
     };
     use baselineops_capabilities::{FirmwareType, Observation, TpmDeviceObservation};
     use std::mem::size_of;
-    use windows::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, RPC_E_TOO_LATE,
-    };
+    use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-        CoInitializeSecurity, CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
+        CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
         RPC_C_IMP_LEVEL_IMPERSONATE,
     };
     use windows::Win32::System::Registry::{
@@ -158,51 +156,57 @@ mod platform {
 
     fn secure_boot_value(name: &str) -> Observation<u32> {
         unsafe {
-            let path = wide(SECURE_BOOT_STATE);
-            let mut key = HKEY::default();
-            let status = RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                PCWSTR(path.as_ptr()),
-                None,
-                KEY_READ,
-                &raw mut key,
-            );
-            if status == ERROR_FILE_NOT_FOUND {
-                return Observation::Missing;
-            }
-            if status == ERROR_ACCESS_DENIED {
-                return Observation::AccessDenied;
-            }
-            if status != ERROR_SUCCESS {
-                return Observation::Unparsed;
-            }
-            let key = OwnedKey(key);
-            let name = wide(name);
-            let mut kind = REG_VALUE_TYPE::default();
-            let mut bytes = u32::try_from(size_of::<u32>()).expect("DWORD length fits u32");
-            let mut value = 0_u32;
-            let status = RegQueryValueExW(
-                key.0,
-                PCWSTR(name.as_ptr()),
-                None,
-                Some(&raw mut kind),
-                Some((&raw mut value).cast()),
-                Some(&raw mut bytes),
-            );
-            if status == ERROR_FILE_NOT_FOUND {
-                return Observation::Missing;
-            }
-            if status == ERROR_ACCESS_DENIED {
-                return Observation::AccessDenied;
-            }
-            if status != ERROR_SUCCESS
-                || kind != REG_DWORD
-                || bytes != u32::try_from(size_of::<u32>()).expect("DWORD size fits u32")
-            {
-                return Observation::Unparsed;
-            }
-            Observation::Present(value)
+            let key = match secure_boot_key() {
+                Ok(key) => key,
+                Err(value) => return value,
+            };
+            secure_boot_dword(&key, name)
         }
+    }
+
+    unsafe fn secure_boot_key() -> Result<OwnedKey, Observation<u32>> {
+        let path = wide(SECURE_BOOT_STATE);
+        let mut key = HKEY::default();
+        match RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(path.as_ptr()),
+            None,
+            KEY_READ,
+            &raw mut key,
+        ) {
+            value if value == ERROR_SUCCESS => Ok(OwnedKey(key)),
+            value if value == ERROR_FILE_NOT_FOUND => Err(Observation::Missing),
+            value if value == ERROR_ACCESS_DENIED => Err(Observation::AccessDenied),
+            _ => Err(Observation::Unparsed),
+        }
+    }
+
+    unsafe fn secure_boot_dword(key: &OwnedKey, name: &str) -> Observation<u32> {
+        let name = wide(name);
+        let mut kind = REG_VALUE_TYPE::default();
+        let mut value = 0_u32;
+        let mut bytes = u32::try_from(size_of::<u32>()).expect("DWORD length fits u32");
+        let status = RegQueryValueExW(
+            key.0,
+            PCWSTR(name.as_ptr()),
+            None,
+            Some(&raw mut kind),
+            Some((&raw mut value).cast()),
+            Some(&raw mut bytes),
+        );
+        if status == ERROR_FILE_NOT_FOUND {
+            return Observation::Missing;
+        }
+        if status == ERROR_ACCESS_DENIED {
+            return Observation::AccessDenied;
+        }
+        if status != ERROR_SUCCESS
+            || kind != REG_DWORD
+            || bytes != u32::try_from(size_of::<u32>()).expect("DWORD size fits u32")
+        {
+            return Observation::Unparsed;
+        }
+        Observation::Present(value)
     }
 
     fn bitlocker_protection() -> Observation<bool> {
@@ -217,73 +221,87 @@ mod platform {
     fn bitlocker_protection_inner() -> Result<Observation<bool>, String> {
         let _apartment = ComApartment::initialize()?;
         unsafe {
-            if let Err(error) = CoInitializeSecurity(
+            let (services, volumes) = bitlocker_provider()?;
+            protection_for_system_drive(&services, &volumes, &system_drive()?)
+        }
+    }
+
+    unsafe fn bitlocker_provider() -> Result<
+        (
+            windows::Win32::System::Wmi::IWbemServices,
+            IEnumWbemClassObject,
+        ),
+        String,
+    > {
+        crate::com_security::initialize_wmi_security()
+            .map_err(|error| format!("WMI security initialization failed: {error}"))?;
+        let services = bitlocker_services()?;
+        let volumes = bitlocker_query(&services)?;
+        Ok((services, volumes))
+    }
+
+    unsafe fn bitlocker_services() -> Result<windows::Win32::System::Wmi::IWbemServices, String> {
+        let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| format!("WMI locator failed: {error}"))?;
+        let empty = BSTR::new();
+        let services = locator
+            .ConnectServer(
+                &BSTR::from(VOLUME_ENCRYPTION_NAMESPACE),
+                &empty,
+                &empty,
+                &empty,
+                0,
+                &empty,
                 None,
-                -1,
-                None,
-                None,
-                RPC_C_AUTHN_LEVEL_CALL,
-                RPC_C_IMP_LEVEL_IMPERSONATE,
-                None,
-                EOAC_NONE,
-                None,
-            ) && error.code() != RPC_E_TOO_LATE
-            {
-                return Err(format!("WMI security initialization failed: {error}"));
-            }
-            let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
-                .map_err(|error| format!("WMI locator failed: {error}"))?;
-            let empty = BSTR::new();
-            let services = locator
-                .ConnectServer(
-                    &BSTR::from(VOLUME_ENCRYPTION_NAMESPACE),
-                    &empty,
-                    &empty,
-                    &empty,
-                    0,
-                    &empty,
-                    None,
-                )
-                .map_err(|error| format!("WMI provider access denied or failed: {error}"))?;
-            CoSetProxyBlanket(
-                &services,
-                RPC_C_AUTHN_WINNT,
-                RPC_C_AUTHZ_NONE,
-                PCWSTR::null(),
-                RPC_C_AUTHN_LEVEL_CALL,
-                RPC_C_IMP_LEVEL_IMPERSONATE,
-                None,
-                EOAC_NONE,
             )
-            .map_err(|error| format!("WMI proxy access denied or failed: {error}"))?;
-            let volumes: IEnumWbemClassObject = services
-                .ExecQuery(
-                    &BSTR::from("WQL"),
-                    &BSTR::from(BITLOCKER_QUERY),
-                    WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
-                    None,
-                )
-                .map_err(|error| format!("BitLocker WMI query failed: {error}"))?;
-            let system_drive = system_drive()?;
-            loop {
-                let mut values = [None];
-                let mut returned = 0_u32;
-                volumes
-                    .Next(WBEM_INFINITE, &mut values, &raw mut returned)
-                    .ok()
-                    .map_err(|error| format!("BitLocker WMI enumeration failed: {error}"))?;
-                if returned == 0 {
-                    break;
-                }
-                let volume = values[0].take().ok_or("WMI returned an empty volume")?;
-                if string_property(&volume, "DriveLetter")? != system_drive {
-                    continue;
-                }
-                let path = string_property(&volume, "__PATH")?;
-                return protection_status(&services, &path);
+            .map_err(|error| format!("WMI provider access denied or failed: {error}"))?;
+        CoSetProxyBlanket(
+            &services,
+            RPC_C_AUTHN_WINNT,
+            RPC_C_AUTHZ_NONE,
+            PCWSTR::null(),
+            RPC_C_AUTHN_LEVEL_CALL,
+            RPC_C_IMP_LEVEL_IMPERSONATE,
+            None,
+            EOAC_NONE,
+        )
+        .map_err(|error| format!("WMI proxy access denied or failed: {error}"))?;
+        Ok(services)
+    }
+
+    unsafe fn bitlocker_query(
+        services: &windows::Win32::System::Wmi::IWbemServices,
+    ) -> Result<IEnumWbemClassObject, String> {
+        services
+            .ExecQuery(
+                &BSTR::from("WQL"),
+                &BSTR::from(BITLOCKER_QUERY),
+                WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+                None,
+            )
+            .map_err(|error| format!("BitLocker WMI query failed: {error}"))
+    }
+
+    unsafe fn protection_for_system_drive(
+        services: &windows::Win32::System::Wmi::IWbemServices,
+        volumes: &IEnumWbemClassObject,
+        system_drive: &str,
+    ) -> Result<Observation<bool>, String> {
+        loop {
+            let mut values = [None];
+            let mut returned = 0_u32;
+            volumes
+                .Next(WBEM_INFINITE, &mut values, &raw mut returned)
+                .ok()
+                .map_err(|error| format!("BitLocker WMI enumeration failed: {error}"))?;
+            if returned == 0 {
+                return Err("no operating-system volume was returned by BitLocker WMI".into());
+            }
+            let volume = values[0].take().ok_or("WMI returned an empty volume")?;
+            if string_property(&volume, "DriveLetter")? == system_drive {
+                return protection_status(services, &string_property(&volume, "__PATH")?);
             }
         }
-        Err("no operating-system volume was returned by BitLocker WMI".into())
     }
 
     unsafe fn protection_status(

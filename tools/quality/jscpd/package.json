@@ -1,0 +1,8 @@
+{
+  "name": "baseline-ops-quality-tools",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "jscpd": "5.1.2"
+  }
+}

@@ -8,8 +8,8 @@ use baselineops_windows::{PlatformError, audit_time_sync, audit_wef_readiness};
 
 /// Native Windows executor for capabilities 34 and 45.
 ///
-/// The descriptors deliberately remain `in_development` until their bounded
-/// observations have Windows-oracle and VM evidence against legacy behavior.
+/// The descriptors are `code_complete`; Windows-oracle and VM evidence for
+/// their bounded observations remains an open release gate.
 pub struct WaveWefTimeWindowsExecutor;
 
 impl CapabilityExecutor for WaveWefTimeWindowsExecutor {

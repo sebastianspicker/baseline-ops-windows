@@ -38,15 +38,39 @@ param(
   [switch]$NoColor
 )
 
-$rootPathWasExplicit = $PSBoundParameters.ContainsKey('RootPath')
-$defaultDeploymentPresent = $false
-if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
-  $defaultDeploymentPresent = Test-Path -LiteralPath (Join-Path $RootPath 'scripts') -PathType Container
+function Resolve-RunBatchRootPath {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param([Parameter(Mandatory)][string]$Candidate, [Parameter(Mandatory)][bool]$WasExplicit)
+
+  $hasDeployment = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT -and (Test-Path -LiteralPath (Join-Path $Candidate 'scripts') -PathType Container)
+  if ($WasExplicit -or $Candidate -ne 'C:\install\mdm\ps1' -or $hasDeployment) { return $Candidate }
+  $repositoryRoot = Split-Path -Parent $PSScriptRoot
+  if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'scripts') -PathType Container) { return $repositoryRoot }
+  return $Candidate
 }
-if (-not $rootPathWasExplicit -and $RootPath -eq 'C:\install\mdm\ps1' -and -not $defaultDeploymentPresent) {
-  $repoRootCandidate = Split-Path -Parent $PSScriptRoot
-  if (Test-Path -LiteralPath (Join-Path $repoRootCandidate 'scripts') -PathType Container) {
-    $RootPath = $repoRootCandidate
+
+$RootPath = Resolve-RunBatchRootPath -Candidate $RootPath -WasExplicit $PSBoundParameters.ContainsKey('RootPath')
+
+function Get-RunBatchTrustMasks {
+  [CmdletBinding()]
+  param()
+  $writeMask = [System.Security.AccessControl.FileSystemRights]::WriteData -bor [System.Security.AccessControl.FileSystemRights]::AppendData -bor [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+  $ancestorReplacementMask = [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+  return [pscustomobject]@{
+    TrustedSids = @{ 'S-1-5-18' = $true; 'S-1-5-32-544' = $true; 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464' = $true }
+    WriteMask = $writeMask; ReplaceMask = $ancestorReplacementMask
+  }
+}
+
+function Assert-RunBatchAclTrust {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)]$Acl, [Parameter(Mandatory)][hashtable]$TrustedSids, [Parameter(Mandatory)][int64]$EffectiveMask, [Parameter(Mandatory)][string]$Path)
+  $ownerSid = $Acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if (-not $TrustedSids.ContainsKey($ownerSid)) { throw "Privileged execution path has an untrusted owner SID: $Path" }
+  foreach ($rule in @($Acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
+    $effectiveAllow = $rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -eq 0
+    if ($effectiveAllow -and -not $TrustedSids.ContainsKey([string]$rule.IdentityReference.Value) -and ([int64]$rule.FileSystemRights -band $EffectiveMask) -ne 0) { throw "Privileged execution path grants write/replace rights to an untrusted SID: $Path" }
   }
 }
 
@@ -57,25 +81,7 @@ function Assert-RunBatchTrustedWindowsAcl {
     [switch]$CheckAncestors
   )
 
-  $trustedSids = @{
-    'S-1-5-18' = $true
-    'S-1-5-32-544' = $true
-    'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464' = $true
-  }
-  $writeMask =
-    [System.Security.AccessControl.FileSystemRights]::WriteData -bor
-    [System.Security.AccessControl.FileSystemRights]::AppendData -bor
-    [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
-    [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
-    [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
-    [System.Security.AccessControl.FileSystemRights]::Delete -bor
-    [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-    [System.Security.AccessControl.FileSystemRights]::TakeOwnership
-  $ancestorReplacementMask =
-    [System.Security.AccessControl.FileSystemRights]::Delete -bor
-    [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
-    [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-    [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+  $trustMasks = Get-RunBatchTrustMasks
 
   $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
   $current = $item.FullName
@@ -86,20 +92,8 @@ function Assert-RunBatchTrustedWindowsAcl {
       throw "Privileged execution path contains a reparse point: $current"
     }
     $acl = Get-Acl -LiteralPath $currentItem.FullName -ErrorAction Stop
-    $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-    if (-not $trustedSids.ContainsKey($ownerSid)) {
-      throw "Privileged execution path has an untrusted owner SID: $current"
-    }
-    $effectiveMask = if ($isProtectedItem) { $writeMask } else { $ancestorReplacementMask }
-    foreach ($rule in @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
-      if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
-      if (($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
-      $sid = [string]$rule.IdentityReference.Value
-      if (-not $trustedSids.ContainsKey($sid) -and
-          ([int64]$rule.FileSystemRights -band [int64]$effectiveMask) -ne 0) {
-        throw "Privileged execution path grants write/replace rights to an untrusted SID: $current"
-      }
-    }
+    $effectiveMask = if ($isProtectedItem) { $trustMasks.WriteMask } else { $trustMasks.ReplaceMask }
+    Assert-RunBatchAclTrust -Acl $acl -TrustedSids $trustMasks.TrustedSids -EffectiveMask $effectiveMask -Path $current
     if (-not $CheckAncestors) { break }
     $parent = Split-Path -Parent $currentItem.FullName
     if ([string]::IsNullOrWhiteSpace($parent) -or
@@ -110,15 +104,21 @@ function Assert-RunBatchTrustedWindowsAcl {
 }
 
 $runProfilePath = Join-Path $PSScriptRoot '00-Run-Profile.ps1'
-$isWindowsPlatform = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
-$isElevatedWindows = $false
-if ($isWindowsPlatform) {
+$runBatchHelperPath = Join-Path $PSScriptRoot 'internal/00-Run-Batch.helpers.ps1'
+function Test-RunBatchElevatedWindows {
+  [CmdletBinding()]
+  [OutputType([bool])]
+  param()
+  if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) { return $false }
   $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
   $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
-  $isElevatedWindows = $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+  return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-if ($isElevatedWindows) {
+function Assert-RunBatchBootstrapClosure {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$ProfilePath, [Parameter(Mandatory)][string]$HelperPath, [Parameter(Mandatory)][string]$TargetRoot)
+
   $runnerRoot = Split-Path -Parent $PSScriptRoot
   $runnerLib = Join-Path $runnerRoot 'lib'
   $trustedBootstrapPaths = @(
@@ -129,25 +129,29 @@ if ($isElevatedWindows) {
     (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1'),
     (Join-Path $runnerLib 'Output.psm1'),
     (Join-Path $runnerLib 'Serialization.psm1'),
-    $runProfilePath,
-    $RootPath,
-    (Join-Path $RootPath 'scripts'),
-    (Join-Path $RootPath 'lib')
+    $HelperPath,
+    $ProfilePath,
+    $TargetRoot,
+    (Join-Path $TargetRoot 'scripts'),
+    (Join-Path $TargetRoot 'lib')
   ) | Select-Object -Unique
   foreach ($trustedPath in $trustedBootstrapPaths) {
     Assert-RunBatchTrustedWindowsAcl -Path $trustedPath -CheckAncestors:($trustedPath -in @($runnerRoot, $RootPath))
   }
 }
 
+$isElevatedWindows = Test-RunBatchElevatedWindows
+if ($isElevatedWindows) { Assert-RunBatchBootstrapClosure -ProfilePath $runProfilePath -HelperPath $runBatchHelperPath -TargetRoot $RootPath }
+
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Serialization.psm1') -Force
+if ($isElevatedWindows) { Assert-RunBatchTrustedWindowsAcl -Path $runBatchHelperPath }
+. $runBatchHelperPath
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '00-Run-Batch.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
@@ -310,88 +314,4 @@ function New-BatchProfileDocument {
   return $batchProfile
 }
 
-if (-not (Test-Path -LiteralPath $runProfilePath -PathType Leaf)) {
-  Write-BatchTerminalResult -Result FAIL -Code 'Batch-MissingProfileRunner' -Message "Missing Run-Profile script: $runProfilePath"
-  exit (Get-V2ExitCode -Result 'FAIL')
-}
-
-$scriptsDir = [System.IO.Path]::Combine($RootPath, 'scripts')
-if (-not (Test-Path -LiteralPath $scriptsDir -PathType Container)) {
-  Write-BatchTerminalResult -Result FAIL -Code 'Batch-MissingScriptsDirectory' -Message "Scripts directory not found: $scriptsDir"
-  exit (Get-V2ExitCode -Result 'FAIL')
-}
-
-$allScriptNames = @(Get-ChildItem -LiteralPath $scriptsDir -Filter '*.ps1' -File |
-    Where-Object { $_.Name -match '^\d{2}-' -and $_.Name -notmatch '^00-' } |
-    Select-Object -ExpandProperty Name)
-$selected = @(Get-BatchSelectedScripts -Category $Category -ScriptNames $allScriptNames)
-
-if ($selected.Count -eq 0) {
-  Write-BatchTerminalResult -Result FAIL -Code 'Batch-NoScriptsSelected' -Message "No scripts found for category '$Category'."
-  exit (Get-V2ExitCode -Result 'FAIL')
-}
-
-$batchProfile = New-BatchProfileDocument -Category $Category -Mode $Mode -Strict ([bool]$Strict) -RequireSigned ([bool]$RequireSigned) -ContinueOnError ([bool]$ContinueOnError) -SelectedScripts $selected
-
-if (-not $PSCmdlet.ShouldProcess("batch-$($Category.ToLowerInvariant())", "Execute $($selected.Count) scripts via profile")) {
-  Write-BatchTerminalResult -Result WARN -Code 'Batch-ExecutionSkipped' -Message 'Batch execution was skipped by WhatIf or confirmation.' -SelectedScripts $selected
-  exit (Get-V2ExitCode -Result 'WARN')
-}
-
-$tempProfileDirectory = $null
-$tempProfile = $null
-$profileLockStream = $null
-$exitCode = $null
-$invocationError = $null
-try {
-  $tempProfileDirectory = New-BatchProfileWorkspace
-  $tempProfile = Join-Path $tempProfileDirectory 'profile.json'
-  $batchProfile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tempProfile -Encoding UTF8
-  if ($isElevatedWindows) {
-    Set-BatchAdminSystemAcl -Path $tempProfile
-    Assert-RunBatchTrustedWindowsAcl -Path $tempProfile
-  }
-
-  # Permit validator/profile reads while denying writes, deletion, and
-  # replacement through the complete Run-Profile invocation.
-  $profileLockStream = New-Object System.IO.FileStream(
-    $tempProfile,
-    [System.IO.FileMode]::Open,
-    [System.IO.FileAccess]::Read,
-    [System.IO.FileShare]::Read
-  )
-
-  $params = @{
-    ProfilePath  = $tempProfile
-    Mode         = $Mode
-    RootPath     = $RootPath
-    OutputFormat = $OutputFormat
-    OutputPath   = $OutputPath
-    Strict       = $Strict
-    RequireSigned = $RequireSigned
-  }
-  if ($PassThru) { $params.PassThru = $true }
-  if ($WhatIfPreference) { $params.WhatIf = $true }
-  if ($PSBoundParameters.ContainsKey('Confirm')) { $params.Confirm = [bool]$PSBoundParameters['Confirm'] }
-
-  & $runProfilePath @params
-  $exitCode = $LASTEXITCODE
-} catch {
-  $invocationError = $_.Exception.Message
-} finally {
-  if ($null -ne $profileLockStream) {
-    $profileLockStream.Dispose()
-  }
-  if (-not [string]::IsNullOrWhiteSpace([string]$tempProfileDirectory) -and
-      (Test-Path -LiteralPath $tempProfileDirectory)) {
-    Remove-Item -LiteralPath $tempProfileDirectory -Recurse -Force -ErrorAction SilentlyContinue
-  }
-}
-
-if (-not [string]::IsNullOrWhiteSpace([string]$invocationError)) {
-  Write-BatchTerminalResult -Result FAIL -Code 'Batch-ProfileInvocationFailed' -Message $invocationError -SelectedScripts $selected
-  exit (Get-V2ExitCode -Result 'FAIL')
-}
-
-if ($null -ne $exitCode) { exit [int]$exitCode }
-exit (Get-V2ExitCode -Result 'OK')
+Invoke-RunBatch

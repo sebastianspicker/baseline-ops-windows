@@ -12,7 +12,7 @@ pub const MAX_LOG_SIZE_KILOBYTES: u16 = 32_767;
 
 /// One of the three built-in Windows Firewall profiles.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum FirewallProfile {
     /// Domain-authenticated networks.
     Domain,
@@ -23,8 +23,13 @@ pub enum FirewallProfile {
 }
 
 /// Typed evidence for one Windows Firewall value.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "status", content = "value", rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum FirewallEvidence<T> {
     /// The value was read successfully.
     Present(T),
@@ -47,8 +52,8 @@ impl<T> FirewallEvidence<T> {
 }
 
 /// Fixed logging evidence for one built-in firewall profile.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct FirewallProfileObservation {
     /// Whether dropped packets are logged.
     pub log_dropped_packets: FirewallEvidence<bool>,
@@ -72,8 +77,8 @@ impl FirewallProfileObservation {
 }
 
 /// Whether local Windows Firewall policy may be modified.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum FirewallPolicyModifyState {
     /// Local policy is writable.
     LocalPolicyWritable,
@@ -86,8 +91,8 @@ pub enum FirewallPolicyModifyState {
 }
 
 /// Fixed logging and policy-modification observations for all profiles.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct FirewallObservation {
     /// Evidence keyed by built-in profile.
     pub profiles: BTreeMap<FirewallProfile, FirewallProfileObservation>,
@@ -253,19 +258,7 @@ pub fn build_firewall_logging_plan(
         .iter()
         .filter_map(|profile| {
             let current = observation.profiles.get(profile)?;
-            let mut fields = Vec::new();
-            if !matches!(current.log_dropped_packets, FirewallEvidence::Present(value) if value == desired.log_dropped_packets) {
-                fields.push(FirewallLoggingField::LogDroppedPackets);
-            }
-            if !matches!(current.log_successful_connections, FirewallEvidence::Present(value) if value == desired.log_successful_connections) {
-                fields.push(FirewallLoggingField::LogSuccessfulConnections);
-            }
-            if !matches!(current.log_file_path, FirewallEvidence::Present(ref value) if value == &desired.log_file_path) {
-                fields.push(FirewallLoggingField::LogFilePath);
-            }
-            if !matches!(current.log_max_size_kilobytes, FirewallEvidence::Present(value) if value == desired.log_max_size_kilobytes) {
-                fields.push(FirewallLoggingField::LogMaxSizeKilobytes);
-            }
+            let fields = logging_drift_fields(current, &desired);
             (!fields.is_empty()).then_some(FirewallLoggingDrift {
                 profile: *profile,
                 fields,
@@ -285,6 +278,49 @@ pub fn build_firewall_logging_plan(
             "legacy-script semantic oracle",
         ],
     })
+}
+
+fn logging_drift_fields(
+    current: &FirewallProfileObservation,
+    desired: &FirewallLoggingDesiredState,
+) -> Vec<FirewallLoggingField> {
+    let mut fields = Vec::new();
+    add_logging_drift(
+        &mut fields,
+        FirewallLoggingField::LogDroppedPackets,
+        &current.log_dropped_packets,
+        &desired.log_dropped_packets,
+    );
+    add_logging_drift(
+        &mut fields,
+        FirewallLoggingField::LogSuccessfulConnections,
+        &current.log_successful_connections,
+        &desired.log_successful_connections,
+    );
+    add_logging_drift(
+        &mut fields,
+        FirewallLoggingField::LogFilePath,
+        &current.log_file_path,
+        &desired.log_file_path,
+    );
+    add_logging_drift(
+        &mut fields,
+        FirewallLoggingField::LogMaxSizeKilobytes,
+        &current.log_max_size_kilobytes,
+        &desired.log_max_size_kilobytes,
+    );
+    fields
+}
+
+fn add_logging_drift<T: PartialEq>(
+    fields: &mut Vec<FirewallLoggingField>,
+    field: FirewallLoggingField,
+    observed: &FirewallEvidence<T>,
+    desired: &T,
+) {
+    if !matches!(observed, FirewallEvidence::Present(value) if value == desired) {
+        fields.push(field);
+    }
 }
 
 /// Returns the only Windows Firewall profiles accepted by the policy.

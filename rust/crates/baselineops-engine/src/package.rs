@@ -106,40 +106,133 @@ pub fn verify_package(
     }
     let snapshot = snapshot_package(package.as_ref())?;
     let package_sha256 = hash_file(snapshot.path())?;
+    let manifest = verify_payload(
+        snapshot.path(),
+        expected_signer_subject,
+        detached_signature_verifier,
+        signature_verifier,
+    )?;
+    Ok(PackageVerification {
+        verified_files: manifest.files.len(),
+        verified_signatures: REQUIRED_EXECUTABLES.len(),
+        manifest,
+        package_sha256,
+    })
+}
+
+fn verify_payload(
+    package: &Path,
+    expected_signer_subject: &str,
+    detached_verifier: &dyn DetachedSignatureVerifier,
+    signature_verifier: &dyn SignatureVerifier,
+) -> Result<PackageManifestV1, PackageError> {
+    with_package_inventory(package, |actual| {
+        let manifest = authenticated_manifest(actual, expected_signer_subject, detached_verifier)?;
+        let actual = verify_inventory(&manifest, actual.clone())?;
+        verify_required_signatures(&actual, expected_signer_subject, signature_verifier)?;
+        Ok(manifest)
+    })
+}
+
+fn with_package_inventory<T>(
+    package: &Path,
+    verify: impl FnOnce(&BTreeMap<String, (std::path::PathBuf, u64)>) -> Result<T, PackageError>,
+) -> Result<T, PackageError> {
     let extraction = tempfile::tempdir()?;
     let extraction_root = fs::canonicalize(extraction.path())?;
-    let archive = File::open(snapshot.path())?;
+    let archive = File::open(package)?;
     let extracted = extract_zip_safely(archive, &extraction_root, ArchivePolicy::default())?;
-    let mut actual = BTreeMap::new();
-    for path in extracted {
-        let relative = path
-            .strip_prefix(&extraction_root)
-            .map_err(|_| {
-                PackageError::InvalidManifest("extracted path escaped package root".into())
-            })?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let metadata = path.metadata()?;
-        actual.insert(relative, (path, metadata.len()));
-    }
-    let manifest_path = require_unique_special_member(&actual, MANIFEST_PATH)?;
-    let manifest_signature_path = require_unique_special_member(&actual, MANIFEST_SIGNATURE_PATH)?;
-    let manifest_bytes = fs::read(manifest_path)?;
-    let manifest_signature_bytes = fs::read(manifest_signature_path)?;
-    detached_signature_verifier.verify(
+    let actual = extracted_inventory(&extraction_root, extracted)?;
+    verify(&actual)
+}
+
+fn extracted_inventory(
+    root: &Path,
+    paths: Vec<std::path::PathBuf>,
+) -> Result<BTreeMap<String, (std::path::PathBuf, u64)>, PackageError> {
+    paths
+        .into_iter()
+        .map(|path| extracted_member(root, path))
+        .collect()
+}
+
+fn extracted_member(
+    root: &Path,
+    path: std::path::PathBuf,
+) -> Result<(String, (std::path::PathBuf, u64)), PackageError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| PackageError::InvalidManifest("extracted path escaped package root".into()))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let size = path.metadata()?.len();
+    Ok((relative, (path, size)))
+}
+
+fn authenticated_manifest(
+    actual: &BTreeMap<String, (std::path::PathBuf, u64)>,
+    expected_signer_subject: &str,
+    verifier: &dyn DetachedSignatureVerifier,
+) -> Result<PackageManifestV1, PackageError> {
+    let (manifest_bytes, manifest_signature_bytes) = signed_manifest_bytes(actual)?;
+    verifier.verify(
         &manifest_bytes,
         &manifest_signature_bytes,
         expected_signer_subject,
     )?;
-    let manifest: PackageManifestV1 = serde_json::from_slice(&manifest_bytes)?;
+    parse_authenticated_manifest(&manifest_bytes, expected_signer_subject)
+}
+
+fn signed_manifest_bytes(
+    actual: &BTreeMap<String, (std::path::PathBuf, u64)>,
+) -> Result<(Vec<u8>, Vec<u8>), PackageError> {
+    Ok((
+        fs::read(require_unique_special_member(actual, MANIFEST_PATH)?)?,
+        fs::read(require_unique_special_member(
+            actual,
+            MANIFEST_SIGNATURE_PATH,
+        )?)?,
+    ))
+}
+fn parse_authenticated_manifest(
+    bytes: &[u8],
+    expected: &str,
+) -> Result<PackageManifestV1, PackageError> {
+    let manifest = serde_json::from_slice(bytes)?;
     validate_manifest(&manifest)?;
-    if manifest.signer_subject != expected_signer_subject {
+    validate_manifest_signer(&manifest, expected)?;
+    Ok(manifest)
+}
+
+fn validate_manifest_signer(
+    manifest: &PackageManifestV1,
+    expected: &str,
+) -> Result<(), PackageError> {
+    if manifest.signer_subject != expected {
         return Err(PackageError::Signature(
             "manifest signer differs from the trusted release signer".into(),
         ));
     }
+    Ok(())
+}
+
+fn verify_inventory(
+    manifest: &PackageManifestV1,
+    mut actual: BTreeMap<String, (std::path::PathBuf, u64)>,
+) -> Result<BTreeMap<String, (std::path::PathBuf, u64)>, PackageError> {
     actual.remove(MANIFEST_PATH);
     actual.remove(MANIFEST_SIGNATURE_PATH);
+    verify_inventory_count(&actual, manifest)?;
+    for expected in &manifest.files {
+        verify_inventory_file(&actual, expected)?;
+    }
+    Ok(actual)
+}
+
+fn verify_inventory_count(
+    actual: &BTreeMap<String, (std::path::PathBuf, u64)>,
+    manifest: &PackageManifestV1,
+) -> Result<(), PackageError> {
     if actual.len() != manifest.files.len() {
         return Err(PackageError::InventoryMismatch(format!(
             "manifest lists {} files but package contains {}",
@@ -147,29 +240,36 @@ pub fn verify_package(
             actual.len()
         )));
     }
-    for expected in &manifest.files {
-        let (path, size) = actual.get(&expected.path).ok_or_else(|| {
-            PackageError::InventoryMismatch(format!("manifest file is absent: {}", expected.path))
-        })?;
-        if *size != expected.size_bytes || hash_file(path)? != expected.sha256 {
-            return Err(PackageError::InventoryMismatch(format!(
-                "size or digest mismatch: {}",
-                expected.path
-            )));
-        }
+    Ok(())
+}
+fn verify_inventory_file(
+    actual: &BTreeMap<String, (std::path::PathBuf, u64)>,
+    expected: &ManifestFile,
+) -> Result<(), PackageError> {
+    let (path, size) = actual.get(&expected.path).ok_or_else(|| {
+        PackageError::InventoryMismatch(format!("manifest file is absent: {}", expected.path))
+    })?;
+    if *size != expected.size_bytes || hash_file(path)? != expected.sha256 {
+        return Err(PackageError::InventoryMismatch(format!(
+            "size or digest mismatch: {}",
+            expected.path
+        )));
     }
+    Ok(())
+}
+
+fn verify_required_signatures(
+    actual: &BTreeMap<String, (std::path::PathBuf, u64)>,
+    expected_signer_subject: &str,
+    signature_verifier: &dyn SignatureVerifier,
+) -> Result<(), PackageError> {
     for executable in REQUIRED_EXECUTABLES {
         let (path, _) = actual.get(executable).ok_or_else(|| {
             PackageError::InventoryMismatch(format!("required executable is absent: {executable}"))
         })?;
         signature_verifier.verify(path, expected_signer_subject)?;
     }
-    Ok(PackageVerification {
-        verified_files: manifest.files.len(),
-        verified_signatures: REQUIRED_EXECUTABLES.len(),
-        manifest,
-        package_sha256,
-    })
+    Ok(())
 }
 
 fn require_unique_special_member<'a>(
@@ -306,108 +406,41 @@ pub enum PackageError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fixtures::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use zip::write::SimpleFileOptions;
 
-    struct CountingVerifier(AtomicUsize);
+    #[path = "fixtures.rs"]
+    mod fixtures;
 
-    impl SignatureVerifier for CountingVerifier {
-        fn verify(&self, executable: &Path, expected_subject: &str) -> Result<(), PackageError> {
-            assert!(executable.is_file());
-            assert_eq!(expected_subject, "CN=BaselineOps Test");
-            self.0.fetch_add(1, Ordering::Relaxed);
-            Ok(())
+    fn detached_verifier(subject: &'static str) -> DetachedFixtureVerifier {
+        DetachedFixtureVerifier {
+            calls: AtomicUsize::new(0),
+            subject,
         }
     }
 
-    struct DetachedFixtureVerifier {
-        calls: AtomicUsize,
-        subject: &'static str,
+    fn counting_verifier() -> CountingVerifier {
+        CountingVerifier(AtomicUsize::new(0))
     }
 
-    impl DetachedSignatureVerifier for DetachedFixtureVerifier {
-        fn verify(
-            &self,
-            signed_bytes: &[u8],
-            signature_bytes: &[u8],
-            expected_subject: &str,
-        ) -> Result<(), PackageError> {
-            if expected_subject != self.subject
-                || signature_bytes != b"fixture detached signature"
-                || !signed_bytes.starts_with(b"{\"schema_version\"")
-            {
-                return Err(PackageError::Signature(
-                    "fixture rejected detached signature bytes or signer".into(),
-                ));
-            }
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        }
+    fn rejecting_verifiers() -> (RejectingDetachedVerifier, CountingVerifier) {
+        (
+            RejectingDetachedVerifier(AtomicUsize::new(0)),
+            counting_verifier(),
+        )
     }
 
-    struct RejectingDetachedVerifier(AtomicUsize);
-
-    impl DetachedSignatureVerifier for RejectingDetachedVerifier {
-        fn verify(&self, _: &[u8], _: &[u8], _: &str) -> Result<(), PackageError> {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            Err(PackageError::Signature(
-                "fixture rejected detached signature".into(),
-            ))
-        }
-    }
-
-    fn write_fixture_package(
-        tamper_digest: bool,
-        include_signature: bool,
-        signer: &str,
-        signature: &[u8],
-    ) -> tempfile::NamedTempFile {
-        let payloads = [
-            ("bin/baselineops.exe", b"cli".as_slice()),
-            ("bin/baselineops-gui.exe", b"gui".as_slice()),
-            ("bin/baselineops-worker.exe", b"worker".as_slice()),
-            ("schemas/profile-v3.schema.json", b"{}".as_slice()),
-        ];
-        let mut files = payloads
-            .iter()
-            .map(|(path, bytes)| ManifestFile {
-                path: (*path).to_owned(),
-                size_bytes: u64::try_from(bytes.len()).expect("fixture size"),
-                sha256: Sha256Digest::of_bytes(bytes),
-            })
-            .collect::<Vec<_>>();
-        if tamper_digest {
-            files[0].sha256 = Sha256Digest::of_bytes(b"different");
-        }
-        let manifest = PackageManifestV1 {
-            schema_version: "1.0".into(),
-            product: "BaselineOps for Windows".into(),
-            package_version: "3.0.0-alpha.1".into(),
-            target: "x86_64-pc-windows-msvc".into(),
-            signer_subject: signer.into(),
-            files,
-        };
-        let output = tempfile::NamedTempFile::new().expect("package");
-        {
-            let mut zip = zip::ZipWriter::new(output.reopen().expect("package writer"));
-            for (path, bytes) in payloads {
-                zip.start_file(path, SimpleFileOptions::default())
-                    .expect("payload member");
-                zip.write_all(bytes).expect("payload bytes");
-            }
-            zip.start_file(MANIFEST_PATH, SimpleFileOptions::default())
-                .expect("manifest member");
-            zip.write_all(&serde_json::to_vec(&manifest).expect("manifest JSON"))
-                .expect("manifest bytes");
-            if include_signature {
-                zip.start_file(MANIFEST_SIGNATURE_PATH, SimpleFileOptions::default())
-                    .expect("signature member");
-                zip.write_all(signature).expect("signature bytes");
-            }
-            zip.finish().expect("finish ZIP");
-        }
-        output
+    fn assert_signature_rejected(
+        package: &std::path::Path,
+        expected_subject: &str,
+        detached: &dyn DetachedSignatureVerifier,
+        verifier: &CountingVerifier,
+    ) {
+        assert!(matches!(
+            verify_package(package, expected_subject, detached, verifier),
+            Err(PackageError::Signature(_))
+        ));
     }
 
     #[test]
@@ -418,11 +451,8 @@ mod tests {
             "CN=BaselineOps Test",
             b"fixture detached signature",
         );
-        let detached = DetachedFixtureVerifier {
-            calls: AtomicUsize::new(0),
-            subject: "CN=BaselineOps Test",
-        };
-        let verifier = CountingVerifier(AtomicUsize::new(0));
+        let detached = detached_verifier("CN=BaselineOps Test");
+        let verifier = counting_verifier();
         let result = verify_package(package.path(), "CN=BaselineOps Test", &detached, &verifier)
             .expect("valid package");
         assert_eq!(result.verified_files, 4);
@@ -439,11 +469,8 @@ mod tests {
             "CN=BaselineOps Test",
             b"fixture detached signature",
         );
-        let detached = DetachedFixtureVerifier {
-            calls: AtomicUsize::new(0),
-            subject: "CN=BaselineOps Test",
-        };
-        let verifier = CountingVerifier(AtomicUsize::new(0));
+        let detached = detached_verifier("CN=BaselineOps Test");
+        let verifier = counting_verifier();
         assert!(matches!(
             verify_package(package.path(), "CN=BaselineOps Test", &detached, &verifier),
             Err(PackageError::InventoryMismatch(_))
@@ -460,27 +487,17 @@ mod tests {
             "CN=BaselineOps Test",
             b"fixture detached signature",
         );
-        let detached = DetachedFixtureVerifier {
-            calls: AtomicUsize::new(0),
-            subject: "CN=Another Publisher",
-        };
-        let verifier = CountingVerifier(AtomicUsize::new(0));
-        assert!(matches!(
-            verify_package(package.path(), "CN=Another Publisher", &detached, &verifier),
-            Err(PackageError::Signature(_))
-        ));
+        let detached = detached_verifier("CN=Another Publisher");
+        let verifier = counting_verifier();
+        assert_signature_rejected(package.path(), "CN=Another Publisher", &detached, &verifier);
         assert_eq!(verifier.0.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn missing_detached_signature_fails_closed_before_manifest_parse() {
         let package = write_fixture_package(false, false, "CN=BaselineOps Test", b"");
-        let detached = RejectingDetachedVerifier(AtomicUsize::new(0));
-        let verifier = CountingVerifier(AtomicUsize::new(0));
-        assert!(matches!(
-            verify_package(package.path(), "CN=BaselineOps Test", &detached, &verifier),
-            Err(PackageError::Signature(_))
-        ));
+        let (detached, verifier) = rejecting_verifiers();
+        assert_signature_rejected(package.path(), "CN=BaselineOps Test", &detached, &verifier);
         assert_eq!(detached.0.load(Ordering::Relaxed), 0);
         assert_eq!(verifier.0.load(Ordering::Relaxed), 0);
     }
@@ -493,12 +510,8 @@ mod tests {
             "CN=Another Publisher",
             b"fixture detached signature",
         );
-        let detached = RejectingDetachedVerifier(AtomicUsize::new(0));
-        let verifier = CountingVerifier(AtomicUsize::new(0));
-        assert!(matches!(
-            verify_package(package.path(), "CN=BaselineOps Test", &detached, &verifier),
-            Err(PackageError::Signature(_))
-        ));
+        let (detached, verifier) = rejecting_verifiers();
+        assert_signature_rejected(package.path(), "CN=BaselineOps Test", &detached, &verifier);
         assert_eq!(detached.0.load(Ordering::Relaxed), 1);
         assert_eq!(verifier.0.load(Ordering::Relaxed), 0);
     }
@@ -506,15 +519,9 @@ mod tests {
     #[test]
     fn tampered_detached_signature_is_rejected_before_manifest_parse() {
         let package = write_fixture_package(false, true, "CN=BaselineOps Test", b"tampered");
-        let detached = DetachedFixtureVerifier {
-            calls: AtomicUsize::new(0),
-            subject: "CN=BaselineOps Test",
-        };
-        let verifier = CountingVerifier(AtomicUsize::new(0));
-        assert!(matches!(
-            verify_package(package.path(), "CN=BaselineOps Test", &detached, &verifier),
-            Err(PackageError::Signature(_))
-        ));
+        let detached = detached_verifier("CN=BaselineOps Test");
+        let verifier = counting_verifier();
+        assert_signature_rejected(package.path(), "CN=BaselineOps Test", &detached, &verifier);
         assert_eq!(detached.calls.load(Ordering::Relaxed), 0);
         assert_eq!(verifier.0.load(Ordering::Relaxed), 0);
     }

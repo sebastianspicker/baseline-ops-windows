@@ -1,8 +1,14 @@
 # Release packaging and protected installation
 
-This guide describes the tag-based GitHub release workflow and the protected Windows installation required before privileged operation. It uses `v2.3.0-alpha.1` as the concrete package example because the protected-install contract and its tests currently use that versioned directory name.
+This guide covers two parts of a PowerShell release: how maintainers publish a
+tagged package on GitHub, and how operators install that package safely for
+privileged use on Windows. The examples use `v2.3.0-alpha.1` because the
+protected-install contract and its tests currently use that versioned directory
+name.
 
-The workflow accepts semantic version tags such as `v2.3.0-alpha.1`. It must be dispatched from the tag being packaged and verifies that the event commit matches the resolved tag commit.
+The release workflow accepts semantic version tags such as
+`v2.3.0-alpha.1`. Dispatch it from the tag being packaged. The workflow checks
+that the event commit is the commit resolved by that tag.
 
 ## Package contents
 
@@ -15,22 +21,32 @@ The operator ZIP contains:
 - the Windows Forms launcher
 - public project, contribution, security, changelog, and operator documentation
 
-The ZIP excludes `.github/`, `tests/`, private directories, and `scripts/ci-local.sh`.
+The ZIP does not include `.github/`, `tests/`, private directories,
+`scripts/ci-local.sh`, `tools/quality/`, `tools/demo/`, or
+`tools/demo-profiles.mjs`. It includes browser tour assets and screenshots as
+documentation, but leaves out the browser test dependencies.
 
 ## Release verification
 
-Before packaging, `.github/workflows/release.yml` performs these checks against the resolved tag:
+Before it builds a package, `.github/workflows/release.yml` runs these checks
+against the resolved tag:
 
 - Installs the official PowerShell 7.6.3 Linux archive after checking its pinned SHA-256 digest.
 - Loads PSScriptAnalyzer 1.25.0 and Pester 5.8.0.
-- Runs the secret scan, documentation check, static verifier, and focused Pester suite.
+- Runs the secret scan, documentation check, static verifier, and complete Pester suite.
 - Builds the ZIP with `git archive` from the resolved release commit.
 - Verifies the package inventory and expected counts.
 - Runs profile validation, profile smoke, secret, documentation, and static checks against an extracted ZIP.
 
-The publish job then verifies the remote tag, requires the repository's immutable-release setting, creates a build provenance attestation, creates a new draft release, uploads the assets without replacement, publishes the release, and verifies its final immutable state.
+After those checks pass, the publish job verifies the remote tag and confirms
+that immutable releases are enabled for the repository. It creates a build
+provenance attestation and a new draft release, uploads the assets without
+replacing any existing asset, publishes the release, and verifies the final
+immutable state.
 
-Repository files cannot prove that environment reviewers, tag rules, secrets, or immutable releases are configured on GitHub. Those controls must be checked before tagging.
+The repository cannot prove that GitHub has the required environment reviewers,
+tag rules, secrets, or immutable-release setting. A maintainer must verify those
+controls before creating the tag.
 
 ## Release artifacts
 
@@ -41,14 +57,16 @@ For a tag named `v2.3.0-alpha.1`, the workflow creates:
 - `baselineops-windows-v2.3.0-alpha.1.zip.manifest.sha256`
 - `baselineops-windows-v2.3.0-alpha.1.zip.intoto.jsonl`
 
-The `.sha256` file covers the ZIP. The manifest contains a SHA-256 record for every extracted file. The `.intoto.jsonl` file contains the downloaded GitHub build provenance attestation bundle. The workflow does not generate an SBOM.
+The `.sha256` file records the ZIP digest. The manifest records a SHA-256 digest
+for every extracted file. The `.intoto.jsonl` file is the downloaded GitHub
+build provenance attestation bundle. This workflow does not generate an SBOM.
 
 ### Authenticate provenance first
 
-Download all four assets from the same GitHub release. In a standard-user
-PowerShell session, copy the 40-character source commit from the release notes.
-Before reading or extracting the ZIP, authenticate its digest, source commit,
-source tag, and publisher workflow with GitHub CLI:
+Download all four assets from the same GitHub release. Open a standard-user
+PowerShell session and copy the 40-character source commit from the release
+notes. Before reading or extracting the ZIP, use GitHub CLI to authenticate the
+ZIP digest, source commit, source tag, and publishing workflow:
 
 ```powershell
 if (-not (Get-Command gh -CommandType Application -ErrorAction SilentlyContinue)) {
@@ -81,9 +99,9 @@ if ($LASTEXITCODE -ne 0 -or $ExpectedSha256 -notmatch '^[0-9a-f]{64}$') {
 $ExpectedSha256
 ```
 
-Keep the printed `$ExpectedSha256` for the protected-install step. A separately
-downloaded checksum detects corruption; it does not authenticate the publisher
-and is therefore checked only after the attestation.
+Save the printed `$ExpectedSha256` for the protected-install step. The separate
+checksum can detect corruption, but it cannot authenticate the publisher. For
+that reason, check it only after the attestation succeeds.
 
 ### Verify the ZIP and extracted files
 
@@ -97,8 +115,8 @@ if ($PublishedChecksum -cne $ExpectedSha256 -or $Actual -cne $ExpectedSha256) {
 }
 ```
 
-POSIX shell or Git Bash, including the extracted file manifest in a new temporary
-directory:
+In a POSIX shell or Git Bash, verify both the ZIP and the extracted file
+manifest in a new temporary directory:
 
 ```bash
 asset='baselineops-windows-v2.3.0-alpha.1.zip'
@@ -112,11 +130,11 @@ unzip -q "${asset}" -d "${package_dir}"
 
 ### Check the extracted operator package
 
-The following commands require only files included in the ZIP. Run them without
-elevation from the extracted package root with PowerShell 7.6.3 exactly. This
-phase validates the package but does not make a user-owned extraction safe for
-privileged execution. The complete static gate also requires PSScriptAnalyzer
-1.25.0 to be installed:
+The following checks use only files included in the ZIP. From the extracted
+package root, run them without elevation and with PowerShell 7.6.3 exactly. They
+validate the package contents, but they do not make a user-owned extraction safe
+for privileged execution. Install PSScriptAnalyzer 1.25.0 before running the
+complete static gate:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\00-Validate-Profile.ps1 -ProfilePath .\examples\profiles\baseline-audit.json -RootPath .
@@ -125,42 +143,48 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Documentation.ps1 -Ro
 pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force; & .\tools\verify.ps1 -RootPath ."
 ```
 
-`verify.ps1 -SkipAnalyzer` is a partial parse-only check, not a substitute for
-the complete gate. Pester and `scripts/ci-local.sh` require a full checkout
-of the release tag. The operator ZIP deliberately excludes `scripts/ci-local.sh`,
-`tests/`.
+`verify.ps1 -SkipAnalyzer` performs only a partial parse check and does not
+replace the complete gate. Pester and `scripts/ci-local.sh` require a full
+checkout of the release tag. The operator ZIP deliberately excludes both
+`scripts/ci-local.sh` and `tests/`.
 
-An extracted ZIP has no Git metadata, so the verifier and secret scan use their
-recursive package fallback. In a Windows checkout, those two tools accept bare
-Git only from the standard Program Files locations and enumerate
-`git ls-files --cached --others --exclude-standard`. If trusted Git is absent,
-the fallback can also see ignored local files; use an exact staged or package
-surface for release evidence rather than weakening the executable-path policy.
-The documentation checker uses the Git application found on `PATH` and
-fails if repository discovery does not complete.
+An extracted ZIP has no Git metadata. The verifier and secret scan therefore
+fall back to recursive package scanning. In a Windows checkout, these two tools
+accept bare Git only from the standard Program Files locations and enumerate
+`git ls-files --cached --others --exclude-standard`. If trusted Git is not
+available, the fallback may also scan ignored local files. Use an exact staged
+or package surface for release evidence; do not weaken the executable-path
+policy. The documentation checker uses the Git application found on `PATH` and
+fails when repository discovery cannot complete.
 
 ### Install a protected Windows copy
 
-Elevated runners and the launcher reject any kit root or ancestor that is owned
-or writable by an untrusted SID. A normal extraction below Downloads is useful
-for the standard-user checks above, but it is intentionally not a privileged
-execution root. `00-Copy-Local.ps1` also validates its own source before import
-and is not a bootstrap from an untrusted directory. When that synchronization
-tool is used, pass `-RepoRef` as the full source commit obtained from the
-verified release provenance; omitted, branch, and tag references are refused
-before synchronization. `-WhatIf` remains a no-mutation preview without a ref.
+Elevated runners and the launcher refuse a kit root when that root or any of its
+ancestors is owned or writable by an untrusted SID. The Downloads extraction is
+appropriate for the standard-user checks above, but it is deliberately unsafe
+as a privileged execution root.
 
-After successful attestation verification, open a new elevated Windows
-PowerShell 5.1 session. In the block below, `$ZipPath` uses the current user's
-Downloads folder. Enter the authenticated digest printed as `$ExpectedSha256`
-above when prompted. The block
-uses only Windows/.NET built-ins: it refuses an existing destination, copies the
-ZIP into a newly protected Program Files directory, verifies that protected copy,
-extracts it, and sets every extracted owner to `BUILTIN\Administrators`. Users
-receive read/execute access but no write/replace access.
+`00-Copy-Local.ps1` cannot bootstrap trust from an untrusted directory. It
+validates its own source before importing it. When using this synchronization
+tool, set `-RepoRef` to the full source commit from the verified release
+provenance. It refuses an omitted reference, branch name, or tag before
+synchronization. `-WhatIf` remains a no-mutation preview and does not require a
+ref.
 
-Copy this block from the immutable tagged GitHub page, not from a local
-user-writable extraction that could have changed after verification.
+After the attestation succeeds, open a new elevated Windows PowerShell 5.1
+session. In the block below, `$ZipPath` points to the current user's Downloads
+folder. At the prompt, enter the authenticated digest printed as
+`$ExpectedSha256` above.
+
+The block uses only Windows and .NET built-ins. It refuses an existing
+destination, creates a protected directory under Program Files, copies and
+verifies the ZIP inside that directory, extracts the files, and changes every
+extracted owner to `BUILTIN\Administrators`. Users receive read and execute
+access, but cannot write or replace the files.
+
+Copy this block from the immutable tagged GitHub page. Do not run a copy from a
+local, user-writable extraction, because that copy could have changed after
+verification.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -238,17 +262,17 @@ try {
 Write-Host "Protected install ready: $InstallRoot"
 ```
 
-Only after that block succeeds should an operator execute repository code with
-elevation. From the protected root, the baseline profile returns `0` for success
-or `2` for completed-with-warnings; exit `1` is a failure:
+Execute repository code with elevation only after the installation block
+succeeds. From the protected root, the baseline profile returns `0` on success,
+`2` when it completes with warnings, and `1` on failure:
 
 ```powershell
 Set-Location -LiteralPath $InstallRoot
 pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 -ProfilePath .\examples\profiles\baseline-audit.json -RootPath $InstallRoot -Mode Audit -OutputFormat None -Confirm:$false
 ```
 
-For a no-execution control-flow preview, use the strict remediation profile with
-`-WhatIf`:
+To preview strict remediation control flow without running any endpoint
+capability, use the profile with `-WhatIf`:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 -ProfilePath .\examples\profiles\hardening-remediate.json -RootPath $InstallRoot -Mode Remediate -Strict -OutputFormat None -WhatIf -Confirm:$false
@@ -257,12 +281,12 @@ pwsh -NoProfile -File .\scripts\00-Run-Batch.ps1 -Category Remediation -RootPath
 ```
 
 The preview intentionally skips every child script and returns `WARN` / exit
-`2`. A strict profile does not promote a warning caused only by those skips;
-batch preview stops before its temporary profile workspace is created. This
-confirms selection and no-mutation behavior; it is not endpoint audit or
-remediation evidence. Keep `-OutputFormat None` for an artifact-free preview;
-an explicitly requested JSON/CSV output path still receives the terminal
-result.
+`2`. Strict mode does not promote a warning caused only by these skips. A batch
+preview stops before creating its temporary profile workspace. This confirms
+selection and no-mutation behavior only; it provides no endpoint audit or
+remediation evidence. Use `-OutputFormat None` to avoid creating an artifact.
+If a JSON/CSV output path is explicitly requested, it still receives the
+terminal result.
 
 ## Operational limitations
 
@@ -275,14 +299,15 @@ result.
 
 ## Maintainer release checklist
 
-Repository files cannot enforce GitHub-hosted settings. Before tagging, enable
+Repository files cannot enforce settings hosted by GitHub. Before tagging,
+enable
 [immutable releases](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/prevent-release-changes),
 protect release-tag creation with a repository ruleset, and configure the
 `alpha-release` environment with required reviewer and deployment-tag controls.
-That environment must also provide `RELEASE_SETTINGS_READ_TOKEN`, a fine-grained
+The environment must also provide `RELEASE_SETTINGS_READ_TOKEN`, a fine-grained
 token scoped to this repository with read-only Administration permission. The
-publish job uses it only to confirm the immutable-release setting before it
-creates a draft; the normal job token handles release contents.
+publish job uses this token only to check the immutable-release setting before
+creating a draft. The normal job token handles the release contents.
 
 1. Verify the remote controls and freeze one clean commit containing the intended source and documentation.
 2. Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md#local-checks) under PowerShell 7.6.3 and Windows PowerShell 5.1 with PSScriptAnalyzer 1.25.0 and Pester 5.8.0. Review failures, unexpected skips, and test-discovery changes.
@@ -298,10 +323,10 @@ creates a draft; the normal job token handles release contents.
 
 ### Failed-draft recovery
 
-The workflow deliberately refuses to reuse a release. If a run fails after it
-creates an unpublished draft, preserve the run logs and inspect the draft assets
-before recovery. Confirm `isDraft` is true, confirm the tag still resolves to the
-frozen commit, then explicitly delete only that draft and rerun from the same
+The workflow never reuses a release. If it fails after creating an unpublished
+draft, preserve the run logs and inspect every draft asset before recovery.
+Confirm that `isDraft` is true and that the tag still points to the frozen
+commit. Then delete only that draft and rerun the workflow from the same,
 unchanged tag:
 
 ```bash
@@ -311,5 +336,5 @@ gh release delete "${tag}" --yes
 ```
 
 Do not pass `--cleanup-tag`; the verified tag must remain intact. Never delete
-or reuse a published or immutable release. If publication state is ambiguous or
-the tag moved, stop and create a new prerelease version only after review.
+or reuse a published or immutable release. If the publication state is unclear
+or the tag has moved, stop. After review, create a new prerelease version.

@@ -97,62 +97,36 @@ mod platform {
         processor_revision: u16,
     }
 
-    #[link(name = "ntdll")]
-    unsafe extern "system" {
-        fn RtlGetVersion(version: *mut OsVersionInfo) -> i32;
-        fn NtQuerySystemInformation(
-            class: u32,
-            information: *mut core::ffi::c_void,
-            length: u32,
-            return_length: *mut u32,
-        ) -> i32;
-    }
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetNativeSystemInfo(info: *mut SystemInfo);
-        fn GetCurrentProcessId() -> u32;
-        fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
-        fn GetVolumeInformationW(
-            root_path: *const u16,
-            volume_name: *mut u16,
-            volume_name_size: u32,
-            serial: *mut u32,
-            maximum_component_length: *mut u32,
-            file_system_flags: *mut u32,
-            file_system_name: *mut u16,
-            file_system_name_size: u32,
-        ) -> i32;
+    struct HostFacts {
+        version: OsVersionInfo,
+        edition: String,
+        sku: u32,
+        hostname: String,
+        session_id: u32,
+        boot_id: String,
+        serial: u32,
     }
 
     pub fn collect() -> Result<HostIdentityV3, PlatformError> {
-        let version = os_version()?;
-        let architecture = native_architecture();
-        let sku = edition_sku(version.major, version.minor)?;
-        let edition = classify_host(
-            version.major,
-            version.minor,
-            version.build,
-            architecture,
-            sku,
-        )?;
-        let hostname = hostname()?;
-        let session_id = session_id()?;
-        let boot_id = boot_id()?;
+        let facts = host_facts()?;
         let host_id = format!(
             "{}-{:08x}",
-            hostname.to_ascii_lowercase(),
-            system_volume_serial()?
+            facts.hostname.to_ascii_lowercase(),
+            facts.serial
         );
         let mut identity = HostIdentityV3 {
             host_id,
-            boot_id,
-            session_id: session_id.to_string(),
-            hostname,
+            boot_id: facts.boot_id,
+            session_id: facts.session_id.to_string(),
+            hostname: facts.hostname,
             os_family: OsFamily::Windows,
             os_version: format!(
                 "Windows {}.{}.{} edition {} (sku-{sku:08x})",
-                version.major, version.minor, version.build, edition
+                facts.version.major,
+                facts.version.minor,
+                facts.version.build,
+                facts.edition,
+                sku = facts.sku
             ),
             architecture: "x86_64".into(),
             fingerprint: baselineops_domain::Sha256Digest::of_bytes([]),
@@ -164,6 +138,32 @@ mod platform {
             PlatformError::TrustFailure(format!("host identity validation failed: {error}"))
         })?;
         Ok(identity)
+    }
+
+    fn host_facts() -> Result<HostFacts, PlatformError> {
+        let (version, edition, sku) = host_edition()?;
+        Ok(HostFacts {
+            version,
+            edition,
+            sku,
+            hostname: hostname()?,
+            session_id: session_id()?,
+            boot_id: boot_id()?,
+            serial: system_volume_serial()?,
+        })
+    }
+
+    fn host_edition() -> Result<(OsVersionInfo, String, u32), PlatformError> {
+        let version = os_version()?;
+        let sku = edition_sku(version.major, version.minor)?;
+        let edition = classify_host(
+            version.major,
+            version.minor,
+            version.build,
+            native_architecture(),
+            sku,
+        )?;
+        Ok((version, edition.to_owned(), sku))
     }
 
     fn os_version() -> Result<OsVersionInfo, PlatformError> {
@@ -307,6 +307,30 @@ mod platform {
             product_type: *mut u32,
         ) -> i32;
     }
+
+    #[link(name = "kernel32")]
+    #[rustfmt::skip]
+    unsafe extern "system" { fn GetVolumeInformationW(root_path: *const u16, volume_name: *mut u16, volume_name_size: u32, serial: *mut u32, maximum_component_length: *mut u32, file_system_flags: *mut u32, file_system_name: *mut u16, file_system_name_size: u32) -> i32; }
+
+    #[link(name = "kernel32")]
+    #[rustfmt::skip]
+    unsafe extern "system" { fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32; }
+
+    #[link(name = "kernel32")]
+    #[rustfmt::skip]
+    unsafe extern "system" { fn GetCurrentProcessId() -> u32; }
+
+    #[link(name = "kernel32")]
+    #[rustfmt::skip]
+    unsafe extern "system" { fn GetNativeSystemInfo(info: *mut SystemInfo); }
+
+    #[link(name = "ntdll")]
+    #[rustfmt::skip]
+    unsafe extern "system" { fn RtlGetVersion(version: *mut OsVersionInfo) -> i32; }
+
+    #[link(name = "ntdll")]
+    #[rustfmt::skip]
+    unsafe extern "system" { fn NtQuerySystemInformation(class: u32, information: *mut core::ffi::c_void, length: u32, return_length: *mut u32) -> i32; }
 }
 
 #[cfg(any(windows, test))]

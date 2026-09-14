@@ -120,6 +120,25 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Test-AllConditions {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (-not (. $condition)) { return $false }
+  }
+  return $true
+}
+function Test-AnyCondition {
+  param([scriptblock[]]$Conditions)
+  foreach ($condition in $Conditions) {
+    if (. $condition) { return $true }
+  }
+  return $false
+}
+function Initialize-Capability31Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+
+  }
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
@@ -130,13 +149,15 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '31-PowerShell-Logging-Baseline.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+$script:__V2Context = Initialize-V2Context -ScriptName '31-PowerShell-Logging-Baseline.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability31Runtime -EntryBoundParameters $PSBoundParameters
 
 # ---------------------------
 # Helpers (no pipeline output)
@@ -193,29 +214,31 @@ function Test-IsSafeTranscriptPath {
 
 function Normalize-ModuleNames {
   param([object]$Names)
-
   $arr = @()
   if ($Names -is [string]) { $arr = @([string]$Names) }
   elseif ($Names -is [System.Collections.IEnumerable]) { $arr = @($Names) }
-
-  $clean = @()
-  foreach ($n in $arr) {
-    $s = ([string]$n).Trim()
-    if ($s.Length -gt 0) { $clean += $s }
+  $clean = @(Get-CleanModuleNames -Names $arr)
+  if ($clean.Count -eq 0) { return @('*') }
+  return @(Get-DistinctModuleNames -Names $clean)
+}
+function Get-CleanModuleNames {
+  param([object[]]$Names)
+  foreach ($name in $Names) {
+    $value = ([string]$name).Trim()
+    if ($value.Length -gt 0) { $value }
   }
-  if (-not $clean -or $clean.Count -eq 0) { return @('*') }
-
+}
+function Get-DistinctModuleNames {
+  param([string[]]$Names)
   $seen = @{}
   $out = @()
-  foreach ($s in $clean) {
-    $k = $s.ToLowerInvariant()
+  foreach ($name in $Names) {
+    $k = $name.ToLowerInvariant()
     if (-not $seen.ContainsKey($k)) {
       $seen[$k] = $true
-      $out += $s
+      $out += $name
     }
   }
-
-  if ($out.Count -eq 0) { return @('*') }
   return $out
 }
 
@@ -230,22 +253,23 @@ function Try-ParseBool {
 
   if ($Value -is [bool]) { $Parsed.Value = [bool]$Value; return $true }
 
-  if ($Value -is [int] -or $Value -is [long] -or $Value -is [byte]) {
-    if ([int]$Value -eq 1) { $Parsed.Value = $true; return $true }
-    if ([int]$Value -eq 0) { $Parsed.Value = $false; return $true }
-    return $false
+  if (@([int], [long], [byte]) -contains $Value.GetType()) {
+    return Set-ParsedNumericBool -Value $Value -Parsed $Parsed
   }
 
   $s = ([string]$Value).Trim()
   if ($s.Length -eq 0) { return $false }
 
-  switch -Regex ($s.ToLowerInvariant()) {
-    '^(true|\$true|yes|y|on|enable|enabled)$'        { $Parsed.Value = $true; return $true }
-    '^(false|\$false|no|n|off|disable|disabled)$'   { $Parsed.Value = $false; return $true }
-    '^(1)$'                                         { $Parsed.Value = $true; return $true }
-    '^(0)$'                                         { $Parsed.Value = $false; return $true }
-    default                                         { return $false }
-  }
+  $normalized = $s.ToLowerInvariant()
+  if (@('true','$true','yes','y','on','enable','enabled','1') -contains $normalized) { $Parsed.Value = $true; return $true }
+  if (@('false','$false','no','n','off','disable','disabled','0') -contains $normalized) { $Parsed.Value = $false; return $true }
+  return $false
+}
+function Set-ParsedNumericBool {
+  param($Value, [ref]$Parsed)
+  if ([int]$Value -eq 1) { $Parsed.Value = $true; return $true }
+  if ([int]$Value -eq 0) { $Parsed.Value = $false; return $true }
+  return $false
 }
 
 function Resolve-Bool {
@@ -270,25 +294,25 @@ function Resolve-Bool {
 }
 
 function Get-SettingsForBase {
-  param([string]$BasePath)
+  param([string]$BasePath, [hashtable]$RunState)
 
-  $transPath = Join-Path $BasePath 'Transcription'
-  $sbPath    = Join-Path $BasePath 'ScriptBlockLogging'
+  $RunState.transPath = Join-Path $BasePath 'Transcription'
+  $RunState.sbPath    = Join-Path $BasePath 'ScriptBlockLogging'
   $modPath   = Join-Path $BasePath 'ModuleLogging'
-  $modNames  = Join-Path $modPath 'ModuleNames'
+  $RunState.modNames  = Join-Path $modPath 'ModuleNames'
 
   [pscustomobject]@{
     PolicyBasePath                                = $BasePath
 
-    Transcription_EnableTranscripting              = Get-RegValue -Path $transPath -Name 'EnableTranscripting'
-    Transcription_OutputDirectory                  = Get-RegValue -Path $transPath -Name 'OutputDirectory'
-    Transcription_EnableInvocationHeader           = Get-RegValue -Path $transPath -Name 'EnableInvocationHeader'
+    Transcription_EnableTranscripting              = Get-RegValue -Path $RunState.transPath -Name 'EnableTranscripting'
+    Transcription_OutputDirectory                  = Get-RegValue -Path $RunState.transPath -Name 'OutputDirectory'
+    Transcription_EnableInvocationHeader           = Get-RegValue -Path $RunState.transPath -Name 'EnableInvocationHeader'
 
-    ScriptBlock_EnableScriptBlockLogging           = Get-RegValue -Path $sbPath -Name 'EnableScriptBlockLogging'
-    ScriptBlock_EnableScriptBlockInvocationLogging = Get-RegValue -Path $sbPath -Name 'EnableScriptBlockInvocationLogging'
+    ScriptBlock_EnableScriptBlockLogging           = Get-RegValue -Path $RunState.sbPath -Name 'EnableScriptBlockLogging'
+    ScriptBlock_EnableScriptBlockInvocationLogging = Get-RegValue -Path $RunState.sbPath -Name 'EnableScriptBlockInvocationLogging'
 
     Module_EnableModuleLogging                     = Get-RegValue -Path $modPath -Name 'EnableModuleLogging'
-    ModuleNames_Configured                         = Get-ModuleNamesConfigured -ModuleNamesKeyPath $modNames
+    ModuleNames_Configured                         = Get-ModuleNamesConfigured -ModuleNamesKeyPath $RunState.modNames
   }
 }
 
@@ -301,16 +325,22 @@ function Get-EffectiveSettings {
   [pscustomobject]@{
     PolicyBasePath                                = $HKLM.PolicyBasePath
 
-    Transcription_EnableTranscripting              = if ($null -ne $HKLM.Transcription_EnableTranscripting) { $HKLM.Transcription_EnableTranscripting } else { $HKCU.Transcription_EnableTranscripting }
-    Transcription_OutputDirectory                  = if ($null -ne $HKLM.Transcription_OutputDirectory)     { $HKLM.Transcription_OutputDirectory }     else { $HKCU.Transcription_OutputDirectory }
-    Transcription_EnableInvocationHeader           = if ($null -ne $HKLM.Transcription_EnableInvocationHeader) { $HKLM.Transcription_EnableInvocationHeader } else { $HKCU.Transcription_EnableInvocationHeader }
+    Transcription_EnableTranscripting              = Get-PreferredPolicyValue $HKLM.Transcription_EnableTranscripting $HKCU.Transcription_EnableTranscripting
+    Transcription_OutputDirectory                  = Get-PreferredPolicyValue $HKLM.Transcription_OutputDirectory $HKCU.Transcription_OutputDirectory
+    Transcription_EnableInvocationHeader           = Get-PreferredPolicyValue $HKLM.Transcription_EnableInvocationHeader $HKCU.Transcription_EnableInvocationHeader
 
-    ScriptBlock_EnableScriptBlockLogging           = if ($null -ne $HKLM.ScriptBlock_EnableScriptBlockLogging) { $HKLM.ScriptBlock_EnableScriptBlockLogging } else { $HKCU.ScriptBlock_EnableScriptBlockLogging }
-    ScriptBlock_EnableScriptBlockInvocationLogging = if ($null -ne $HKLM.ScriptBlock_EnableScriptBlockInvocationLogging) { $HKLM.ScriptBlock_EnableScriptBlockInvocationLogging } else { $HKCU.ScriptBlock_EnableScriptBlockInvocationLogging }
+    ScriptBlock_EnableScriptBlockLogging           = Get-PreferredPolicyValue $HKLM.ScriptBlock_EnableScriptBlockLogging $HKCU.ScriptBlock_EnableScriptBlockLogging
+    ScriptBlock_EnableScriptBlockInvocationLogging = Get-PreferredPolicyValue $HKLM.ScriptBlock_EnableScriptBlockInvocationLogging $HKCU.ScriptBlock_EnableScriptBlockInvocationLogging
 
-    Module_EnableModuleLogging                     = if ($null -ne $HKLM.Module_EnableModuleLogging) { $HKLM.Module_EnableModuleLogging } else { $HKCU.Module_EnableModuleLogging }
-    ModuleNames_Configured                         = if ($HKLM.ModuleNames_Configured) { $HKLM.ModuleNames_Configured } else { $HKCU.ModuleNames_Configured }
+    Module_EnableModuleLogging                     = Get-PreferredPolicyValue $HKLM.Module_EnableModuleLogging $HKCU.Module_EnableModuleLogging
+    ModuleNames_Configured                         = Get-PreferredPolicyValue $HKLM.ModuleNames_Configured $HKCU.ModuleNames_Configured -UseTruthiness
   }
+}
+function Get-PreferredPolicyValue {
+  param([AllowNull()]$MachineValue, [AllowNull()]$UserValue, [switch]$UseTruthiness)
+  if ($UseTruthiness -and $MachineValue) { return $MachineValue }
+  if (-not $UseTruthiness -and $null -ne $MachineValue) { return $MachineValue }
+  return $UserValue
 }
 
 function Format-PolicyValue {
@@ -328,7 +358,7 @@ function Format-PolicyValue {
 # ---------------------------
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
 if (-not $isWindowsHost) {
-  $summary = [pscustomobject]@{
+  $RunState.summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
     Mode         = $Mode
@@ -337,236 +367,307 @@ if (-not $isWindowsHost) {
   }
 
   $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
-  $result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
+  $result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $RunState.summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
   if ($PassThru) { $result }
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
+function Initialize-PowerShellLoggingAuditState {
+  param([hashtable]$RunState)
 Require-Admin
 
-$Findings = Get-FindingsList
-$registryWriteFailed = $false
+$RunState.Findings = Get-FindingsList
+$RunState.registryWriteFailed = $false
+}
+. Initialize-PowerShellLoggingAuditState -RunState $RunState
 
 function Add-RegistryWriteFailureFinding {
   param(
     [Parameter(Mandatory)][string]$Path,
     [Parameter(Mandatory)][string]$Name,
     [Parameter(Mandatory)][object]$Value
-  )
+  , [hashtable]$RunState)
 
-  $null = Add-Finding -FindingList $Findings -Code 'PSLOG-RegWriteFailed' -Severity 'High' `
+  $null = Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-RegWriteFailed' -Severity 'High' `
     -Message ("Failed to write PowerShell logging registry value '{0}' at '{1}'. Hardening not applied." -f $Name, $Path) `
     -Extra @{ Path = $Path; Name = $Name; Value = $Value }
 }
 
 # Defaults (used when JSON missing/invalid)
-$commonApplicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
-if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { $commonApplicationData = [IO.Path]::GetTempPath() }
-if ([string]::IsNullOrWhiteSpace($commonApplicationData)) { throw 'CommonApplicationData could not be resolved.' }
-$defaultTranscriptDirectory = Join-Path $commonApplicationData 'PowerShellTranscripts'
-$defaults = @{
-  TranscriptOutputDirectory           = $defaultTranscriptDirectory
-  EnableTranscription                = $true
-  EnableInvocationHeader             = $true
-  EnableScriptBlockLogging           = $true
-  EnableScriptBlockInvocationLogging = $false
-  EnableModuleLogging                = $true
-  ModuleNames                        = @('*')
-}
-
-$sanitized = if ([string]::IsNullOrWhiteSpace($ConfigJsonPath)) { $null } else { Sanitize-Path -Path $ConfigJsonPath -MustExist }
-if (-not $sanitized -and -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-ConfigJsonMissing' -Severity 'Info' -Message 'Config JSON not found; using defaults.'
-}
-$cfgResult = Read-ConfigWithDefaults -Path $sanitized -Defaults $defaults
-$config = $cfgResult.Config
-if ($cfgResult.Meta.Provided -and -not $cfgResult.Meta.Loaded) {
-  $code = 'PSLOG-ConfigJsonInvalid'
-  $msg = 'Config JSON could not be loaded/parsed; using defaults.'
-  if ($cfgResult.Meta.Error -eq 'ConfigPath not found or invalid.') {
-    $code = 'PSLOG-ConfigJsonMissing'
-    $msg = 'Config JSON not found; using defaults.'
-  } elseif ($cfgResult.Meta.Error -eq 'Config file is empty.') {
-    $code = 'PSLOG-ConfigJsonEmpty'
-    $msg = 'Config JSON is empty; using defaults.'
+function Invoke-Capability31MainPhase01 {
+  param([hashtable]$RunState)
+  $commonApplicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { $commonApplicationData = [IO.Path]::GetTempPath() }
+  if ([string]::IsNullOrWhiteSpace($commonApplicationData)) { throw 'CommonApplicationData could not be resolved.' }
+  $defaultTranscriptDirectory = Join-Path $commonApplicationData 'PowerShellTranscripts'
+  $defaults = @{
+    TranscriptOutputDirectory           = $defaultTranscriptDirectory
+    EnableTranscription                = $true
+    EnableInvocationHeader             = $true
+    EnableScriptBlockLogging           = $true
+    EnableScriptBlockInvocationLogging = $false
+    EnableModuleLogging                = $true
+    ModuleNames                        = @('*')
   }
-  Add-Finding -FindingList $Findings -Code $code -Severity 'Info' -Message $msg
+
+  $sanitized = if ([string]::IsNullOrWhiteSpace($ConfigJsonPath)) { $null } else { Sanitize-Path -Path $ConfigJsonPath -MustExist }
+  if (-not $sanitized -and -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)) {
+    Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-ConfigJsonMissing' -Severity 'Info' -Message 'Config JSON not found; using defaults.'
+  }
+  $cfgResult = Read-ConfigWithDefaults -Path $sanitized -Defaults $defaults
+  $RunState.config = $cfgResult.Config
+}
+function Invoke-Capability31MainPhase02 {
+  param([hashtable]$RunState)
+  if ($cfgResult.Meta.Provided -and -not $cfgResult.Meta.Loaded) {
+    $code = 'PSLOG-ConfigJsonInvalid'
+    $msg = 'Config JSON could not be loaded/parsed; using defaults.'
+    if ($cfgResult.Meta.Error -eq 'ConfigPath not found or invalid.') {
+      $code = 'PSLOG-ConfigJsonMissing'
+      $msg = 'Config JSON not found; using defaults.'
+    } elseif ($cfgResult.Meta.Error -eq 'Config file is empty.') {
+      $code = 'PSLOG-ConfigJsonEmpty'
+      $msg = 'Config JSON is empty; using defaults.'
+    }
+    Add-Finding -FindingList $RunState.Findings -Code $code -Severity 'Info' -Message $msg
+  }
+}
+function Invoke-Capability31MainPhase03 {
+  param([hashtable]$RunState)
+  $RunState.targetTranscriptDir = if ($script:__EntryBoundParameters.ContainsKey('TranscriptOutputDirectory') -and -not [string]::IsNullOrWhiteSpace($TranscriptOutputDirectory)) {
+    $TranscriptOutputDirectory
+  } elseif (-not [string]::IsNullOrWhiteSpace([string]$RunState.config.TranscriptOutputDirectory)) {
+    [string]$RunState.config.TranscriptOutputDirectory
+  } else {
+    $defaultTranscriptDirectory
+  }
+
+  $RunState.targetEnableTranscription = Resolve-Bool -ParameterValue $EnableTranscription -ParameterWasBound $script:__EntryBoundParameters.ContainsKey('EnableTranscription') -ConfigValue $RunState.config.EnableTranscription -DefaultValue $true -NameForFinding 'EnableTranscription' -Findings $RunState.Findings
+  $RunState.targetEnableInvocationHeader = Resolve-Bool -ParameterValue $EnableInvocationHeader -ParameterWasBound $script:__EntryBoundParameters.ContainsKey('EnableInvocationHeader') -ConfigValue $RunState.config.EnableInvocationHeader -DefaultValue $true -NameForFinding 'EnableInvocationHeader' -Findings $RunState.Findings
+  $RunState.targetEnableScriptBlockLogging = Resolve-Bool -ParameterValue $EnableScriptBlockLogging -ParameterWasBound $script:__EntryBoundParameters.ContainsKey('EnableScriptBlockLogging') -ConfigValue $RunState.config.EnableScriptBlockLogging -DefaultValue $true -NameForFinding 'EnableScriptBlockLogging' -Findings $RunState.Findings
+  $RunState.targetEnableScriptBlockInvocationLogging = Resolve-Bool -ParameterValue $EnableScriptBlockInvocationLogging -ParameterWasBound $script:__EntryBoundParameters.ContainsKey('EnableScriptBlockInvocationLogging') -ConfigValue $RunState.config.EnableScriptBlockInvocationLogging -DefaultValue $false -NameForFinding 'EnableScriptBlockInvocationLogging' -Findings $RunState.Findings
+  $RunState.targetEnableModuleLogging = Resolve-Bool -ParameterValue $EnableModuleLogging -ParameterWasBound $script:__EntryBoundParameters.ContainsKey('EnableModuleLogging') -ConfigValue $RunState.config.EnableModuleLogging -DefaultValue $true -NameForFinding 'EnableModuleLogging' -Findings $RunState.Findings
+
+  $targetModuleNames = if ($script:__EntryBoundParameters.ContainsKey('ModuleNames')) { $ModuleNames } else { $RunState.config.ModuleNames }
+  $targetModuleNames = Normalize-ModuleNames -Names $targetModuleNames
+}
+function Invoke-Capability31MainPhase04 {
+  param([hashtable]$RunState)
+  if ($RunState.targetEnableTranscription -and -not (Test-IsSafeTranscriptPath -Path $RunState.targetTranscriptDir)) {
+    Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-TranscriptPathNotProgramData' -Severity 'Info' -Message 'Transcript output directory is not under ProgramData (review ACLs and data exposure risk).'
+  }
+
+  $hklmBase = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
+  $hkcuBase = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
+
+  $currentHKLM = Get-SettingsForBase -BasePath $hklmBase -RunState $RunState
+  $currentHKCU = if ($IncludeHKCU) { Get-SettingsForBase -BasePath $hkcuBase -RunState $RunState } else { $null }
+  $RunState.effectiveBefore = if ($IncludeHKCU -and $currentHKCU) { Get-EffectiveSettings -HKLM $currentHKLM -HKCU $currentHKCU } else { $currentHKLM }
+}
+function Invoke-Capability31MainPhase05 {
+  param([hashtable]$RunState)
+  if ($RunState.targetEnableTranscription -and $RunState.effectiveBefore.Transcription_EnableTranscripting -ne 1) {
+    Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-TranscriptionOff' -Severity 'Medium' -Message 'Transcription is not enabled (effective policy).'
+  }
+  if ($RunState.targetEnableInvocationHeader -and $RunState.targetEnableTranscription -and $RunState.effectiveBefore.Transcription_EnableInvocationHeader -ne 1) {
+    Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-InvocationHeaderOff' -Severity 'Low' -Message 'Invocation Header is not enabled (effective policy).'
+  }
+}
+function Invoke-Capability31MainPhase06 {
+  param([hashtable]$RunState)
+  if ($RunState.targetEnableScriptBlockLogging -and $RunState.effectiveBefore.ScriptBlock_EnableScriptBlockLogging -ne 1) {
+    Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-ScriptBlockOff' -Severity 'Medium' -Message 'Script Block Logging is not enabled (effective policy).'
+  }
+  if ($RunState.targetEnableScriptBlockInvocationLogging -and $RunState.targetEnableScriptBlockLogging -and $RunState.effectiveBefore.ScriptBlock_EnableScriptBlockInvocationLogging -ne 1) {
+    Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-ScriptBlockInvocationOff' -Severity 'Low' -Message 'Script Block Invocation Logging is not enabled (effective policy).'
+  }
+}
+function Invoke-Capability31MainPhase07 {
+  param([hashtable]$RunState)
+  if ($RunState.targetEnableModuleLogging -and $RunState.effectiveBefore.Module_EnableModuleLogging -ne 1) {
+    Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-ModuleLoggingOff' -Severity 'Low' -Message 'Module Logging is not enabled (effective policy).'
+  }
+
+  if ($RunState.targetEnableScriptBlockLogging -and $Mode -eq 'Audit') {
+    Add-Finding -FindingList $RunState.Findings -Code 'PSLOG-Recommend-ProtectedEventLogging' -Severity 'Info' -Message 'Consider enabling Protected Event Logging when using Script Block Logging beyond diagnostics.'
+  }
+}
+function Invoke-Capability31MainPhase08Step01 {
+  param([hashtable]$RunState)
+$RunState.transPath = Join-Path $hklmBase 'Transcription'
+    $RunState.sbPath    = Join-Path $hklmBase 'ScriptBlockLogging'
+    $modPath   = Join-Path $hklmBase 'ModuleLogging'
+    $RunState.modNames  = Join-Path $modPath 'ModuleNames'
 }
 
-$targetTranscriptDir = if ($PSBoundParameters.ContainsKey('TranscriptOutputDirectory') -and -not [string]::IsNullOrWhiteSpace($TranscriptOutputDirectory)) {
-  $TranscriptOutputDirectory
-} elseif (-not [string]::IsNullOrWhiteSpace([string]$config.TranscriptOutputDirectory)) {
-  [string]$config.TranscriptOutputDirectory
-} else {
-  $defaultTranscriptDirectory
-}
-
-$targetEnableTranscription = Resolve-Bool -ParameterValue $EnableTranscription -ParameterWasBound $PSBoundParameters.ContainsKey('EnableTranscription') -ConfigValue $config.EnableTranscription -DefaultValue $true -NameForFinding 'EnableTranscription' -Findings $Findings
-$targetEnableInvocationHeader = Resolve-Bool -ParameterValue $EnableInvocationHeader -ParameterWasBound $PSBoundParameters.ContainsKey('EnableInvocationHeader') -ConfigValue $config.EnableInvocationHeader -DefaultValue $true -NameForFinding 'EnableInvocationHeader' -Findings $Findings
-$targetEnableScriptBlockLogging = Resolve-Bool -ParameterValue $EnableScriptBlockLogging -ParameterWasBound $PSBoundParameters.ContainsKey('EnableScriptBlockLogging') -ConfigValue $config.EnableScriptBlockLogging -DefaultValue $true -NameForFinding 'EnableScriptBlockLogging' -Findings $Findings
-$targetEnableScriptBlockInvocationLogging = Resolve-Bool -ParameterValue $EnableScriptBlockInvocationLogging -ParameterWasBound $PSBoundParameters.ContainsKey('EnableScriptBlockInvocationLogging') -ConfigValue $config.EnableScriptBlockInvocationLogging -DefaultValue $false -NameForFinding 'EnableScriptBlockInvocationLogging' -Findings $Findings
-$targetEnableModuleLogging = Resolve-Bool -ParameterValue $EnableModuleLogging -ParameterWasBound $PSBoundParameters.ContainsKey('EnableModuleLogging') -ConfigValue $config.EnableModuleLogging -DefaultValue $true -NameForFinding 'EnableModuleLogging' -Findings $Findings
-
-$targetModuleNames = if ($PSBoundParameters.ContainsKey('ModuleNames')) { $ModuleNames } else { $config.ModuleNames }
-$targetModuleNames = Normalize-ModuleNames -Names $targetModuleNames
-
-if ($targetEnableTranscription -and -not (Test-IsSafeTranscriptPath -Path $targetTranscriptDir)) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-TranscriptPathNotProgramData' -Severity 'Info' -Message 'Transcript output directory is not under ProgramData (review ACLs and data exposure risk).'
-}
-
-$hklmBase = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
-$hkcuBase = 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
-
-$currentHKLM = Get-SettingsForBase -BasePath $hklmBase
-$currentHKCU = if ($IncludeHKCU) { Get-SettingsForBase -BasePath $hkcuBase } else { $null }
-$effectiveBefore = if ($IncludeHKCU -and $currentHKCU) { Get-EffectiveSettings -HKLM $currentHKLM -HKCU $currentHKCU } else { $currentHKLM }
-
-# Audit findings (effective)
-if ($targetEnableTranscription -and $effectiveBefore.Transcription_EnableTranscripting -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-TranscriptionOff' -Severity 'Medium' -Message 'Transcription is not enabled (effective policy).'
-}
-if ($targetEnableInvocationHeader -and $targetEnableTranscription -and $effectiveBefore.Transcription_EnableInvocationHeader -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-InvocationHeaderOff' -Severity 'Low' -Message 'Invocation Header is not enabled (effective policy).'
-}
-if ($targetEnableScriptBlockLogging -and $effectiveBefore.ScriptBlock_EnableScriptBlockLogging -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-ScriptBlockOff' -Severity 'Medium' -Message 'Script Block Logging is not enabled (effective policy).'
-}
-if ($targetEnableScriptBlockInvocationLogging -and $targetEnableScriptBlockLogging -and $effectiveBefore.ScriptBlock_EnableScriptBlockInvocationLogging -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-ScriptBlockInvocationOff' -Severity 'Low' -Message 'Script Block Invocation Logging is not enabled (effective policy).'
-}
-if ($targetEnableModuleLogging -and $effectiveBefore.Module_EnableModuleLogging -ne 1) {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-ModuleLoggingOff' -Severity 'Low' -Message 'Module Logging is not enabled (effective policy).'
-}
-
-if ($targetEnableScriptBlockLogging -and $Mode -eq 'Audit') {
-  Add-Finding -FindingList $Findings -Code 'PSLOG-Recommend-ProtectedEventLogging' -Severity 'Info' -Message 'Consider enabling Protected Event Logging when using Script Block Logging beyond diagnostics.'
-}
-
-# Remediate (HKLM only)
-if ($Mode -eq 'Remediate') {
-  $transPath = Join-Path $hklmBase 'Transcription'
-  $sbPath    = Join-Path $hklmBase 'ScriptBlockLogging'
-  $modPath   = Join-Path $hklmBase 'ModuleLogging'
-  $modNames  = Join-Path $modPath 'ModuleNames'
-
-  if ($targetEnableTranscription) {
-    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell transcription policy keys (HKLM)')) {
-      Ensure-RegistryKey -Path $hklmBase
-      Ensure-RegistryKey -Path $transPath
-      if (-not (Set-RegDword -Path $transPath -Name 'EnableTranscripting' -Value 1)) {
-        Add-RegistryWriteFailureFinding -Path $transPath -Name 'EnableTranscripting' -Value 1
-        $registryWriteFailed = $true
-      }
-      if (-not (Set-RegString -Path $transPath -Name 'OutputDirectory' -Value $targetTranscriptDir)) {
-        Add-RegistryWriteFailureFinding -Path $transPath -Name 'OutputDirectory' -Value $targetTranscriptDir
-        $registryWriteFailed = $true
-      }
-      if ($targetEnableInvocationHeader) {
-        if (-not (Set-RegDword -Path $transPath -Name 'EnableInvocationHeader' -Value 1)) {
-          Add-RegistryWriteFailureFinding -Path $transPath -Name 'EnableInvocationHeader' -Value 1
-          $registryWriteFailed = $true
+function Invoke-Capability31MainPhase08Step02 {
+  param([hashtable]$RunState)
+if ($RunState.targetEnableTranscription) {
+      if ($script:__EntryCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell transcription policy keys (HKLM)')) {
+        Ensure-RegistryKey -Path $hklmBase
+        Ensure-RegistryKey -Path $RunState.transPath
+        if (-not (Set-RegDword -Path $RunState.transPath -Name 'EnableTranscripting' -Value 1)) {
+          Add-RegistryWriteFailureFinding -Path $RunState.transPath -Name 'EnableTranscripting' -Value 1 -RunState $RunState
+          $RunState.registryWriteFailed = $true
+        }
+        if (-not (Set-RegString -Path $RunState.transPath -Name 'OutputDirectory' -Value $RunState.targetTranscriptDir)) {
+          Add-RegistryWriteFailureFinding -Path $RunState.transPath -Name 'OutputDirectory' -Value $RunState.targetTranscriptDir -RunState $RunState
+          $RunState.registryWriteFailed = $true
+        }
+        . Set-PowerShellInvocationHeaderPolicy -RunState $RunState
+        if (-not (Test-Path -LiteralPath $RunState.targetTranscriptDir)) {
+          $null = New-Item -Path $RunState.targetTranscriptDir -ItemType Directory -Force
         }
       }
-      if (-not (Test-Path -LiteralPath $targetTranscriptDir)) {
-        $null = New-Item -Path $targetTranscriptDir -ItemType Directory -Force
-      }
     }
+}
+function Set-PowerShellInvocationHeaderPolicy {
+  param([hashtable]$RunState)
+  if (-not $RunState.targetEnableInvocationHeader) { return }
+  if (-not (Set-RegDword -Path $RunState.transPath -Name 'EnableInvocationHeader' -Value 1)) {
+    Add-RegistryWriteFailureFinding -Path $RunState.transPath -Name 'EnableInvocationHeader' -Value 1 -RunState $RunState
+    $RunState.registryWriteFailed = $true
   }
+}
 
-  if ($targetEnableScriptBlockLogging) {
-    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell script block logging policy keys (HKLM)')) {
-      Ensure-RegistryKey -Path $hklmBase
-      Ensure-RegistryKey -Path $sbPath
-      if (-not (Set-RegDword -Path $sbPath -Name 'EnableScriptBlockLogging' -Value 1)) {
-        Add-RegistryWriteFailureFinding -Path $sbPath -Name 'EnableScriptBlockLogging' -Value 1
-        $registryWriteFailed = $true
-      }
-      if ($targetEnableScriptBlockInvocationLogging) {
-        if (-not (Set-RegDword -Path $sbPath -Name 'EnableScriptBlockInvocationLogging' -Value 1)) {
-          Add-RegistryWriteFailureFinding -Path $sbPath -Name 'EnableScriptBlockInvocationLogging' -Value 1
-          $registryWriteFailed = $true
+function Invoke-Capability31MainPhase08Step03 {
+  param([hashtable]$RunState)
+if ($RunState.targetEnableScriptBlockLogging) {
+      if ($script:__EntryCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell script block logging policy keys (HKLM)')) {
+        Ensure-RegistryKey -Path $hklmBase
+        Ensure-RegistryKey -Path $RunState.sbPath
+        if (-not (Set-RegDword -Path $RunState.sbPath -Name 'EnableScriptBlockLogging' -Value 1)) {
+          Add-RegistryWriteFailureFinding -Path $RunState.sbPath -Name 'EnableScriptBlockLogging' -Value 1 -RunState $RunState
+          $RunState.registryWriteFailed = $true
+        }
+        if ($RunState.targetEnableScriptBlockInvocationLogging) {
+          if (-not (Set-RegDword -Path $RunState.sbPath -Name 'EnableScriptBlockInvocationLogging' -Value 1)) {
+            Add-RegistryWriteFailureFinding -Path $RunState.sbPath -Name 'EnableScriptBlockInvocationLogging' -Value 1 -RunState $RunState
+            $RunState.registryWriteFailed = $true
+          }
         }
       }
     }
-  }
+}
 
-  if ($targetEnableModuleLogging) {
-    if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell module logging policy keys (HKLM)')) {
-      Ensure-RegistryKey -Path $hklmBase
-      Ensure-RegistryKey -Path $modPath
-      Ensure-RegistryKey -Path $modNames
+function Invoke-Capability31MainPhase08Step04 {
+  param([hashtable]$RunState)
+if ($RunState.targetEnableModuleLogging) {
+      if ($script:__EntryCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure PowerShell module logging policy keys (HKLM)')) {
+        Ensure-RegistryKey -Path $hklmBase
+        Ensure-RegistryKey -Path $modPath
+        Ensure-RegistryKey -Path $RunState.modNames
 
-      if (-not (Set-RegDword -Path $modPath -Name 'EnableModuleLogging' -Value 1)) {
-        Add-RegistryWriteFailureFinding -Path $modPath -Name 'EnableModuleLogging' -Value 1
-        $registryWriteFailed = $true
-      }
-      Remove-AllModuleNames -ModuleNamesKeyPath $modNames
+        if (-not (Set-RegDword -Path $modPath -Name 'EnableModuleLogging' -Value 1)) {
+          Add-RegistryWriteFailureFinding -Path $modPath -Name 'EnableModuleLogging' -Value 1 -RunState $RunState
+          $RunState.registryWriteFailed = $true
+        }
+        Remove-AllModuleNames -ModuleNamesKeyPath $RunState.modNames
 
-      $i = 1
-      foreach ($m in $targetModuleNames) {
-        $null = New-ItemProperty -Path $modNames -Name ([string]$i) -PropertyType String -Value $m -Force
-        $i++
+        $i = 1
+        foreach ($m in $targetModuleNames) {
+          $null = New-ItemProperty -Path $RunState.modNames -Name ([string]$i) -PropertyType String -Value $m -Force
+          $i++
+        }
       }
     }
+}
+
+function Invoke-Capability31MainPhase08 {
+  param([hashtable]$RunState)
+  if ($Mode -eq 'Remediate') {
+    . Invoke-Capability31MainPhase08Step01 -RunState $RunState
+. Invoke-Capability31MainPhase08Step02 -RunState $RunState
+. Invoke-Capability31MainPhase08Step03 -RunState $RunState
+. Invoke-Capability31MainPhase08Step04 -RunState $RunState
   }
 }
+function Invoke-Capability31MainPhase09 {
+  param([hashtable]$RunState)
+  $afterHKLM = Get-SettingsForBase -BasePath $hklmBase -RunState $RunState
+  $afterHKCU = if ($IncludeHKCU) { Get-SettingsForBase -BasePath $hkcuBase -RunState $RunState } else { $null }
+  $RunState.effectiveAfter = if ($IncludeHKCU -and $afterHKCU) { Get-EffectiveSettings -HKLM $afterHKLM -HKCU $afterHKCU } else { $afterHKLM }
 
-$afterHKLM = Get-SettingsForBase -BasePath $hklmBase
-$afterHKCU = if ($IncludeHKCU) { Get-SettingsForBase -BasePath $hkcuBase } else { $null }
-$effectiveAfter = if ($IncludeHKCU -and $afterHKCU) { Get-EffectiveSettings -HKLM $afterHKLM -HKCU $afterHKCU } else { $afterHKLM }
+  $RunState.summary = [pscustomobject]@{
+    ComputerName  = $env:COMPUTERNAME
+    Mode          = $Mode
+    FindingsCount = ($RunState.Findings | Measure-Object).Count
+    RegistryWriteFailed = $RunState.registryWriteFailed
+    Timestamp     = Get-Date
 
-$summary = [pscustomobject]@{
-  ComputerName  = $env:COMPUTERNAME
-  Mode          = $Mode
-  FindingsCount = ($Findings | Measure-Object).Count
-  RegistryWriteFailed = $registryWriteFailed
-  Timestamp     = Get-Date
+    Target_TranscriptOutputDirectory          = $RunState.targetTranscriptDir
+    Target_EnableTranscription                = $RunState.targetEnableTranscription
+    Target_EnableInvocationHeader             = $RunState.targetEnableInvocationHeader
+    Target_EnableScriptBlockLogging           = $RunState.targetEnableScriptBlockLogging
+    Target_EnableScriptBlockInvocationLogging = $RunState.targetEnableScriptBlockInvocationLogging
+    Target_EnableModuleLogging                = $RunState.targetEnableModuleLogging
+    Target_ModuleNames                        = @($targetModuleNames)
 
-  Target_TranscriptOutputDirectory          = $targetTranscriptDir
-  Target_EnableTranscription                = $targetEnableTranscription
-  Target_EnableInvocationHeader             = $targetEnableInvocationHeader
-  Target_EnableScriptBlockLogging           = $targetEnableScriptBlockLogging
-  Target_EnableScriptBlockInvocationLogging = $targetEnableScriptBlockInvocationLogging
-  Target_EnableModuleLogging                = $targetEnableModuleLogging
-  Target_ModuleNames                        = @($targetModuleNames)
-
-  ConfigJsonPath                            = if ($ConfigJsonPath) { '[configured path]' } else { $null }
-  PolicyBasePath                            = $hklmBase
-  IncludeHKCU                               = [bool]$IncludeHKCU
-}
-
-if ($ExportPath) {
-  $dir = Split-Path -Path $ExportPath -Parent
-  if ($dir -and -not (Test-Path -LiteralPath $dir)) { $null = New-Item -Path $dir -ItemType Directory -Force }
-  $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
-}
-
-if (-not $QuietConsole) {
-  $t  = Format-PolicyValue $effectiveAfter.Transcription_EnableTranscripting
-  $sb = Format-PolicyValue $effectiveAfter.ScriptBlock_EnableScriptBlockLogging
-  $ml = Format-PolicyValue $effectiveAfter.Module_EnableModuleLogging
-  $modNamesStr = if ($effectiveAfter.ModuleNames_Configured) {
-    $vals = @(); foreach ($p in $effectiveAfter.ModuleNames_Configured.PSObject.Properties) { $vals += ("{0}={1}" -f $p.Name, $p.Value) }; $vals -join '; '
-  } else { 'NotConfigured' }
-
-  $customFields = [ordered]@{
-    'Mode'          = $summary.Mode
-    'Transcript'    = ("{0} (target={1})" -f $t, $summary.Target_EnableTranscription)
-    'SBLogging'     = ("{0} (target={1})" -f $sb, $summary.Target_EnableScriptBlockLogging)
-    'ModuleLog'     = ("{0} (target={1})" -f $ml, $summary.Target_EnableModuleLogging)
-    'ModuleNames'   = $modNamesStr
-    'TranscriptDir' = Format-PolicyValue $effectiveAfter.Transcription_OutputDirectory
+    ConfigJsonPath                            = if ($ConfigJsonPath) { '[configured path]' } else { $null }
+    PolicyBasePath                            = $hklmBase
+    IncludeHKCU                               = [bool]$IncludeHKCU
   }
-  $findingsAL = ConvertTo-ArrayList -InputObject $Findings
-  Write-ConsoleSummary -Summary $summary -Findings $findingsAL `
-    -Title 'PowerShell Logging Baseline' `
-    -CustomFields $customFields
 }
+function Invoke-Capability31MainPhase10 {
+  param([hashtable]$RunState)
+  if ($ExportPath) {
+    $dir = Split-Path -Path $ExportPath -Parent
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { $null = New-Item -Path $dir -ItemType Directory -Force }
+    $RunState.summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
+  }
+}
+function Invoke-Capability31MainPhase11 {
+  param([hashtable]$RunState)
+  if (-not $QuietConsole) {
+    $t  = Format-PolicyValue $RunState.effectiveAfter.Transcription_EnableTranscripting
+    $sb = Format-PolicyValue $RunState.effectiveAfter.ScriptBlock_EnableScriptBlockLogging
+    $ml = Format-PolicyValue $RunState.effectiveAfter.Module_EnableModuleLogging
+    $modNamesStr = if ($RunState.effectiveAfter.ModuleNames_Configured) {
+      $vals = @(); foreach ($p in $RunState.effectiveAfter.ModuleNames_Configured.PSObject.Properties) { $vals += ("{0}={1}" -f $p.Name, $p.Value) }; $vals -join '; '
+    } else { 'NotConfigured' }
+
+    $customFields = [ordered]@{
+      'Mode'          = $RunState.summary.Mode
+      'Transcript'    = ("{0} (target={1})" -f $t, $RunState.summary.Target_EnableTranscription)
+      'SBLogging'     = ("{0} (target={1})" -f $sb, $RunState.summary.Target_EnableScriptBlockLogging)
+      'ModuleLog'     = ("{0} (target={1})" -f $ml, $RunState.summary.Target_EnableModuleLogging)
+      'ModuleNames'   = $modNamesStr
+      'TranscriptDir' = Format-PolicyValue $RunState.effectiveAfter.Transcription_OutputDirectory
+    }
+    $findingsAL = ConvertTo-ArrayList -InputObject $RunState.Findings
+    Write-ConsoleSummary -Summary $RunState.summary -Findings $findingsAL `
+      -Title 'PowerShell Logging Baseline' `
+      -CustomFields $customFields
+  }
+}
+function Invoke-Capability31Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability31MainPhase01 -RunState $RunState
+  . Invoke-Capability31MainPhase02 -RunState $RunState
+  . Invoke-Capability31MainPhase03 -RunState $RunState
+  . Invoke-Capability31MainPhase04 -RunState $RunState
+  . Invoke-Capability31MainPhase05 -RunState $RunState
+  . Invoke-Capability31MainPhase06 -RunState $RunState
+  . Invoke-Capability31MainPhase07 -RunState $RunState
+  . Invoke-Capability31MainPhase08 -RunState $RunState
+  . Invoke-Capability31MainPhase09 -RunState $RunState
+  . Invoke-Capability31MainPhase10 -RunState $RunState
+  . Invoke-Capability31MainPhase11 -RunState $RunState
+}
+. Invoke-Capability31Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # V2 output contract
-$resultToken = if ($registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-$v2Result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $summary -Metadata @{ Current = [pscustomobject]@{ HKLM = [pscustomobject]@{ Before = $currentHKLM; After = $afterHKLM }; HKCU = if ($IncludeHKCU) { [pscustomobject]@{ Before = $currentHKCU; After = $afterHKCU } } else { $null }; Effective = [pscustomobject]@{ Before = $effectiveBefore; After = $effectiveAfter } } }
+function Get-Capability31ResultToken {
+  param([hashtable]$RunState)
+  $resultToken = if ($RunState.registryWriteFailed) { 'FAIL' } elseif ($Strict -and $RunState.Findings.Count -gt 0) { 'FAIL' } elseif ($RunState.Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability31ResultToken -RunState $RunState
+$v2Result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $RunState.Findings.ToArray()) -Summary $RunState.summary -Metadata @{ Current = [pscustomobject]@{ HKLM = [pscustomobject]@{ Before = $currentHKLM; After = $afterHKLM }; HKCU = if ($IncludeHKCU) { [pscustomobject]@{ Before = $currentHKCU; After = $afterHKCU } } else { $null }; Effective = [pscustomobject]@{ Before = $RunState.effectiveBefore; After = $RunState.effectiveAfter } } }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

@@ -112,18 +112,10 @@ param(
   [switch]$NoColor
 )
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
-Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
-Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
-Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
-Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
+. (Join-Path $PSScriptRoot 'internal/14-SecureRemoteAccessGuardrails.dependencies.ps1')
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor -DeriveRemediate
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $true }
 $Remediate = [bool]$script:__V2Context.Remediate
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
@@ -145,16 +137,12 @@ if (-not $isWindowsHost) {
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
-$script:Findings = Get-FindingsList
-if ([string]::IsNullOrWhiteSpace($ProofPath)) {
-  $ProofPath = Join-Path ([System.IO.Path]::GetTempPath()) 'SecureRemoteAccessGuardrails-proof.json'
-}
 # ----------------------------
 # Constants / defaults
 # ----------------------------
-$ScriptEventSource = "SecureRemoteAccessGuardrails"
-$ScriptEventLog    = "Application"
-$DefaultCatalogJson = @"
+$eventSettings = [pscustomobject]@{ Source='SecureRemoteAccessGuardrails'; Log='Application' }
+function Get-DefaultCatalogJson {
+  return @"
 {
   "RDP": {
     "Enable": false,
@@ -179,6 +167,7 @@ $DefaultCatalogJson = @"
   }
 }
 "@
+}
 # ----------------------------
 # UI helpers (console only)
 # ----------------------------
@@ -204,7 +193,7 @@ function ConvertFrom-JsonSafe {
   catch { return $null }
 }
 function Get-DefaultCatalog {
-  $c = ConvertFrom-JsonSafe -JsonText $DefaultCatalogJson
+  $c = ConvertFrom-JsonSafe -JsonText (Get-DefaultCatalogJson)
   if ($c) { return $c }
   throw "Built-in default catalog JSON is invalid."
 }
@@ -214,15 +203,23 @@ function Merge-CatalogWithDefaults {
     [psobject]$Defaults
   )
   if (-not $Catalog) { return $Defaults }
-  if (-not $Catalog.RDP) { $Catalog | Add-Member -NotePropertyName RDP -NotePropertyValue ([pscustomobject]@{}) -Force }
-  if (-not $Catalog.RemoteAssistance) { $Catalog | Add-Member -NotePropertyName RemoteAssistance -NotePropertyValue ([pscustomobject]@{}) -Force }
-  foreach ($p in @('Enable','Port','Profiles','RemoteAddresses','AllowUDP','NLA','SecurityLayer','MinEncryptionLevel','RestrictedAdmin','DisablePasswordSaving','EnforceGroupMembership','AllowedGroups','ExactMembership')) {
-    if ($null -eq $Catalog.RDP.$p) { $Catalog.RDP | Add-Member -NotePropertyName $p -NotePropertyValue $Defaults.RDP.$p -Force }
-  }
-  foreach ($p in @('AllowSolicited','AllowUnsolicited','Helpers','TicketMaxLifetimeMinutes')) {
-    if ($null -eq $Catalog.RemoteAssistance.$p) { $Catalog.RemoteAssistance | Add-Member -NotePropertyName $p -NotePropertyValue $Defaults.RemoteAssistance.$p -Force }
-  }
+  Add-MissingCatalogSection -Catalog $Catalog -Defaults $Defaults -Section RDP -Properties @(
+    'Enable','Port','Profiles','RemoteAddresses','AllowUDP','NLA','SecurityLayer','MinEncryptionLevel',
+    'RestrictedAdmin','DisablePasswordSaving','EnforceGroupMembership','AllowedGroups','ExactMembership'
+  )
+  Add-MissingCatalogSection -Catalog $Catalog -Defaults $Defaults -Section RemoteAssistance -Properties @(
+    'AllowSolicited','AllowUnsolicited','Helpers','TicketMaxLifetimeMinutes'
+  )
   return $Catalog
+}
+function Add-MissingCatalogSection {
+  param([psobject]$Catalog,[psobject]$Defaults,[string]$Section,[string[]]$Properties)
+  if (-not $Catalog.$Section) { $Catalog | Add-Member -NotePropertyName $Section -NotePropertyValue ([pscustomobject]@{}) -Force }
+  foreach ($propertyName in $Properties) {
+    if ($null -eq $Catalog.$Section.$propertyName) {
+      $Catalog.$Section | Add-Member -NotePropertyName $propertyName -NotePropertyValue $Defaults.$Section.$propertyName -Force
+    }
+  }
 }
 function Load-Catalog {
   param([string]$ExplicitCatalogPath,[string]$ConfigPath)
@@ -280,17 +277,29 @@ function Disable-LocalBuiltinRdpInbound {
 }
 function Get-RdpFirewallSettings {
   param([Parameter(Mandatory)][psobject]$Rdp)
-  $profiles = Normalize-Array -Value $Rdp.Profiles
-  if (@($profiles).Count -eq 0) { $profiles = @('Domain') }
-  $scope = Normalize-Array -Value $Rdp.RemoteAddresses
-  if (@($scope).Count -eq 0) { $scope = @('LocalSubnet') }
-  $port = 3389
-  try { if ($Rdp.Port) { $port = [int]$Rdp.Port } } catch { $port = 3389 }
+  $profiles = Get-RdpArraySetting $Rdp.Profiles @('Domain')
+  $scope = Get-RdpArraySetting $Rdp.RemoteAddresses @('LocalSubnet')
+  $port = Get-RdpPortSetting $Rdp.Port
   $messages = @()
   if ($port -lt 1 -or $port -gt 65535) { $port = 3389; $messages += 'Invalid RDP.Port in catalog; using 3389.' }
-  $allowUdp = $false
-  try { if ($null -ne $Rdp.AllowUDP) { $allowUdp = [bool]$Rdp.AllowUDP } } catch { $allowUdp = $false }
+  $allowUdp = Get-RdpBooleanSetting $Rdp.AllowUDP
   return [pscustomobject]@{ Profiles = $profiles; Scope = $scope; Port = $port; AllowUdp = $allowUdp; Messages = $messages }
+}
+function Get-RdpArraySetting {
+  param($Value,[string[]]$Default)
+  $values = @(Normalize-Array -Value $Value)
+  if ($values.Count -eq 0) { return $Default }
+  return $values
+}
+function Get-RdpPortSetting {
+  param($Value)
+  try { if ($Value) { return [int]$Value } } catch { return 3389 }
+  return 3389
+}
+function Get-RdpBooleanSetting {
+  param($Value)
+  try { if ($null -ne $Value) { return [bool]$Value } } catch { return $false }
+  return $false
 }
 function New-RdpFirewallRule {
   [CmdletBinding(SupportsShouldProcess = $true)]
@@ -333,91 +342,100 @@ function Set-RdpTcpFirewallRule {
 function Ensure-RdpUdpFirewallMode {
   [CmdletBinding(SupportsShouldProcess = $true)]
   param([Parameter(Mandatory)]$Settings,[Parameter(Mandatory)][string]$AllowName,[Parameter(Mandatory)][string]$BlockName,[Parameter(Mandatory)][string]$Group,[switch]$Remediate)
-  $actions = @(); $drifts = @()
+  $actions = [System.Collections.Generic.List[string]]::new()
+  $drifts = [System.Collections.Generic.List[string]]::new()
   $createName = if ($Settings.AllowUdp) { $AllowName } else { $BlockName }
   $createAction = if ($Settings.AllowUdp) { 'Allow' } else { 'Block' }
   $createRemoteAddress = if ($Settings.AllowUdp) { $Settings.Scope } else { @('Any') }
-  if (-not (Get-LocalFirewallRuleByDisplayName -DisplayName $createName)) {
-    if ($Remediate) {
-      try {
-        if (New-RdpFirewallRule -DisplayName $createName -Action $createAction -Protocol UDP -Port $Settings.Port -Profiles $Settings.Profiles -RemoteAddress $createRemoteAddress -Group $Group) { $actions += "Created $createName" }
-        else { $drifts += "Missing local rule: $createName" }
-      } catch { $drifts += "Failed to create $createName - $($_.Exception.Message)" }
-    } else { $drifts += "Missing local rule: $createName" }
-  }
+  Add-RdpUdpDesiredRule $Settings $createName $createAction $createRemoteAddress $Group ([bool]$Remediate) $actions $drifts
   $oppositeName = if ($Settings.AllowUdp) { $BlockName } else { $AllowName }
   $oppositeMode = if ($Settings.AllowUdp) { 'UDP allowed' } else { 'UDP blocked' }
-  if ($Remediate) {
-    if (Get-LocalFirewallRuleByDisplayName -DisplayName $oppositeName) {
-      if (Remove-LocalFirewallRuleByDisplayName -DisplayName $oppositeName) { $actions += "Removed $oppositeName ($oppositeMode)" }
-      else { $drifts += "Failed to remove $oppositeName ($oppositeMode)" }
-    }
-  } elseif (Get-LocalFirewallRuleByDisplayName -DisplayName $oppositeName) {
-    $drifts += "$(if ($Settings.AllowUdp) { 'UDP allowed but block rule exists' } else { 'UDP blocked but allow rule exists' }): $oppositeName"
+  Remove-RdpUdpOppositeRule $Settings $oppositeName $oppositeMode ([bool]$Remediate) $actions $drifts
+  return [pscustomobject]@{ Actions = @($actions); Drifts = @($drifts) }
+}
+function Add-RdpUdpDesiredRule {
+  param($Settings,[string]$Name,[string]$Action,[string[]]$RemoteAddress,[string]$Group,[bool]$Remediate,$Actions,$Drifts)
+  if (Get-LocalFirewallRuleByDisplayName -DisplayName $Name) { return }
+  if (-not $Remediate) { $Drifts.Add("Missing local rule: $Name"); return }
+  try {
+    if (New-RdpFirewallRule -DisplayName $Name -Action $Action -Protocol UDP -Port $Settings.Port -Profiles $Settings.Profiles -RemoteAddress $RemoteAddress -Group $Group) { $Actions.Add("Created $Name") }
+    else { $Drifts.Add("Missing local rule: $Name") }
+  } catch { $Drifts.Add("Failed to create $Name - $($_.Exception.Message)") }
+}
+function Remove-RdpUdpOppositeRule {
+  param($Settings,[string]$Name,[string]$Mode,[bool]$Remediate,$Actions,$Drifts)
+  if (-not (Get-LocalFirewallRuleByDisplayName -DisplayName $Name)) { return }
+  if (-not $Remediate) {
+    $label = $(if ($Settings.AllowUdp) { 'UDP allowed but block rule exists' } else { 'UDP blocked but allow rule exists' })
+    $Drifts.Add("${label}: $Name")
+    return
   }
-  return [pscustomobject]@{ Actions = $actions; Drifts = $drifts }
+  if (Remove-LocalFirewallRuleByDisplayName -DisplayName $Name) { $Actions.Add("Removed $Name ($Mode)") }
+  else { $Drifts.Add("Failed to remove $Name ($Mode)") }
+}
+function Get-RdpFirewallRuleNames {
+  return [pscustomobject]@{ Tcp='Guardrails RDP TCP-In Scoped'; UdpAllow='Guardrails RDP UDP-In Scoped'; UdpBlock='Guardrails RDP UDP-In Blocked'; Group='Guardrails RDP Scoped' }
+}
+function Update-DisabledRdpFirewallRules {
+  param($Names,[bool]$Remediate,$Actions,$Drifts)
+  foreach ($name in @($Names.Tcp,$Names.UdpAllow,$Names.UdpBlock)) {
+    if ($Remediate) {
+      if (Remove-LocalFirewallRuleByDisplayName -DisplayName $name) { $Actions.Add("Removed local rule: $name") }
+      else { $Drifts.Add("Failed to remove local rule: $name") }
+    } elseif (Get-LocalFirewallRuleByDisplayName -DisplayName $name) { $Drifts.Add("RDP disabled but local rule exists: $name") }
+  }
+}
+function Update-RdpTcpFirewallRule {
+  param($Settings,$Names,[bool]$Remediate,$Actions,$Drifts)
+  $rule = Get-LocalFirewallRuleByDisplayName -DisplayName $Names.Tcp
+  if (-not $rule) { Add-RdpTcpFirewallRule $Settings $Names $Remediate $Actions $Drifts; return }
+  Repair-RdpTcpFirewallRule $rule $Settings $Names $Remediate $Actions $Drifts
+}
+function Add-RdpTcpFirewallRule {
+  param($Settings,$Names,[bool]$Remediate,$Actions,$Drifts)
+  if (-not $Remediate) { $Drifts.Add("Missing local rule: $($Names.Tcp)"); return }
+  try {
+    if (New-RdpFirewallRule -DisplayName $Names.Tcp -Action Allow -Protocol TCP -Port $Settings.Port -Profiles $Settings.Profiles -RemoteAddress $Settings.Scope -Group $Names.Group) { $Actions.Add("Created $($Names.Tcp)") }
+    else { $Drifts.Add("Missing local rule: $($Names.Tcp)") }
+  } catch { $Drifts.Add("Failed to create $($Names.Tcp) - $($_.Exception.Message)") }
+}
+function Repair-RdpTcpFirewallRule {
+  param($Rule,$Settings,$Names,[bool]$Remediate,$Actions,$Drifts)
+  try {
+    $inspection = Get-RdpTcpFirewallDrift -Rule $Rule -Settings $Settings -DisplayName $Names.Tcp
+    foreach ($message in $inspection.Messages) { $Drifts.Add($message) }
+    if ($inspection.Messages.Count -gt 0 -and $Remediate) {
+      try { if (Set-RdpTcpFirewallRule -Rule $Rule -Settings $Settings -DisplayName $Names.Tcp) { $Actions.Add("Repaired $($Names.Tcp)") } }
+      catch { $Drifts.Add("Failed to repair $($Names.Tcp) - $($_.Exception.Message)") }
+    }
+  } catch { $Drifts.Add("Failed to inspect $($Names.Tcp) - $($_.Exception.Message)") }
+}
+function Update-RdpDisabledFirewallMode {
+  param($Names,[bool]$Remediate,$Actions,$Drifts)
+  if ($Remediate) { Disable-LocalBuiltinRdpInbound }
+  Update-DisabledRdpFirewallRules $Names $Remediate $Actions $Drifts
 }
 function Ensure-RdpFirewallRules {
   [CmdletBinding(SupportsShouldProcess = $true)]
   param([psobject]$Rdp,[switch]$Remediate)
-  $actions = @()
-  $drifts  = @()
+  $actions = [System.Collections.Generic.List[string]]::new()
+  $drifts = [System.Collections.Generic.List[string]]::new()
   if (-not (Test-CmdletAvailable -Name 'Get-NetFirewallRule')) {
     return @("NetSecurity cmdlets not available (Get-NetFirewallRule missing).")
   }
   $settings = Get-RdpFirewallSettings -Rdp $Rdp
-  $drifts += $settings.Messages
-  $nameTCP      = "Guardrails RDP TCP-In Scoped"
-  $nameUDPAllow = "Guardrails RDP UDP-In Scoped"
-  $nameUDPBlock = "Guardrails RDP UDP-In Blocked"
-  $group        = "Guardrails RDP Scoped"
+  foreach ($message in $settings.Messages) { $drifts.Add($message) }
+  $names = Get-RdpFirewallRuleNames
   # Only disable built-in RDP inbound rules when remediating and catalog specifies RDP disabled (§1/§16)
-  if ($Remediate -and -not [bool]$Rdp.Enable) {
-    Disable-LocalBuiltinRdpInbound
-  }
   if (-not [bool]$Rdp.Enable) {
-    if ($Remediate) {
-      if (Remove-LocalFirewallRuleByDisplayName -DisplayName $nameTCP)      { $actions += "Removed local rule: $nameTCP" } else { $drifts += "Failed to remove local rule: $nameTCP" }
-      if (Remove-LocalFirewallRuleByDisplayName -DisplayName $nameUDPAllow) { $actions += "Removed local rule: $nameUDPAllow" } else { $drifts += "Failed to remove local rule: $nameUDPAllow" }
-      if (Remove-LocalFirewallRuleByDisplayName -DisplayName $nameUDPBlock) { $actions += "Removed local rule: $nameUDPBlock" } else { $drifts += "Failed to remove local rule: $nameUDPBlock" }
-    } else {
-      if (Get-LocalFirewallRuleByDisplayName -DisplayName $nameTCP)      { $drifts += "RDP disabled but local rule exists: $nameTCP" }
-      if (Get-LocalFirewallRuleByDisplayName -DisplayName $nameUDPAllow) { $drifts += "RDP disabled but local rule exists: $nameUDPAllow" }
-      if (Get-LocalFirewallRuleByDisplayName -DisplayName $nameUDPBlock) { $drifts += "RDP disabled but local rule exists: $nameUDPBlock" }
-    }
-    return @($actions + $drifts)
+    Update-RdpDisabledFirewallMode $names ([bool]$Remediate) $actions $drifts
+    return @(@($actions) + @($drifts))
   }
-  # TCP allow rule
-  $ruleTCP = Get-LocalFirewallRuleByDisplayName -DisplayName $nameTCP
-  if (-not $ruleTCP) {
-    if ($Remediate) {
-      try {
-        if (New-RdpFirewallRule -DisplayName $nameTCP -Action Allow -Protocol TCP -Port $settings.Port -Profiles $settings.Profiles -RemoteAddress $settings.Scope -Group $group) { $actions += "Created $nameTCP" }
-        else { $drifts += "Missing local rule: $nameTCP" }
-      } catch {
-        $drifts += "Failed to create $nameTCP - $($_.Exception.Message)"
-      }
-    } else {
-      $drifts += "Missing local rule: $nameTCP"
-    }
-  } else {
-    try {
-      $tcpDrift = Get-RdpTcpFirewallDrift -Rule $ruleTCP -Settings $settings -DisplayName $nameTCP
-      $drifts += $tcpDrift.Messages
-      if ($tcpDrift.Messages.Count -gt 0 -and $Remediate) {
-        try {
-          if (Set-RdpTcpFirewallRule -Rule $ruleTCP -Settings $settings -DisplayName $nameTCP) { $actions += "Repaired $nameTCP" }
-        } catch {
-          $drifts += "Failed to repair $nameTCP - $($_.Exception.Message)"
-        }
-      }
-    } catch {
-      $drifts += "Failed to inspect $nameTCP - $($_.Exception.Message)"
-    }
-  }
-  $udp = Ensure-RdpUdpFirewallMode -Settings $settings -AllowName $nameUDPAllow -BlockName $nameUDPBlock -Group $group -Remediate:$Remediate
-  $actions += $udp.Actions; $drifts += $udp.Drifts
-  return @($actions + $drifts)
+  Update-RdpTcpFirewallRule $settings $names ([bool]$Remediate) $actions $drifts
+  $udp = Ensure-RdpUdpFirewallMode -Settings $settings -AllowName $names.UdpAllow -BlockName $names.UdpBlock -Group $names.Group -Remediate:$Remediate
+  foreach ($message in $udp.Actions) { $actions.Add($message) }
+  foreach ($message in $udp.Drifts) { $drifts.Add($message) }
+  return @(@($actions) + @($drifts))
 }
 # ----------------------------
 # Local group enforcement
@@ -425,8 +443,8 @@ function Ensure-RdpFirewallRules {
 function Ensure-RdpGroupMembership {
   [CmdletBinding(SupportsShouldProcess = $true)]
   param([psobject]$Rdp,[switch]$Remediate)
-  $actions = @()
-  $drifts  = @()
+  $actions = [System.Collections.Generic.List[string]]::new()
+  $drifts = [System.Collections.Generic.List[string]]::new()
   if (-not [bool]$Rdp.EnforceGroupMembership) { return @() }
   if (-not (Test-CmdletAvailable -Name 'Get-LocalGroupMember')) { return @("LocalAccounts cmdlets not available (Get-LocalGroupMember missing).") }
   $targetGroup = "Remote Desktop Users"
@@ -438,30 +456,30 @@ function Ensure-RdpGroupMembership {
   } catch {
     return @("Cannot read group '$targetGroup' - $($_.Exception.Message)")
   }
-  foreach ($a in $allowed) {
-    if ($curNames -notcontains $a) {
-      if ($Remediate -and $PSCmdlet.ShouldProcess($targetGroup, "Add $a")) {
-        try { Add-LocalGroupMember -Group $targetGroup -Member $a -ErrorAction Stop; $actions += "Added member $a" }
-        catch { $drifts += "Failed to add member $a - $($_.Exception.Message)" }
-      } else {
-        $drifts += "Missing member $a"
-      }
-    }
-  }
+  Add-MissingRdpGroupMembers $targetGroup $allowed $curNames ([bool]$Remediate) $PSCmdlet $actions $drifts
   if ($exact) {
     $keep = @($allowed + "BUILTIN\Administrators") | Sort-Object -Unique
-    foreach ($m in $curNames) {
-      if ($keep -notcontains $m) {
-        if ($Remediate -and $PSCmdlet.ShouldProcess($targetGroup, "Remove $m")) {
-          try { Remove-LocalGroupMember -Group $targetGroup -Member $m -Confirm:$false -ErrorAction Stop; $actions += "Removed member $m" }
-          catch { $drifts += "Failed to remove member $m - $($_.Exception.Message)" }
-        } else {
-          $drifts += "Unexpected member $m"
-        }
-      }
-    }
+    Remove-UnexpectedRdpGroupMembers $targetGroup $keep $curNames ([bool]$Remediate) $PSCmdlet $actions $drifts
   }
-  return @($actions + $drifts)
+  return @(@($actions) + @($drifts))
+}
+function Add-MissingRdpGroupMembers {
+  param([string]$Group,[string[]]$Allowed,[string[]]$Current,[bool]$Remediate,$CommandContext,$Actions,$Drifts)
+  foreach ($member in $Allowed) {
+    if ($Current -contains $member) { continue }
+    if (-not $Remediate -or -not $CommandContext.ShouldProcess($Group, "Add $member")) { $Drifts.Add("Missing member $member"); continue }
+    try { Add-LocalGroupMember -Group $Group -Member $member -ErrorAction Stop; $Actions.Add("Added member $member") }
+    catch { $Drifts.Add("Failed to add member $member - $($_.Exception.Message)") }
+  }
+}
+function Remove-UnexpectedRdpGroupMembers {
+  param([string]$Group,[string[]]$Keep,[string[]]$Current,[bool]$Remediate,$CommandContext,$Actions,$Drifts)
+  foreach ($member in $Current) {
+    if ($Keep -contains $member) { continue }
+    if (-not $Remediate -or -not $CommandContext.ShouldProcess($Group, "Remove $member")) { $Drifts.Add("Unexpected member $member"); continue }
+    try { Remove-LocalGroupMember -Group $Group -Member $member -Confirm:$false -ErrorAction Stop; $Actions.Add("Removed member $member") }
+    catch { $Drifts.Add("Failed to remove member $member - $($_.Exception.Message)") }
+  }
 }
 # ----------------------------
 # Remote Assistance enforcement
@@ -469,276 +487,40 @@ function Ensure-RdpGroupMembership {
 function Ensure-RemoteAssistance {
   [CmdletBinding(SupportsShouldProcess = $true)]
   param([psobject]$Ra,[switch]$Remediate)
-  $actions = @()
-  $drifts  = @()
+  $actions = [System.Collections.Generic.List[string]]::new()
+  $drifts = [System.Collections.Generic.List[string]]::new()
   $polKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
   $wantSol = 0; if ([bool]$Ra.AllowSolicited) { $wantSol = 1 }
   $wantUn  = 0; if ([bool]$Ra.AllowUnsolicited) { $wantUn = 1 }
-  $curSol = Get-RegDword -Path $polKey -Name 'fAllowToGetHelp'
-  $curUn  = Get-RegDword -Path $polKey -Name 'fAllowUnsolicited'
-  if ($curSol -ne $wantSol) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess($polKey, "Set fAllowToGetHelp=$wantSol")) {
-      if (Set-RegDword -Path $polKey -Name 'fAllowToGetHelp' -Value $wantSol) { $actions += "Set RemoteAssistance fAllowToGetHelp=$wantSol" }
-      else { $drifts += "Failed to set RemoteAssistance fAllowToGetHelp=$wantSol" }
-    } else {
-      $drifts += "RemoteAssistance fAllowToGetHelp $curSol != $wantSol"
-    }
-  }
-  if ($curUn -ne $wantUn) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess($polKey, "Set fAllowUnsolicited=$wantUn")) {
-      if (Set-RegDword -Path $polKey -Name 'fAllowUnsolicited' -Value $wantUn) { $actions += "Set RemoteAssistance fAllowUnsolicited=$wantUn" }
-      else { $drifts += "Failed to set RemoteAssistance fAllowUnsolicited=$wantUn" }
-    } else {
-      $drifts += "RemoteAssistance fAllowUnsolicited $curUn != $wantUn"
-    }
-  }
+  Set-RemoteAssistancePolicyValue $polKey fAllowToGetHelp $wantSol ([bool]$Remediate) $PSCmdlet $actions $drifts
+  Set-RemoteAssistancePolicyValue $polKey fAllowUnsolicited $wantUn ([bool]$Remediate) $PSCmdlet $actions $drifts
   if ($null -ne $Ra.TicketMaxLifetimeMinutes) {
     $wantTicket = [int]$Ra.TicketMaxLifetimeMinutes
     if ($wantTicket -lt 1) { $wantTicket = 60 }
-    $curTicket  = Get-RegDword -Path $polKey -Name 'MaxTicketExpiry'
-    if ($curTicket -ne $wantTicket) {
-      if ($Remediate -and $PSCmdlet.ShouldProcess($polKey, "Set MaxTicketExpiry=$wantTicket")) {
-        if (Set-RegDword -Path $polKey -Name 'MaxTicketExpiry' -Value $wantTicket) { $actions += "Set RemoteAssistance MaxTicketExpiry=$wantTicket" }
-        else { $drifts += "Failed to set RemoteAssistance MaxTicketExpiry=$wantTicket" }
-      } else {
-        $drifts += "RemoteAssistance MaxTicketExpiry $curTicket != $wantTicket"
-      }
-    }
+    Set-RemoteAssistancePolicyValue $polKey MaxTicketExpiry $wantTicket ([bool]$Remediate) $PSCmdlet $actions $drifts
   }
-  return @($actions + $drifts)
+  return @(@($actions) + @($drifts))
+}
+function Set-RemoteAssistancePolicyValue {
+  param([string]$Path,[string]$Name,[int]$Desired,[bool]$Remediate,$CommandContext,$Actions,$Drifts)
+  $current = Get-RegDword -Path $Path -Name $Name
+  if ($current -eq $Desired) { return }
+  if (-not $Remediate -or -not $CommandContext.ShouldProcess($Path, "Set $Name=$Desired")) {
+    $Drifts.Add("RemoteAssistance $Name $current != $Desired")
+    return
+  }
+  if (Set-RegDword -Path $Path -Name $Name -Value $Desired) { $Actions.Add("Set RemoteAssistance $Name=$Desired") }
+  else { $Drifts.Add("Failed to set RemoteAssistance $Name=$Desired") }
 }
 # ----------------------------
 # Main
 # ----------------------------
-if (-not (Ensure-EventSource -Source $ScriptEventSource -LogName $ScriptEventLog)) {
-  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
-}
-$start      = Get-Date
-$isElevated = Test-IsElevated
-$changes = @()
-$drifts  = @()
-$notes   = @()
-$hadError = $false
-$resultObject = $null
-try {
-  if (-not $isElevated) {
-    $notes += "Not elevated - audit works, remediation may fail."
-    if ($Remediate) { $notes += "Remediate requested but session not elevated." }
-  }
-  $cat = Load-Catalog -ExplicitCatalogPath $CatalogPath -ConfigPath $ConfigPath
-  # Registry keys
-  $TSKey     = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
-  $RdpTcpKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
-  $LsaKey    = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
-  $PolTSKey  = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
-  # RDP enable/disable
-  $wantEnable = [bool]$cat.RDP.Enable
-  $wantDeny   = 1; if ($wantEnable) { $wantDeny = 0 }
-  $curDeny    = Get-RegDword -Path $TSKey -Name 'fDenyTSConnections'
-  if ($curDeny -ne $wantDeny) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess($TSKey, "Set fDenyTSConnections=$wantDeny")) {
-      if (Set-RegDword -Path $TSKey -Name 'fDenyTSConnections' -Value $wantDeny) { $changes += "Set fDenyTSConnections=$wantDeny" }
-      else { $drifts += "Failed to set fDenyTSConnections=$wantDeny"; $hadError = $true }
-    } else { $drifts += "fDenyTSConnections $curDeny != $wantDeny" }
-  }
-  # NLA
-  $wantNLA = 0; if ([bool]$cat.RDP.NLA) { $wantNLA = 1 }
-  $curNLA  = Get-RegDword -Path $RdpTcpKey -Name 'UserAuthentication'
-  if ($curNLA -ne $wantNLA) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess($RdpTcpKey, "Set UserAuthentication=$wantNLA")) {
-      if (Set-RegDword -Path $RdpTcpKey -Name 'UserAuthentication' -Value $wantNLA) { $changes += "Set UserAuthentication(NLA)=$wantNLA" }
-      else { $drifts += "Failed to set UserAuthentication=$wantNLA"; $hadError = $true }
-    } else { $drifts += "UserAuthentication/NLA $curNLA != $wantNLA" }
-  }
-  # SecurityLayer
-  $mapSec = @{ "RDP"=0; "Negotiate"=1; "TLS"=2 }
-  $wantSec = 2
-  try {
-    $secKey = [string]$cat.RDP.SecurityLayer
-    if ($secKey -and $mapSec.ContainsKey($secKey)) { $wantSec = [int]$mapSec[$secKey] }
-  } catch { $wantSec = 2 }
-  $curSec = Get-RegDword -Path $RdpTcpKey -Name 'SecurityLayer'
-  if ($curSec -ne $wantSec) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess($RdpTcpKey, "Set SecurityLayer=$wantSec")) {
-      if (Set-RegDword -Path $RdpTcpKey -Name 'SecurityLayer' -Value $wantSec) { $changes += "Set SecurityLayer=$wantSec" }
-      else { $drifts += "Failed to set SecurityLayer=$wantSec"; $hadError = $true }
-    } else { $drifts += "SecurityLayer $curSec != $wantSec" }
-  }
-  # MinEncryptionLevel
-  $mapEnc = @{ "ClientCompatible"=2; "High"=3; "FIPS"=4 }
-  $wantEnc = 3
-  try {
-    $encKey = [string]$cat.RDP.MinEncryptionLevel
-    if ($encKey -and $mapEnc.ContainsKey($encKey)) { $wantEnc = [int]$mapEnc[$encKey] }
-  } catch { $wantEnc = 3 }
-  $curEnc = Get-RegDword -Path $RdpTcpKey -Name 'MinEncryptionLevel'
-  if ($curEnc -ne $wantEnc) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess($RdpTcpKey, "Set MinEncryptionLevel=$wantEnc")) {
-      if (Set-RegDword -Path $RdpTcpKey -Name 'MinEncryptionLevel' -Value $wantEnc) { $changes += "Set MinEncryptionLevel=$wantEnc" }
-      else { $drifts += "Failed to set MinEncryptionLevel=$wantEnc"; $hadError = $true }
-    } else { $drifts += "MinEncryptionLevel $curEnc != $wantEnc" }
-  }
-  # Restricted Admin (server-side): DisableRestrictedAdmin=0 enables
-  $wantRA = 1; if ([bool]$cat.RDP.RestrictedAdmin) { $wantRA = 0 }
-  $curRA = Get-RegDword -Path $LsaKey -Name 'DisableRestrictedAdmin'
-  if ($null -eq $curRA) { $curRA = 0 }
-  if ($curRA -ne $wantRA) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess($LsaKey, "Set DisableRestrictedAdmin=$wantRA")) {
-      if (Set-RegDword -Path $LsaKey -Name 'DisableRestrictedAdmin' -Value $wantRA) { $changes += "Set DisableRestrictedAdmin=$wantRA" }
-      else { $drifts += "Failed to set DisableRestrictedAdmin=$wantRA"; $hadError = $true }
-    } else { $drifts += "DisableRestrictedAdmin $curRA != $wantRA" }
-  }
-  # PortNumber
-  $wantPort = 3389
-  try { if ($cat.RDP.Port) { $wantPort = [int]$cat.RDP.Port } } catch { $wantPort = 3389 }
-  $curPort = Get-RegDword -Path $RdpTcpKey -Name 'PortNumber'
-  if ($null -ne $curPort -and $curPort -ne $wantPort) {
-    if ($Remediate -and $PSCmdlet.ShouldProcess($RdpTcpKey, "Set PortNumber=$wantPort")) {
-      if (Set-RegDword -Path $RdpTcpKey -Name 'PortNumber' -Value $wantPort) { $changes += "Set PortNumber=$wantPort" }
-      else { $drifts += "Failed to set PortNumber=$wantPort"; $hadError = $true }
-    } else { $drifts += "PortNumber $curPort != $wantPort" }
-  }
-  # DisablePasswordSaving (Policies hive)
-  if ($null -ne $cat.RDP.DisablePasswordSaving) {
-    $wantPS = 0; if ([bool]$cat.RDP.DisablePasswordSaving) { $wantPS = 1 }
-    $curPS = Get-RegDword -Path $PolTSKey -Name 'DisablePasswordSaving'
-    if ($curPS -ne $wantPS) {
-      $notes += "DisablePasswordSaving is under Policies hive and may be overridden by policy."
-      if ($Remediate -and $PSCmdlet.ShouldProcess($PolTSKey, "Set DisablePasswordSaving=$wantPS")) {
-        if (Set-RegDword -Path $PolTSKey -Name 'DisablePasswordSaving' -Value $wantPS) { $changes += "Set DisablePasswordSaving=$wantPS" }
-        else { $drifts += "Failed to set DisablePasswordSaving=$wantPS"; $hadError = $true }
-      } else { $drifts += "DisablePasswordSaving $curPS != $wantPS" }
-    }
-  }
-  # Firewall
-  $fw = Ensure-RdpFirewallRules -Rdp $cat.RDP -Remediate:$Remediate
-  foreach ($x in @($fw)) { if ($x -match '^(Failed|Missing|.*drift|.*not |NetSecurity)') { $drifts += $x } else { $changes += $x } }
-  # Group membership
-  $gm = Ensure-RdpGroupMembership -Rdp $cat.RDP -Remediate:$Remediate
-  foreach ($x in @($gm)) { if ($x -match '^(Failed|Missing|Unexpected|Cannot|LocalAccounts)') { $drifts += $x } else { $changes += $x } }
-  # Remote Assistance
-  $ra = Ensure-RemoteAssistance -Ra $cat.RemoteAssistance -Remediate:$Remediate
-  foreach ($x in @($ra)) { if ($x -match '^(Failed|RemoteAssistance)') { $drifts += $x } else { $changes += $x } }
-  # Result object (pipeline)
-  Ensure-DirectoryForFile -FilePath $ProofPath | Out-Null
-  $resultObject = [pscustomobject]@{
-    TimestampUtc = (Get-Date).ToUniversalTime().ToString('o')
-    ComputerName = $env:COMPUTERNAME
-    User         = $env:USERNAME
-    Elevated     = $isElevated
-    Remediate    = [bool]$Remediate
-    Strict       = [bool]$Strict
-    CatalogPath  = $(if ($CatalogPath) { '[configured path]' } else { $null })
-    ConfigPath   = $(if ($ConfigPath) { '[configured path]' } else { $null })
-    ProofPath    = $ProofPath
-    Changed      = @($changes)
-    Drift        = @($drifts)
-    Notes        = @($notes)
-    EventId      = $null
-    HasError     = $hadError
-    HasDrift     = (@($drifts).Count -gt 0)
-  }
-  # Proof JSON
-  try {
-    $resultObject | ConvertTo-Json -Depth 6 | Set-Content -Path $ProofPath -Encoding UTF8 -ErrorAction Stop
-  } catch {
-    $notes += "Failed to write proof JSON - $($_.Exception.Message)"
-    $hadError = $true
-    $resultObject.HasError = $true
-    $resultObject.Notes = @($notes)
-  }
-  # Event + console message
-  $duration   = (New-TimeSpan -Start $start -End (Get-Date))
-  $eventIsBad = $hadError -or ($Strict -and $resultObject.HasDrift)
-  $lines = @()
-  if (@($changes).Count -gt 0) { $lines += "Changed: " + (@($changes) -join ' | ') }
-  if (@($drifts).Count  -gt 0) { $lines += "Drift: "   + (@($drifts)  -join ' | ') }
-  if (@($notes).Count   -gt 0) { $lines += "Notes: "   + (@($notes)   -join ' | ') }
-  if (@($lines).Count -eq 0)   { $lines += "Compliant. No drift." }
-  $lines += ("Duration: {0:00}:{1:00}:{2:00}" -f $duration.Hours, $duration.Minutes, $duration.Seconds)
-  $lines += ("Proof: {0}" -f $ProofPath)
-  $msg = $lines -join "`r`n"
-  $resultObject.EventId = $(if ($eventIsBad) { 4850 } else { 4840 })
-  if ($eventIsBad) { Write-HealthEvent -Id 4850 -Message $msg -Level 'Warning' -Source $ScriptEventSource }
-  else { Write-HealthEvent -Id 4840 -Message $msg -Level 'Information' -Source $ScriptEventSource }
-  # Formatted console output (no pipeline output)
-  Write-UiLine ""
-  Write-UiSeparator -Title "Secure Remote Access Guardrails"
-  Write-KeyValue -Key "Computer"  -Value $env:COMPUTERNAME -Color Gray
-  Write-KeyValue -Key "Elevated"  -Value ($isElevated.ToString()) -Color $(if ($isElevated) { 'Green' } else { 'Yellow' })
-  Write-KeyValue -Key "Remediate" -Value ([bool]$Remediate) -Color $(if ($Remediate) { 'Yellow' } else { 'Gray' })
-  Write-KeyValue -Key "Strict"    -Value ([bool]$Strict) -Color $(if ($Strict) { 'Yellow' } else { 'Gray' })
-  Write-KeyValue -Key "EventId"   -Value $resultObject.EventId -Color $(if ($eventIsBad) { 'Yellow' } else { 'Green' })
-  Write-KeyValue -Key "Proof"     -Value $ProofPath -Color Cyan
-  Write-KeyValue -Key "Duration"  -Value ("{0:00}:{1:00}:{2:00}" -f $duration.Hours, $duration.Minutes, $duration.Seconds) -Color Gray
-  Write-UiSeparator
-  $statusColor = 'Green'
-  $statusText  = 'COMPLIANT'
-  if ($eventIsBad) { $statusColor = 'Yellow'; $statusText = 'ATTENTION' }
-  if ($hadError) { $statusColor = 'Red'; $statusText = 'ERROR' }
-  Write-UiLine -Text ("Status: {0}" -f $statusText) -Color $statusColor
-  Write-KeyValue -Key "Changes" -Value (@($changes).Count) -Color $(if (@($changes).Count -gt 0) { 'Yellow' } else { 'Gray' })
-  Write-KeyValue -Key "Drifts"  -Value (@($drifts).Count) -Color $(if (@($drifts).Count -gt 0) { 'Yellow' } else { 'Green' })
-  Write-KeyValue -Key "Notes"   -Value (@($notes).Count) -Color $(if (@($notes).Count -gt 0) { 'Cyan' } else { 'Gray' })
-  Write-UiLine ""
-  Write-UiList -Header "Changes" -Items @($changes) -Color Yellow
-  Write-UiList -Header "Drift"   -Items @($drifts)  -Color Yellow
-  Write-UiList -Header "Notes"   -Items @($notes)   -Color Cyan
-  # Optional info stream (shown only when InformationAction allows it)
-  Write-Information -MessageData ("Guardrails done. EventId={0}, Proof={1}" -f $resultObject.EventId, $ProofPath) -InformationAction Continue
-  # Pipeline output (single object)
-  $resultObject
-}
-catch {
-  $err = $_.Exception.Message
-  Write-HealthEvent -Id 4850 -Message ("Guardrail error - " + $err) -Level 'Error' -Source $ScriptEventSource
-  Ensure-DirectoryForFile -FilePath $ProofPath | Out-Null
-  try {
-    [pscustomobject]@{
-      TimestampUtc = (Get-Date).ToUniversalTime().ToString('o')
-      ComputerName = $env:COMPUTERNAME
-      Error        = $err
-    } | ConvertTo-Json -Depth 4 | Set-Content -Path $ProofPath -Encoding UTF8 -ErrorAction Stop
-  } catch {
-    Write-Warning "Could not write proof file: $($_.Exception.Message)"
-  }
-  Write-UiLine ""
-  Write-UiSeparator -Title "Secure Remote Access Guardrails"
-  Write-UiLine -Text "Status: ERROR" -Color Red
-  Write-UiLine -Text ("Message: {0}" -f $err) -Color Red
-  Write-UiLine -Text ("Proof:   {0}" -f $ProofPath) -Color Cyan
-  Write-UiSeparator
-  [pscustomobject]@{
-    TimestampUtc = (Get-Date).ToUniversalTime().ToString('o')
-    ComputerName = $env:COMPUTERNAME
-    User         = $env:USERNAME
-    Elevated     = $isElevated
-    Remediate    = [bool]$Remediate
-    Strict       = [bool]$Strict
-    CatalogPath  = $(if ($CatalogPath) { '[configured path]' } else { $null })
-    ConfigPath   = $(if ($ConfigPath) { '[configured path]' } else { $null })
-    ProofPath    = $ProofPath
-    Changed      = @()
-    Drift        = @()
-    Notes        = @("Guardrail error - $err")
-    EventId      = 4850
-    HasError     = $true
-    HasDrift     = $false
-  }
-}
-foreach ($d in @($drifts)) {
-  $code = 'RDP-Drift'
-  $sev = 'Medium'
-  if ($d -match 'fDenyTSConnections|UserAuthentication|NLA')            { $code = 'RDP-ConfigDrift' }
-  if ($d -match 'SecurityLayer|MinEncryption')                          { $code = 'RDP-EncryptionDrift' }
-  if ($d -match 'DisableRestrictedAdmin|DisablePasswordSaving')         { $code = 'RDP-SecurityDrift' }
-  if ($d -match 'PortNumber')                                           { $code = 'RDP-PortDrift' }
-  if ($d -match 'Failed|Missing|Unexpected')                            { $sev = 'High' }
-  if ($d -match 'RemoteAssistance')                                     { $code = 'RDP-RemoteAssistDrift' }
-  if ($d -match 'rule|firewall' -or $d -match 'TCP|UDP')               { $code = 'RDP-FirewallDrift' }
-  if ($d -match 'member')                                               { $code = 'RDP-GroupDrift' }
-  Add-Finding -FindingList $script:Findings -Code $code -Severity $sev -Message $d
-}
+. (Join-Path $PSScriptRoot 'internal/14-SecureRemoteAccessGuardrails.runtime.ps1')
+$ProofPath = Get-RemoteAccessProofPath $ProofPath
+$runState = New-RemoteAccessRunState -IsElevated (Test-IsElevated)
+$runOptions = [pscustomobject]@{ CatalogPath=$CatalogPath; ConfigPath=$ConfigPath; ProofPath=$ProofPath; Remediate=$Remediate; Strict=[bool]$Strict; EventSource=$eventSettings.Source; EventLog=$eventSettings.Log }
+Invoke-RemoteAccessCapability -RunState $runState -CommandContext $PSCmdlet -Options $runOptions
+Add-RemoteAccessCanonicalFindings -Drifts @($runState.Drifts)
 # V2 output contract
 $resultToken = if ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
 $v2Result = Get-V2ResultObject -ScriptName '14-SecureRemoteAccessGuardrails.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Timestamp = Get-Date }) -Metadata @{}

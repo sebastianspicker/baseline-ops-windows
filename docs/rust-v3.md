@@ -1,17 +1,26 @@
 # Rust v3 implementation
 
-The self-contained Rust rewrite is developed under [`rust/`](../rust/README.md). It is additive:
-the existing PowerShell product remains the supported behavioral oracle and release line.
+Rust v3 is a self-contained rewrite under
+[`rust/`](https://github.com/sebastianspicker/baseline-ops/blob/main/rust/README.md).
+It is not yet released. The existing PowerShell product remains the supported
+release line and the reference for expected behavior.
 
-Rust releases use separate `rust-v*` tags and separate CI/release workflows. Registry presence does
-not mean native parity. The checked-in [capability ledger](../rust/ledger/capability-parity.md) records
-the implementation and evidence state for every legacy endpoint capability.
+Rust releases have their own `rust-v*` tags and CI/release workflows. A
+capability appearing in the registry does not mean that its native Windows
+behavior matches PowerShell. The machine-readable
+[capability ledger](https://github.com/sebastianspicker/baseline-ops/blob/main/rust/ledger/capability-parity.json)
+is the authority for implementation status. Its
+[Markdown companion](https://github.com/sebastianspicker/baseline-ops/blob/main/rust/ledger/capability-parity.md)
+shows the evidence state for every PowerShell endpoint capability.
 
-The v3 package targets Windows 11 Pro and Enterprise x64, version 24H2 or later. Publication requires
-all 52 capabilities and every retained external evidence gate to close, an exact `rust-v<Cargo
-version>` tag, and all three executables to pass Authenticode subject and public-key pin
-verification. The package inventory is anchored by a detached PKCS#7 signature over its exact
-manifest bytes. Schemas, SBOM,
-protected-install checks, and the remaining current-time/offline trust evidence are described in the
-[verification contract](../rust/docs/verification.md). The release workflow currently refuses
-publication because those capability and Windows evidence gates are not closed.
+The v3 package targets Windows 11 Pro and Enterprise x64, version 24H2 or
+later. It cannot be published until all 52 capabilities and every retained
+external evidence gate are complete. Publication also requires an exact
+`rust-v<Cargo version>` tag and Authenticode subject and public-key pin
+verification for all three executables. A detached PKCS#7 signature over the
+exact manifest bytes authenticates the package inventory.
+
+The [verification contract](https://github.com/sebastianspicker/baseline-ops/blob/main/rust/docs/verification.md)
+covers the schemas, SBOM, protected-install checks, and the remaining
+current-time and offline trust evidence. The release workflow currently refuses
+publication because the capability and Windows evidence gates are still open.

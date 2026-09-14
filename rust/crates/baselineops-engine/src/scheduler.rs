@@ -3,7 +3,10 @@ use baselineops_domain::{
     PlannedActionV3,
 };
 use chrono::{DateTime, Utc};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+
+mod order;
+use order::topological_order;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -277,7 +280,7 @@ mod tests {
     use baselineops_domain::{ActionId, CapabilityId, RebootRequirement, Reversibility, RiskLevel};
     use std::sync::Mutex;
 
-    fn action(depends_on: Vec<ActionId>, continue_on_error: bool) -> PlannedActionV3 {
+    pub(super) fn action(depends_on: Vec<ActionId>, continue_on_error: bool) -> PlannedActionV3 {
         PlannedActionV3 {
             id: ActionId::new(),
             source_step: ActionId::new(),
@@ -381,45 +384,6 @@ mod tests {
     }
 }
 
-fn topological_order(actions: &[PlannedActionV3]) -> Result<Vec<ActionId>, SchedulerError> {
-    if actions.is_empty() {
-        return Err(SchedulerError::InvalidGraph(
-            "no actions were supplied".into(),
-        ));
-    }
-    let by_id = actions
-        .iter()
-        .map(|action| (action.id, action))
-        .collect::<BTreeMap<_, _>>();
-    if by_id.len() != actions.len() {
-        return Err(SchedulerError::InvalidGraph("duplicate action IDs".into()));
-    }
-    let mut complete = BTreeSet::new();
-    let mut order = Vec::with_capacity(actions.len());
-    while order.len() < actions.len() {
-        let next = actions.iter().find(|action| {
-            !complete.contains(&action.id)
-                && action
-                    .depends_on
-                    .iter()
-                    .all(|dependency| complete.contains(dependency))
-        });
-        let Some(next) = next else {
-            return Err(SchedulerError::InvalidGraph(
-                "dependencies are missing or cyclic".into(),
-            ));
-        };
-        if next
-            .depends_on
-            .iter()
-            .any(|dependency| !by_id.contains_key(dependency))
-        {
-            return Err(SchedulerError::InvalidGraph(
-                "an action depends on an unknown action".into(),
-            ));
-        }
-        complete.insert(next.id);
-        order.push(next.id);
-    }
-    Ok(order)
-}
+#[cfg(test)]
+#[path = "scheduler_bench.rs"]
+mod bench;

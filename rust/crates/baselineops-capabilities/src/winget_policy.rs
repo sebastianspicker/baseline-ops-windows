@@ -34,8 +34,8 @@ pub const MAX_WINGET_APP_PATH_BYTES: usize = 1024;
 pub struct WingetParameters {}
 
 /// Parsed App Installer version, independent of localized display text.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct WingetVersion {
     /// Major version component.
     pub major: u16,
@@ -46,8 +46,8 @@ pub struct WingetVersion {
 }
 
 /// Fixed App Installer location evidence.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum WingetExecutableEvidence {
     /// A bounded absolute App Paths value. It is not an execution authority.
     Located {
@@ -66,24 +66,24 @@ pub enum WingetExecutableEvidence {
 }
 
 /// Non-secret source evidence retained by a future package API adapter.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct WingetSourceEvidence {
     /// Count from a bounded, API-supplied source inventory.
     pub source_count: u16,
 }
 
 /// Non-secret configuration evidence retained by a future package API adapter.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct WingetConfigurationEvidence {
     /// Whether the package API exposed a configuration capability indicator.
     pub available: bool,
 }
 
 /// Shared bounded observation acquired once for both canonical `WinGet` IDs.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct WingetObservation {
     /// Fixed HKLM App Paths evidence for `winget.exe`.
     pub executable: Observation<WingetExecutableEvidence>,

@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 pub const MAX_POLICY_STRING_BYTES: usize = 128;
 
 /// Fixed Windows Update registry fields understood by the native foundation.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum WindowsUpdateField {
     /// Whether Windows Server Update Services is selected.
     UseWsus,
@@ -41,8 +41,8 @@ pub enum WindowsUpdateField {
 }
 
 /// Fixed observed Windows Update policy values.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct WindowsUpdateObservation {
     /// Values keyed by finite policy-field identity.
     pub values: BTreeMap<WindowsUpdateField, PolicyValueSnapshot>,
@@ -64,7 +64,7 @@ pub struct WindowsUpdateParameters {
 pub struct WindowsUpdateConfig {
     /// Selected update-source family.
     pub update_source: UpdateSource,
-    /// Whether Microsoft Update service participation is allowed.
+    /// Retained catalog metadata; v2 does not change service participation.
     pub allow_microsoft_update: bool,
     /// Feature and quality update deferrals.
     pub deferrals: Deferrals,
@@ -269,10 +269,6 @@ fn expected_values(
         PolicyValueSnapshot::Dword(u32::from(use_wsus)),
     );
     expected.insert(
-        WindowsUpdateField::AllowMicrosoftUpdate,
-        PolicyValueSnapshot::Dword(u32::from(desired.allow_microsoft_update)),
-    );
-    expected.insert(
         WindowsUpdateField::DeferFeatureUpdates,
         PolicyValueSnapshot::Dword(1),
     );
@@ -359,6 +355,29 @@ mod tests {
             })
             .is_err()
         );
+    }
+    #[test]
+    fn microsoft_update_catalog_metadata_never_grants_a_new_mutation() {
+        for allow in [true, false] {
+            let desired = WindowsUpdateConfig {
+                allow_microsoft_update: allow,
+                ..WindowsUpdateConfig::default()
+            };
+            let observed = WindowsUpdateObservation {
+                values: BTreeMap::from([(
+                    WindowsUpdateField::AllowMicrosoftUpdate,
+                    PolicyValueSnapshot::Dword(u32::from(!allow)),
+                )]),
+            };
+            let plan = build_plan(observed.clone(), desired);
+            assert_eq!(plan.rollback, observed);
+            assert!(
+                !plan
+                    .mutations
+                    .iter()
+                    .any(|mutation| mutation.field == WindowsUpdateField::AllowMicrosoftUpdate)
+            );
+        }
     }
     #[test]
     fn missing_and_present_values_have_reversible_deterministic_plans() {

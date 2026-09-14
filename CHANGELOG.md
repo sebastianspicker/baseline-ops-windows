@@ -1,6 +1,7 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
+Release notes for BaselineOps. Versioned entries describe behavior at the time
+of that release; use the README and current guides for today's requirements.
 
 ## [Unreleased]
 
@@ -8,14 +9,14 @@ Target alpha: `v2.3.0-alpha.1`.
 
 ### Added
 
-- Alpha Windows Forms operator console with separate script/profile workflows,
-  asynchronous script discovery, explicit remediation review, integrity
-  controls, stoppable child-process execution, bounded live output, and
-  bounded captured-output export.
-- Versioned JSON launcher worker protocol and pure launcher policy tests for
-  argument safety, manifest validation, stream capture, and terminal states.
-- Launcher guide documenting current capabilities and the outstanding native
-  form smoke, accessibility, DPI, and manual UI validation gate.
+- Alpha Windows Forms launcher for running scripts and profiles, with
+  asynchronous script discovery, remediation review, integrity checks, a stop
+  control for child processes, and size limits on live and saved output.
+- Versioned JSON messages between the launcher and its worker, with isolated
+  tests for argument safety, manifest validation, output capture, and final
+  run states.
+- Launcher guide covering supported actions and the Windows form,
+  accessibility, DPI, and manual UI checks still needed.
 - Public alpha release guide covering package contents, checksum and
   attestation verification, protected Windows installation, and the manual
   publication sequence.
@@ -25,13 +26,13 @@ Target alpha: `v2.3.0-alpha.1`.
 
 ### Changed
 
-- Restored the unreleased parallel Rust v3 prototype, its separate build and
-  release pipelines, capability ledger, schemas, and native application
-  workspace while keeping the PowerShell product as the supported release line.
-- Documented one dependency direction for orchestration, capabilities, shared
-  application services, and the private Windows/native-process boundary.
-- WinGet remediation now accepts installer and source authority only from
-  explicit operator parameters; audit mode never refreshes or adds sources.
+- Restored the unreleased Rust v3 prototype with its own builds, releases,
+  capability ledger, schemas, and native applications. PowerShell remains the
+  supported product.
+- Documented how the runners, capabilities, shared modules, and private
+  Windows and native-process code depend on each other.
+- WinGet remediation now requires explicit operator parameters to authorize
+  installers and package sources. Audit mode never refreshes or adds sources.
 - The source distribution, release artifacts, and local runtime identifiers
   use the BaselineOps for Windows name.
 - PowerShell verification now parses tool modules (`tools/*.psm1`) as well as
@@ -40,18 +41,19 @@ Target alpha: `v2.3.0-alpha.1`.
   public `docs/` content is restricted to an explicit reviewed allowlist.
 - Documentation lint now checks tracked and untracked non-ignored Markdown for
   missing or mis-cased local targets, root escapes, and empty image alt text.
-- Local validation instructions now use Pester's `-CI` failure semantics. Script
-  mode and profile-schema docs match the current runner contracts.
+- Local test commands now include Pester's `-CI` switch so failures produce a
+  failing exit code. Mode and profile-schema documentation matches the runners.
 - Script-specific helpers live under `scripts/internal/`, with focused helper
   and sanitization tests under `tests/`.
 - Release packaging now resolves a strict semantic version tag, verifies the
-  exact tagged tree, emits a transitive package manifest, refuses asset
+  exact tagged tree, lists every packaged file in a manifest, refuses asset
   replacement, and creates a prerelease when necessary.
 - Operator documentation now separates standard-user package validation from
   privileged execution; elevated runners and the launcher are started only from
   the protected installation root.
 - GitHub ownership, pull-request validation checks, generated release-note
-  categories, and shell/YAML/documentation lint now cover the alpha surface.
+  categories, and shell, YAML, and documentation checks now cover the alpha
+  release files.
 - Extracted the firewall baseline's catalog and normalization helpers into a
   script-specific internal helper without changing its parameters.
 
@@ -64,7 +66,7 @@ Target alpha: `v2.3.0-alpha.1`.
 - Windows PowerShell 5.1 compatibility now covers null/empty argument binding,
   single-item pipeline collections, bounded regex timeouts, result capture, and
   high-volume native output across runners and endpoint audit scripts.
-- Strict profile `-WhatIf` runs now remain successful no-mutation previews:
+- Strict profile `-WhatIf` runs now preview execution without making changes:
   every child step is skipped, the result is `WARN` / exit `2`, and the warning
   is not promoted to failure. Batch `-WhatIf` stops before workspace creation.
 - Report aggregation now uses canonical on-disk path casing on Windows, and the
@@ -105,7 +107,7 @@ Target alpha: `v2.3.0-alpha.1`.
   `04-OfficeBrowser-Hardening-Proof.helpers.ps1` (~530 lines),
   `09-SupportBundle.helpers.ps1` (~577 lines),
   `12-Suspicious-Artifact-Grabber.helpers.ps1` (~677 lines).
-  All three parent scripts are now well under the 800-line budget.
+  All three parent scripts are below the 800-line limit.
 - `tests/scripts/InternalHelpers.Tests.ps1`: Pester coverage for helper pure
   functions, constructors, and symbol boundaries.
 - `tests/scripts/ScriptLineBudget.Tests.ps1`: enforces an 800-line
@@ -120,7 +122,8 @@ Target alpha: `v2.3.0-alpha.1`.
   - `52-DoH-Audit.ps1`: audits Windows DNS client DoH configuration
     (`EnableAutoDoh`), validates configured resolvers against known
     DoH-capable servers, and reports plaintext DNS fallback posture.
-  All three follow the full v2 contract and pass V2Contract.Tests.ps1.
+
+  All three follow the v2 result contract and pass `V2Contract.Tests.ps1`.
 - `tests/lib/Sanitization.Tests.ps1`: Pester coverage for `Sanitize-Path`,
   `Read-ConfigWithDefaults`, and `ConvertTo-Hashtable`.
 - Scripts 50–52 added to `examples/profiles/full-audit.json`.
@@ -137,7 +140,8 @@ Target alpha: `v2.3.0-alpha.1`.
   14, 16, 18, and 22 added to the Audit table (they were listed only
   under Remediation despite supporting both modes). The `Internal Helpers`
   section added. Scripts 50–52 added to catalog.
-- Root `README.md` script catalog updated (52 scripts, rows 50–52 added).
+- Updated the root `README.md` catalog to include all 52 scripts, adding rows
+  50–52.
 - The former future-script planning list marked AMSI, AppLocker, and DoH as
   completed after scripts 50–52 were implemented.
 - Doc-comment whitespace cleaned up in scripts 02, 06–08, 10–11,
@@ -162,12 +166,12 @@ Target alpha: `v2.3.0-alpha.1`.
   and UEFI firmware verification), `47-WDAG-Readiness-Audit.ps1` (Application
   Guard prerequisites), `48-ExploitProtection-Audit.ps1` (system/process
   exploit mitigations and ASR rules), `49-DriverSigning-Integrity-Audit.ps1`
-  (driver signing enforcement and HVCI status). All follow v2 contract with
-  C10 findings pattern.
+  (driver signing enforcement and HVCI status). All use the v2 result contract
+  and shared findings helpers.
 - 4 new execution profiles: `full-audit.json` (all 49 audit scripts),
   `endpoint-health-check.json` (health-focused subset),
   `incident-response.json` (IR triage with DependsOn ordering),
-  `compliance-full.json` (compliance-focused audit battery).
+  `compliance-full.json` (checks relevant to compliance reviews).
 - `New-SafeFileName` function in `lib/Common.psm1` for sanitizing file
   names by replacing invalid characters.
 - `CustomFields` parameter in `Write-ConsoleSummary` (`lib/Console.psm1`)
@@ -175,13 +179,14 @@ Target alpha: `v2.3.0-alpha.1`.
 
 ### Changed in 2.1.0
 
-- Batch categories expanded: 17 scripts added to Audit category
+- Expanded the Audit batch category with scripts
   (03, 04, 06, 07, 11, 13, 14, 18, 20, 22, 24, 31, 32, 34, 38, 39, 40, 41),
   6 scripts added to Remediation category (06, 07, 08, 25, 32, 38).
-  3 orphan scripts (07, 24, 41) now included in appropriate categories.
-- 13 scripts migrated to C10 findings pattern (`New-FindingsList`/`Add-Finding`):
-  6 moderate (06, 10, 20, 24, 25, 29) and 6 hard (04, 05, 07, 14, 15, 16)
-  conversions plus 1 easy fix (33). C10 compliance rose from 47% to 82%.
+  3 previously omitted scripts (07, 24, 41) are now included in the appropriate
+  categories.
+- 13 scripts now use `New-FindingsList`/`Add-Finding`: 04, 05, 06, 07, 10, 14,
+  15, 16, 20, 24, 25, 29, and 33. Adoption of the shared findings pattern
+  increased from 47% to 82%.
 - 7 scripts migrated to lib `Write-ConsoleSummary`: scripts 08, 27, 31, 33,
   34, 36, 41 replaced local Write-ConsoleSummary implementations with the
   canonical `lib/Console.psm1` version using `CustomFields`. ~330 lines removed.
@@ -194,14 +199,14 @@ Target alpha: `v2.3.0-alpha.1`.
 
 ### Fixed in 2.1.0
 
-- 3 orphan scripts (07-ScheduledTasks-Hygiene, 24-Cert-AutoEnrollment-Health,
+- 3 previously omitted scripts (07-ScheduledTasks-Hygiene, 24-Cert-AutoEnrollment-Health,
   41-NTLM-Audit-Client) added to batch categories in `00-Run-Batch.ps1`.
 
 ## [2.0.2] - 2026-03-21
 
 ### Fixed in 2.0.2
 
-- Security hardening (Phase 2.1, S6-S17): auditpol subcategory input validation,
+- Input validation and native-command safety: auditpol subcategory input validation,
   registry key path allowlist enforcement, firewall RulePrefix validation, direct
   wevtutil calls replaced with `Invoke-Wevtutil` wrapper, driveId CIM filter escaping,
   dangerous winget `ExtraArgs` filtering, hardcoded WinRM CIM filter safety comment,
@@ -209,43 +214,43 @@ Target alpha: `v2.3.0-alpha.1`.
   check, environment variable expansion before traversal check in `Evidence.psm1`,
   `New-MdmScheduledTask` TaskName input validation, and Sysmon drift sensor
   ScriptPath validation.
-- Static analysis fixes (Phase 2.2): added
+- Static-analysis fixes: added
   `Set-StrictMode -Version Latest` to 3 scripts missing it, fixed `$null`
   ordering (`$LASTEXITCODE -eq $null` to
   `$null -eq $LASTEXITCODE`), removed unused variable assignments (`$eventLogReady`,
   `$canEventLog`), guarded `$InformationPreference = 'Continue'` override behind
   `$Quiet` check, removed 20 local function redefinitions replaced by lib imports.
-- Error handling standardization (Phase 4.2): 94 empty catch blocks annotated
+- Consistent error reporting: 94 empty catch blocks annotated
   with `<# best-effort #>` across 19 scripts, 9 bare `throw` statements converted
   to `Add-Finding` + v2 FAIL result + `exit 1`, 3 silent catches in IOC-Sweep
   converted to `Write-Warning`, 4 bare re-throws replaced with v2 FAIL output.
-- Path traversal guards (Phase 4.3): added `Assert-NoPathTraversal` for
+- Path traversal checks: added `Assert-NoPathTraversal` for
   config-driven output paths in `09-SupportBundle.ps1` and `12-Suspicious-Artifact-Grabber.ps1`.
 
 ### Changed in 2.0.2
 
-- Convention alignment (Phase 2.3): `ErrorActionPreference = 'Stop'` added to
+- Consistent error and result handling: `ErrorActionPreference = 'Stop'` added to
   10 scripts (now 100%), `exit 0` added to 40 scripts (now 100%), v2 output contract
   (`New-V2ResultObject` + `Write-ResultObject`) added to 44 scripts (94% coverage),
   1 script converted to `New-FindingsList`/`Add-Finding` pattern.
-- Lib deduplication (Phase 4.1): removed `Read-JsonConfig` from `Common.psm1`
+- Shared module cleanup: removed `Read-JsonConfig` from `Common.psm1`
   (sole caller migrated to `Read-JsonFileSafe`), removed `Write-JsonToFile` from
   `JsonCatalog.psm1` (consolidated on `Save-Json` with path-traversal guard),
   removed 8 local function copies across scripts (`Try-LoadJsonFile`, `Load-JsonFile`,
   `Read-Json`, `Read-JsonFile`, `Expand-Env`, `Ensure-Directory`).
-- Hardcoded paths replaced with env variables (Phase 4.3): `C:\Windows\` to
+- Hardcoded paths replaced with environment variables: `C:\Windows\` to
   `$env:SystemRoot`, `C:\Program Files\` to `$env:ProgramFiles`,
   `C:\Program Files (x86)\` to `${env:ProgramFiles(x86)}` across scripts 07,
   08, and 16.
-- Write-Rule name collision resolved (Phase 4.3): renamed `Console.psm1`'s
+- Resolved a `Write-Rule` name collision: renamed `Console.psm1`'s
   `Write-Rule` to `Write-DecorativeRule`; updated all internal and script callers.
-- Invoke-Git collision resolved (Phase 4.3): renamed local `Invoke-Git` in
+- Resolved an `Invoke-Git` name collision: renamed local `Invoke-Git` in
   `00-Copy-Local.ps1` to `Invoke-GitCommand` to avoid collision with `External.psm1`.
-- Has-Property extracted to `Common.psm1` (Phase 4.3): removed duplicate local
+- Moved `Has-Property` to `Common.psm1`: removed duplicate local
   definitions from `00-Run-Profile.ps1` and `00-Validate-Profile.ps1`.
-- Set-RegString shadow removed (Phase 4.3): removed local `Set-RegString` from
+- Removed a duplicate `Set-RegString`: removed local `Set-RegString` from
   `31-PowerShell-Logging-Baseline.ps1`; lib `Registry.psm1` version already imported.
-- Style tokens (Phase 4.3): replaced `DarkCyan`/`DarkYellow`/`DarkGray`
+- Console styling: replaced `DarkCyan`/`DarkYellow`/`DarkGray`
   `-ForegroundColor` calls with semantic `-Style` tokens (`Header`, `Warning`,
   `Muted`, `Accent`) in 6 scripts.
 
@@ -264,7 +269,7 @@ Target alpha: `v2.3.0-alpha.1`.
 ### Fixed in 2.0.1
 
 - Invoke-NativeProcess deadlock (`lib/Execution.psm1`): stdout/stderr
-  `ReadToEnd()` was called after `WaitForExit()`, causing a classic pipe-buffer
+  `ReadToEnd()` was called after `WaitForExit()`, causing a pipe-buffer
   deadlock for child processes that emit more than ~64 KB. Fixed with async reads
   started before `WaitForExit()`.
 - WQL injection (`scripts/02-LAPS-Hygiene.ps1`, `scripts/11-IOC-Sweep-Defender.ps1`):
@@ -284,7 +289,7 @@ Target alpha: `v2.3.0-alpha.1`.
   `Write-UiLine -Text`.
 - CI: Pester exit code (`.github/workflows/ci.yml`): `Invoke-Pester`
   was called without `-CI`, so Pester 5 returned exit code 0 even when tests
-  failed, so test failures silently passed CI. Added `-CI` flag.
+  failed, allowing failing tests to pass CI. Added `-CI` flag.
 - CI: Scorecard permissions (`.github/workflows/scorecard.yml`): replaced
   overly broad `permissions: read-all` with minimal
   `permissions: { contents: read }`; job-level write scopes already set
@@ -339,9 +344,9 @@ Target alpha: `v2.3.0-alpha.1`.
 - One-off migration helpers moved from `tools/` to `scripts/dev/`.
 - Launcher GUI expanded for profile execution and output export.
 - CI extended with Pester test jobs.
-- Hard-cutover on script mode contract:
+- Breaking changes to script mode selection:
   - `AuditOnly` removed from `Mode` validate sets.
-  - legacy top-level `-Remediate` script parameter removed in productive scripts.
+  - legacy top-level `-Remediate` parameter removed from endpoint scripts.
   - remediation guarded via `-Mode Remediate` + `SupportsShouldProcess`.
 
 ### Fixed in 2.0.0

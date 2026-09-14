@@ -11,8 +11,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 /// A fixed registry field within the v3 Security Options subset.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SecurityOptionsField {
     /// UAC master switch.
     EnableLua,
@@ -29,8 +29,13 @@ pub enum SecurityOptionsField {
 }
 
 /// Typed result of reading one fixed HKLM DWORD field.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "status", content = "value", rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum SecurityOptionEvidence {
     /// A DWORD value was read successfully.
     Present(u32),
@@ -43,8 +48,8 @@ pub enum SecurityOptionEvidence {
 }
 
 /// Fixed HKLM evidence for capability 38.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SecurityOptionsObservation {
     /// Each allowlisted field's independently typed evidence.
     pub values: BTreeMap<SecurityOptionsField, SecurityOptionEvidence>,
@@ -52,7 +57,7 @@ pub struct SecurityOptionsObservation {
 
 /// A finite DWORD on/off desired value.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Enabled {
     /// Write the DWORD value zero in a future verified worker path.
     Disabled,
@@ -72,7 +77,7 @@ impl Enabled {
 
 /// Finite LAN Manager authentication compatibility policy values.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum LmCompatibilityLevel {
     /// Send LM and NTLM responses.
     SendLmAndNtlm,
@@ -104,7 +109,7 @@ impl LmCompatibilityLevel {
 
 /// Finite anonymous-enumeration restriction values.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum AnonymousRestriction {
     /// Do not add a registry restriction.
     None,
@@ -157,8 +162,8 @@ impl Default for SecurityOptionsPolicy {
 }
 
 /// One fixed field whose observed DWORD differs from the typed desired value.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SecurityOptionsDrift {
     /// Fixed field with drift.
     pub field: SecurityOptionsField,
@@ -213,44 +218,26 @@ pub fn evaluate_security_options(
             .get(field)
             .cloned()
             .unwrap_or(SecurityOptionEvidence::Missing);
-        let (code, status, severity, message) = match &evidence {
-            SecurityOptionEvidence::Present(actual) if actual == wanted => (
-                "SECOPT-Compliant",
-                FindingStatus::Pass,
-                Severity::Low,
-                format!("{field:?} matches its fixed desired value {wanted}."),
-            ),
-            SecurityOptionEvidence::Present(actual) => {
-                if *field == SecurityOptionsField::EnableLua {
-                    enable_lua_changed = true;
-                }
-                (
-                    "SECOPT-Drift",
-                    FindingStatus::Fail,
-                    Severity::High,
-                    format!("{field:?} is {actual}, expected {wanted}."),
-                )
-            }
-            SecurityOptionEvidence::Missing => (
-                "SECOPT-Missing",
-                FindingStatus::Warning,
-                Severity::Medium,
-                format!("{field:?} is not configured or its fixed key is absent."),
-            ),
-            SecurityOptionEvidence::AccessDenied => (
-                "SECOPT-AccessDenied",
-                FindingStatus::Error,
-                Severity::High,
-                format!("Windows denied read access to {field:?}."),
-            ),
-            SecurityOptionEvidence::Error => (
-                "SECOPT-ObservationError",
-                FindingStatus::Error,
-                Severity::High,
-                format!("{field:?} could not be read as its required DWORD type."),
-            ),
-        };
-        findings.push(PolicyFinding {
+        let (finding, lua_changed) = evaluate_field(*field, *wanted, &evidence);
+        enable_lua_changed |= lua_changed;
+        findings.push(finding);
+    }
+    SecurityOptionsAudit {
+        observation,
+        desired,
+        findings,
+        reboot_or_logoff_required_if_enable_lua_changed: enable_lua_changed,
+    }
+}
+
+fn evaluate_field(
+    field: SecurityOptionsField,
+    wanted: u32,
+    evidence: &SecurityOptionEvidence,
+) -> (PolicyFinding, bool) {
+    let (code, status, severity, message, lua_changed) = field_outcome(field, wanted, evidence);
+    (
+        PolicyFinding {
             code,
             status,
             severity,
@@ -260,13 +247,52 @@ pub fn evaluate_security_options(
                 ("observed".into(), json!(evidence)),
                 ("desired".into(), json!(wanted)),
             ]),
-        });
-    }
-    SecurityOptionsAudit {
-        observation,
-        desired,
-        findings,
-        reboot_or_logoff_required_if_enable_lua_changed: enable_lua_changed,
+        },
+        lua_changed,
+    )
+}
+
+fn field_outcome(
+    field: SecurityOptionsField,
+    wanted: u32,
+    evidence: &SecurityOptionEvidence,
+) -> (&'static str, FindingStatus, Severity, String, bool) {
+    match evidence {
+        SecurityOptionEvidence::Present(actual) if *actual == wanted => (
+            "SECOPT-Compliant",
+            FindingStatus::Pass,
+            Severity::Low,
+            format!("{field:?} matches its fixed desired value {wanted}."),
+            false,
+        ),
+        SecurityOptionEvidence::Present(actual) => (
+            "SECOPT-Drift",
+            FindingStatus::Fail,
+            Severity::High,
+            format!("{field:?} is {actual}, expected {wanted}."),
+            field == SecurityOptionsField::EnableLua,
+        ),
+        SecurityOptionEvidence::Missing => (
+            "SECOPT-Missing",
+            FindingStatus::Warning,
+            Severity::Medium,
+            format!("{field:?} is not configured or its fixed key is absent."),
+            false,
+        ),
+        SecurityOptionEvidence::AccessDenied => (
+            "SECOPT-AccessDenied",
+            FindingStatus::Error,
+            Severity::High,
+            format!("Windows denied read access to {field:?}."),
+            false,
+        ),
+        SecurityOptionEvidence::Error => (
+            "SECOPT-ObservationError",
+            FindingStatus::Error,
+            Severity::High,
+            format!("{field:?} could not be read as its required DWORD type."),
+            false,
+        ),
     }
 }
 

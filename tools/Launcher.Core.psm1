@@ -27,13 +27,21 @@ using System.Threading.Tasks;
 
 public sealed class LauncherOutputCollector : IDisposable
 {
+    private const int FlushIntervalMilliseconds = 250;
+    private const long FlushThresholdBytes = 64L * 1024L;
     private readonly object sync = new object();
     private readonly StreamWriter writer;
+    private readonly Timer flushTimer;
     private readonly long maximumBytes;
     private readonly int maximumPending;
     private long bytesWritten;
+    private long unflushedBytes;
+    private long writeOperationCount;
+    private long flushOperationCount;
     private bool truncated;
     private bool logWriteFailed;
+    private bool completed;
+    private bool disposed;
     private int pendingCount;
 
     public LauncherOutputCollector(string logPath, long maximumBytes, int maximumPending)
@@ -42,17 +50,23 @@ public sealed class LauncherOutputCollector : IDisposable
         this.maximumPending = maximumPending;
         this.Pending = new ConcurrentQueue<string>();
         this.writer = new StreamWriter(logPath, false, new UTF8Encoding(true));
+        this.flushTimer = new Timer(this.FlushFromTimer, null, FlushIntervalMilliseconds, FlushIntervalMilliseconds);
     }
 
     public ConcurrentQueue<string> Pending { get; private set; }
-    public bool LogWriteFailed { get { return this.logWriteFailed; } }
+    public bool LogWriteFailed { get { lock (this.sync) { return this.logWriteFailed; } } }
+    public bool IsTruncated { get { lock (this.sync) { return this.truncated; } } }
+    public bool IsDisposed { get { lock (this.sync) { return this.disposed; } } }
+    public int PendingCount { get { return Volatile.Read(ref this.pendingCount); } }
+    public long WriteOperationCount { get { lock (this.sync) { return this.writeOperationCount; } } }
+    public long FlushOperationCount { get { lock (this.sync) { return this.flushOperationCount; } } }
 
     public void AddLine(string line)
     {
         if (line == null) return;
         lock (this.sync)
         {
-            if (!this.truncated && !this.logWriteFailed)
+            if (!this.disposed && !this.truncated && !this.logWriteFailed)
             {
                 try
                 {
@@ -60,27 +74,54 @@ public sealed class LauncherOutputCollector : IDisposable
                     if (this.bytesWritten + size <= this.maximumBytes)
                     {
                         this.writer.WriteLine(line);
-                        this.writer.Flush();
                         this.bytesWritten += size;
+                        this.unflushedBytes += size;
+                        this.writeOperationCount++;
+                        if (this.completed || this.unflushedBytes >= FlushThresholdBytes) this.FlushWriterLocked();
                     }
                     else
                     {
-                        this.writer.WriteLine("[OUTPUT TRUNCATED: temporary full log reached 25 MiB]");
-                        this.writer.Flush();
+                        string marker = "[OUTPUT TRUNCATED: temporary full log reached 25 MiB]";
+                        this.writer.WriteLine(marker);
+                        this.unflushedBytes += Encoding.UTF8.GetByteCount(marker + Environment.NewLine);
+                        this.writeOperationCount++;
                         this.truncated = true;
+                        if (this.completed || this.unflushedBytes >= FlushThresholdBytes) this.FlushWriterLocked();
                     }
                 }
                 catch { this.logWriteFailed = true; }
             }
-        }
 
-        this.Pending.Enqueue(line);
-        int currentCount = Interlocked.Increment(ref this.pendingCount);
-        string discarded;
-        while (currentCount > this.maximumPending && this.Pending.TryDequeue(out discarded))
-        {
-            currentCount = Interlocked.Decrement(ref this.pendingCount);
+            this.Pending.Enqueue(line);
+            Interlocked.Increment(ref this.pendingCount);
+            this.TrimPendingLocked();
         }
+    }
+
+    private void TrimPendingLocked()
+    {
+        string discarded;
+        while (Volatile.Read(ref this.pendingCount) > this.maximumPending && this.Pending.TryDequeue(out discarded))
+        {
+            Interlocked.Decrement(ref this.pendingCount);
+        }
+    }
+
+    private void FlushFromTimer(object state)
+    {
+        lock (this.sync)
+        {
+            if (this.disposed || this.completed || this.logWriteFailed || this.unflushedBytes == 0) return;
+            try { this.FlushWriterLocked(); }
+            catch { this.logWriteFailed = true; }
+        }
+    }
+
+    private void FlushWriterLocked()
+    {
+        this.writer.Flush();
+        this.unflushedBytes = 0;
+        this.flushOperationCount++;
     }
 
     private async Task Drain(StreamReader reader, string prefix)
@@ -113,12 +154,48 @@ public sealed class LauncherOutputCollector : IDisposable
 
     public void Flush()
     {
-        lock (this.sync) { this.writer.Flush(); }
+        lock (this.sync)
+        {
+            if (this.disposed) throw new ObjectDisposedException("LauncherOutputCollector");
+            if (this.logWriteFailed) throw new IOException("The launcher output log is unavailable because an earlier write failed.");
+            try { if (this.unflushedBytes > 0) this.FlushWriterLocked(); }
+            catch { this.logWriteFailed = true; throw; }
+        }
+    }
+
+    public void Complete()
+    {
+        lock (this.sync)
+        {
+            if (this.disposed || this.completed) return;
+            this.completed = true;
+            try { this.flushTimer.Change(Timeout.Infinite, Timeout.Infinite); }
+            catch (ObjectDisposedException) { }
+            if (this.logWriteFailed) throw new IOException("The launcher output log is unavailable because an earlier write failed.");
+            try { if (this.unflushedBytes > 0) this.FlushWriterLocked(); }
+            catch { this.logWriteFailed = true; throw; }
+        }
     }
 
     public void Dispose()
     {
-        lock (this.sync) { this.writer.Dispose(); }
+        Timer timer;
+        lock (this.sync)
+        {
+            if (this.disposed) return;
+            this.disposed = true;
+            timer = this.flushTimer;
+            try { timer.Change(Timeout.Infinite, Timeout.Infinite); }
+            catch (ObjectDisposedException) { }
+            try { if (!this.logWriteFailed && this.unflushedBytes > 0) this.FlushWriterLocked(); }
+            catch { this.logWriteFailed = true; }
+            finally
+            {
+                try { this.writer.Dispose(); }
+                catch { this.logWriteFailed = true; }
+            }
+        }
+        timer.Dispose();
     }
 }
 
@@ -328,6 +405,34 @@ function ConvertFrom-LauncherArgumentString {
 
   if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
 
+  function Add-LauncherArgumentToken {
+    param([Parameter(Mandatory)]$Tokens, [Parameter(Mandatory)]$Current)
+
+    if ($Current.Length -gt 0) {
+      [void]$Tokens.Add($Current.ToString())
+      [void]$Current.Clear()
+    }
+  }
+
+  function Test-LauncherArgumentCharacter {
+    param([Parameter(Mandatory)][char]$Character)
+
+    if ($Character -in @('|', ';', '&', '<', '>', '`', "`r", "`n")) {
+      throw "Advanced arguments contain unsupported executable syntax '$Character'."
+    }
+  }
+
+  function Assert-LauncherArgumentTokens {
+    param([Parameter(Mandatory)][object[]]$Tokens, [char]$Quote)
+
+    if ($Quote -ne [char]0) { throw 'Advanced arguments contain an unmatched quote.' }
+    foreach ($token in $Tokens) {
+      if ($token -match '\$\(' -or $token -match '\$\{' -or $token -match '\$(?!true(?:\b|$)|false(?:\b|$))') {
+        throw "Advanced argument '$token' contains unsupported variable or subexpression syntax."
+      }
+    }
+  }
+
   $tokens = New-Object System.Collections.ArrayList
   $current = New-Object System.Text.StringBuilder
   $quote = [char]0
@@ -345,34 +450,23 @@ function ConvertFrom-LauncherArgumentString {
       continue
     }
 
-    if ($c -eq [char]39 -or $c -eq [char]34) {
+    if ($c -in @([char]39, [char]34)) {
       $quote = $c
       continue
     }
 
-    if ($c -eq ' ' -or $c -eq "`t") {
-      if ($current.Length -gt 0) {
-        [void]$tokens.Add($current.ToString())
-        [void]$current.Clear()
-      }
+    if ([char]::IsWhiteSpace($c)) {
+      Add-LauncherArgumentToken -Tokens $tokens -Current $current
       continue
     }
 
-    if ($c -in @('|', ';', '&', '<', '>', '`', "`r", "`n")) {
-      throw "Advanced arguments contain unsupported executable syntax '$c'."
-    }
+    Test-LauncherArgumentCharacter -Character $c
 
     [void]$current.Append($c)
   }
 
-  if ($quote -ne [char]0) { throw 'Advanced arguments contain an unmatched quote.' }
-  if ($current.Length -gt 0) { [void]$tokens.Add($current.ToString()) }
-
-  foreach ($token in @($tokens)) {
-    if ($token -match '\$\(' -or $token -match '\$\{' -or $token -match '\$(?!true(?:\b|$)|false(?:\b|$))') {
-      throw "Advanced argument '$token' contains unsupported variable or subexpression syntax."
-    }
-  }
+  Add-LauncherArgumentToken -Tokens $tokens -Current $current
+  Assert-LauncherArgumentTokens -Tokens @($tokens) -Quote $quote
 
   return @($tokens)
 }
@@ -507,60 +601,44 @@ function Enter-LauncherTrustedClosure {
   $root = Assert-LauncherPathFreeOfReparsePoint -Path $RootPath -RequireDirectory
   $streams = New-Object System.Collections.Generic.List[System.IO.FileStream]
   try {
-    if ($enforceAcl) {
-      if (-not [string]::IsNullOrWhiteSpace($Operation) -and [string]::IsNullOrWhiteSpace($SelectedExecutionPath)) {
-        throw "Selected execution path is required for elevated launcher operation '$Operation'."
-      }
-      # The root ancestor check prevents replacement of an otherwise protected
-      # kit directory. Descendants are checked individually below because a
-      # file can carry a weaker explicit ACL than its protected parent.
-      Assert-TrustedWindowsPathAcl -Path $root.FullName -CheckAncestors | Out-Null
-      $scriptsPath = Join-Path $root.FullName 'scripts'
-      $libPath = Join-Path $root.FullName 'lib'
-      foreach ($requiredDirectory in @($scriptsPath, $libPath)) {
-        $requiredItem = Assert-LauncherPathFreeOfReparsePoint -Path $requiredDirectory -RequireDirectory
-        Assert-TrustedWindowsPathAcl -Path $requiredItem.FullName | Out-Null
-      }
-      foreach ($requiredFile in @(
-          (Join-Path $scriptsPath '00-Run-Local.ps1'),
-          (Join-Path $scriptsPath '00-Run-Profile.ps1'),
-          (Join-Path $scriptsPath '00-Validate-Profile.ps1'),
-          (Join-Path $scriptsPath '_lib/Bootstrap.ps1'),
-          (Join-Path $libPath 'Validation.psm1')
-        )) {
-        $requiredItem = Assert-LauncherPathFreeOfReparsePoint -Path $requiredFile -RequireFile
-        Assert-TrustedWindowsPathAcl -Path $requiredItem.FullName | Out-Null
-      }
-      if (-not [string]::IsNullOrWhiteSpace($SelectedExecutionPath)) {
-        $selectedItem = Assert-LauncherPathFreeOfReparsePoint -Path $SelectedExecutionPath -RequireFile
-        Assert-TrustedWindowsPathAcl -Path $selectedItem.FullName -CheckAncestors | Out-Null
-      }
-    }
-
-    $items = @($root) + @(Get-ChildItem -LiteralPath $root.FullName -Recurse -Force -ErrorAction Stop)
-    foreach ($item in $items) {
-      if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Launcher closure contains a reparse point: $($item.FullName)"
-      }
-      if ($enforceAcl) {
-        Assert-TrustedWindowsPathAcl -Path $item.FullName | Out-Null
-      }
-      if (-not $item.PSIsContainer) {
-        $streams.Add([System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read))
-      }
-    }
-    foreach ($path in @($AdditionalPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-      $item = Assert-LauncherPathFreeOfReparsePoint -Path $path -RequireFile
-      if ($enforceAcl) {
-        Assert-TrustedWindowsPathAcl -Path $item.FullName -CheckAncestors | Out-Null
-      }
-      $streams.Add([System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read))
-    }
+    if ($enforceAcl) { Assert-LauncherClosureAcl -Root $root -Operation $Operation -SelectedExecutionPath $SelectedExecutionPath }
+    Open-LauncherClosureItems -Root $root -Streams $streams -EnforceAcl:$enforceAcl
+    Open-LauncherClosureAdditionalPaths -Paths $AdditionalPaths -Streams $streams -EnforceAcl:$enforceAcl
     return [pscustomobject]@{ Root = $root.FullName; Streams = $streams }
-  } catch {
-    foreach ($stream in $streams) { try { $stream.Dispose() } catch { Write-Verbose 'Launcher closure cleanup failed.' } }
-    throw
+  } catch { Close-LauncherClosureStreams -Streams $streams; throw }
+}
+
+function Assert-LauncherClosureAcl {
+  param($Root, [string]$Operation, [string]$SelectedExecutionPath)
+  if (-not [string]::IsNullOrWhiteSpace($Operation) -and [string]::IsNullOrWhiteSpace($SelectedExecutionPath)) { throw "Selected execution path is required for elevated launcher operation '$Operation'." }
+  Assert-TrustedWindowsPathAcl -Path $Root.FullName -CheckAncestors | Out-Null
+  $scripts = Join-Path $Root.FullName 'scripts'; $lib = Join-Path $Root.FullName 'lib'
+  foreach ($directory in @($scripts, $lib)) { Assert-TrustedWindowsPathAcl -Path (Assert-LauncherPathFreeOfReparsePoint -Path $directory -RequireDirectory).FullName | Out-Null }
+  foreach ($file in @((Join-Path $scripts '00-Run-Local.ps1'), (Join-Path $scripts '00-Run-Profile.ps1'), (Join-Path $scripts '00-Validate-Profile.ps1'), (Join-Path $scripts '_lib/Bootstrap.ps1'), (Join-Path $lib 'Validation.psm1'))) { Assert-TrustedWindowsPathAcl -Path (Assert-LauncherPathFreeOfReparsePoint -Path $file -RequireFile).FullName | Out-Null }
+  if (-not [string]::IsNullOrWhiteSpace($SelectedExecutionPath)) { Assert-TrustedWindowsPathAcl -Path (Assert-LauncherPathFreeOfReparsePoint -Path $SelectedExecutionPath -RequireFile).FullName -CheckAncestors | Out-Null }
+}
+
+function Open-LauncherClosureItems {
+  param($Root, $Streams, [switch]$EnforceAcl)
+  foreach ($item in @($Root) + @(Get-ChildItem -LiteralPath $Root.FullName -Recurse -Force -ErrorAction Stop)) {
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Launcher closure contains a reparse point: $($item.FullName)" }
+    if ($EnforceAcl) { Assert-TrustedWindowsPathAcl -Path $item.FullName | Out-Null }
+    if (-not $item.PSIsContainer) { $Streams.Add([System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)) }
   }
+}
+
+function Open-LauncherClosureAdditionalPaths {
+  param([string[]]$Paths, $Streams, [switch]$EnforceAcl)
+  foreach ($path in @($Paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+    $item = Assert-LauncherPathFreeOfReparsePoint -Path $path -RequireFile
+    if ($EnforceAcl) { Assert-TrustedWindowsPathAcl -Path $item.FullName -CheckAncestors | Out-Null }
+    $Streams.Add([System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read))
+  }
+}
+
+function Close-LauncherClosureStreams {
+  param($Streams)
+  foreach ($stream in $Streams) { try { $stream.Dispose() } catch { Write-Verbose 'Launcher closure cleanup failed.' } }
 }
 
 <#
@@ -632,26 +710,42 @@ function Get-LauncherProfileSummary {
   if ([string]::IsNullOrWhiteSpace($raw)) { throw 'Profile file is empty.' }
   try { $document = $raw | ConvertFrom-Json -ErrorAction Stop } catch { throw "Profile JSON is invalid: $($_.Exception.Message)" }
 
-  foreach ($required in @('ProfileName', 'Version', 'Defaults', 'Steps', 'Integrity')) {
-    if ($document.PSObject.Properties.Name -notcontains $required) { throw "Profile is missing required field '$required'." }
-  }
+  return ConvertTo-LauncherProfileSummary -Document $document
+}
 
-  $defaultMode = if ($document.Defaults.PSObject.Properties.Name -contains 'Mode') { [string]$document.Defaults.Mode } else { 'Audit' }
-  $strict = [bool](($document.Defaults.PSObject.Properties.Name -contains 'Strict') -and $document.Defaults.Strict)
-  $requireSigned = [bool](($document.Integrity.PSObject.Properties.Name -contains 'RequireSigned') -and $document.Integrity.RequireSigned)
-  $steps = New-Object System.Collections.ArrayList
-  foreach ($step in @($document.Steps)) {
-    $depends = if ($step.PSObject.Properties.Name -contains 'DependsOn') { @($step.DependsOn) -join ', ' } else { '' }
-    [void]$steps.Add([pscustomobject]@{ Script = [string]$step.Script; DependsOn = $depends })
+function Assert-LauncherProfileFields {
+  param($Document)
+  foreach ($required in @('ProfileName', 'Version', 'Defaults', 'Steps', 'Integrity')) {
+    if ($Document.PSObject.Properties.Name -notcontains $required) { throw "Profile is missing required field '$required'." }
   }
+}
+
+function Get-LauncherProfileValue {
+  param($Object, [string]$Name, $Default)
+  if ($Object.PSObject.Properties.Name -notcontains $Name) { return $Default }
+  return $Object.$Name
+}
+
+function Get-LauncherProfileSteps {
+  param($Steps)
+  $result = New-Object System.Collections.ArrayList
+  foreach ($step in @($Steps)) {
+    $depends = Get-LauncherProfileValue -Object $step -Name 'DependsOn' -Default ''
+    [void]$result.Add([pscustomobject]@{ Script = [string]$step.Script; DependsOn = @($depends) -join ', ' })
+  }
+  return ,$result
+}
+
+function ConvertTo-LauncherProfileSummary {
+  param($Document)
+  Assert-LauncherProfileFields -Document $Document
+  $steps = Get-LauncherProfileSteps -Steps $Document.Steps
   return [pscustomobject]@{
-    ProfileName = [string]$document.ProfileName
-    Version = [string]$document.Version
-    DefaultMode = $defaultMode
-    Strict = $strict
-    RequireSigned = $requireSigned
-    StepCount = $steps.Count
-    Steps = @($steps)
+    ProfileName = [string]$Document.ProfileName; Version = [string]$Document.Version
+    DefaultMode = [string](Get-LauncherProfileValue -Object $Document.Defaults -Name 'Mode' -Default 'Audit')
+    Strict = [bool](Get-LauncherProfileValue -Object $Document.Defaults -Name 'Strict' -Default $false)
+    RequireSigned = [bool](Get-LauncherProfileValue -Object $Document.Integrity -Name 'RequireSigned' -Default $false)
+    StepCount = $steps.Count; Steps = @($steps)
   }
 }
 
@@ -671,11 +765,13 @@ function ConvertTo-LauncherManifest {
     [string[]]$ArgumentTokens = @(),
     [switch]$Strict,
     [switch]$RequireSigned,
-    [string]$ExpectedHash,
-    [ValidateSet('SHA256', 'SHA384', 'SHA512')][string]$HashAlgorithm = 'SHA256',
-    [switch]$RemediationApproved
+    [hashtable]$Options = @{}
   )
 
+  $ExpectedHash = if ($Options.ContainsKey('ExpectedHash')) { [string]$Options.ExpectedHash } else { '' }
+  $HashAlgorithm = if ($Options.ContainsKey('HashAlgorithm')) { [string]$Options.HashAlgorithm } else { 'SHA256' }
+  $RemediationApproved = if ($Options.ContainsKey('RemediationApproved')) { [bool]$Options.RemediationApproved } else { $false }
+  if ($HashAlgorithm -notin @('SHA256', 'SHA384', 'SHA512')) { throw 'Hash algorithm is invalid.' }
   Assert-LauncherArgumentsAllowed -ArgumentTokens $ArgumentTokens | Out-Null
   if ($Mode -eq 'Remediate' -and -not $RemediationApproved) { throw 'Remediation requires explicit operator approval.' }
   [ordered]@{
@@ -703,54 +799,68 @@ function Assert-LauncherManifest {
   [CmdletBinding()]
   param([Parameter(Mandatory)]$Manifest)
 
-  if ($null -eq $Manifest -or $Manifest -is [string] -or $Manifest -is [System.ValueType] -or $Manifest -is [System.Collections.IEnumerable]) {
-    throw 'Launcher manifest root must be an object.'
-  }
-  $names = @($Manifest.PSObject.Properties.Name)
-  $normalizedNames = @{}
-  foreach ($name in $names) {
-    $normalizedName = $name.ToLowerInvariant()
-    if ($normalizedNames.ContainsKey($normalizedName)) { throw "Manifest contains duplicate field '$name'." }
-    $normalizedNames[$normalizedName] = $true
-    if ($script:LauncherManifestFields -notcontains $name) { throw "Manifest contains unknown field '$name'." }
-  }
-  foreach ($required in $script:LauncherManifestFields) {
-    if ($names -notcontains $required) { throw "Manifest is missing required field '$required'." }
-  }
-  if (
-    $Manifest.schemaVersion -isnot [byte] -and $Manifest.schemaVersion -isnot [sbyte] -and
-    $Manifest.schemaVersion -isnot [int16] -and $Manifest.schemaVersion -isnot [uint16] -and
-    $Manifest.schemaVersion -isnot [int32] -and $Manifest.schemaVersion -isnot [uint32] -and
-    $Manifest.schemaVersion -isnot [int64] -and $Manifest.schemaVersion -isnot [uint64]
-  ) { throw 'Launcher manifest schemaVersion must be an integer.' }
-  if ([int64]$Manifest.schemaVersion -ne 1) { throw 'Unsupported launcher manifest schema version.' }
-  foreach ($stringField in @('operation', 'root', 'target', 'mode', 'expectedHash', 'hashAlgorithm')) {
-    if ($Manifest.$stringField -isnot [string]) { throw "Launcher manifest field '$stringField' must be a string." }
-  }
-  foreach ($booleanField in @('strict', 'requireSigned', 'remediationApproved')) {
-    if ($Manifest.$booleanField -isnot [bool]) { throw "Launcher manifest field '$booleanField' must be a boolean." }
-  }
-  if ($Manifest.argumentTokens -is [string] -or $Manifest.argumentTokens -isnot [System.Collections.IEnumerable]) {
-    throw "Launcher manifest field 'argumentTokens' must be an array of strings."
-  }
-  foreach ($argumentToken in @($Manifest.argumentTokens)) {
-    if ($argumentToken -isnot [string]) { throw "Launcher manifest field 'argumentTokens' must contain only strings." }
-  }
-  if ($script:LauncherOperations -notcontains $Manifest.operation) { throw "Unsupported launcher operation '$($Manifest.operation)'." }
-  if (-not (Test-LauncherKitRoot -RootPath $Manifest.root)) { throw 'Manifest kit root is invalid.' }
-  if (@('Audit', 'Remediate') -notcontains $Manifest.mode) { throw "Unsupported execution mode '$($Manifest.mode)'." }
-  if ($Manifest.mode -eq 'Remediate' -and -not $Manifest.remediationApproved) { throw 'Manifest does not contain remediation approval.' }
-  if (@('SHA256', 'SHA384', 'SHA512') -notcontains $Manifest.hashAlgorithm) { throw 'Unsupported hash algorithm.' }
-  if ($Manifest.operation -eq 'run-script' -and $Manifest.target -notmatch '^\d{2}-[^\\/]+\.ps1$') { throw 'Manifest script target is invalid.' }
-  if ($Manifest.operation -in @('validate-profile', 'run-profile') -and -not (Test-Path -LiteralPath $Manifest.target -PathType Leaf)) { throw 'Manifest profile target is invalid.' }
-  if (-not [string]::IsNullOrWhiteSpace($Manifest.expectedHash)) {
-    $expectedLength = switch ($Manifest.hashAlgorithm) { 'SHA256' { 64 } 'SHA384' { 96 } 'SHA512' { 128 } }
-    if ($Manifest.expectedHash -notmatch "^[a-fA-F0-9]{$expectedLength}$") { throw 'Manifest expected hash is invalid for the selected hash algorithm.' }
-  }
-  if ($Manifest.operation -ne 'run-script' -and -not [string]::IsNullOrWhiteSpace($Manifest.expectedHash)) { throw 'Expected hash is only valid for a single-script run.' }
-  if ($Manifest.operation -ne 'run-script' -and @($Manifest.argumentTokens).Count -gt 0) { throw 'Advanced argument tokens are only valid for a single-script run.' }
+  $names = Assert-LauncherManifestObject -Manifest $Manifest
+  Assert-LauncherManifestNames -Names $names
+  Assert-LauncherManifestTypes -Manifest $Manifest
+  Assert-LauncherManifestPolicy -Manifest $Manifest
   Assert-LauncherArgumentsAllowed -ArgumentTokens @($Manifest.argumentTokens) | Out-Null
   return $Manifest
+}
+
+function Assert-LauncherManifestObject {
+  param($Manifest)
+  if ($null -eq $Manifest) { throw 'Launcher manifest root must be an object.' }
+  foreach ($type in @([string], [System.ValueType], [System.Collections.IEnumerable])) { if ($Manifest -is $type) { throw 'Launcher manifest root must be an object.' } }
+  return @($Manifest.PSObject.Properties.Name)
+}
+
+function Assert-LauncherManifestNames {
+  param([string[]]$Names)
+  $normalized = @{}
+  foreach ($name in $Names) {
+    $key = $name.ToLowerInvariant()
+    if ($normalized.ContainsKey($key)) { throw "Manifest contains duplicate field '$name'." }
+    $normalized[$key] = $true
+    if ($script:LauncherManifestFields -notcontains $name) { throw "Manifest contains unknown field '$name'." }
+  }
+  foreach ($required in $script:LauncherManifestFields) { if ($Names -notcontains $required) { throw "Manifest is missing required field '$required'." } }
+}
+
+function Test-LauncherManifestInteger { param($Value) foreach ($type in @([byte], [sbyte], [int16], [uint16], [int32], [uint32], [int64], [uint64])) { if ($Value -is $type) { return $true } }; return $false }
+function Assert-LauncherManifestType { param($Value, [type]$Type, [string]$Message) if ($Value -isnot $Type) { throw $Message } }
+function Assert-LauncherManifestTypes {
+  param($Manifest)
+  if (-not (Test-LauncherManifestInteger $Manifest.schemaVersion)) { throw 'Launcher manifest schemaVersion must be an integer.' }
+  if ([int64]$Manifest.schemaVersion -ne 1) { throw 'Unsupported launcher manifest schema version.' }
+  foreach ($field in @('operation', 'root', 'target', 'mode', 'expectedHash', 'hashAlgorithm')) { Assert-LauncherManifestType -Value $Manifest.$field -Type ([string]) -Message "Launcher manifest field '$field' must be a string." }
+  foreach ($field in @('strict', 'requireSigned', 'remediationApproved')) { Assert-LauncherManifestType -Value $Manifest.$field -Type ([bool]) -Message "Launcher manifest field '$field' must be a boolean." }
+  Assert-LauncherManifestArgumentsType -ArgumentTokens $Manifest.argumentTokens
+}
+
+function Assert-LauncherManifestArgumentsType {
+  param($ArgumentTokens)
+  if ($ArgumentTokens -is [string] -or $ArgumentTokens -isnot [System.Collections.IEnumerable]) { throw "Launcher manifest field 'argumentTokens' must be an array of strings." }
+  foreach ($token in @($ArgumentTokens)) { Assert-LauncherManifestType -Value $token -Type ([string]) -Message "Launcher manifest field 'argumentTokens' must contain only strings." }
+}
+
+function Assert-LauncherManifestAllowedValue { param($Value, [object[]]$Allowed, [string]$Message) if ($Allowed -notcontains $Value) { throw $Message } }
+function Assert-LauncherManifestTarget { param($Manifest) if ($Manifest.operation -eq 'run-script' -and $Manifest.target -notmatch '^\d{2}-[^\\/]+\.ps1$') { throw 'Manifest script target is invalid.' }; if ($Manifest.operation -in @('validate-profile', 'run-profile') -and -not (Test-Path -LiteralPath $Manifest.target -PathType Leaf)) { throw 'Manifest profile target is invalid.' } }
+function Assert-LauncherManifestHash { param($Manifest) if ([string]::IsNullOrWhiteSpace($Manifest.expectedHash)) { return }; $length = switch ($Manifest.hashAlgorithm) { 'SHA256' { 64 } 'SHA384' { 96 } 'SHA512' { 128 } }; if ($Manifest.expectedHash -notmatch "^[a-fA-F0-9]{$length}$") { throw 'Manifest expected hash is invalid for the selected hash algorithm.' } }
+function Assert-LauncherManifestPolicy {
+  param($Manifest)
+  Assert-LauncherManifestAllowedValue -Value $Manifest.operation -Allowed $script:LauncherOperations -Message "Unsupported launcher operation '$($Manifest.operation)'."
+  if (-not (Test-LauncherKitRoot -RootPath $Manifest.root)) { throw 'Manifest kit root is invalid.' }
+  Assert-LauncherManifestAllowedValue -Value $Manifest.mode -Allowed @('Audit', 'Remediate') -Message "Unsupported execution mode '$($Manifest.mode)'."
+  if ($Manifest.mode -eq 'Remediate' -and -not $Manifest.remediationApproved) { throw 'Manifest does not contain remediation approval.' }
+  Assert-LauncherManifestAllowedValue -Value $Manifest.hashAlgorithm -Allowed @('SHA256', 'SHA384', 'SHA512') -Message 'Unsupported hash algorithm.'
+  Assert-LauncherManifestTarget -Manifest $Manifest; Assert-LauncherManifestHash -Manifest $Manifest
+  Assert-LauncherManifestCrossFields -Manifest $Manifest
+}
+
+function Assert-LauncherManifestCrossFields {
+  param($Manifest)
+  if ($Manifest.operation -ne 'run-script' -and -not [string]::IsNullOrWhiteSpace($Manifest.expectedHash)) { throw 'Expected hash is only valid for a single-script run.' }
+  if ($Manifest.operation -ne 'run-script' -and @($Manifest.argumentTokens).Count -gt 0) { throw 'Advanced argument tokens are only valid for a single-script run.' }
 }
 
 <#
@@ -839,56 +949,55 @@ function Stop-LauncherProcessTree {
     [ValidateRange(100, 30000)][int]$WaitMilliseconds = 5000
   )
 
+  $exited = Test-LauncherProcessExited -Process $Process -Job $Job
+  if ($null -ne $exited) { return $exited }
+  if (Stop-LauncherJobProcess -Process $Process -Job $Job -WaitMilliseconds $WaitMilliseconds) { return $true }
+  if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) { return Stop-LauncherWindowsProcess -Process $Process -WaitMilliseconds $WaitMilliseconds }
+  return Stop-LauncherPortableProcess -Process $Process -WaitMilliseconds $WaitMilliseconds
+}
+
+function Test-LauncherProcessExited {
+  param([System.Diagnostics.Process]$Process, $Job)
   try {
-    if ($Process.HasExited) {
-      if ($null -ne $Job) { $Job.Dispose() }
-      return $true
-    }
-  } catch {
+    if (-not $Process.HasExited) { return $null }
+    if ($null -ne $Job) { $Job.Dispose() }
+    return $true
+  } catch { return $false }
+}
+
+function Stop-LauncherJobProcess {
+  param([System.Diagnostics.Process]$Process, $Job, [int]$WaitMilliseconds)
+  if ($null -eq $Job) { return $false }
+  try { $Job.Terminate(1); $Job.Dispose(); return $Process.WaitForExit($WaitMilliseconds) }
+  catch {
+    Write-Verbose ("Job Object termination failed: {0}" -f $_.Exception.Message)
+    try { $Job.Dispose() } catch { Write-Verbose ("Job Object disposal failed: {0}" -f $_.Exception.Message) }
     return $false
   }
+}
 
-  if ($null -ne $Job) {
-    try {
-      $Job.Terminate(1)
-      $Job.Dispose()
-      return $Process.WaitForExit($WaitMilliseconds)
-    } catch {
-      Write-Verbose ("Job Object termination failed: {0}" -f $_.Exception.Message)
-      try { $Job.Dispose() } catch { Write-Verbose ("Job Object disposal failed: {0}" -f $_.Exception.Message) }
-    }
-  }
-
-  if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
-    $killer = $null
-    try {
-      $taskkillPath = Get-LauncherTrustedSystem32Path
-      $killer = Start-Process -FilePath $taskkillPath `
-        -ArgumentList @('/PID', [string]$Process.Id, '/T', '/F') `
-        -PassThru -WindowStyle Hidden -ErrorAction Stop
-      if (-not $killer.WaitForExit($WaitMilliseconds)) {
-        try {
-          $killer.Kill()
-          [void]$killer.WaitForExit([Math]::Min($WaitMilliseconds, 2000))
-        } catch { Write-Verbose ("taskkill timeout cleanup failed: {0}" -f $_.Exception.Message) }
-        return $false
-      }
-      if (-not $Process.WaitForExit($WaitMilliseconds)) { return $false }
-      return ($killer.ExitCode -eq 0 -and $Process.HasExited)
-    } catch {
-      Write-Verbose ("taskkill process-tree fallback failed: {0}" -f $_.Exception.Message)
-    } finally {
-      if ($null -ne $killer) { $killer.Dispose() }
-    }
-  }
-
+function Stop-LauncherWindowsProcess {
+  param([System.Diagnostics.Process]$Process, [int]$WaitMilliseconds)
+  $killer = $null
   try {
-    $Process.Kill()
-    return $Process.WaitForExit($WaitMilliseconds)
-  } catch {
-    Write-Verbose ("Worker process termination failed: {0}" -f $_.Exception.Message)
-    return $false
-  }
+    $killer = Start-Process -FilePath (Get-LauncherTrustedSystem32Path) -ArgumentList @('/PID', [string]$Process.Id, '/T', '/F') -PassThru -WindowStyle Hidden -ErrorAction Stop
+    if (-not $killer.WaitForExit($WaitMilliseconds)) { Stop-LauncherKiller -Killer $killer -WaitMilliseconds $WaitMilliseconds; return $false }
+    if (-not $Process.WaitForExit($WaitMilliseconds)) { return $false }
+    return ($killer.ExitCode -eq 0 -and $Process.HasExited)
+  } catch { Write-Verbose ("taskkill process-tree fallback failed: {0}" -f $_.Exception.Message); return $false }
+  finally { if ($null -ne $killer) { $killer.Dispose() } }
+}
+
+function Stop-LauncherKiller {
+  param($Killer, [int]$WaitMilliseconds)
+  try { $Killer.Kill(); [void]$Killer.WaitForExit([Math]::Min($WaitMilliseconds, 2000)) }
+  catch { Write-Verbose ("taskkill timeout cleanup failed: {0}" -f $_.Exception.Message) }
+}
+
+function Stop-LauncherPortableProcess {
+  param([System.Diagnostics.Process]$Process, [int]$WaitMilliseconds)
+  try { $Process.Kill(); return $Process.WaitForExit($WaitMilliseconds) }
+  catch { Write-Verbose ("Worker process termination failed: {0}" -f $_.Exception.Message); return $false }
 }
 
 Export-ModuleMember -Function @(

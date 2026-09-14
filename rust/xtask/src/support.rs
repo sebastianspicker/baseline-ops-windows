@@ -14,15 +14,20 @@ pub(crate) fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
 }
 
 pub(crate) fn copy_regular(source: &Path, destination: &Path) -> Result<()> {
+    validate_copy_source(source)?;
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source, destination)?;
+    Ok(())
+}
+
+fn validate_copy_source(source: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(source)
         .with_context(|| format!("missing package input {}", source.display()))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         bail!("package input is not a regular file: {}", source.display());
     }
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::copy(source, destination)?;
     Ok(())
 }
 

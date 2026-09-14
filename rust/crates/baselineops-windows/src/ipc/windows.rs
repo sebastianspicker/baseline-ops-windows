@@ -4,8 +4,16 @@
 
 use super::{BrokerFrame, FrameCodec, PeerIdentity};
 use crate::PlatformError;
-use std::ffi::{OsStr, c_void};
-use std::os::windows::ffi::OsStrExt;
+use std::ffi::c_void;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::time::{Duration, Instant};
+
+mod identity;
+mod overlapped;
+mod transfer;
+
+use identity::{SecurityDescriptor, pipe_name, pipe_peer_identity};
+use transfer::{ReadOutcome, ReadStage, classify_read, native_error};
 
 const INVALID_HANDLE_VALUE: isize = -1;
 const GENERIC_READ: u32 = 0x8000_0000;
@@ -13,12 +21,13 @@ const GENERIC_WRITE: u32 = 0x4000_0000;
 const OPEN_EXISTING: u32 = 3;
 const PIPE_ACCESS_DUPLEX: u32 = 3;
 const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
+const FILE_FLAG_OVERLAPPED: u32 = 0x4000_0000;
 const PIPE_TYPE_MESSAGE: u32 = 4;
 const PIPE_READMODE_MESSAGE: u32 = 2;
 const PIPE_WAIT: u32 = 0;
 const PIPE_REJECT_REMOTE_CLIENTS: u32 = 8;
 const ERROR_PIPE_CONNECTED: u32 = 535;
-const ERROR_MORE_DATA: u32 = 234;
+const DEFAULT_IO_TIMEOUT: Duration = Duration::from_mins(2);
 
 #[repr(C)]
 struct SecurityAttributes {
@@ -48,38 +57,14 @@ unsafe extern "system" {
         flags_and_attributes: u32,
         template_file: isize,
     ) -> isize;
-    fn ConnectNamedPipe(pipe: isize, overlapped: *mut c_void) -> i32;
     fn DisconnectNamedPipe(pipe: isize) -> i32;
-    fn ReadFile(
-        handle: isize,
-        buffer: *mut c_void,
-        bytes_to_read: u32,
-        bytes_read: *mut u32,
-        overlapped: *mut c_void,
+    fn SetNamedPipeHandleState(
+        pipe: isize,
+        mode: *mut u32,
+        maximum_collection_count: *mut u32,
+        collection_data_timeout: *mut u32,
     ) -> i32;
-    fn WriteFile(
-        handle: isize,
-        buffer: *const c_void,
-        bytes_to_write: u32,
-        bytes_written: *mut u32,
-        overlapped: *mut c_void,
-    ) -> i32;
-    fn CloseHandle(handle: isize) -> i32;
     fn GetLastError() -> u32;
-    fn GetNamedPipeClientProcessId(pipe: isize, process_id: *mut u32) -> i32;
-    fn GetNamedPipeServerProcessId(pipe: isize, process_id: *mut u32) -> i32;
-    fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
-    fn LocalFree(memory: *mut c_void) -> *mut c_void;
-}
-
-#[link(name = "advapi32")]
-unsafe extern "system" {
-    fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        text: *const u16,
-        revision: u32,
-        descriptor: *mut *mut c_void,
-        descriptor_size: *mut u32,
-    ) -> i32;
 }
 
 /// Verifies Windows peer credentials after the pipe supplies its process ID.
@@ -94,12 +79,13 @@ pub trait PipePeerVerifier: Send + Sync {
 
 /// First-instance, local-only Windows message-mode pipe listener.
 pub struct NamedPipeServer {
-    handle: Handle,
+    handle: OwnedHandle,
 }
 
 /// Connected broker pipe client or accepted server connection.
 pub struct NamedPipeClient {
-    handle: Handle,
+    handle: OwnedHandle,
+    poisoned: bool,
 }
 
 impl NamedPipeServer {
@@ -116,13 +102,13 @@ impl NamedPipeServer {
             length: u32::try_from(std::mem::size_of::<SecurityAttributes>()).map_err(|_| {
                 PlatformError::ProtocolRejected("security attributes size overflow".into())
             })?,
-            security_descriptor: descriptor.0,
+            security_descriptor: descriptor.as_ptr(),
             inherit_handle: 0,
         };
         let handle = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
-                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 1,
                 64 * 1024,
@@ -131,7 +117,7 @@ impl NamedPipeServer {
                 &raw const attributes,
             )
         };
-        Handle::new(handle).map(|handle| Self { handle })
+        owned_handle(handle).map(|handle| Self { handle })
     }
 
     /// Wait for one client and run the caller verifier against its OS PID/session.
@@ -140,16 +126,29 @@ impl NamedPipeServer {
     ///
     /// Returns an error when connection, identity collection, or verification fails.
     pub fn accept(self, verifier: &dyn PipePeerVerifier) -> Result<NamedPipeClient, PlatformError> {
-        let connected = unsafe { ConnectNamedPipe(self.handle.0, std::ptr::null_mut()) } != 0
-            || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
-        if !connected {
-            return Err(last_error("ConnectNamedPipe"));
-        }
-        let peer = pipe_peer_identity(self.handle.0, true)?;
+        self.accept_timeout(verifier, DEFAULT_IO_TIMEOUT)
+    }
+
+    /// Wait for one client for at most `timeout` and verify its OS PID/session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after safely cancelling and draining a timed-out accept,
+    /// or when identity collection or verification fails.
+    pub fn accept_timeout(
+        self,
+        verifier: &dyn PipePeerVerifier,
+        timeout: Duration,
+    ) -> Result<NamedPipeClient, PlatformError> {
+        overlapped::connect(raw_handle(&self.handle), timeout)?;
+        let peer = pipe_peer_identity(raw_handle(&self.handle), true)?;
         verifier.verify(&peer)?;
         let server = std::mem::ManuallyDrop::new(self);
         let handle = unsafe { std::ptr::read(&raw const server.handle) };
-        Ok(NamedPipeClient { handle })
+        Ok(NamedPipeClient {
+            handle,
+            poisoned: false,
+        })
     }
 }
 
@@ -168,11 +167,16 @@ impl NamedPipeClient {
                 0,
                 std::ptr::null(),
                 OPEN_EXISTING,
-                0,
+                FILE_FLAG_OVERLAPPED,
                 0,
             )
         };
-        Handle::new(handle).map(|handle| Self { handle })
+        let handle = owned_handle(handle)?;
+        set_message_read_mode(raw_handle(&handle))?;
+        Ok(Self {
+            handle,
+            poisoned: false,
+        })
     }
 
     /// Return the server PID/session before the client sends any broker bytes.
@@ -181,7 +185,7 @@ impl NamedPipeClient {
     ///
     /// Returns an error when Windows cannot identify the pipe server.
     pub fn server_peer_identity(&self) -> Result<PeerIdentity, PlatformError> {
-        pipe_peer_identity(self.handle.0, false)
+        pipe_peer_identity(raw_handle(&self.handle), false)
     }
 
     /// Send one already-encoded bounded frame.
@@ -190,13 +194,32 @@ impl NamedPipeClient {
     ///
     /// Returns an error when the frame cannot be written in full.
     pub fn send(&mut self, frame: &BrokerFrame) -> Result<(), PlatformError> {
+        self.send_timeout(frame, DEFAULT_IO_TIMEOUT)
+    }
+
+    /// Send one bounded frame within `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error and poisons the connection when a started transfer does
+    /// not complete exactly within the deadline.
+    pub fn send_timeout(
+        &mut self,
+        frame: &BrokerFrame,
+        timeout: Duration,
+    ) -> Result<(), PlatformError> {
         if frame.0.len() < 4 || frame.0.len() > super::MAX_FRAME_BYTES.saturating_add(4) {
             return Err(PlatformError::ProtocolRejected(
                 "pipe frame is outside explicit bounds".into(),
             ));
         }
         let _: serde_json::Value = FrameCodec::decode(&frame.0)?;
-        write_message(self.handle.0, &frame.0)
+        self.require_usable()?;
+        let result = write_message(raw_handle(&self.handle), &frame.0, timeout);
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
     }
 
     /// Receive one bounded frame after validating its length and JSON shape.
@@ -205,150 +228,134 @@ impl NamedPipeClient {
     ///
     /// Returns an error when the peer closes or sends an invalid bounded frame.
     pub fn receive(&mut self) -> Result<BrokerFrame, PlatformError> {
-        let mut prefix = [0_u8; 4];
-        let prefix_more_data = read_message_part(self.handle.0, &mut prefix)?;
-        let body = usize::try_from(u32::from_be_bytes(prefix))
-            .map_err(|_| PlatformError::ProtocolRejected("pipe frame length is invalid".into()))?;
-        if body > super::MAX_FRAME_BYTES {
-            return Err(PlatformError::ProtocolRejected(
-                "pipe frame exceeds maximum size".into(),
-            ));
-        }
-        if !prefix_has_expected_boundary(body, prefix_more_data) {
-            return Err(PlatformError::ProtocolRejected(
-                "pipe message disagrees with its declared frame body".into(),
-            ));
-        }
-        let mut frame = Vec::with_capacity(body.saturating_add(4));
-        frame.extend_from_slice(&prefix);
-        frame.resize(body.saturating_add(4), 0);
-        if body != 0 && read_message_part(self.handle.0, &mut frame[4..])? {
-            return Err(PlatformError::ProtocolRejected(
-                "pipe message contains bytes after its bounded frame".into(),
-            ));
-        }
-        let _: serde_json::Value = FrameCodec::decode(&frame)?;
-        Ok(BrokerFrame(frame))
+        self.receive_timeout(DEFAULT_IO_TIMEOUT)?.ok_or_else(|| {
+            PlatformError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "pipe receive exceeded its finite timeout",
+            ))
+        })
     }
+
+    /// Receive one bounded frame within `timeout`.
+    ///
+    /// `None` means the prefix read timed out without consuming any bytes. The
+    /// cancelled operation has been drained and the pipe remains reusable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error and poisons the pipe after any partial prefix, body
+    /// timeout, malformed message, or native transfer failure.
+    pub fn receive_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<BrokerFrame>, PlatformError> {
+        self.require_usable()?;
+        let result = receive_message(raw_handle(&self.handle), timeout);
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    fn require_usable(&self) -> Result<(), PlatformError> {
+        if self.poisoned {
+            return Err(PlatformError::ProtocolRejected(
+                "pipe connection is unusable after an incomplete transfer".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn receive_message(handle: isize, timeout: Duration) -> Result<Option<BrokerFrame>, PlatformError> {
+    let started = Instant::now();
+    let mut prefix = [0_u8; 4];
+    let prefix_more_data = match read_message_part(handle, &mut prefix, timeout, ReadStage::Prefix)?
+    {
+        ReadOutcome::Complete { more_data } => more_data,
+        ReadOutcome::CleanTimeout => return Ok(None),
+    };
+    let body = declared_body_length(prefix, prefix_more_data)?;
+    let remaining = timeout.saturating_sub(started.elapsed());
+    let frame = read_declared_body(handle, prefix, body, remaining)?;
+    let _: serde_json::Value = FrameCodec::decode(&frame)?;
+    Ok(Some(BrokerFrame(frame)))
+}
+
+fn declared_body_length(prefix: [u8; 4], prefix_more_data: bool) -> Result<usize, PlatformError> {
+    let body = usize::try_from(u32::from_be_bytes(prefix))
+        .map_err(|_| PlatformError::ProtocolRejected("pipe frame length is invalid".into()))?;
+    if body > super::MAX_FRAME_BYTES {
+        return Err(PlatformError::ProtocolRejected(
+            "pipe frame exceeds maximum size".into(),
+        ));
+    }
+    if !prefix_has_expected_boundary(body, prefix_more_data) {
+        return Err(PlatformError::ProtocolRejected(
+            "pipe message disagrees with its declared frame body".into(),
+        ));
+    }
+    Ok(body)
+}
+
+fn read_declared_body(
+    handle: isize,
+    prefix: [u8; 4],
+    body: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, PlatformError> {
+    let mut frame = Vec::with_capacity(body.saturating_add(4));
+    frame.extend_from_slice(&prefix);
+    frame.resize(body.saturating_add(4), 0);
+    if body != 0 {
+        match read_message_part(handle, &mut frame[4..], timeout, ReadStage::Body)? {
+            ReadOutcome::Complete { more_data: false } => {}
+            ReadOutcome::Complete { more_data: true } => {
+                return Err(PlatformError::ProtocolRejected(
+                    "pipe message contains bytes after its bounded frame".into(),
+                ));
+            }
+            ReadOutcome::CleanTimeout => {
+                return Err(PlatformError::ProtocolRejected(
+                    "pipe body unexpectedly reported a clean timeout".into(),
+                ));
+            }
+        }
+    }
+    Ok(frame)
 }
 
 impl Drop for NamedPipeServer {
     fn drop(&mut self) {
-        let _ = unsafe { DisconnectNamedPipe(self.handle.0) };
+        let _ = unsafe { DisconnectNamedPipe(raw_handle(&self.handle)) };
     }
 }
 
-struct Handle(isize);
-
-impl Handle {
-    fn new(handle: isize) -> Result<Self, PlatformError> {
-        if handle == INVALID_HANDLE_VALUE || handle == 0 {
-            return Err(last_error("Windows handle creation"));
-        }
-        Ok(Self(handle))
+fn owned_handle(handle: isize) -> Result<OwnedHandle, PlatformError> {
+    if handle == INVALID_HANDLE_VALUE || handle == 0 {
+        return Err(last_error("Windows handle creation"));
     }
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle as _) })
 }
 
-impl Drop for Handle {
-    fn drop(&mut self) {
-        let _ = unsafe { CloseHandle(self.0) };
-    }
+fn raw_handle(handle: &OwnedHandle) -> isize {
+    handle.as_raw_handle() as isize
 }
 
-struct SecurityDescriptor(*mut c_void);
-
-impl SecurityDescriptor {
-    fn for_client_logon_sid(logon_sid: &str) -> Result<Self, PlatformError> {
-        if !valid_sid_text(logon_sid) {
-            return Err(PlatformError::ProtocolRejected(
-                "logon SID is invalid".into(),
-            ));
-        }
-        let sddl = format!("D:P(A;;GRGW;;;{logon_sid})(A;;GRGW;;;SY)(A;;GRGW;;;BA)");
-        let text = OsStr::new(&sddl)
-            .encode_wide()
-            .chain(Some(0))
-            .collect::<Vec<_>>();
-        let mut descriptor = std::ptr::null_mut();
-        if unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                text.as_ptr(),
-                1,
-                &raw mut descriptor,
-                std::ptr::null_mut(),
-            )
-        } == 0
-            || descriptor.is_null()
-        {
-            return Err(last_error(
-                "ConvertStringSecurityDescriptorToSecurityDescriptorW",
-            ));
-        }
-        Ok(Self(descriptor))
-    }
-}
-
-impl Drop for SecurityDescriptor {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            let _ = unsafe { LocalFree(self.0) };
-        }
-    }
-}
-
-fn pipe_name(name: &str) -> Result<Vec<u16>, PlatformError> {
-    if name.is_empty()
-        || name.len() > 128
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+fn set_message_read_mode(handle: isize) -> Result<(), PlatformError> {
+    let mut mode = PIPE_READMODE_MESSAGE;
+    if unsafe {
+        SetNamedPipeHandleState(
+            handle,
+            &raw mut mode,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
     {
-        return Err(PlatformError::ProtocolRejected(
-            "pipe name is outside the BaselineOps namespace".into(),
-        ));
+        return Err(last_error("SetNamedPipeHandleState"));
     }
-    Ok(OsStr::new(&format!(r"\\.\pipe\BaselineOps-{name}"))
-        .encode_wide()
-        .chain(Some(0))
-        .collect())
-}
-
-fn pipe_peer_identity(pipe: isize, client: bool) -> Result<PeerIdentity, PlatformError> {
-    let mut process_id = 0_u32;
-    let result = unsafe {
-        if client {
-            GetNamedPipeClientProcessId(pipe, &raw mut process_id)
-        } else {
-            GetNamedPipeServerProcessId(pipe, &raw mut process_id)
-        }
-    };
-    if result == 0 || process_id == 0 {
-        return Err(last_error(if client {
-            "GetNamedPipeClientProcessId"
-        } else {
-            "GetNamedPipeServerProcessId"
-        }));
-    }
-    let mut session_id = 0_u32;
-    if unsafe { ProcessIdToSessionId(process_id, &raw mut session_id) } == 0 {
-        return Err(last_error("ProcessIdToSessionId"));
-    }
-    Ok(PeerIdentity {
-        process_id,
-        session_id,
-        user_sid: String::new(),
-        integrity_rid: 0,
-        image_path: String::new(),
-    })
-}
-
-fn valid_sid_text(value: &str) -> bool {
-    value.len() >= 5
-        && value.len() <= 1024
-        && value.starts_with("S-")
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || byte == b'-' || byte == b'S')
+    Ok(())
 }
 
 /// Read exactly one known-sized portion of the current message.
@@ -357,55 +364,17 @@ fn valid_sid_text(value: &str) -> bool {
 /// copying valid bytes. The prefix intentionally uses that behavior to learn
 /// the bounded body length. A later `ERROR_MORE_DATA` means the peer appended
 /// bytes beyond the declared frame and is rejected by `receive`.
-fn read_message_part(handle: isize, bytes: &mut [u8]) -> Result<bool, PlatformError> {
-    let count = u32::try_from(bytes.len())
-        .map_err(|_| PlatformError::ProtocolRejected("pipe read exceeds Win32 bound".into()))?;
-    if count == 0 {
-        return Ok(false);
+fn read_message_part(
+    handle: isize,
+    bytes: &mut [u8],
+    timeout: Duration,
+    stage: ReadStage,
+) -> Result<ReadOutcome, PlatformError> {
+    if bytes.is_empty() {
+        return Ok(ReadOutcome::Complete { more_data: false });
     }
-    let mut read = 0_u32;
-    let succeeded = unsafe {
-        ReadFile(
-            handle,
-            bytes.as_mut_ptr().cast(),
-            count,
-            &raw mut read,
-            std::ptr::null_mut(),
-        )
-    } != 0;
-    let error = if succeeded {
-        0
-    } else {
-        unsafe { GetLastError() }
-    };
-    message_read_progress(
-        succeeded,
-        error,
-        usize::try_from(read).expect("u32 fits usize"),
-        bytes.len(),
-    )
-}
-
-fn message_read_progress(
-    succeeded: bool,
-    error: u32,
-    actual: usize,
-    expected: usize,
-) -> Result<bool, PlatformError> {
-    if actual != expected {
-        return Err(if succeeded {
-            PlatformError::ProtocolRejected("pipe message is shorter than its frame".into())
-        } else {
-            last_error_code("ReadFile", error)
-        });
-    }
-    if succeeded {
-        Ok(false)
-    } else if error == ERROR_MORE_DATA {
-        Ok(true)
-    } else {
-        Err(last_error_code("ReadFile", error))
-    }
+    let status = overlapped::read(handle, bytes, timeout)?;
+    classify_read(status, bytes.len(), stage)
 }
 
 fn prefix_has_expected_boundary(body: usize, prefix_more_data: bool) -> bool {
@@ -414,22 +383,21 @@ fn prefix_has_expected_boundary(body: usize, prefix_more_data: bool) -> bool {
 
 /// Preserve the frame-to-message boundary: a retry would create a new pipe
 /// message and let a receiver desynchronize its length-prefix state.
-fn write_message(handle: isize, bytes: &[u8]) -> Result<(), PlatformError> {
-    let count = u32::try_from(bytes.len())
-        .map_err(|_| PlatformError::ProtocolRejected("pipe write exceeds Win32 bound".into()))?;
-    let mut written = 0_u32;
-    if unsafe {
-        WriteFile(
-            handle,
-            bytes.as_ptr().cast(),
-            count,
-            &raw mut written,
-            std::ptr::null_mut(),
-        )
-    } == 0
-        || usize::try_from(written).expect("u32 fits usize") != bytes.len()
-    {
-        return Err(last_error("WriteFile"));
+fn write_message(handle: isize, bytes: &[u8], timeout: Duration) -> Result<(), PlatformError> {
+    let status = overlapped::write(handle, bytes, timeout)?;
+    if status.timed_out {
+        return Err(PlatformError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "pipe send exceeded its finite timeout",
+        )));
+    }
+    if !status.succeeded {
+        return Err(native_error("WriteFile", status.error));
+    }
+    if status.actual != bytes.len() {
+        return Err(PlatformError::ProtocolRejected(
+            "pipe write completed without the exact frame".into(),
+        ));
     }
     Ok(())
 }
@@ -439,22 +407,12 @@ fn last_error(operation: &str) -> PlatformError {
 }
 
 fn last_error_code(operation: &str, code: u32) -> PlatformError {
-    PlatformError::Io(std::io::Error::other(format!(
-        "{operation}: Win32 error {code}",
-    )))
+    native_error(operation, code)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn message_read_accepts_more_data_as_prefix_progress() {
-        assert!(message_read_progress(false, ERROR_MORE_DATA, 4, 4).expect("progress"));
-        assert!(!message_read_progress(true, 0, 4, 4).expect("complete"));
-        assert!(message_read_progress(false, ERROR_MORE_DATA, 3, 4).is_err());
-        assert!(message_read_progress(false, 5, 4, 4).is_err());
-    }
 
     #[test]
     fn prefix_state_cannot_cross_pipe_message_boundaries() {

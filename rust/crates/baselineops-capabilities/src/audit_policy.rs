@@ -299,37 +299,45 @@ fn evaluate_configured_ntlm(
             evidence(),
         ));
     }
-    match value {
-        0 | 1 => findings.push(finding(
+    if let Some(finding) = ntlm_level_finding(value, policy, description, evidence()) {
+        findings.push(finding);
+    }
+}
+
+fn ntlm_level_finding(
+    value: u32,
+    policy: &NtlmPolicy,
+    description: &str,
+    evidence: JsonMap,
+) -> Option<PolicyFinding> {
+    let (code, status, severity, message) = match value {
+        0 | 1 => (
             "NTLM-LMAllowed",
             FindingStatus::Fail,
             policy.severity_lm_allowed,
             format!("LmCompatibilityLevel={value} ({description}) allows LM/NTLM."),
-            evidence(),
-        )),
-        2 => findings.push(finding(
+        ),
+        2 => (
             "NTLM-NTLMv1ClientAuth",
             FindingStatus::Fail,
             policy.severity_ntlm_v1,
-            "LmCompatibilityLevel=2 implies NTLMv1 client authentication.",
-            evidence(),
-        )),
-        3 | 4 if policy.emit_info_findings => findings.push(finding(
+            "LmCompatibilityLevel=2 implies NTLMv1 client authentication.".into(),
+        ),
+        3 | 4 if policy.emit_info_findings => (
             "NTLM-NTLMv2ClientOnly",
             FindingStatus::Info,
             Severity::Info,
             format!("LmCompatibilityLevel={value} ({description}) uses NTLMv2 for clients."),
-            evidence(),
-        )),
-        5 if policy.emit_info_findings => findings.push(finding(
+        ),
+        5 if policy.emit_info_findings => (
             "NTLM-Strictest",
             FindingStatus::Info,
             Severity::Info,
-            "LmCompatibilityLevel=5 refuses LM and NTLM.",
-            evidence(),
-        )),
-        _ => {}
-    }
+            "LmCompatibilityLevel=5 refuses LM and NTLM.".into(),
+        ),
+        _ => return None,
+    };
+    Some(finding(code, status, severity, message, evidence))
 }
 
 fn ntlm_level_description(level: Option<u32>) -> String {

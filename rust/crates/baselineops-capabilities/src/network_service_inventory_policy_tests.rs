@@ -37,67 +37,75 @@ fn access_denied_record_is_incomplete_not_healthy() {
 
 fn mixed_service_process_observation() -> ServiceProcessInventoryObservation {
     ServiceProcessInventoryObservation {
-        processes: vec![
-            ProcessInventoryRecord {
-                process_id: 41,
-                name: "collector.exe".into(),
-                cpu_time_100ns: Observation::TimedOut,
-                working_set_bytes: Observation::Missing,
-                image_path: Observation::AccessDenied,
-            },
-            ProcessInventoryRecord {
-                process_id: 42,
-                name: "parser.exe".into(),
-                cpu_time_100ns: Observation::Failed { exit_code: 87 },
-                working_set_bytes: Observation::Truncated,
-                image_path: Observation::Unparsed,
-            },
-        ],
-        services: vec![
-            Observation::Present(ServiceInventoryRecord {
-                name: "BaselineCollector".into(),
-                display_name: "Baseline Collector".into(),
-                state: 4,
-                process_id: 41,
-                start_mode: Observation::Unparsed,
-                image_path: Observation::AccessDenied,
-                start_name: Observation::Missing,
-            }),
-            Observation::AccessDenied,
-            Observation::Present(ServiceInventoryRecord {
-                name: "BaselineParser".into(),
-                display_name: "Baseline Parser".into(),
-                state: 0,
-                process_id: 0,
-                start_mode: Observation::TimedOut,
-                image_path: Observation::Truncated,
-                start_name: Observation::Failed { exit_code: 5 },
-            }),
-            Observation::Present(ServiceInventoryRecord {
-                name: "BaselineReporter".into(),
-                display_name: "Baseline Reporter".into(),
-                state: 5,
-                process_id: 43,
-                start_mode: Observation::Missing,
-                image_path: Observation::Unparsed,
-                start_name: Observation::NotRun,
-            }),
-        ],
+        processes: mixed_processes(),
+        services: mixed_services(),
         process_enumeration_complete: false,
         service_enumeration_complete: true,
     }
 }
 
+fn mixed_processes() -> Vec<ProcessInventoryRecord> {
+    vec![
+        ProcessInventoryRecord {
+            process_id: 41,
+            name: "collector.exe".into(),
+            cpu_time_100ns: Observation::TimedOut,
+            working_set_bytes: Observation::Missing,
+            image_path: Observation::AccessDenied,
+        },
+        ProcessInventoryRecord {
+            process_id: 42,
+            name: "parser.exe".into(),
+            cpu_time_100ns: Observation::Failed { exit_code: 87 },
+            working_set_bytes: Observation::Truncated,
+            image_path: Observation::Unparsed,
+        },
+    ]
+}
+
+fn mixed_services() -> Vec<Observation<ServiceInventoryRecord>> {
+    vec![
+        Observation::Present(ServiceInventoryRecord {
+            name: "BaselineCollector".into(),
+            display_name: "Baseline Collector".into(),
+            state: 4,
+            process_id: 41,
+            start_mode: Observation::Unparsed,
+            image_path: Observation::AccessDenied,
+            start_name: Observation::Missing,
+        }),
+        Observation::AccessDenied,
+        Observation::Present(ServiceInventoryRecord {
+            name: "BaselineParser".into(),
+            display_name: "Baseline Parser".into(),
+            state: 0,
+            process_id: 0,
+            start_mode: Observation::TimedOut,
+            image_path: Observation::Truncated,
+            start_name: Observation::Failed { exit_code: 5 },
+        }),
+        Observation::Present(ServiceInventoryRecord {
+            name: "BaselineReporter".into(),
+            display_name: "Baseline Reporter".into(),
+            state: 5,
+            process_id: 43,
+            start_mode: Observation::Missing,
+            image_path: Observation::Unparsed,
+            start_name: Observation::NotRun,
+        }),
+    ]
+}
+
 fn incomplete_finding(
     code: &'static str,
-    message: &'static str,
+    subject: &'static str,
     observation_status: &'static str,
 ) -> PolicyFinding {
     PolicyFinding {
         code,
         status: FindingStatus::Warning,
         severity: Severity::Medium,
-        message: message.into(),
+        message: format!("{subject} observation is incomplete: {observation_status}."),
         evidence: JsonMap::from([("observation_status".into(), json!(observation_status))]),
     }
 }
@@ -145,92 +153,59 @@ fn service_process_findings_keep_record_and_pass_order() {
     assert_eq!(audit.process_count, 2);
     assert_eq!(audit.service_count, 4);
     assert_eq!(audit.running_services, 1);
-    assert_eq!(
-        audit.findings,
-        vec![
-            incomplete_finding(
-                "INV-ProcessImageIncomplete",
-                "process image observation is incomplete: access_denied.",
-                "access_denied",
-            ),
-            incomplete_finding(
-                "INV-ProcessCpuIncomplete",
-                "process CPU observation is incomplete: timed_out.",
-                "timed_out",
-            ),
-            incomplete_finding(
-                "INV-ProcessMemoryIncomplete",
-                "process memory observation is incomplete: missing.",
-                "missing",
-            ),
-            incomplete_finding(
-                "INV-ProcessImageIncomplete",
-                "process image observation is incomplete: unparsed.",
-                "unparsed",
-            ),
-            incomplete_finding(
-                "INV-ProcessCpuIncomplete",
-                "process CPU observation is incomplete: failed.",
-                "failed",
-            ),
-            incomplete_finding(
-                "INV-ProcessMemoryIncomplete",
-                "process memory observation is incomplete: truncated.",
-                "truncated",
-            ),
-            incomplete_finding(
-                "INV-ServiceConfigIncomplete",
-                "service configuration observation is incomplete: unparsed.",
-                "unparsed",
-            ),
-            incomplete_finding(
-                "INV-ServiceImageIncomplete",
-                "service image observation is incomplete: access_denied.",
-                "access_denied",
-            ),
-            incomplete_finding(
-                "INV-ServiceAccountIncomplete",
-                "service account observation is incomplete: missing.",
-                "missing",
-            ),
-            incomplete_finding(
-                "INV-ServiceIncomplete",
-                "service observation is incomplete: access_denied.",
-                "access_denied",
-            ),
-            incomplete_finding(
-                "INV-ServiceConfigIncomplete",
-                "service configuration observation is incomplete: timed_out.",
-                "timed_out",
-            ),
-            incomplete_finding(
-                "INV-ServiceImageIncomplete",
-                "service image observation is incomplete: truncated.",
-                "truncated",
-            ),
-            incomplete_finding(
-                "INV-ServiceAccountIncomplete",
-                "service account observation is incomplete: failed.",
-                "failed",
-            ),
-            incomplete_finding(
-                "INV-ServiceConfigIncomplete",
-                "service configuration observation is incomplete: missing.",
-                "missing",
-            ),
-            incomplete_finding(
-                "INV-ServiceImageIncomplete",
-                "service image observation is incomplete: unparsed.",
-                "unparsed",
-            ),
-            incomplete_finding(
-                "INV-ServiceAccountIncomplete",
-                "service account observation is incomplete: not_run.",
-                "not_run",
-            ),
-            enumeration_incomplete_finding(),
-        ]
-    );
+    assert_eq!(audit.findings, expected_mixed_inventory_findings());
+}
+
+fn expected_mixed_inventory_findings() -> Vec<PolicyFinding> {
+    let mut findings = incomplete_findings(&[
+        (
+            "INV-ProcessImageIncomplete",
+            "process image",
+            "access_denied",
+        ),
+        ("INV-ProcessCpuIncomplete", "process CPU", "timed_out"),
+        ("INV-ProcessMemoryIncomplete", "process memory", "missing"),
+        ("INV-ProcessImageIncomplete", "process image", "unparsed"),
+        ("INV-ProcessCpuIncomplete", "process CPU", "failed"),
+        ("INV-ProcessMemoryIncomplete", "process memory", "truncated"),
+        (
+            "INV-ServiceConfigIncomplete",
+            "service configuration",
+            "unparsed",
+        ),
+        (
+            "INV-ServiceImageIncomplete",
+            "service image",
+            "access_denied",
+        ),
+        ("INV-ServiceAccountIncomplete", "service account", "missing"),
+        ("INV-ServiceIncomplete", "service", "access_denied"),
+        (
+            "INV-ServiceConfigIncomplete",
+            "service configuration",
+            "timed_out",
+        ),
+        ("INV-ServiceImageIncomplete", "service image", "truncated"),
+        ("INV-ServiceAccountIncomplete", "service account", "failed"),
+        (
+            "INV-ServiceConfigIncomplete",
+            "service configuration",
+            "missing",
+        ),
+        ("INV-ServiceImageIncomplete", "service image", "unparsed"),
+        ("INV-ServiceAccountIncomplete", "service account", "not_run"),
+    ]);
+    findings.push(enumeration_incomplete_finding());
+    findings
+}
+
+fn incomplete_findings(
+    entries: &[(&'static str, &'static str, &'static str)],
+) -> Vec<PolicyFinding> {
+    entries
+        .iter()
+        .map(|&(code, subject, status)| incomplete_finding(code, subject, status))
+        .collect()
 }
 
 #[test]

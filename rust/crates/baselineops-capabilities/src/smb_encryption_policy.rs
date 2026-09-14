@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// Fixed SMB encryption controls that this capability may observe.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SmbEncryptionField {
     /// Server-wide SMB encryption requirement.
     ServerEncryptData,
@@ -47,8 +47,8 @@ impl Default for SmbEncryptionPolicy {
 }
 
 /// Fixed native local evidence for SMB encryption settings.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SmbEncryptionObservation {
     /// Fixed server-wide encryption setting.
     pub server_encrypt_data: Observation<bool>,
@@ -59,8 +59,8 @@ pub struct SmbEncryptionObservation {
 }
 
 /// One proven difference between fixed evidence and finite desired state.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SmbEncryptionDrift {
     /// The fixed SMB setting that differs.
     pub field: SmbEncryptionField,

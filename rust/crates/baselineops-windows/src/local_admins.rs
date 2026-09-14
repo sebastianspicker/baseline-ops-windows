@@ -111,6 +111,15 @@ mod platform {
         if account_len > MAX_ACCOUNT_NAME_UNITS {
             return Observation::Truncated;
         }
+        read_account_name(sid, account_len, domain_len, use_type)
+    }
+
+    fn read_account_name(
+        sid: PSID,
+        account_len: u32,
+        domain_len: u32,
+        mut use_type: SID_NAME_USE,
+    ) -> Observation<String> {
         let account_len = usize::try_from(account_len).unwrap_or_default();
         let domain_len = usize::try_from(domain_len).unwrap_or_default();
         let mut account = vec![0_u16; account_len];
@@ -198,6 +207,18 @@ mod platform {
         if count == 0 {
             return Some(true);
         }
+        validate_member_buffer(buffer, count)?;
+        // SAFETY: alignment, checked count × element size, and NetAPI's reported
+        // allocation extent were validated by validate_member_buffer while the allocation remains live.
+        #[allow(clippy::cast_ptr_alignment)]
+        let entries =
+            unsafe { slice::from_raw_parts(buffer.cast::<LOCALGROUP_MEMBERS_INFO_2>(), count) };
+        let retained = count.min(limit);
+        append_members(members, &entries[..retained]);
+        Some(retained == count)
+    }
+
+    fn validate_member_buffer(buffer: *mut u8, count: usize) -> Option<()> {
         if buffer.is_null()
             || !buffer
                 .addr()
@@ -209,19 +230,17 @@ mod platform {
         if unsafe { NetApiBufferSize(buffer.cast(), &raw mut allocation_bytes) } != NERR_Success {
             return None;
         }
+        validate_member_extent(count, allocation_bytes)?;
+        Some(())
+    }
+
+    fn validate_member_extent(count: usize, allocation_bytes: u32) -> Option<()> {
         let allocation_bytes = usize::try_from(allocation_bytes).ok()?;
         let entry_bytes = count.checked_mul(size_of::<LOCALGROUP_MEMBERS_INFO_2>())?;
         if allocation_bytes > MAX_MEMBER_BUFFER_BYTES || entry_bytes > allocation_bytes {
             return None;
         }
-        // SAFETY: alignment, checked count × element size, and NetAPI's reported
-        // allocation extent were validated above while `allocation` remains live.
-        #[allow(clippy::cast_ptr_alignment)]
-        let entries =
-            unsafe { slice::from_raw_parts(buffer.cast::<LOCALGROUP_MEMBERS_INFO_2>(), count) };
-        let retained = count.min(limit);
-        append_members(members, &entries[..retained]);
-        Some(retained == count)
+        Some(())
     }
 
     fn append_members(

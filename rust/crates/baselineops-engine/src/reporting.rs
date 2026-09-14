@@ -89,12 +89,7 @@ fn validate_result_plan_bindings(
     result: &ResultV3,
     plan: &baselineops_domain::PlanV3,
 ) -> Result<(), ReportError> {
-    if result.plan_id != plan.id
-        || result.run_id != plan.run_id
-        || result.profile_id != plan.profile_id
-        || result.host != plan.host
-        || result.operation != plan.intent.into()
-    {
+    if !matches_plan_identity(result, plan) {
         return Err(ReportError::ResultPlanMismatch);
     }
     let planned = plan
@@ -111,6 +106,22 @@ fn validate_result_plan_bindings(
         }
     }
     Ok(())
+}
+
+fn matches_plan_identity(result: &ResultV3, plan: &baselineops_domain::PlanV3) -> bool {
+    (
+        result.plan_id,
+        result.run_id,
+        result.profile_id,
+        &result.host,
+        result.operation,
+    ) == (
+        plan.id,
+        plan.run_id,
+        plan.profile_id,
+        &plan.host,
+        plan.intent.into(),
+    )
 }
 
 /// Write one authoritative pretty JSON result atomically.
@@ -165,42 +176,78 @@ pub fn write_csv(path: impl AsRef<Path>, results: &[ResultV3]) -> Result<(), Rep
             "observed_at",
         ])?;
         for result in results {
-            result.validate()?;
-            if result.findings.is_empty() {
-                writer.write_record([
-                    result.id.to_string(),
-                    result.plan_id.to_string(),
-                    result.profile_id.to_string(),
-                    result.host.hostname.clone(),
-                    format!("{:?}", result.status),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                ])?;
-            } else {
-                for finding in &result.findings {
-                    writer.write_record([
-                        result.id.to_string(),
-                        result.plan_id.to_string(),
-                        result.profile_id.to_string(),
-                        result.host.hostname.clone(),
-                        format!("{:?}", result.status),
-                        finding.capability.to_string(),
-                        finding.code.clone(),
-                        format!("{:?}", finding.status),
-                        format!("{:?}", finding.severity),
-                        finding.message.clone(),
-                        finding.observed_at.to_rfc3339(),
-                    ])?;
-                }
-            }
+            write_csv_result(&mut writer, result)?;
         }
         writer.flush().map_err(csv::Error::from)?;
     }
     atomic_write(path, &bytes)?;
+    Ok(())
+}
+
+fn write_csv_result(
+    writer: &mut csv::Writer<&mut Vec<u8>>,
+    result: &ResultV3,
+) -> Result<(), ReportError> {
+    result.validate()?;
+    if result.findings.is_empty() {
+        return write_csv_empty(writer, result);
+    }
+    for finding in &result.findings {
+        write_csv_finding(writer, result, finding)?;
+    }
+    Ok(())
+}
+
+fn csv_prefix(result: &ResultV3) -> [String; 5] {
+    [
+        result.id.to_string(),
+        result.plan_id.to_string(),
+        result.profile_id.to_string(),
+        result.host.hostname.clone(),
+        format!("{:?}", result.status),
+    ]
+}
+
+fn write_csv_empty(
+    writer: &mut csv::Writer<&mut Vec<u8>>,
+    result: &ResultV3,
+) -> Result<(), ReportError> {
+    let [id, plan, profile, host, status] = csv_prefix(result);
+    writer.write_record([
+        id,
+        plan,
+        profile,
+        host,
+        status,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    ])?;
+    Ok(())
+}
+
+fn write_csv_finding(
+    writer: &mut csv::Writer<&mut Vec<u8>>,
+    result: &ResultV3,
+    finding: &baselineops_domain::FindingV3,
+) -> Result<(), ReportError> {
+    let [id, plan, profile, host, status] = csv_prefix(result);
+    writer.write_record([
+        id,
+        plan,
+        profile,
+        host,
+        status,
+        finding.capability.to_string(),
+        finding.code.clone(),
+        format!("{:?}", finding.status),
+        format!("{:?}", finding.severity),
+        finding.message.clone(),
+        finding.observed_at.to_rfc3339(),
+    ])?;
     Ok(())
 }
 
@@ -258,6 +305,14 @@ mod tests {
 
     fn plan_and_result() -> (baselineops_domain::PlanV3, ResultV3) {
         let now = Utc::now();
+        let host = test_host();
+        let action = test_action();
+        let plan = test_plan(now, &host, &action);
+        let result = test_result(now, host, action, &plan);
+        (plan, result)
+    }
+
+    fn test_host() -> HostIdentityV3 {
         let mut host = HostIdentityV3 {
             host_id: "host".into(),
             boot_id: "boot".into(),
@@ -269,11 +324,14 @@ mod tests {
             fingerprint: baselineops_domain::Sha256Digest::of_bytes(b"placeholder"),
         };
         host.fingerprint = host.calculated_fingerprint().expect("fingerprint");
-        let capability = CapabilityId::new("v3.test.capability").expect("capability");
-        let action = PlannedActionV3 {
+        host
+    }
+
+    fn test_action() -> PlannedActionV3 {
+        PlannedActionV3 {
             id: ActionId::new(),
             source_step: ActionId::new(),
-            capability: capability.clone(),
+            capability: CapabilityId::new("v3.test.capability").expect("capability"),
             operation: Operation::Apply,
             parameters: JsonMap::new(),
             depends_on: Vec::new(),
@@ -285,9 +343,16 @@ mod tests {
             reboot: RebootRequirement::NotRequired,
             privileges: Vec::new(),
             metadata: JsonMap::new(),
-        };
-        let plan = baselineops_domain::PlanV3 {
-            schema_version: SchemaVersion::V3,
+        }
+    }
+
+    fn test_plan(
+        now: chrono::DateTime<Utc>,
+        host: &HostIdentityV3,
+        action: &PlannedActionV3,
+    ) -> baselineops_domain::PlanV3 {
+        baselineops_domain::PlanV3 {
+            schema_version: baselineops_domain::PlanSchemaVersion::V4,
             id: PlanId::new(),
             run_id: RunId::new(),
             intent: ExecutionIntent::Apply,
@@ -309,6 +374,7 @@ mod tests {
                 digest: baselineops_domain::Sha256Digest::of_bytes(b"input"),
                 size_bytes: 1,
             },
+            resources: Vec::new(),
             observed_state: ObservedStateV3 {
                 captured_at: now,
                 digest: baselineops_domain::Sha256Digest::of_bytes(b"facts"),
@@ -318,8 +384,16 @@ mod tests {
             expires_at: now + chrono::Duration::minutes(1),
             actions: vec![action.clone()],
             metadata: JsonMap::new(),
-        };
-        let result = ResultV3 {
+        }
+    }
+
+    fn test_result(
+        now: chrono::DateTime<Utc>,
+        host: HostIdentityV3,
+        action: PlannedActionV3,
+        plan: &baselineops_domain::PlanV3,
+    ) -> ResultV3 {
+        ResultV3 {
             schema_version: SchemaVersion::V3,
             id: baselineops_domain::ResultId::new(),
             run_id: plan.run_id,
@@ -333,7 +407,7 @@ mod tests {
             completed_at: now,
             actions: vec![ActionResultV3 {
                 action_id: action.id,
-                capability,
+                capability: action.capability,
                 status: ActionStatus::Succeeded,
                 started_at: now,
                 completed_at: now,
@@ -343,8 +417,7 @@ mod tests {
             summary: "completed".into(),
             artifacts: Vec::new(),
             metadata: JsonMap::new(),
-        };
-        (plan, result)
+        }
     }
 
     #[test]

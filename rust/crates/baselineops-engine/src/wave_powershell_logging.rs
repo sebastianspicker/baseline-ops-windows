@@ -9,8 +9,8 @@ use baselineops_windows::{PlatformError, observe_powershell_logging};
 
 /// Native Windows executor for the PowerShell logging policy capability.
 ///
-/// This remains `in_development` until Windows VM and legacy-oracle evidence
-/// verifies observation and mutation semantics.
+/// This is `code_complete`; Windows VM and legacy-oracle evidence for
+/// observation and mutation semantics remains an open release gate.
 pub struct WavePowerShellLoggingWindowsExecutor;
 
 impl CapabilityExecutor for WavePowerShellLoggingWindowsExecutor {

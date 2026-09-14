@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Fixed default action accepted for a Windows Firewall profile.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum FirewallDefaultAction {
     /// Block traffic not matched by an allow rule.
     #[default]
@@ -65,8 +65,8 @@ pub struct FirewallBaselineParameters {
 }
 
 /// Typed read evidence for the supported controls of one fixed profile.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct FirewallBaselineProfileObservation {
     /// Profile enablement from the effective Windows Firewall policy.
     pub enabled: FirewallEvidence<bool>,
@@ -90,8 +90,8 @@ impl FirewallBaselineProfileObservation {
 }
 
 /// Fixed observations for the only three profiles this capability accepts.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct FirewallBaselineProfileObservations {
     /// Domain-profile evidence.
     pub domain: FirewallBaselineProfileObservation,
@@ -114,8 +114,8 @@ impl FirewallBaselineProfileObservations {
 }
 
 /// Read-only effective firewall evidence from the documented Windows API.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct FirewallBaselineObservation {
     /// Evidence for the three fixed profiles.
     pub profiles: FirewallBaselineProfileObservations,
@@ -135,8 +135,8 @@ impl FirewallBaselineObservation {
 }
 
 /// One fixed profile field that differs from the requested state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum FirewallBaselineField {
     /// Profile enablement.
     Enabled,
@@ -149,8 +149,8 @@ pub enum FirewallBaselineField {
 }
 
 /// Fixed, typed differences for one Windows Firewall profile.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct FirewallBaselineDrift {
     /// One of Domain, Private, or Public.
     pub profile: FirewallProfile,
@@ -284,22 +284,42 @@ fn drift_fields(
     desired: &FirewallBaselineProfileDesiredState,
 ) -> Vec<FirewallBaselineField> {
     let mut fields = Vec::new();
-    if !matches!(observed.enabled, FirewallEvidence::Present(value) if value == desired.enabled) {
-        fields.push(FirewallBaselineField::Enabled);
-    }
-    if !matches!(observed.default_inbound_action, FirewallEvidence::Present(value) if value == desired.default_inbound_action)
-    {
-        fields.push(FirewallBaselineField::DefaultInboundAction);
-    }
-    if !matches!(observed.default_outbound_action, FirewallEvidence::Present(value) if value == desired.default_outbound_action)
-    {
-        fields.push(FirewallBaselineField::DefaultOutboundAction);
-    }
-    if !matches!(observed.notify_on_listen, FirewallEvidence::Present(value) if value == desired.notify_on_listen)
-    {
-        fields.push(FirewallBaselineField::NotifyOnListen);
-    }
+    add_drift(
+        &mut fields,
+        FirewallBaselineField::Enabled,
+        &observed.enabled,
+        &desired.enabled,
+    );
+    add_drift(
+        &mut fields,
+        FirewallBaselineField::DefaultInboundAction,
+        &observed.default_inbound_action,
+        &desired.default_inbound_action,
+    );
+    add_drift(
+        &mut fields,
+        FirewallBaselineField::DefaultOutboundAction,
+        &observed.default_outbound_action,
+        &desired.default_outbound_action,
+    );
+    add_drift(
+        &mut fields,
+        FirewallBaselineField::NotifyOnListen,
+        &observed.notify_on_listen,
+        &desired.notify_on_listen,
+    );
     fields
+}
+
+fn add_drift<T: PartialEq>(
+    fields: &mut Vec<FirewallBaselineField>,
+    field: FirewallBaselineField,
+    observed: &FirewallEvidence<T>,
+    desired: &T,
+) {
+    if !matches!(observed, FirewallEvidence::Present(value) if value == desired) {
+        fields.push(field);
+    }
 }
 
 #[cfg(test)]

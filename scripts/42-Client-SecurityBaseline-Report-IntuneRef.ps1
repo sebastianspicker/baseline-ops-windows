@@ -82,10 +82,8 @@ $script:Quiet = [bool]$Quiet
 $script:NoConsoleSummary = [bool]$NoConsoleSummary
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
@@ -112,61 +110,17 @@ if (-not $isWindowsHost) {
 
 
 
-function Test-RegKey {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Path)
-  try { Test-Path -Path $Path } catch { $false }
-}
+
 
 # Ensure-Directory imported from lib/Common.psm1
 
-function ConvertTo-ScalarString {
-  [CmdletBinding()]
-  param([object]$Value)
 
-  if ($null -eq $Value) { return $null }
-  if ($Value -is [System.Array]) { return ($Value | ForEach-Object { $_.ToString() }) -join ',' }
-  return $Value.ToString()
-}
 
-function ConvertTo-DisplayString {
-  [CmdletBinding()]
-  param([object]$Value)
 
-  $s = ConvertTo-ScalarString -Value $Value
-  if ([string]::IsNullOrWhiteSpace($s)) { return '<not set>' }
-  return $s
-}
 
-function Get-ObjectList {
-  # Strong list internally, but do NOT expose as typed parameter to avoid empty-collection binding issues.
-  New-Object 'System.Collections.Generic.List[object]'
-}
 
-function Add-Row {
-  [CmdletBinding()]
-  param(
-    # Accept as object to avoid PowerShell "empty collection" parameter binding pitfalls with generic lists.
-    [Parameter(Mandatory)]
-    [object]$List,
 
-    [Parameter(Mandatory)]
-    [hashtable]$Data
-  )
 
-  if ($null -eq $List) { throw "Add-Row: List is null." }
-
-  $row = [pscustomobject]$Data
-  $row.PSObject.TypeNames.Insert(0, 'BaselineReport.Row')
-
-  # Support both List[T] and arraylist-like types
-  if ($List -is [System.Collections.IList]) {
-    [void]$List.Add($row)
-    return
-  }
-
-  throw ("Add-Row: Unsupported list type: {0}" -f $List.GetType().FullName)
-}
 
 function Get-ReferenceDefaults {
   return @{
@@ -314,286 +268,339 @@ function Get-LevelForMatch {
 
 #region Main
 
-$refInfo = Load-ReferenceJson -Path $ReferenceJsonPath
-$ref     = $refInfo.Reference
-$partialReasons = New-Object 'System.Collections.Generic.List[string]'
-$sourceStatus = [ordered]@{
-  Reference = [ordered]@{
-    Requested = -not [string]::IsNullOrWhiteSpace($ReferenceJsonPath)
-    Loaded    = [bool]$refInfo.Loaded
-    Error     = $refInfo.Error
-  }
-  FirewallProfile = [ordered]@{
-    Attempted = $false
-    Succeeded = $null
-    Error     = $null
-  }
-}
-if ($sourceStatus.Reference.Requested -and -not $refInfo.Loaded) {
-  [void]$partialReasons.Add("Reference JSON failed: $($refInfo.Error)")
-}
-
-$dgRuntime   = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
-$lsaRuntime  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
-$dgPolicy    = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'
-$psPolicy    = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
-$psSBPolicy  = Join-Path $psPolicy 'ScriptBlockLogging'
-$psMLPolicy  = Join-Path $psPolicy 'ModuleLogging'
-$psTRPolicy  = Join-Path $psPolicy 'Transcription'
-
-$rows = Get-ObjectList
-
-# Credential Guard / VBS - runtime intent
-$enableVbs = Get-RegValue -Path $dgRuntime  -Name 'EnableVirtualizationBasedSecurity'
-$reqPlat   = Get-RegValue -Path $dgRuntime  -Name 'RequirePlatformSecurityFeatures'
-$lsaCfg    = Get-RegValue -Path $lsaRuntime -Name 'LsaCfgFlags'
-
-$cmpVbs = Compare-ToExpected -Reference $ref -SectionName 'CredentialGuard/VBS' -FieldName 'EnableVirtualizationBasedSecurity' -ActualValue $enableVbs
-$cmpReq = Compare-ToExpected -Reference $ref -SectionName 'CredentialGuard/VBS' -FieldName 'RequirePlatformSecurityFeatures' -ActualValue $reqPlat
-$cmpLsa = Compare-ToExpected -Reference $ref -SectionName 'CredentialGuard/VBS' -FieldName 'LsaCfgFlags' -ActualValue $lsaCfg
-
-Add-Row -List $rows -Data @{
-  Section = 'CredentialGuard/VBS'
-  Source  = 'Runtime'
-  EnableVirtualizationBasedSecurity = $enableVbs
-  RequirePlatformSecurityFeatures   = $reqPlat
-  LsaCfgFlags                       = $lsaCfg
-  Expected_EnableVirtualizationBasedSecurity = $cmpVbs.Expected
-  Match_EnableVirtualizationBasedSecurity    = $cmpVbs.Match
-  Expected_RequirePlatformSecurityFeatures   = $cmpReq.Expected
-  Match_RequirePlatformSecurityFeatures      = $cmpReq.Match
-  Expected_LsaCfgFlags                       = $cmpLsa.Expected
-  Match_LsaCfgFlags                          = $cmpLsa.Match
-  Interpretation = $null
-}
-
-# Credential Guard / VBS - policy intent
-if (Test-RegKey -Path $dgPolicy) {
-  Add-Row -List $rows -Data @{
-    Section = 'CredentialGuard/VBS'
-    Source  = 'Policy'
-    EnableVirtualizationBasedSecurity = Get-RegValue -Path $dgPolicy -Name 'EnableVirtualizationBasedSecurity'
-    RequirePlatformSecurityFeatures   = Get-RegValue -Path $dgPolicy -Name 'RequirePlatformSecurityFeatures'
-    LsaCfgFlags                       = Get-RegValue -Path $dgPolicy -Name 'LsaCfgFlags'
-    Interpretation = 'Policy path present.'
-  }
-} else {
-  Add-Row -List $rows -Data @{
-    Section = 'CredentialGuard/VBS'
-    Source  = 'Policy'
-    Interpretation = 'Policy path not present.'
-  }
-}
-
-# Win32_DeviceGuard - CIM runtime status
-try {
-  $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard' -ErrorAction Stop
-  Add-Row -List $rows -Data @{
-    Section = 'DeviceGuardStatus(CIM)'
-    Source  = 'CIM'
-    SecurityServicesConfigured        = ConvertTo-ScalarString $dg.SecurityServicesConfigured
-    SecurityServicesRunning           = ConvertTo-ScalarString $dg.SecurityServicesRunning
-    VirtualizationBasedSecurityStatus = ConvertTo-ScalarString $dg.VirtualizationBasedSecurityStatus
-    Interpretation = 'CIM query succeeded.'
-  }
-} catch {
-  Add-Row -List $rows -Data @{
-    Section = 'DeviceGuardStatus(CIM)'
-    Source  = 'CIM'
-    Interpretation = ('CIM query failed: {0}' -f $_.Exception.Message)
-  }
-}
-
-# LSA protection (RunAsPPL)
-$runAsPpl = Get-RegValue -Path $lsaRuntime -Name 'RunAsPPL'
-$cmpPpl   = Compare-ToExpected -Reference $ref -SectionName 'LSAProtection(PPL)' -FieldName 'RunAsPPL' -ActualValue $runAsPpl
-
-Add-Row -List $rows -Data @{
-  Section  = 'LSAProtection(PPL)'
-  Source   = 'Runtime'
-  RunAsPPL = $runAsPpl
-  Expected_RunAsPPL = $cmpPpl.Expected
-  Match_RunAsPPL    = $cmpPpl.Match
-  Interpretation    = $null
-}
-
-# PowerShell logging (policy)
-$sbEnabled = Get-RegValue -Path $psSBPolicy -Name 'EnableScriptBlockLogging'
-$sbInvoc   = Get-RegValue -Path $psSBPolicy -Name 'EnableScriptBlockInvocationLogging'
-$mlEnabled = Get-RegValue -Path $psMLPolicy -Name 'EnableModuleLogging'
-$trEnabled = Get-RegValue -Path $psTRPolicy -Name 'EnableTranscripting'
-
-$cmpSb  = Compare-ToExpected -Reference $ref -SectionName 'PowerShellLogging(Policy)' -FieldName 'EnableScriptBlockLogging' -ActualValue $sbEnabled
-$cmpSbI = Compare-ToExpected -Reference $ref -SectionName 'PowerShellLogging(Policy)' -FieldName 'EnableScriptBlockInvocationLogging' -ActualValue $sbInvoc
-$cmpMl  = Compare-ToExpected -Reference $ref -SectionName 'PowerShellLogging(Policy)' -FieldName 'EnableModuleLogging' -ActualValue $mlEnabled
-$cmpTr  = Compare-ToExpected -Reference $ref -SectionName 'PowerShellLogging(Policy)' -FieldName 'EnableTranscripting' -ActualValue $trEnabled
-
-Add-Row -List $rows -Data @{
-  Section = 'PowerShellLogging(Policy)'
-  Source  = 'Policy'
-  BaseKeyExists = (Test-RegKey -Path $psPolicy)
-  ScriptBlockLoggingKeyExists        = (Test-RegKey -Path $psSBPolicy)
-  EnableScriptBlockLogging           = $sbEnabled
-  EnableScriptBlockInvocationLogging = $sbInvoc
-  ModuleLoggingKeyExists             = (Test-RegKey -Path $psMLPolicy)
-  EnableModuleLogging                = $mlEnabled
-  TranscriptionKeyExists             = (Test-RegKey -Path $psTRPolicy)
-  EnableTranscripting                = $trEnabled
-  Expected_EnableScriptBlockLogging           = $cmpSb.Expected
-  Match_EnableScriptBlockLogging              = $cmpSb.Match
-  Expected_EnableScriptBlockInvocationLogging  = $cmpSbI.Expected
-  Match_EnableScriptBlockInvocationLogging     = $cmpSbI.Match
-  Expected_EnableModuleLogging                = $cmpMl.Expected
-  Match_EnableModuleLogging                   = $cmpMl.Match
-  Expected_EnableTranscripting                = $cmpTr.Expected
-  Match_EnableTranscripting                   = $cmpTr.Match
-  Interpretation = $null
-}
-
-# Firewall profiles
-if (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue) {
-  $sourceStatus.FirewallProfile.Attempted = $true
-  try {
-    foreach ($p in (Get-NetFirewallProfile -ErrorAction Stop)) {
-      Add-Row -List $rows -Data @{
-        Section = 'FirewallProfile'
-        Source  = 'NetSecurity'
-        Name    = $p.Name
-        Enabled = $p.Enabled
-        LogAllowed = $p.LogAllowed
-        LogBlocked = $p.LogBlocked
-        LogFileName = $p.LogFileName
-        LogMaxSizeKilobytes = $p.LogMaxSizeKilobytes
-        Interpretation = $null
-      }
+function Invoke-Capability42MainPhase01 {
+  param([hashtable]$RunState)
+  $refInfo = Load-ReferenceJson -Path $ReferenceJsonPath
+  $ref     = $refInfo.Reference
+  $partialReasons = New-Object 'System.Collections.Generic.List[string]'
+  $sourceStatus = [ordered]@{
+    Reference = [ordered]@{
+      Requested = -not [string]::IsNullOrWhiteSpace($ReferenceJsonPath)
+      Loaded    = [bool]$refInfo.Loaded
+      Error     = $refInfo.Error
     }
-    $sourceStatus.FirewallProfile.Succeeded = $true
-  } catch {
-    $sourceStatus.FirewallProfile.Succeeded = $false
-    $sourceStatus.FirewallProfile.Error = $_.Exception.Message
-    [void]$partialReasons.Add("Firewall profile source failed: $($sourceStatus.FirewallProfile.Error)")
-    Add-Row -List $rows -Data @{
-      Section = 'FirewallProfile'
-      Source  = 'NetSecurity'
-      Interpretation = ('Get-NetFirewallProfile failed: {0}' -f $_.Exception.Message)
+    FirewallProfile = [ordered]@{
+      Attempted = $false
+      Succeeded = $null
+      Error     = $null
     }
   }
-} else {
-  $sourceStatus.FirewallProfile.Succeeded = $false
-  $sourceStatus.FirewallProfile.Error = 'Get-NetFirewallProfile not available.'
-  [void]$partialReasons.Add($sourceStatus.FirewallProfile.Error)
-  Add-Row -List $rows -Data @{
-    Section = 'FirewallProfile'
-    Source  = 'NetSecurity'
-    Interpretation = 'Get-NetFirewallProfile not available.'
+  if ($sourceStatus.Reference.Requested -and -not $refInfo.Loaded) {
+    [void]$partialReasons.Add("Reference JSON failed: $($refInfo.Error)")
   }
+
+  $dgRuntime   = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
+  $lsaRuntime  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+  $RunState.dgPolicy    = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard'
+  $psPolicy    = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell'
+  $RunState.psSBPolicy  = Join-Path $psPolicy 'ScriptBlockLogging'
+  $RunState.psMLPolicy  = Join-Path $psPolicy 'ModuleLogging'
+  $RunState.psTRPolicy  = Join-Path $psPolicy 'Transcription'
+
+  $RunState.rows = Get-ObjectList
+
+  # Credential Guard / VBS - runtime intent
+  $enableVbs = Get-RegValue -Path $dgRuntime  -Name 'EnableVirtualizationBasedSecurity'
+  $reqPlat   = Get-RegValue -Path $dgRuntime  -Name 'RequirePlatformSecurityFeatures'
+  $lsaCfg    = Get-RegValue -Path $lsaRuntime -Name 'LsaCfgFlags'
+
+  $RunState.cmpVbs = Compare-ToExpected -Reference $ref -SectionName 'CredentialGuard/VBS' -FieldName 'EnableVirtualizationBasedSecurity' -ActualValue $enableVbs
+  $RunState.cmpReq = Compare-ToExpected -Reference $ref -SectionName 'CredentialGuard/VBS' -FieldName 'RequirePlatformSecurityFeatures' -ActualValue $reqPlat
+  $RunState.cmpLsa = Compare-ToExpected -Reference $ref -SectionName 'CredentialGuard/VBS' -FieldName 'LsaCfgFlags' -ActualValue $lsaCfg
 }
-
-$summary = [pscustomobject]@{
-  ComputerName = $env:COMPUTERNAME
-  Timestamp    = (Get-Date)
-  Rows         = $rows.Count
-  ReferenceJsonPath  = if ($ReferenceJsonPath) { '[configured path]' } else { $null }
-  ReferenceLoaded    = $refInfo.Loaded
-  ReferenceLoadError = $refInfo.Error
-  Partial            = ($partialReasons.Count -gt 0)
-  PartialReasons     = $partialReasons.ToArray()
-  SourceStatus       = [pscustomobject]@{
-    Reference       = [pscustomobject]$sourceStatus.Reference
-    FirewallProfile = [pscustomobject]$sourceStatus.FirewallProfile
+function Invoke-Capability42MainPhase02 {
+  param([hashtable]$RunState)
+  Add-Row -List $RunState.rows -Data @{
+    Section = 'CredentialGuard/VBS'
+    Source  = 'Runtime'
+    EnableVirtualizationBasedSecurity = $enableVbs
+    RequirePlatformSecurityFeatures   = $reqPlat
+    LsaCfgFlags                       = $lsaCfg
+    Expected_EnableVirtualizationBasedSecurity = $RunState.cmpVbs.Expected
+    Match_EnableVirtualizationBasedSecurity    = $RunState.cmpVbs.Match
+    Expected_RequirePlatformSecurityFeatures   = $RunState.cmpReq.Expected
+    Match_RequirePlatformSecurityFeatures      = $RunState.cmpReq.Match
+    Expected_LsaCfgFlags                       = $RunState.cmpLsa.Expected
+    Match_LsaCfgFlags                          = $RunState.cmpLsa.Match
+    Interpretation = $null
   }
-}
-$summary.PSObject.TypeNames.Insert(0, 'BaselineReport.Summary')
 
-if ($ExportPath) {
-  $folder = Split-Path -Path $ExportPath -Parent
-  if (-not $folder) { $folder = (Get-Location).Path }
-  [void](Ensure-Directory -Path $folder)
-
-  $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
-  $base = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
-  $rows.ToArray() | Export-Csv -Path (Join-Path $folder ($base + '_sections.csv')) -NoTypeInformation -Encoding UTF8
-}
-
-if (-not $script:Quiet -and -not $script:NoConsoleSummary) {
-  $rowsArr = $rows.ToArray()
-  $refText  = 'Defaults (no path provided)'
-  if ($refInfo.Loaded) { $refText = 'Loaded ([configured path])' }
-  elseif ($refInfo.Path) { $refText = 'Defaults (failed: [configured path])' }
-
-  Write-ConsoleSummary -Summary $summary -Findings ([System.Collections.ArrayList]::new()) `
-    -CustomFields ([ordered]@{
-      Rows            = $summary.Rows
-      'Reference JSON' = $refText
-    })
-
-  # VBS / Credential Guard
-  $cgRuntime = $rowsArr | Where-Object { $_.Section -eq 'CredentialGuard/VBS' -and $_.Source -eq 'Runtime' } | Select-Object -First 1
-  $ppl       = $rowsArr | Where-Object { $_.Section -eq 'LSAProtection(PPL)' -and $_.Source -eq 'Runtime' } | Select-Object -First 1
-  $dgCim     = $rowsArr | Where-Object { $_.Section -eq 'DeviceGuardStatus(CIM)' -and $_.Source -eq 'CIM' } | Select-Object -First 1
-
-  $vbsRegText = '<n/a>'; $cgRegText = '<n/a>'; $vbsMatch = $null; $cgMatch = $null
-  if ($cgRuntime) {
-    $vbsRegText = ConvertTo-DisplayString $cgRuntime.EnableVirtualizationBasedSecurity
-    $cgRegText  = ConvertTo-DisplayString $cgRuntime.LsaCfgFlags
-    $vbsMatch   = $cgRuntime.Match_EnableVirtualizationBasedSecurity
-    $cgMatch    = $cgRuntime.Match_LsaCfgFlags
-  }
-  $vbsCimVal = $null; $vbsCimTxt = 'Unknown'; $cgRunTxt = 'Unknown'
-  if ($dgCim) {
-    $vbsCimVal = $dgCim.VirtualizationBasedSecurityStatus
-    $vbsCimTxt = Resolve-VbsStatusText -Value $vbsCimVal
-    $cgRunTxt  = Resolve-CredentialGuardRunningText -SecurityServicesRunning $dgCim.SecurityServicesRunning
-  }
-  $runAsPplText = '<n/a>'; $pplMatch = $null
-  if ($ppl) { $runAsPplText = ConvertTo-DisplayString $ppl.RunAsPPL; $pplMatch = $ppl.Match_RunAsPPL }
-  $cgRunLevel = if ($cgRunTxt -eq 'Running') { 'Warn' } else { 'Good' }
-
-  Write-UiHeader -Title 'VBS / Credential Guard'
-  Write-KeyValue -Key 'VBS intent (registry)' -Value $vbsRegText -Level (Get-LevelForMatch $vbsMatch)
-  Write-KeyValue -Key 'CG intent (registry)'  -Value $cgRegText  -Level (Get-LevelForMatch $cgMatch)
-  Write-KeyValue -Key 'VBS status (CIM)'      -Value ("{0} ({1})" -f (ConvertTo-DisplayString $vbsCimVal), $vbsCimTxt) -Level 'Info'
-  Write-KeyValue -Key 'CG running (CIM)'      -Value $cgRunTxt -Level $cgRunLevel
-
-  # LSA Protection
-  Write-UiHeader -Title 'LSA Protection'
-  Write-KeyValue -Key 'RunAsPPL' -Value $runAsPplText -Level (Get-LevelForMatch $pplMatch)
-
-  # Firewall (first 3 profiles)
-  Write-UiHeader -Title 'Firewall (first 3 profiles)'
-  $fw = $rowsArr | Where-Object { $_.Section -eq 'FirewallProfile' -and $_.Name } | Select-Object -First 3
-  if ($fw) {
-    foreach ($p in $fw) {
-      $profileText = "{0}: Enabled={1}, LogAllowed={2}, LogBlocked={3}" -f $p.Name, $p.Enabled, $p.LogAllowed, $p.LogBlocked
-      $profileLevel = 'Info'
-      if ($p.Enabled -ne $true) { $profileLevel = 'Bad' }
-      Write-KeyValue -Key 'Profile' -Value $profileText -Level $profileLevel
+  # Credential Guard / VBS - policy intent
+  if (Test-RegKey -Path $RunState.dgPolicy) {
+    Add-Row -List $RunState.rows -Data @{
+      Section = 'CredentialGuard/VBS'
+      Source  = 'Policy'
+      EnableVirtualizationBasedSecurity = Get-RegValue -Path $RunState.dgPolicy -Name 'EnableVirtualizationBasedSecurity'
+      RequirePlatformSecurityFeatures   = Get-RegValue -Path $RunState.dgPolicy -Name 'RequirePlatformSecurityFeatures'
+      LsaCfgFlags                       = Get-RegValue -Path $RunState.dgPolicy -Name 'LsaCfgFlags'
+      Interpretation = 'Policy path present.'
     }
   } else {
-    Write-KeyValue -Key 'Profiles' -Value 'No data' -Level 'Dim'
+    Add-Row -List $RunState.rows -Data @{
+      Section = 'CredentialGuard/VBS'
+      Source  = 'Policy'
+      Interpretation = 'Policy path not present.'
+    }
   }
-  Write-UiLine ''
+}
+function Invoke-Capability42MainPhase03 {
+  param([hashtable]$RunState)
+  try {
+    $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard' -ErrorAction Stop
+    Add-Row -List $RunState.rows -Data @{
+      Section = 'DeviceGuardStatus(CIM)'
+      Source  = 'CIM'
+      SecurityServicesConfigured        = ConvertTo-ScalarString $dg.SecurityServicesConfigured
+      SecurityServicesRunning           = ConvertTo-ScalarString $dg.SecurityServicesRunning
+      VirtualizationBasedSecurityStatus = ConvertTo-ScalarString $dg.VirtualizationBasedSecurityStatus
+      Interpretation = 'CIM query succeeded.'
+    }
+  } catch {
+    Add-Row -List $RunState.rows -Data @{
+      Section = 'DeviceGuardStatus(CIM)'
+      Source  = 'CIM'
+      Interpretation = ('CIM query failed: {0}' -f $_.Exception.Message)
+    }
+  }
+
+  # LSA protection (RunAsPPL)
+  $runAsPpl = Get-RegValue -Path $lsaRuntime -Name 'RunAsPPL'
+  $cmpPpl   = Compare-ToExpected -Reference $ref -SectionName 'LSAProtection(PPL)' -FieldName 'RunAsPPL' -ActualValue $runAsPpl
+
+  Add-Row -List $RunState.rows -Data @{
+    Section  = 'LSAProtection(PPL)'
+    Source   = 'Runtime'
+    RunAsPPL = $runAsPpl
+    Expected_RunAsPPL = $cmpPpl.Expected
+    Match_RunAsPPL    = $cmpPpl.Match
+    Interpretation    = $null
+  }
+
+  # PowerShell logging (policy)
+  $sbEnabled = Get-RegValue -Path $RunState.psSBPolicy -Name 'EnableScriptBlockLogging'
+  $sbInvoc   = Get-RegValue -Path $RunState.psSBPolicy -Name 'EnableScriptBlockInvocationLogging'
+  $mlEnabled = Get-RegValue -Path $RunState.psMLPolicy -Name 'EnableModuleLogging'
+  $trEnabled = Get-RegValue -Path $RunState.psTRPolicy -Name 'EnableTranscripting'
+
+  $RunState.cmpSb  = Compare-ToExpected -Reference $ref -SectionName 'PowerShellLogging(Policy)' -FieldName 'EnableScriptBlockLogging' -ActualValue $sbEnabled
+  $RunState.cmpSbI = Compare-ToExpected -Reference $ref -SectionName 'PowerShellLogging(Policy)' -FieldName 'EnableScriptBlockInvocationLogging' -ActualValue $sbInvoc
+  $RunState.cmpMl  = Compare-ToExpected -Reference $ref -SectionName 'PowerShellLogging(Policy)' -FieldName 'EnableModuleLogging' -ActualValue $mlEnabled
+  $RunState.cmpTr  = Compare-ToExpected -Reference $ref -SectionName 'PowerShellLogging(Policy)' -FieldName 'EnableTranscripting' -ActualValue $trEnabled
+}
+function Invoke-Capability42MainPhase04 {
+  param([hashtable]$RunState)
+  Add-Row -List $RunState.rows -Data @{
+    Section = 'PowerShellLogging(Policy)'
+    Source  = 'Policy'
+    BaseKeyExists = (Test-RegKey -Path $psPolicy)
+    ScriptBlockLoggingKeyExists        = (Test-RegKey -Path $RunState.psSBPolicy)
+    EnableScriptBlockLogging           = $sbEnabled
+    EnableScriptBlockInvocationLogging = $sbInvoc
+    ModuleLoggingKeyExists             = (Test-RegKey -Path $RunState.psMLPolicy)
+    EnableModuleLogging                = $mlEnabled
+    TranscriptionKeyExists             = (Test-RegKey -Path $RunState.psTRPolicy)
+    EnableTranscripting                = $trEnabled
+    Expected_EnableScriptBlockLogging           = $RunState.cmpSb.Expected
+    Match_EnableScriptBlockLogging              = $RunState.cmpSb.Match
+    Expected_EnableScriptBlockInvocationLogging  = $RunState.cmpSbI.Expected
+    Match_EnableScriptBlockInvocationLogging     = $RunState.cmpSbI.Match
+    Expected_EnableModuleLogging                = $RunState.cmpMl.Expected
+    Match_EnableModuleLogging                   = $RunState.cmpMl.Match
+    Expected_EnableTranscripting                = $RunState.cmpTr.Expected
+    Match_EnableTranscripting                   = $RunState.cmpTr.Match
+    Interpretation = $null
+  }
+}
+function Invoke-Capability42MainPhase05 {
+  param([hashtable]$RunState)
+  if (Get-Command -Name Get-NetFirewallProfile -ErrorAction SilentlyContinue) {
+    $sourceStatus.FirewallProfile.Attempted = $true
+    try {
+      foreach ($p in (Get-NetFirewallProfile -ErrorAction Stop)) {
+        Add-Row -List $RunState.rows -Data @{
+          Section = 'FirewallProfile'
+          Source  = 'NetSecurity'
+          Name    = $p.Name
+          Enabled = $p.Enabled
+          LogAllowed = $p.LogAllowed
+          LogBlocked = $p.LogBlocked
+          LogFileName = $p.LogFileName
+          LogMaxSizeKilobytes = $p.LogMaxSizeKilobytes
+          Interpretation = $null
+        }
+      }
+      $sourceStatus.FirewallProfile.Succeeded = $true
+    } catch {
+      $sourceStatus.FirewallProfile.Succeeded = $false
+      $sourceStatus.FirewallProfile.Error = $_.Exception.Message
+      [void]$partialReasons.Add("Firewall profile source failed: $($sourceStatus.FirewallProfile.Error)")
+      Add-Row -List $RunState.rows -Data @{
+        Section = 'FirewallProfile'
+        Source  = 'NetSecurity'
+        Interpretation = ('Get-NetFirewallProfile failed: {0}' -f $_.Exception.Message)
+      }
+    }
+  } else {
+    $sourceStatus.FirewallProfile.Succeeded = $false
+    $sourceStatus.FirewallProfile.Error = 'Get-NetFirewallProfile not available.'
+    [void]$partialReasons.Add($sourceStatus.FirewallProfile.Error)
+    Add-Row -List $RunState.rows -Data @{
+      Section = 'FirewallProfile'
+      Source  = 'NetSecurity'
+      Interpretation = 'Get-NetFirewallProfile not available.'
+    }
+  }
+}
+function Invoke-Capability42MainPhase06 {
+  param([hashtable]$RunState)
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = (Get-Date)
+    Rows         = $RunState.rows.Count
+    ReferenceJsonPath  = if ($ReferenceJsonPath) { '[configured path]' } else { $null }
+    ReferenceLoaded    = $refInfo.Loaded
+    ReferenceLoadError = $refInfo.Error
+    Partial            = ($partialReasons.Count -gt 0)
+    PartialReasons     = $partialReasons.ToArray()
+    SourceStatus       = [pscustomobject]@{
+      Reference       = [pscustomobject]$sourceStatus.Reference
+      FirewallProfile = [pscustomobject]$sourceStatus.FirewallProfile
+    }
+  }
+  $summary.PSObject.TypeNames.Insert(0, 'BaselineReport.Summary')
+
+  if ($ExportPath) {
+    $folder = Split-Path -Path $ExportPath -Parent
+    if (-not $folder) { $folder = (Get-Location).Path }
+    [void](Ensure-Directory -Path $folder)
+
+    $summary | Export-Csv -Path $ExportPath -NoTypeInformation -Encoding UTF8
+    $base = [IO.Path]::GetFileNameWithoutExtension($ExportPath)
+    $RunState.rows.ToArray() | Export-Csv -Path (Join-Path $folder ($base + '_sections.csv')) -NoTypeInformation -Encoding UTF8
+  }
+}
+function Invoke-Capability42MainPhase07Step01 {
+  param([hashtable]$RunState)
+$rowsArr = $RunState.rows.ToArray()
+    $refText  = 'Defaults (no path provided)'
+    if ($refInfo.Loaded) { $refText = 'Loaded ([configured path])' }
+    elseif ($refInfo.Path) { $refText = 'Defaults (failed: [configured path])' }
+
+    Write-ConsoleSummary -Summary $summary -Findings ([System.Collections.ArrayList]::new()) `
+      -CustomFields ([ordered]@{
+        Rows            = $summary.Rows
+        'Reference JSON' = $refText
+      })
+
+    # VBS / Credential Guard
+    $RunState.cgRuntime = $rowsArr | Where-Object { $_.Section -eq 'CredentialGuard/VBS' -and $_.Source -eq 'Runtime' } | Select-Object -First 1
+    $RunState.ppl       = $rowsArr | Where-Object { $_.Section -eq 'LSAProtection(PPL)' -and $_.Source -eq 'Runtime' } | Select-Object -First 1
+    $RunState.dgCim     = $rowsArr | Where-Object { $_.Section -eq 'DeviceGuardStatus(CIM)' -and $_.Source -eq 'CIM' } | Select-Object -First 1
+
+    $RunState.vbsRegText = '<n/a>'; $RunState.cgRegText = '<n/a>'; $RunState.vbsMatch = $null; $RunState.cgMatch = $null
 }
 
-# V2 output contract
-$findings = @()
-if ($sourceStatus.Reference.Requested -and -not $refInfo.Loaded) {
-  $findings += [pscustomobject]@{
-    Code     = 'BASELINE-ReferenceLoadFailed'
-    Severity = 'Medium'
-    Message  = ("Requested reference JSON was not loaded: {0}" -f $refInfo.Error)
+function Invoke-Capability42MainPhase07Step02 {
+  param([hashtable]$RunState)
+if ($RunState.cgRuntime) {
+      $RunState.vbsRegText = ConvertTo-DisplayString $RunState.cgRuntime.EnableVirtualizationBasedSecurity
+      $RunState.cgRegText  = ConvertTo-DisplayString $RunState.cgRuntime.LsaCfgFlags
+      $RunState.vbsMatch   = $RunState.cgRuntime.Match_EnableVirtualizationBasedSecurity
+      $RunState.cgMatch    = $RunState.cgRuntime.Match_LsaCfgFlags
+    }
+    $vbsCimVal = $null; $vbsCimTxt = 'Unknown'; $cgRunTxt = 'Unknown'
+    if ($RunState.dgCim) {
+      $vbsCimVal = $RunState.dgCim.VirtualizationBasedSecurityStatus
+      $vbsCimTxt = Resolve-VbsStatusText -Value $vbsCimVal
+      $cgRunTxt  = Resolve-CredentialGuardRunningText -SecurityServicesRunning $RunState.dgCim.SecurityServicesRunning
+    }
+    $runAsPplText = '<n/a>'; $pplMatch = $null
+    if ($RunState.ppl) { $runAsPplText = ConvertTo-DisplayString $RunState.ppl.RunAsPPL; $pplMatch = $RunState.ppl.Match_RunAsPPL }
+    $cgRunLevel = if ($cgRunTxt -eq 'Running') { 'Warn' } else { 'Good' }
+
+    Write-UiHeader -Title 'VBS / Credential Guard'
+    Write-KeyValue -Key 'VBS intent (registry)' -Value $RunState.vbsRegText -Level (Get-LevelForMatch $RunState.vbsMatch)
+    Write-KeyValue -Key 'CG intent (registry)'  -Value $RunState.cgRegText  -Level (Get-LevelForMatch $RunState.cgMatch)
+    Write-KeyValue -Key 'VBS status (CIM)'      -Value ("{0} ({1})" -f (ConvertTo-DisplayString $vbsCimVal), $vbsCimTxt) -Level 'Info'
+    Write-KeyValue -Key 'CG running (CIM)'      -Value $cgRunTxt -Level $cgRunLevel
+
+    # LSA Protection
+    Write-UiHeader -Title 'LSA Protection'
+    Write-KeyValue -Key 'RunAsPPL' -Value $runAsPplText -Level (Get-LevelForMatch $pplMatch)
+
+    # Firewall (first 3 profiles)
+    Write-UiHeader -Title 'Firewall (first 3 profiles)'
+    $RunState.fw = $rowsArr | Where-Object { $_.Section -eq 'FirewallProfile' -and $_.Name } | Select-Object -First 3
+}
+
+function Invoke-Capability42MainPhase07Step03 {
+  param([hashtable]$RunState)
+if ($RunState.fw) {
+      foreach ($p in $RunState.fw) {
+        $profileText = "{0}: Enabled={1}, LogAllowed={2}, LogBlocked={3}" -f $p.Name, $p.Enabled, $p.LogAllowed, $p.LogBlocked
+        $profileLevel = 'Info'
+        if ($p.Enabled -ne $true) { $profileLevel = 'Bad' }
+        Write-KeyValue -Key 'Profile' -Value $profileText -Level $profileLevel
+      }
+    } else {
+      Write-KeyValue -Key 'Profiles' -Value 'No data' -Level 'Dim'
+    }
+    Write-UiLine ''
+}
+
+function Invoke-Capability42MainPhase07 {
+  param([hashtable]$RunState)
+  if (-not $script:Quiet -and -not $script:NoConsoleSummary) {
+    . Invoke-Capability42MainPhase07Step01 -RunState $RunState
+. Invoke-Capability42MainPhase07Step02 -RunState $RunState
+. Invoke-Capability42MainPhase07Step03 -RunState $RunState
   }
 }
-if ($sourceStatus.FirewallProfile.Succeeded -eq $false) {
-  $findings += [pscustomobject]@{
-    Code     = 'BASELINE-SourceFailed'
-    Severity = 'Medium'
-    Message  = ("Firewall profile source failed: {0}" -f $sourceStatus.FirewallProfile.Error)
+function Invoke-Capability42MainPhase08 {
+  $findings = @()
+  if ($sourceStatus.Reference.Requested -and -not $refInfo.Loaded) {
+    $findings += [pscustomobject]@{
+      Code     = 'BASELINE-ReferenceLoadFailed'
+      Severity = 'Medium'
+      Message  = ("Requested reference JSON was not loaded: {0}" -f $refInfo.Error)
+    }
+  }
+  if ($sourceStatus.FirewallProfile.Succeeded -eq $false) {
+    $findings += [pscustomobject]@{
+      Code     = 'BASELINE-SourceFailed'
+      Severity = 'Medium'
+      Message  = ("Firewall profile source failed: {0}" -f $sourceStatus.FirewallProfile.Error)
+    }
   }
 }
-$resultToken = if ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
-if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
-$v2Result = Get-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result $resultToken -Findings $findings -Summary $summary -Metadata @{ Rows = @($rows.ToArray()); RefInfo = $refInfo }
+function Invoke-Capability42Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation)
+  $RunState = @{
+
+  }
+  . (Join-Path $PSScriptRoot 'internal/42-Client-SecurityBaseline-Report-IntuneRef.helpers.ps1')
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability42MainPhase01 -RunState $RunState
+  . Invoke-Capability42MainPhase02 -RunState $RunState
+  . Invoke-Capability42MainPhase03 -RunState $RunState
+  . Invoke-Capability42MainPhase04 -RunState $RunState
+  . Invoke-Capability42MainPhase05 -RunState $RunState
+  . Invoke-Capability42MainPhase06 -RunState $RunState
+  . Invoke-Capability42MainPhase07 -RunState $RunState
+  . Invoke-Capability42MainPhase08
+  $script:RunState = $RunState
+}
+
+. Invoke-Capability42Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation
+function Get-Capability42ResultToken {
+  $resultToken = if ($findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
+  return $resultToken
+}
+$resultToken = Get-Capability42ResultToken
+$v2Result = Get-V2ResultObject -ScriptName '42-Client-SecurityBaseline-Report-IntuneRef.ps1' -Mode $Mode -Result $resultToken -Findings $findings -Summary $summary -Metadata @{ Rows = @($RunState.rows.ToArray()); RefInfo = $refInfo }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 

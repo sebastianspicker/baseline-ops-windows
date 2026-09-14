@@ -602,12 +602,6 @@
       "version": "0.1.41"
     },
     {
-      "name": "tracing-attributes",
-      "purl": "pkg:cargo/tracing-attributes@0.1.31",
-      "type": "library",
-      "version": "0.1.31"
-    },
-    {
       "name": "tracing-core",
       "purl": "pkg:cargo/tracing-core@0.1.36",
       "type": "library",

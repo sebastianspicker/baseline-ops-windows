@@ -42,8 +42,8 @@ impl Default for SysmonPolicy {
 }
 
 /// Fixed SCM identities that may represent a local Sysmon installation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SysmonServiceIdentity {
     /// The 64-bit Sysmon service identity.
     Sysmon64,
@@ -52,8 +52,8 @@ pub enum SysmonServiceIdentity {
 }
 
 /// Signature evidence collected only for an already bounded Sysmon image.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SysmonSignatureEvidence {
     /// The image passed the fixed Microsoft subject-only observation check.
     MicrosoftSubjectVerified,
@@ -62,8 +62,8 @@ pub enum SysmonSignatureEvidence {
 }
 
 /// Bounded metadata retained for a safely resolved fixed-service image.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SysmonBinaryEvidence {
     /// Image length in bytes; configuration content is never retained.
     pub bytes: u64,
@@ -74,8 +74,8 @@ pub struct SysmonBinaryEvidence {
 }
 
 /// Outcome of resolving an SCM-provided fixed Sysmon image path.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SysmonImageEvidence {
     /// Path validation and bounded image evidence completed.
     Verified(SysmonBinaryEvidence),
@@ -84,8 +84,8 @@ pub enum SysmonImageEvidence {
 }
 
 /// One fixed service observation, with no service-config command line retained.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SysmonServiceObservation {
     /// Compile-time service identity queried through SCM.
     pub identity: SysmonServiceIdentity,
@@ -98,8 +98,8 @@ pub struct SysmonServiceObservation {
 }
 
 /// Native read-only Sysmon evidence before policy evaluation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SysmonObservation {
     /// Exactly the `Sysmon64` and `Sysmon` SCM observations, in that order.
     pub services: Vec<Observation<SysmonServiceObservation>>,
@@ -442,16 +442,7 @@ mod tests {
 
     #[test]
     fn service_evaluation_preserves_finding_order_and_ignores_a_third_observation() {
-        let Observation::Present(mut stopped_untrusted) = service() else {
-            unreachable!("service fixture must be present");
-        };
-        stopped_untrusted.state = ServiceState::Stopped;
-        stopped_untrusted.binary =
-            Observation::Present(SysmonImageEvidence::Verified(SysmonBinaryEvidence {
-                bytes: 1,
-                sha256: "00".repeat(32),
-                signature: SysmonSignatureEvidence::Untrusted,
-            }));
+        let stopped_untrusted = stopped_untrusted_service();
         let mut findings = Vec::new();
 
         evaluate_services(
@@ -466,13 +457,7 @@ mod tests {
         assert_eq!(
             findings,
             vec![
-                PolicyFinding {
-                    code: "SYSMON-ServiceSetIncomplete",
-                    status: FindingStatus::Warning,
-                    severity: Severity::High,
-                    message: "The fixed Sysmon service observation set was incomplete.".into(),
-                    evidence: JsonMap::from([("read_only".into(), json!(true))]),
-                },
+                service_set_incomplete_finding(),
                 PolicyFinding {
                     code: "SYSMON-ServiceNotRunning",
                     status: FindingStatus::Warning,
@@ -501,6 +486,20 @@ mod tests {
         );
     }
 
+    fn stopped_untrusted_service() -> SysmonServiceObservation {
+        let Observation::Present(mut service) = service() else {
+            unreachable!("service fixture must be present");
+        };
+        service.state = ServiceState::Stopped;
+        service.binary =
+            Observation::Present(SysmonImageEvidence::Verified(SysmonBinaryEvidence {
+                bytes: 1,
+                sha256: "00".repeat(32),
+                signature: SysmonSignatureEvidence::Untrusted,
+            }));
+        service
+    }
+
     #[test]
     fn not_installed_requires_every_observation_in_the_whole_slice_to_be_missing() {
         let mut all_missing_findings = Vec::new();
@@ -512,25 +511,7 @@ mod tests {
             ],
             &mut all_missing_findings,
         );
-        assert_eq!(
-            all_missing_findings,
-            vec![
-                PolicyFinding {
-                    code: "SYSMON-ServiceSetIncomplete",
-                    status: FindingStatus::Warning,
-                    severity: Severity::High,
-                    message: "The fixed Sysmon service observation set was incomplete.".into(),
-                    evidence: JsonMap::from([("read_only".into(), json!(true))]),
-                },
-                PolicyFinding {
-                    code: "SYSMON-NotInstalled",
-                    status: FindingStatus::Warning,
-                    severity: Severity::Medium,
-                    message: "Neither fixed Sysmon service identity is installed.".into(),
-                    evidence: JsonMap::from([("read_only".into(), json!(true))]),
-                },
-            ]
-        );
+        assert_eq!(all_missing_findings, all_missing_service_findings());
 
         let mut third_observation_findings = Vec::new();
         evaluate_services(
@@ -543,13 +524,30 @@ mod tests {
         );
         assert_eq!(
             third_observation_findings,
-            vec![PolicyFinding {
-                code: "SYSMON-ServiceSetIncomplete",
-                status: FindingStatus::Warning,
-                severity: Severity::High,
-                message: "The fixed Sysmon service observation set was incomplete.".into(),
-                evidence: JsonMap::from([("read_only".into(), json!(true))]),
-            }]
+            vec![service_set_incomplete_finding()]
         );
+    }
+
+    fn all_missing_service_findings() -> Vec<PolicyFinding> {
+        vec![
+            service_set_incomplete_finding(),
+            PolicyFinding {
+                code: "SYSMON-NotInstalled",
+                status: FindingStatus::Warning,
+                severity: Severity::Medium,
+                message: "Neither fixed Sysmon service identity is installed.".into(),
+                evidence: JsonMap::from([("read_only".into(), json!(true))]),
+            },
+        ]
+    }
+
+    fn service_set_incomplete_finding() -> PolicyFinding {
+        PolicyFinding {
+            code: "SYSMON-ServiceSetIncomplete",
+            status: FindingStatus::Warning,
+            severity: Severity::High,
+            message: "The fixed Sysmon service observation set was incomplete.".into(),
+            evidence: JsonMap::from([("read_only".into(), json!(true))]),
+        }
     }
 }

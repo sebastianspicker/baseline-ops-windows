@@ -105,6 +105,11 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+function Initialize-Capability40Runtime {
+  param($EntryBoundParameters)
+  $RunState = @{
+
+  }
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
@@ -114,16 +119,19 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
-$script:__V2Context = Initialize-V2Context -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+. (Join-Path $PSScriptRoot 'internal/40-AddedLSAProtection-RunAsPPL-AuditRemediate.helpers.ps1')
+$script:__V2Context = Initialize-V2Context -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -BoundParameters $EntryBoundParameters `
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
 
-$isWindowsHost = ($env:OS -eq 'Windows_NT')
-if (-not $isWindowsHost) {
+$RunState.isWindowsHost = ($env:OS -eq 'Windows_NT')
+  $script:RunState = $RunState
+}
+
+. Initialize-Capability40Runtime -EntryBoundParameters $PSBoundParameters
+if (-not $RunState.isWindowsHost) {
   $summary = [pscustomobject]@{
     ComputerName = $env:COMPUTERNAME
     Timestamp    = Get-Date
@@ -142,46 +150,15 @@ if (-not $isWindowsHost) {
 # Console helpers (no pipeline output)
 # ----------------------------
 
-function Write-Badge {
-  param(
-    [Parameter(Mandatory)][string]$Label,
-    [Parameter(Mandatory)][string]$Value,
-    [ConsoleColor]$Color = [ConsoleColor]::Gray
-  )
-
-  Write-UiLine ("{0,-20}: {1}" -f $Label, $Value) -ForegroundColor $Color
-}
-
-
 # ----------------------------
 # Common helpers
 # ----------------------------
 
-function Format-Nullable {
-  param([AllowNull()][object]$Value)
-  if ($null -eq $Value) { return '<null>' }
-  return [string]$Value
-}
 
-function To-Bool {
-  param([AllowNull()][object]$Value, [bool]$Default = $false)
-  if ($null -eq $Value) { return $Default }
-  try { return [bool]$Value } catch { return $Default }
-}
 
-function To-Int {
-  param([AllowNull()][object]$Value, [int]$Default)
-  if ($null -eq $Value) { return $Default }
-  try { return [int]$Value } catch { return $Default }
-}
 
-function To-StringOrNull {
-  param([AllowNull()][object]$Value)
-  if ($null -eq $Value) { return $null }
-  $s = [string]$Value
-  if ([string]::IsNullOrWhiteSpace($s)) { return $null }
-  return $s
-}
+
+
 
 # ----------------------------
 # Registry helpers
@@ -338,8 +315,20 @@ function Apply-ArgsOverlay {
     [AllowNull()][object[]]$ArgsList
   )
 
-  if ($null -eq $ArgsList -or $ArgsList.Count -eq 0) { return $Config }
+  if ((Test-AnyCondition -Conditions @({ $null -eq $ArgsList }, { $ArgsList.Count -eq 0 }))) { return $Config }
 
+  Set-LsaLegacyModeAndTarget -Config $Config -ArgsList $ArgsList
+  Set-LsaLegacySwitches -Config $Config -ArgsList $ArgsList
+  Set-LsaLegacyValues -Config $Config -ArgsList $ArgsList
+  Set-LsaLegacyExport -Config $Config -ArgsList $ArgsList
+  if (Has-Token -ArgsList $ArgsList -Token 'Quiet') {
+    Write-Warning "LegacyArgs overriding parameter 'Quiet' to value 'True'"
+    $Config['Quiet'] = $true
+  }
+  return $Config
+}
+function Set-LsaLegacyModeAndTarget {
+  param($Config, $ArgsList)
   if ($ArgsList.Count -ge 1 -and $ArgsList[0]) {
     if ([string]$ArgsList[0] -notin @('Audit', 'Remediate')) {
       throw "Invalid Mode '$([string]$ArgsList[0])'. Must be 'Audit' or 'Remediate'."
@@ -356,23 +345,27 @@ function Apply-ArgsOverlay {
     Write-Warning "LegacyArgs overriding parameter 'TargetRunAsPPL' to value '$parsedTarget'"
     $Config['TargetRunAsPPL'] = $parsedTarget
   }
-
-  if ($ArgsList.Count -ge 3 -and $ArgsList[2]) { if ([string]$ArgsList[2] -ieq 'Boot') {
-    Write-Warning "LegacyArgs overriding parameter 'ManageRunAsPPLBoot' to value 'True'"
-    $Config['ManageRunAsPPLBoot'] = $true
-  } }
-  if ($ArgsList.Count -ge 4 -and $ArgsList[3]) { if ([string]$ArgsList[3] -ieq 'Verify') {
-    Write-Warning "LegacyArgs overriding parameter 'Verify' to value 'True'"
-    $Config['Verify'] = $true
-  } }
+}
+function Set-LsaLegacySwitches {
+  param($Config, $ArgsList)
+  Set-LsaLegacyNamedSwitch -Config $Config -ArgsList $ArgsList -Index 2 -Token 'Boot' -Name 'ManageRunAsPPLBoot'
+  Set-LsaLegacyNamedSwitch -Config $Config -ArgsList $ArgsList -Index 3 -Token 'Verify' -Name 'Verify'
+  Set-LsaLegacyNamedSwitch -Config $Config -ArgsList $ArgsList -Index 5 -Token 'CI' -Name 'CollectCodeIntegrity'
+}
+function Set-LsaLegacyNamedSwitch {
+  param($Config, $ArgsList, [int]$Index, [string]$Token, [string]$Name)
+  if ($ArgsList.Count -le $Index) { return }
+  if (-not $ArgsList[$Index]) { return }
+  if ([string]$ArgsList[$Index] -ine $Token) { return }
+  Write-Warning "LegacyArgs overriding parameter '$Name' to value 'True'"
+  $Config[$Name] = $true
+}
+function Set-LsaLegacyValues {
+  param($Config, $ArgsList)
   if ($ArgsList.Count -ge 5 -and $ArgsList[4]) {
     Write-Warning "LegacyArgs overriding parameter 'VerifyLookbackHours' to value '$([int]$ArgsList[4])'"
     $Config['VerifyLookbackHours'] = [int]$ArgsList[4]
   }
-  if ($ArgsList.Count -ge 6 -and $ArgsList[5]) { if ([string]$ArgsList[5] -ieq 'CI') {
-    Write-Warning "LegacyArgs overriding parameter 'CollectCodeIntegrity' to value 'True'"
-    $Config['CollectCodeIntegrity'] = $true
-  } }
   if ($ArgsList.Count -ge 7 -and $ArgsList[6]) {
     Write-Warning "LegacyArgs overriding parameter 'CILookbackHours' to value '$([int]$ArgsList[6])'"
     $Config['CILookbackHours'] = [int]$ArgsList[6]
@@ -381,19 +374,15 @@ function Apply-ArgsOverlay {
     Write-Warning "LegacyArgs overriding parameter 'DisableMethod' to value '$([string]$ArgsList[7])'"
     $Config['DisableMethod'] = [string]$ArgsList[7]
   }
-
+}
+function Set-LsaLegacyExport {
+  param($Config, $ArgsList)
   if ($ArgsList.Count -ge 10 -and $ArgsList[8] -and $ArgsList[9]) {
     if ([string]$ArgsList[8] -ieq 'Export') {
       Write-Warning "LegacyArgs overriding parameter 'ExportPath' to value '$([string]$ArgsList[9])'"
       $Config['ExportPath'] = [string]$ArgsList[9]
     }
   }
-
-  if (Has-Token -ArgsList $ArgsList -Token 'Quiet') {
-    Write-Warning "LegacyArgs overriding parameter 'Quiet' to value 'True'"
-    $Config['Quiet'] = $true
-  }
-  return $Config
 }
 
 function Normalize-ConfigTypes {
@@ -412,15 +401,26 @@ function Normalize-ConfigTypes {
   return $Config
 }
 
-function Validate-Config {
-  param([Parameter(Mandatory)][hashtable]$Config)
+function Validate-ConfigSection01 {
+  param([hashtable]$RunState)
+if ($RunState.Config['Mode'] -eq 'AuditOnly') { $RunState.Config['Mode'] = 'Audit' }
+  if ($RunState.Config['Mode'] -notin @('Audit','Remediate')) { throw "Mode must be Audit or Remediate. Got: $($RunState.Config['Mode'])" }
+  if ($RunState.Config['TargetRunAsPPL'] -notin @(0,1,2)) { throw "TargetRunAsPPL must be 0, 1, or 2. Got: $($RunState.Config['TargetRunAsPPL'])" }
+  if ($RunState.Config['VerifyLookbackHours'] -lt 1 -or $RunState.Config['VerifyLookbackHours'] -gt 168) { throw "VerifyLookbackHours must be 1..168. Got: $($RunState.Config['VerifyLookbackHours'])" }
+}
 
-  if ($Config['Mode'] -eq 'AuditOnly') { $Config['Mode'] = 'Audit' }
-  if ($Config['Mode'] -notin @('Audit','Remediate')) { throw "Mode must be Audit or Remediate. Got: $($Config['Mode'])" }
-  if ($Config['TargetRunAsPPL'] -notin @(0,1,2)) { throw "TargetRunAsPPL must be 0, 1, or 2. Got: $($Config['TargetRunAsPPL'])" }
-  if ($Config['VerifyLookbackHours'] -lt 1 -or $Config['VerifyLookbackHours'] -gt 168) { throw "VerifyLookbackHours must be 1..168. Got: $($Config['VerifyLookbackHours'])" }
-  if ($Config['CILookbackHours'] -lt 1 -or $Config['CILookbackHours'] -gt 168) { throw "CILookbackHours must be 1..168. Got: $($Config['CILookbackHours'])" }
-  if ($Config['DisableMethod'] -notin @('SetZero','DeleteValue')) { throw "DisableMethod must be SetZero or DeleteValue. Got: $($Config['DisableMethod'])" }
+function Validate-ConfigSection02 {
+  param([hashtable]$RunState)
+if ($RunState.Config['CILookbackHours'] -lt 1 -or $RunState.Config['CILookbackHours'] -gt 168) { throw "CILookbackHours must be 1..168. Got: $($RunState.Config['CILookbackHours'])" }
+  if ($RunState.Config['DisableMethod'] -notin @('SetZero','DeleteValue')) { throw "DisableMethod must be SetZero or DeleteValue. Got: $($RunState.Config['DisableMethod'])" }
+}
+
+function Validate-Config {
+  param([Parameter(Mandatory)][hashtable]$Config, [hashtable]$RunState)
+  $RunState.Config = $Config
+
+    . Validate-ConfigSection01 -RunState $RunState
+    . Validate-ConfigSection02 -RunState $RunState
 }
 
 # ----------------------------
@@ -442,112 +442,45 @@ function Export-ResultJson {
 # ----------------------------
 # Formatted console output (no pipeline output)
 # ----------------------------
-function Write-PrettySummary {
-  param([Parameter(Mandatory)][object]$Result)
-
-  $s = $Result.Summary
-
-  $overallText = 'OK'
-  $overallColor = [ConsoleColor]::Green
-  if ($s.FindingsCount -gt 0) { $overallText = 'ATTENTION'; $overallColor = [ConsoleColor]::Yellow }
-  if ($s.RebootRequired) { $overallText = 'REBOOT REQUIRED'; $overallColor = [ConsoleColor]::Yellow }
-
-  $findingsColor = [ConsoleColor]::Green
-  if ($s.FindingsCount -gt 0) { $findingsColor = [ConsoleColor]::Yellow }
-
-  $rebootColor = [ConsoleColor]::Green
-  if ($s.RebootRequired) { $rebootColor = [ConsoleColor]::Yellow }
-
-  Write-Section -Title 'LSA PPL (RunAsPPL)'
-  Write-Badge -Label 'Overall'            -Value $overallText -Color $overallColor
-  Write-Badge -Label 'ComputerName'       -Value $s.ComputerName -Color Gray
-  Write-Badge -Label 'Mode'               -Value $s.Mode -Color Gray
-  Write-Badge -Label 'TargetRunAsPPL'     -Value ([string]$s.TargetRunAsPPL) -Color Cyan
-  Write-Badge -Label 'RunAsPPL (before)'  -Value (Format-Nullable $Result.Current.RunAsPPL) -Color Gray
-  Write-Badge -Label 'RunAsPPL (after)'   -Value (Format-Nullable $Result.After.RunAsPPL) -Color Gray
-
-  if ($s.ManageRunAsPPLBoot) {
-    Write-Badge -Label 'RunAsPPLBoot (before)' -Value (Format-Nullable $Result.Current.RunAsPPLBoot) -Color Gray
-    Write-Badge -Label 'RunAsPPLBoot (after)'  -Value (Format-Nullable $Result.After.RunAsPPLBoot) -Color Gray
-  }
-
-  Write-Badge -Label 'DisableMethod'      -Value $s.DisableMethod -Color DarkGray
-  Write-Badge -Label 'FindingsCount'      -Value ([string]$s.FindingsCount) -Color $findingsColor
-  Write-Badge -Label 'RebootRequired'     -Value ([string]$s.RebootRequired) -Color $rebootColor
-  Write-Badge -Label 'Timestamp'          -Value ([string]$s.Timestamp) -Color DarkGray
-
-  if ($s.Changes -and $s.Changes.Count -gt 0) {
-    Write-Section -Title 'Changes'
-    foreach ($c in $s.Changes) { Write-UiLine ("  + {0}" -f $c) -ForegroundColor Cyan }
-  }
-
-  if ($Result.Findings -and $Result.Findings.Count -gt 0) {
-    Write-Section -Title 'Findings'
-    foreach ($f in $Result.Findings) {
-      $c = [ConsoleColor]::Yellow
-      if ([string]$f.Severity -ieq 'High') { $c = [ConsoleColor]::Red }
-      elseif ([string]$f.Severity -ieq 'Low') { $c = [ConsoleColor]::Gray }
-      Write-UiLine ("  ! [{0}] {1} - {2}" -f $f.Severity, $f.Code, $f.Message) -ForegroundColor $c
-    }
-  }
-
-  if ($null -ne $Result.Verification) {
-    Write-Section -Title 'Verify (Wininit Event 12)'
-    if ($Result.Verification.Found) {
-      Write-UiLine "  OK Wininit event found indicating PPL level 4." -ForegroundColor Green
-      Write-UiLine ("  TimeCreated   : {0}" -f $Result.Verification.TimeCreated) -ForegroundColor DarkGray
-      Write-UiLine ("  EventRecordId : {0}" -f $Result.Verification.EventRecordId) -ForegroundColor DarkGray
-    } else {
-      Write-UiLine "  WARN No matching Wininit event found in lookback window." -ForegroundColor Yellow
-      if ($Result.Verification.Error) { Write-UiLine ("  Error: {0}" -f $Result.Verification.Error) -ForegroundColor Yellow }
-    }
-  }
-
-  if ($null -ne $Result.CodeIntegrity) {
-    Write-Section -Title 'CodeIntegrity (Operational)'
-    if ($Result.CodeIntegrity.Error) {
-      Write-UiLine ("  WARN Unable to read log: {0}" -f $Result.CodeIntegrity.Error) -ForegroundColor Yellow
-    } else {
-      Write-UiLine ("  Events (lsass.exe) in last {0}h: {1}" -f $Result.CodeIntegrity.LookbackHrs, $Result.CodeIntegrity.Count) -ForegroundColor Gray
-    }
-  }
-}
-
 # ----------------------------
 # MAIN
 # ----------------------------
+function Initialize-LsaProtectionConfiguration {
+  param($EntryBoundParameters, [hashtable]$RunState)
 Require-Admin
 
 $configPath = if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath } else { Get-TokenValue -ArgsList $LegacyArgs -Token 'Config' }
 $cfgResult = Read-ConfigWithDefaults -Path $configPath -Defaults (Get-DefaultConfig) -AsHashtable -OnWarning { param($m) Write-Warn $m }
-$config = $cfgResult.Config
-$config = Apply-ArgsOverlay -Config $config -ArgsList $LegacyArgs
-$config['Mode'] = if ($Mode -eq 'Remediate') { 'Remediate' } else { 'Audit' }
-if ($PSBoundParameters.ContainsKey('Quiet')) { $config['Quiet'] = [bool]$Quiet }
-if (-not [string]::IsNullOrWhiteSpace($OutputPath)) { $config['ExportPath'] = $OutputPath }
-$config = Normalize-ConfigTypes -Config $config
-Validate-Config -Config $config
+$RunState.config = $cfgResult.Config
+$RunState.config = Apply-ArgsOverlay -Config $RunState.config -ArgsList $LegacyArgs
+$RunState.config['Mode'] = if ($Mode -eq 'Remediate') { 'Remediate' } else { 'Audit' }
+if ($EntryBoundParameters.ContainsKey('Quiet')) { $RunState.config['Quiet'] = [bool]$Quiet }
+if (-not [string]::IsNullOrWhiteSpace($OutputPath)) { $RunState.config['ExportPath'] = $OutputPath }
+$RunState.config = Normalize-ConfigTypes -Config $RunState.config
+Validate-Config -Config $RunState.config -RunState $RunState
 
-$Mode = $config['Mode']
-$TargetRunAsPPL = $config['TargetRunAsPPL']
-$ManageBoot = $config['ManageRunAsPPLBoot']
-$DisableMethod = $config['DisableMethod']
-$DoVerify = $config['Verify']
-$VerifyLookbackHours = $config['VerifyLookbackHours']
-$CollectCI = $config['CollectCodeIntegrity']
-$CILookbackHours = $config['CILookbackHours']
-$ExportPath = $config['ExportPath']
-$Quiet = $config['Quiet']
+$Mode = $RunState.config['Mode']
+$RunState.TargetRunAsPPL = $RunState.config['TargetRunAsPPL']
+$RunState.ManageBoot = $RunState.config['ManageRunAsPPLBoot']
+$RunState.DisableMethod = $RunState.config['DisableMethod']
+$RunState.DoVerify = $RunState.config['Verify']
+$RunState.VerifyLookbackHours = $RunState.config['VerifyLookbackHours']
+$RunState.CollectCI = $RunState.config['CollectCodeIntegrity']
+$RunState.CILookbackHours = $RunState.config['CILookbackHours']
+$RunState.ExportPath = $RunState.config['ExportPath']
+$Quiet = $RunState.config['Quiet']
 
 $Findings = Get-FindingsList
-$Changes  = New-Object 'System.Collections.Generic.List[string]'
-$rebootRequired = $false
-$registryWriteFailed = $false
+$RunState.Changes  = New-Object 'System.Collections.Generic.List[string]'
+$RunState.rebootRequired = $false
+$RunState.registryWriteFailed = $false
 
 if ($cfgResult.Meta.Error) {
   [void](Add-Finding -FindingList $Findings -Code 'LSA-ConfigLoadFailed' -Severity 'Medium' `
     -Message ("Config JSON could not be loaded; using parameters/defaults. Error: {0}" -f $cfgResult.Meta.Error))
 }
+}
+. Initialize-LsaProtectionConfiguration -EntryBoundParameters $PSBoundParameters -RunState $RunState
 
 function Add-LsaRegistryWriteFailureFinding {
   param(
@@ -561,136 +494,182 @@ function Add-LsaRegistryWriteFailureFinding {
     -Extra @{ Path = $Path; Name = $Name; Value = $Value }
 }
 
-$lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+function Invoke-Capability40MainPhase01 {
+  $lsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
 
-$current = [pscustomobject]@{
-  RunAsPPL     = Get-RegValue -Path $lsaPath -Name 'RunAsPPL'
-  RunAsPPLBoot = Get-RegValue -Path $lsaPath -Name 'RunAsPPLBoot'
+  $current = [pscustomobject]@{
+    RunAsPPL     = Get-RegValue -Path $lsaPath -Name 'RunAsPPL'
+    RunAsPPLBoot = Get-RegValue -Path $lsaPath -Name 'RunAsPPLBoot'
+  }
+
+  if ($null -eq $current.RunAsPPL) {
+    Add-Finding -FindingList $Findings -Code 'LSA-PPL-Missing' -Severity 'High' -Message 'RunAsPPL is not set (effectively disabled).'
+  } elseif ($current.RunAsPPL -eq 0) {
+    Add-Finding -FindingList $Findings -Code 'LSA-PPL-Off' -Severity 'High' -Message 'RunAsPPL is 0 (Added LSA protection disabled).'
+  } elseif ($current.RunAsPPL -notin @(1,2)) {
+    Add-Finding -FindingList $Findings -Code 'LSA-PPL-Invalid' -Severity 'Medium' -Message ("RunAsPPL has unexpected value: {0}" -f $current.RunAsPPL)
+  }
 }
-
-if ($null -eq $current.RunAsPPL) {
-  Add-Finding -FindingList $Findings -Code 'LSA-PPL-Missing' -Severity 'High' -Message 'RunAsPPL is not set (effectively disabled).'
-} elseif ($current.RunAsPPL -eq 0) {
-  Add-Finding -FindingList $Findings -Code 'LSA-PPL-Off' -Severity 'High' -Message 'RunAsPPL is 0 (Added LSA protection disabled).'
-} elseif ($current.RunAsPPL -notin @(1,2)) {
-  Add-Finding -FindingList $Findings -Code 'LSA-PPL-Invalid' -Severity 'Medium' -Message ("RunAsPPL has unexpected value: {0}" -f $current.RunAsPPL)
+function Invoke-Capability40MainPhase02Step01 {
+  param([hashtable]$RunState)
+if ($RunState.DisableMethod -ieq 'DeleteValue') {
+        . Remove-LsaRunAsPplValue -RunState $RunState
+      } else {
+        . Disable-LsaRunAsPplValue -RunState $RunState
+      }
 }
-
-if ($Mode -eq 'Remediate') {
-
-  if ($TargetRunAsPPL -eq 0) {
-
-    if ($DisableMethod -ieq 'DeleteValue') {
-      if ($null -ne $current.RunAsPPL) {
-        if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Remove registry value")) {
-          if (Remove-RegValueIfExists -Path $lsaPath -Name 'RunAsPPL') {
-            $rebootRequired = $true
-            $Changes.Add(("RunAsPPL: {0} -> <deleted>" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
-          }
-        }
-      }
-    } else {
-      if ($current.RunAsPPL -ne 0) {
-        if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Set registry value to 0")) {
-          if (Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value 0) {
-            $rebootRequired = $true
-            $Changes.Add(("RunAsPPL: {0} -> 0" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
-          } else {
-            Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPL' -Value 0
-            $registryWriteFailed = $true
-          }
-        }
-      }
-    }
-
-    if ($ManageBoot) {
-      if ($current.RunAsPPLBoot -ne 0) {
-        if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPLBoot", "Set registry value to 0")) {
-          if (Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0) {
-            $rebootRequired = $true
-            $Changes.Add(("RunAsPPLBoot: {0} -> 0" -f (Format-Nullable $current.RunAsPPLBoot))) | Out-Null
-          } else {
-            Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0
-            $registryWriteFailed = $true
-          }
-        }
-      }
-    }
-
+function Remove-LsaRunAsPplValue {
+  param([hashtable]$RunState)
+  if ($null -eq $current.RunAsPPL) { return }
+  if (-not $script:__EntryCmdlet.ShouldProcess("$lsaPath\RunAsPPL", 'Remove registry value')) { return }
+  if (Remove-RegValueIfExists -Path $lsaPath -Name 'RunAsPPL') {
+    $RunState.rebootRequired = $true
+    $RunState.Changes.Add(("RunAsPPL: {0} -> <deleted>" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
+  }
+}
+function Disable-LsaRunAsPplValue {
+  param([hashtable]$RunState)
+  if ($current.RunAsPPL -eq 0) { return }
+  if (-not $script:__EntryCmdlet.ShouldProcess("$lsaPath\RunAsPPL", 'Set registry value to 0')) { return }
+  if (Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value 0) {
+    $RunState.rebootRequired = $true
+    $RunState.Changes.Add(("RunAsPPL: {0} -> 0" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
   } else {
+    Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPL' -Value 0
+    $RunState.registryWriteFailed = $true
+  }
+}
 
-    if ($current.RunAsPPL -ne $TargetRunAsPPL) {
-      if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Set registry value to $TargetRunAsPPL")) {
-        if (Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value $TargetRunAsPPL) {
-          $rebootRequired = $true
-          $Changes.Add(("RunAsPPL: {0} -> {1}" -f (Format-Nullable $current.RunAsPPL), $TargetRunAsPPL)) | Out-Null
-        } else {
-          Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPL' -Value $TargetRunAsPPL
-          $registryWriteFailed = $true
-        }
-      }
-    }
-
-    if ($ManageBoot) {
-      if ($current.RunAsPPLBoot -ne $TargetRunAsPPL) {
-        if ($PSCmdlet.ShouldProcess("$lsaPath\RunAsPPLBoot", "Set registry value to $TargetRunAsPPL")) {
-          if (Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value $TargetRunAsPPL) {
-            $rebootRequired = $true
-            $Changes.Add(("RunAsPPLBoot: {0} -> {1}" -f (Format-Nullable $current.RunAsPPLBoot), $TargetRunAsPPL)) | Out-Null
-          } else {
-            Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPLBoot' -Value $TargetRunAsPPL
-            $registryWriteFailed = $true
+function Invoke-Capability40MainPhase02Step02 {
+  param([hashtable]$RunState)
+if ($RunState.ManageBoot) {
+        if ($current.RunAsPPLBoot -ne 0) {
+          if ($script:__EntryCmdlet.ShouldProcess("$lsaPath\RunAsPPLBoot", "Set registry value to 0")) {
+            if (Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0) {
+              $RunState.rebootRequired = $true
+              $RunState.Changes.Add(("RunAsPPLBoot: {0} -> 0" -f (Format-Nullable $current.RunAsPPLBoot))) | Out-Null
+            } else {
+              Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPLBoot' -Value 0
+              $RunState.registryWriteFailed = $true
+            }
           }
         }
       }
+}
+
+function Invoke-Capability40MainPhase02Stage01 {
+  param([hashtable]$RunState)
+if ($current.RunAsPPL -ne $RunState.TargetRunAsPPL) {
+        if ($script:__EntryCmdlet.ShouldProcess("$lsaPath\RunAsPPL", "Set registry value to $($RunState.TargetRunAsPPL)")) {
+          if (Set-RegDword -Path $lsaPath -Name 'RunAsPPL' -Value $RunState.TargetRunAsPPL) {
+            $RunState.rebootRequired = $true
+            $RunState.Changes.Add(("RunAsPPL: {0} -> {1}" -f (Format-Nullable $current.RunAsPPL), $RunState.TargetRunAsPPL)) | Out-Null
+          } else {
+            Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPL' -Value $RunState.TargetRunAsPPL
+            $RunState.registryWriteFailed = $true
+          }
+        }
+      }
+}
+
+function Invoke-Capability40MainPhase02Stage02 {
+  param([hashtable]$RunState)
+if ($RunState.ManageBoot) {
+        if ($current.RunAsPPLBoot -ne $RunState.TargetRunAsPPL) {
+          if ($script:__EntryCmdlet.ShouldProcess("$lsaPath\RunAsPPLBoot", "Set registry value to $($RunState.TargetRunAsPPL)")) {
+            if (Set-RegDword -Path $lsaPath -Name 'RunAsPPLBoot' -Value $RunState.TargetRunAsPPL) {
+              $RunState.rebootRequired = $true
+              $RunState.Changes.Add(("RunAsPPLBoot: {0} -> {1}" -f (Format-Nullable $current.RunAsPPLBoot), $RunState.TargetRunAsPPL)) | Out-Null
+            } else {
+              Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPLBoot' -Value $RunState.TargetRunAsPPL
+              $RunState.registryWriteFailed = $true
+            }
+          }
+        }
+      }
+}
+
+function Invoke-Capability40MainPhase02 {
+  param([hashtable]$RunState)
+  if ($Mode -eq 'Remediate') {
+
+    if ($RunState.TargetRunAsPPL -eq 0) {
+
+      . Invoke-Capability40MainPhase02Step01 -RunState $RunState
+. Invoke-Capability40MainPhase02Step02 -RunState $RunState
+
+    } else {
+
+      . Invoke-Capability40MainPhase02Stage01 -RunState $RunState
+. Invoke-Capability40MainPhase02Stage02 -RunState $RunState
+
     }
-
   }
 }
-
-$after = [pscustomobject]@{
-  RunAsPPL     = Get-RegValue -Path $lsaPath -Name 'RunAsPPL'
-  RunAsPPLBoot = Get-RegValue -Path $lsaPath -Name 'RunAsPPLBoot'
-}
-
-$verification = $null
-if ($DoVerify) { $verification = Get-LsaProtectionWinInitEvent -LookbackHours $VerifyLookbackHours }
-
-$codeIntegrity = $null
-if ($CollectCI) { $codeIntegrity = Get-CodeIntegrityLsaEvents -LookbackHours $CILookbackHours }
-
-$result = [pscustomobject]@{
-  Summary = [pscustomobject]@{
-    ComputerName        = $env:COMPUTERNAME
-    Mode                = $Mode
-    TargetRunAsPPL      = $TargetRunAsPPL
-    ManageRunAsPPLBoot  = $ManageBoot
-    DisableMethod       = $DisableMethod
-    RebootRequired      = $rebootRequired
-    RegistryWriteFailed = $registryWriteFailed
-    FindingsCount       = [int]$Findings.Count
-    Changes             = @($Changes.ToArray())
-    Timestamp           = (Get-Date)
-    ConfigPathUsed      = if ($configPath) { '[configured path]' } else { $null }
-    ExportPathUsed      = if ($ExportPath) { '[configured path]' } else { $null }
-    VerifyLookbackHours = $VerifyLookbackHours
-    CILookbackHours     = $CILookbackHours
+function Invoke-Capability40MainPhase03 {
+  param([hashtable]$RunState)
+  $after = [pscustomobject]@{
+    RunAsPPL     = Get-RegValue -Path $lsaPath -Name 'RunAsPPL'
+    RunAsPPLBoot = Get-RegValue -Path $lsaPath -Name 'RunAsPPLBoot'
   }
-  Current       = $current
-  After         = $after
-  Findings      = @($Findings.ToArray())
-  Verification  = $verification
-  CodeIntegrity = $codeIntegrity
-}
 
-if ($ExportPath) {
-  Export-ResultJson -Result $result -Path $ExportPath
-}
+  $verification = $null
+  if ($RunState.DoVerify) { $verification = Get-LsaProtectionWinInitEvent -LookbackHours $RunState.VerifyLookbackHours }
 
-if ($OutputFormat -eq 'Console' -and -not $Quiet) { Write-PrettySummary -Result $result }
+  $codeIntegrity = $null
+  if ($RunState.CollectCI) { $codeIntegrity = Get-CodeIntegrityLsaEvents -LookbackHours $RunState.CILookbackHours }
+
+  $result = [pscustomobject]@{
+    Summary = [pscustomobject]@{
+      ComputerName        = $env:COMPUTERNAME
+      Mode                = $Mode
+      TargetRunAsPPL      = $RunState.TargetRunAsPPL
+      ManageRunAsPPLBoot  = $RunState.ManageBoot
+      DisableMethod       = $RunState.DisableMethod
+      RebootRequired      = $RunState.rebootRequired
+      RegistryWriteFailed = $RunState.registryWriteFailed
+      FindingsCount       = [int]$Findings.Count
+      Changes             = @($RunState.Changes.ToArray())
+      Timestamp           = (Get-Date)
+      ConfigPathUsed      = if ($configPath) { '[configured path]' } else { $null }
+      ExportPathUsed      = if ($RunState.ExportPath) { '[configured path]' } else { $null }
+      VerifyLookbackHours = $RunState.VerifyLookbackHours
+      CILookbackHours     = $RunState.CILookbackHours
+    }
+    Current       = $current
+    After         = $after
+    Findings      = @($Findings.ToArray())
+    Verification  = $verification
+    CodeIntegrity = $codeIntegrity
+  }
+
+  if ($RunState.ExportPath) {
+    Export-ResultJson -Result $result -Path $RunState.ExportPath
+  }
+}
+function Invoke-Capability40MainPhase04 {
+  param([hashtable]$RunState)
+  if ($OutputFormat -eq 'Console' -and -not $Quiet) { Write-PrettySummary -Result $RunState.result -RunState $RunState }
+}
+function Invoke-Capability40Main {
+  param($EntryBoundParameters, $EntryCmdlet, $EntryInvocation, [hashtable]$RunState)
+  $script:__EntryBoundParameters = $EntryBoundParameters
+  $script:__EntryCmdlet = $EntryCmdlet
+  $script:__EntryInvocation = $EntryInvocation
+  . Invoke-Capability40MainPhase01
+  . Invoke-Capability40MainPhase02 -RunState $RunState
+  . Invoke-Capability40MainPhase03 -RunState $RunState
+  . Invoke-Capability40MainPhase04 -RunState $RunState
+}
+. Invoke-Capability40Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # V2 output contract
-$resultToken = if ($registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+function Get-Capability40ResultToken {
+  param([hashtable]$RunState)
+  $resultToken = if ($RunState.registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+  return $resultToken
+}
+$resultToken = Get-Capability40ResultToken -RunState $RunState
 $v2Result = Get-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After }
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }

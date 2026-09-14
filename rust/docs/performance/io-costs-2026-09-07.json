@@ -1,0 +1,102 @@
+{
+  "measurement_date": "2026-09-07",
+  "platform": "aarch64-apple-darwin",
+  "os": "macOS 26.6.2 (25G83)",
+  "hardware": "Apple M4",
+  "toolchain": "1.96.0",
+  "profile": "release; workspace defaults including LTO",
+  "warmups": 3,
+  "samples_per_workload": 25,
+  "quantiles": "nearest rank: p50=sorted[12], p95=sorted[23], p99=sorted[24]",
+  "execution": "separate sequential runtime-only process per category; shared host, no cold-cache control",
+  "payload": "byte at offset i = i mod 251; ZIP Stored compression; three 24-byte inert executable fixtures plus one payload",
+  "trust": "test-only evidence protection and signature fixtures; no Windows ACL, Authenticode, PKCS7, UAC or native mutation cost",
+  "source_sha256": {
+    "rust/crates/baselineops-engine/src/boundary_io_bench.rs": "7444e683d8b9a42568d8a2d4120e8201a1df730ad9ffac757ece92944265d402",
+    "rust/crates/baselineops-engine/src/journal.rs": "b3c46bf9cd8fc667be457dc00704c9671ba7172632772eee2f30aa12a9a382ac",
+    "rust/crates/baselineops-engine/src/journal/lifecycle.rs": "a6c0b5d353866b4e4a4b5160ef3a8fc09f4da63cce1b316e060548cc093c3cd8",
+    "rust/crates/baselineops-engine/src/journal/reader.rs": "f35950a91089ae2c01fdd010c8d06cc7b223b7e518a44db755da61ab060e4f39",
+    "rust/crates/baselineops-engine/src/evidence.rs": "6e1800d4e3c02e601214d8c6167e7006f5689d0c9d39fb5d1ce7eb33e316c16a",
+    "rust/crates/baselineops-engine/src/package.rs": "e62cb50057306c803c104efc12b824431162f3cc2b9ee0bf79d50e91058d8b1e",
+    "rust/crates/baselineops-engine/src/journal/storage.rs": "6b3ba6a9b47c1d0895eb155c1f54122ce302967ca9e39a80612ed8d5ee0ea951"
+  },
+  "measurements": [
+    {
+      "category": "journal",
+      "measurements": [
+        {
+          "workload": "journal_32_actions",
+          "size": 66,
+          "samples": 25,
+          "p50_ns": 270716833,
+          "p95_ns": 291368208,
+          "p99_ns": 296683458
+        }
+      ],
+      "maximum_resident_set_bytes": 7897088,
+      "peak_memory_footprint_bytes": 2261304
+    },
+    {
+      "category": "evidence",
+      "measurements": [
+        {
+          "workload": "evidence_bytes",
+          "size": 4096,
+          "samples": 25,
+          "p50_ns": 25752750,
+          "p95_ns": 29150792,
+          "p99_ns": 29170708
+        },
+        {
+          "workload": "evidence_bytes",
+          "size": 1048576,
+          "samples": 25,
+          "p50_ns": 29669583,
+          "p95_ns": 39760208,
+          "p99_ns": 40236125
+        },
+        {
+          "workload": "evidence_bytes",
+          "size": 16777216,
+          "samples": 25,
+          "p50_ns": 116002416,
+          "p95_ns": 130313833,
+          "p99_ns": 139638208
+        }
+      ],
+      "maximum_resident_set_bytes": 44580864,
+      "peak_memory_footprint_bytes": 38977896
+    },
+    {
+      "category": "package",
+      "measurements": [
+        {
+          "workload": "package_payload_bytes",
+          "size": 4096,
+          "samples": 25,
+          "p50_ns": 35158333,
+          "p95_ns": 37082166,
+          "p99_ns": 37146042
+        },
+        {
+          "workload": "package_payload_bytes",
+          "size": 1048576,
+          "samples": 25,
+          "p50_ns": 38709583,
+          "p95_ns": 47844083,
+          "p99_ns": 49747125
+        },
+        {
+          "workload": "package_payload_bytes",
+          "size": 16777216,
+          "samples": 25,
+          "p50_ns": 114412708,
+          "p95_ns": 121240000,
+          "p99_ns": 147869458
+        }
+      ],
+      "maximum_resident_set_bytes": 26034176,
+      "peak_memory_footprint_bytes": 20382056
+    }
+  ]
+}

@@ -132,6 +132,18 @@ param(
   [switch]$NoColor
 )
 
+function Get-SoftwareAuditUnsupportedSummary {
+  param([string]$Mode)
+  $summary = [pscustomobject]@{
+    ComputerName = $env:COMPUTERNAME
+    Timestamp    = Get-Date
+    Mode         = $Mode
+    Supported    = $false
+    Notes        = @('Skipped: this script is only supported on Windows hosts.')
+  }
+  return $summary
+}
+
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
@@ -142,23 +154,14 @@ Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
 Set-StrictMode -Version Latest
-# v2-init (migrated to Initialize-V2Context)
 $script:__V2Context = Initialize-V2Context -ScriptName '19-Software-Audit.ps1' -BoundParameters $PSBoundParameters `
-  -Mode $Mode -ConfigPath $ConfigPath -OutputFormat $OutputFormat -OutputPath $OutputPath `
-  -PassThru:$PassThru -Strict:$Strict -Quiet:$Quiet -NoColor:$NoColor
+  -Values @{ Mode = $Mode; ConfigPath = $ConfigPath; OutputFormat = $OutputFormat; OutputPath = $OutputPath; PassThru = $PassThru; Strict = $Strict; Quiet = $Quiet; NoColor = $NoColor; DeriveRemediate = $false }
 if ($script:__V2Context.Quiet) { $InformationPreference = 'SilentlyContinue'; $VerbosePreference = 'SilentlyContinue' }
 $script:NoColor = [bool]$script:__V2Context.NoColor
 $ErrorActionPreference = 'Stop'
-
 $isWindowsHost = ($env:OS -eq 'Windows_NT')
 if (-not $isWindowsHost) {
-  $summary = [pscustomobject]@{
-    ComputerName = $env:COMPUTERNAME
-    Timestamp    = Get-Date
-    Mode         = $Mode
-    Supported    = $false
-    Notes        = @('Skipped: this script is only supported on Windows hosts.')
-  }
+  $summary = Get-SoftwareAuditUnsupportedSummary -Mode $Mode
   $unsupportedResult = if ($Strict) { 'FAIL' } else { 'WARN' }
   $result = Get-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result $unsupportedResult -Findings @() -Summary $summary -Metadata @{ UnsupportedHost = $true }
   Write-ResultObject -ResultObject $result -OutputFormat $OutputFormat -OutputPath $OutputPath
@@ -166,12 +169,14 @@ if (-not $isWindowsHost) {
   exit (Get-V2ExitCode -Result $unsupportedResult)
 }
 
+$softwareAuditHelperPath = Join-Path $PSScriptRoot 'internal/19-Software-Audit.helpers.ps1'
+. $softwareAuditHelperPath
+
+
 # -------------------- Settings --------------------
 $Script:EventLogName     = 'Application'
 $Script:EventSourceName  = 'Software-Audit'
-if ([string]::IsNullOrWhiteSpace($StatePath)) {
-  $StatePath = Join-Path ([System.IO.Path]::GetTempPath()) 'sw-inventory.json'
-}
+if ([string]::IsNullOrWhiteSpace($StatePath)) { $StatePath = Join-Path ([System.IO.Path]::GetTempPath()) 'sw-inventory.json' }
 $Script:FallbackEventLog = Join-Path ([System.IO.Path]::GetTempPath()) 'sw-inventory.eventlog-fallback.txt'
 
 $Script:DefaultCatalogJson = @"
@@ -186,438 +191,9 @@ $Script:DefaultCatalogJson = @"
 }
 "@
 
-# -------------------- Helpers: safe property access --------------------
-function Test-HasProperty {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)]$Object,
-    [Parameter(Mandatory=$true)][string]$Name
-  )
-  if (-not $Object) { return $false }
-  return ($Object.PSObject.Properties.Match($Name).Count -gt 0)
-}
-
-function Get-PropString {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)]$Object,
-    [Parameter(Mandatory=$true)][string]$Name
-  )
-  if (-not (Test-HasProperty -Object $Object -Name $Name)) { return '' }
-  return [string]$Object.$Name
-}
-
-function Get-PropInt {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)]$Object,
-    [Parameter(Mandatory=$true)][string]$Name,
-    [int]$Default = 0
-  )
-  if (-not (Test-HasProperty -Object $Object -Name $Name)) { return $Default }
-  try { return [int]$Object.$Name } catch { return $Default }
-}
-
-# -------------------- Helpers: filesystem + JSON --------------------
-
-# Read-JsonFile replaced by Read-JsonFileSafe from lib/JsonCatalog.psm1
-
-function ConvertFrom-JsonSafe {
-  [CmdletBinding()]
-  param([Parameter(Mandatory=$true)][string]$Json)
-
-  try {
-    if ([string]::IsNullOrWhiteSpace($Json)) { return $null }
-    $Json | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    return $null
-  }
-}
-
-# -------------------- Catalog --------------------
-function Get-CatalogWrapper {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)][string]$Source,
-    [Parameter(Mandatory=$true)][bool]$Loaded,
-    $CatalogObject,
-    [object[]]$Issues = @(),
-    [object[]]$Attempts = @()
-  )
-
-  $wl = @()
-  $bl = @()
-
-  if ($CatalogObject -and $CatalogObject.PSObject -and $CatalogObject.PSObject.Properties) {
-    if ($CatalogObject.PSObject.Properties.Match('Whitelist').Count -gt 0 -and $CatalogObject.Whitelist) { $wl = @($CatalogObject.Whitelist) }
-    if ($CatalogObject.PSObject.Properties.Match('Blacklist').Count -gt 0 -and $CatalogObject.Blacklist) { $bl = @($CatalogObject.Blacklist) }
-  }
-
-  if ($null -eq $wl) { $wl = @() }
-  if ($null -eq $bl) { $bl = @() }
-
-  [pscustomobject]@{
-    Meta      = [pscustomobject]@{ Source = $Source; Loaded = $Loaded; Issues = @($Issues); Attempts = @($Attempts) }
-    Whitelist = @($wl)
-    Blacklist = @($bl)
-  }
-}
-
-function Get-CatalogLoadIssue {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)][string]$Kind,
-    [Parameter(Mandatory=$true)]$Meta
-  )
-
-  [pscustomobject]@{
-    Kind   = $Kind
-    Path   = $Meta.Path
-    Status = $Meta.Status
-    Error  = $Meta.Error
-  }
-}
-
-function Load-Catalog {
-  [CmdletBinding()]
-  param(
-    [string]$CatalogPath,
-    [string]$ConfigPath,
-    [bool]$CatalogPathProvided,
-    [bool]$ConfigPathProvided
-  )
-
-  $issues = @()
-  $attempts = @()
-
-  if (-not [string]::IsNullOrWhiteSpace($CatalogPath)) {
-    $catLoad = Read-JsonFileWithStatus -Path $CatalogPath
-    $attempts += [pscustomobject]@{ Kind = 'CatalogPath'; Meta = $catLoad.Meta }
-    if ($catLoad.Meta.Loaded) { return (Get-CatalogWrapper -Source 'CatalogPath' -Loaded $true -CatalogObject $catLoad.Data -Issues $issues -Attempts $attempts) }
-    if ($CatalogPathProvided) { $issues += (Get-CatalogLoadIssue -Kind 'CatalogPath' -Meta $catLoad.Meta) }
-  }
-
-  if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $cfgLoad = Read-JsonFileWithStatus -Path $ConfigPath
-    $attempts += [pscustomobject]@{ Kind = 'ConfigPath'; Meta = $cfgLoad.Meta }
-    $cfg = $cfgLoad.Data
-    if ($ConfigPathProvided -and -not $cfgLoad.Meta.Loaded) { $issues += (Get-CatalogLoadIssue -Kind 'ConfigPath' -Meta $cfgLoad.Meta) }
-    if ($cfg -and (Test-HasProperty $cfg 'Software') -and $cfg.Software -and (Test-HasProperty $cfg.Software 'CatalogPath')) {
-      $p = [string]$cfg.Software.CatalogPath
-      if (-not [string]::IsNullOrWhiteSpace($p)) {
-        $catLoad = Read-JsonFileWithStatus -Path $p
-        $attempts += [pscustomobject]@{ Kind = 'ConfigPath:Software.CatalogPath'; Meta = $catLoad.Meta }
-        if ($catLoad.Meta.Loaded) { return (Get-CatalogWrapper -Source 'ConfigPath:Software.CatalogPath' -Loaded $true -CatalogObject $catLoad.Data -Issues $issues -Attempts $attempts) }
-        $issues += (Get-CatalogLoadIssue -Kind 'ConfigPath:Software.CatalogPath' -Meta $catLoad.Meta)
-      }
-    }
-  }
-
-  $fallback = ConvertFrom-JsonSafe -Json $Script:DefaultCatalogJson
-  if ($fallback) { return (Get-CatalogWrapper -Source 'EmbeddedDefault' -Loaded $true -CatalogObject $fallback -Issues $issues -Attempts $attempts) }
-
-  Get-CatalogWrapper -Source 'EmptyFallback' -Loaded $false -CatalogObject $null -Issues $issues -Attempts $attempts
-}
-
-# -------------------- Event logging (best effort) --------------------
-
-
-# -------------------- Inventory (pipeline-friendly) --------------------
-function Get-InstalledSoftware {
-  [CmdletBinding()]
-  param()
-
-  $paths = @(
-    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
-  )
-
-  $items = @()
-
-  foreach ($p in $paths) {
-    $subKeys = Get-ChildItem -Path $p -ErrorAction SilentlyContinue
-    foreach ($sk in $subKeys) {
-      $v = Get-ItemProperty -Path $sk.PSPath -ErrorAction SilentlyContinue
-      if (-not $v) { continue }
-
-      if (-not (Test-HasProperty -Object $v -Name 'DisplayName')) { continue }
-      $displayName = Get-PropString -Object $v -Name 'DisplayName'
-      if ([string]::IsNullOrWhiteSpace($displayName)) { continue }
-
-      $systemComponent = Get-PropInt -Object $v -Name 'SystemComponent' -Default 0
-      if ($systemComponent -eq 1) { continue }
-
-      $parentKeyName = Get-PropString -Object $v -Name 'ParentKeyName'
-      if (-not [string]::IsNullOrWhiteSpace($parentKeyName)) { continue }
-
-      $releaseType = Get-PropString -Object $v -Name 'ReleaseType'
-      if (-not [string]::IsNullOrWhiteSpace($releaseType) -and ($releaseType -match 'Update|Hotfix|Security Update')) { continue }
-
-      $items += [pscustomobject]@{
-        Name            = $displayName
-        Version         = Get-PropString -Object $v -Name 'DisplayVersion'
-        Publisher       = Get-PropString -Object $v -Name 'Publisher'
-        UninstallString = Get-PropString -Object $v -Name 'UninstallString'
-        InstallDate     = Get-PropString -Object $v -Name 'InstallDate'
-        Key             = [string]$sk.PSChildName
-        HivePath        = [string]$p
-        Source          = 'Registry'
-      }
-    }
-  }
-
-  $dedup = @{}
-  foreach ($it in $items) {
-    $k = ("{0}||{1}||{2}" -f $it.Name, $it.Version, $it.Publisher)
-    if (-not $dedup.ContainsKey($k)) { $dedup[$k] = $it }
-  }
-
-  $dedup.Values | Sort-Object Name, Version
-}
-
-# -------------------- Compliance evaluation (pipeline-friendly) --------------------
-function Test-SoftwareCompliance {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)]$Inventory,
-    [Parameter(Mandatory=$true)]$Catalog
-  )
-
-  $whitelist = @($Catalog.Whitelist)
-  $blacklist = @($Catalog.Blacklist)
-
-  $BLHits  = @()
-  $WLHits  = @()
-  $Unknown = @()
-
-  foreach ($sw in $Inventory) {
-    $name = [string]$sw.Name
-    $pub  = [string]$sw.Publisher
-
-    $WLMatch = $false
-    foreach ($w in $whitelist) {
-      $nr = [string]$w.NameRegex
-      $vr = [string]$w.VendorRegex
-      $nOk = ([string]::IsNullOrWhiteSpace($nr)) -or ($name -match $nr)
-      $pOk = ([string]::IsNullOrWhiteSpace($vr)) -or ($pub  -match $vr)
-      if ($nOk -and $pOk) { $WLMatch = $true; break }
-    }
-
-    $BLMatch = $false
-    foreach ($b in $blacklist) {
-      $nr = [string]$b.NameRegex
-      $vr = [string]$b.VendorRegex
-      $nOk = ([string]::IsNullOrWhiteSpace($nr)) -or ($name -match $nr)
-      $pOk = ([string]::IsNullOrWhiteSpace($vr)) -or ($pub  -match $vr)
-      if ($nOk -and $pOk) { $BLMatch = $true; break }
-    }
-
-    if ($BLMatch)      { $BLHits  += $sw }
-    elseif ($WLMatch)  { $WLHits  += $sw }
-    else               { $Unknown += $sw }
-  }
-
-  [pscustomobject]@{
-    Blacklisted = @($BLHits)
-    Whitelisted = @($WLHits)
-    Unknown     = @($Unknown)
-  }
-}
-
-function Get-AuditStatus {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)][int]$BlacklistedCount,
-    [Parameter(Mandatory=$true)][int]$UnknownCount,
-    [int]$ConfigIssueCount = 0,
-    [switch]$Strict
-  )
-
-  $eventId = 4900
-  $level   = 'Information'
-
-  if ($BlacklistedCount -gt 0) {
-    $eventId = 4902; $level = 'Error'
-  } elseif ($UnknownCount -gt 0 -or $ConfigIssueCount -gt 0) {
-    $eventId = 4901; $level = 'Warning'
-  }
-
-  if ($Strict -and ($BlacklistedCount -gt 0 -or $UnknownCount -gt 0)) {
-    if ($BlacklistedCount -gt 0) { $eventId = 4902; $level = 'Error' }
-    else                         { $eventId = 4901; $level = 'Warning' }
-  }
-
-  [pscustomobject]@{
-    EventId = [int]$eventId
-    Level   = [string]$level
-  }
-}
-
-function Get-SummaryLines {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$true)][int]$Total,
-    [Parameter(Mandatory=$true)][int]$Whitelisted,
-    [Parameter(Mandatory=$true)][int]$Unknown,
-    [Parameter(Mandatory=$true)][int]$Blacklisted,
-    [Parameter(Mandatory=$true)]$Audit
-  )
-
-  $lines = @()
-  $lines += ("Total={0}; Whitelisted={1}; Unknown={2}; Blacklisted={3}" -f $Total, $Whitelisted, $Unknown, $Blacklisted)
-
-  if ($Blacklisted -gt 0) {
-    $names = (@($Audit.Blacklisted) | Select-Object -ExpandProperty Name | Sort-Object)
-    $lines += ("Blacklisted: " + ($names -join '; '))
-  }
-  if ($Unknown -gt 0) {
-    $names = (@($Audit.Unknown) | Select-Object -ExpandProperty Name | Sort-Object)
-    $lines += ("Unknown: " + ($names -join '; '))
-  }
-
-  return ,$lines
-}
-
-# -------------------- MAIN --------------------
-$eventSourceReady = $true
-if (-not (Ensure-EventSource)) {
-  $eventSourceReady = $false
-  Write-Warning "EventSource could not be registered. EventLog tracing will be unavailable."
-}
-
-$result = $null
-$status = $null
-$findings = @()
-$runtimeError = $null
-
-try {
-  $catalogPathProvided = $PSBoundParameters.ContainsKey('CatalogPath')
-  $configPathProvided = $PSBoundParameters.ContainsKey('ConfigPath')
-  $catalog = Load-Catalog -CatalogPath $CatalogPath -ConfigPath $ConfigPath `
-    -CatalogPathProvided:$catalogPathProvided `
-    -ConfigPathProvided:$configPathProvided
-  $inv     = Get-InstalledSoftware
-  $audit   = Test-SoftwareCompliance -Inventory $inv -Catalog $catalog
-
-  $cntTotal = [int](@($inv).Count)
-  $cntBL    = [int](@($audit.Blacklisted).Count)
-  $cntWL    = [int](@($audit.Whitelisted).Count)
-  $cntUK    = [int](@($audit.Unknown).Count)
-  $catalogIssues = @($catalog.Meta.Issues)
-  $findings = foreach ($issue in $catalogIssues) {
-    [pscustomobject]@{
-      Code     = 'CFG-CatalogLoadFailed'
-      Severity = 'Medium'
-      Message  = ("Explicit catalog/config input was not loaded ({0}: {1}). Defaults were used." -f $issue.Kind, $issue.Status)
-      Kind     = $issue.Kind
-      Path     = $issue.Path
-      Status   = $issue.Status
-      Error    = $issue.Error
-    }
-  }
-
-  $status = Get-AuditStatus -BlacklistedCount $cntBL -UnknownCount $cntUK -ConfigIssueCount $catalogIssues.Count -Strict:$Strict
-  $summaryLines = Get-SummaryLines -Total $cntTotal -Whitelisted $cntWL -Unknown $cntUK -Blacklisted $cntBL -Audit $audit
-
-  $result = [pscustomobject]@{
-    Time             = (Get-Date).ToString('s')
-    Host             = [string]$env:COMPUTERNAME
-    Catalog          = $catalog
-    EventSource      = [pscustomobject]@{ Name = [string]$Script:EventSourceName; Ready = [bool]$eventSourceReady }
-    Status           = $status
-
-    Total            = $cntTotal
-    CountWhitelisted = $cntWL
-    CountUnknown     = $cntUK
-    CountBlacklisted = $cntBL
-
-    Summary          = @($summaryLines)
-    Findings         = @($findings)
-
-    # Pipeline-friendly structured data
-    Whitelisted      = @($audit.Whitelisted)
-    Blacklisted      = @($audit.Blacklisted)
-    Unknown          = @($audit.Unknown)
-  }
-
-  # Proof JSON (optional)
-  if (-not [string]::IsNullOrWhiteSpace($StatePath)) {
-    try {
-      $dir = Split-Path -Parent $StatePath
-      if ($dir) { Ensure-Directory -Path $dir | Out-Null }
-      ($result | ConvertTo-Json -Depth 7) | Set-Content -Encoding UTF8 -LiteralPath $StatePath
-    } catch {
-      Write-Verbose ("Software audit state write failed for '{0}': {1}" -f $StatePath,$_.Exception.Message)
-    }
-  }
-
-  # Event (best effort)
-  $msg = [string](@($summaryLines) -join "`r`n")
-  Write-HealthEvent -Id $status.EventId -Msg $msg -Level $status.Level | Out-Null
-
-  # Console summary (host output only)
-  $summaryObj = [pscustomobject]@{ ComputerName = [string]$result.Host; Timestamp = Get-Date }
-  Write-ConsoleSummary -Summary $summaryObj -Findings ([System.Collections.ArrayList]::new()) `
-    -CustomFields ([ordered]@{
-      Catalog     = [string]$result.Catalog.Meta.Source
-      Status      = ("{0} ({1})" -f $result.Status.EventId, $result.Status.Level)
-      Total       = $result.Total
-      Whitelisted = $result.CountWhitelisted
-      Unknown     = $result.CountUnknown
-      Blacklisted = $result.CountBlacklisted
-      CatalogWarnings = @($catalogIssues).Count
-    })
-  # Summary lines
-  Write-UiLine ""
-  Write-UiLine "Summary:" -ForegroundColor 'Gray'
-  foreach ($l in @($result.Summary)) {
-    Write-UiLine ("  " + [string]$l) -ForegroundColor 'Gray'
-  }
-  # Blacklisted and Unknown lists
-  $blNames = @($result.Blacklisted | Select-Object -ExpandProperty Name | Sort-Object)
-  $ukNames = @($result.Unknown     | Select-Object -ExpandProperty Name | Sort-Object)
-  Write-UiLine ""
-  Write-ConsoleList -Header "Blacklisted items:" -Items $blNames -HeaderColor 'Red' -ItemColor 'Red' -MaxItems 20
-  Write-ConsoleList -Header "Unknown items:"     -Items $ukNames -HeaderColor 'Yellow' -ItemColor 'Yellow' -MaxItems 20
-
-} catch {
-  $errMsg = [string]("SW Inventory Error: " + $_.Exception.Message)
-  $runtimeError = $errMsg
-  $status = [pscustomobject]@{ EventId = 4902; Level = 'Error' }
-  $findings = @(
-    [pscustomobject]@{
-      Code     = 'SW-AuditFailed'
-      Severity = 'High'
-      Message  = $errMsg
-    }
-  )
-
-  Write-HealthEvent -Id 4902 -Msg $errMsg -Level 'Error' | Out-Null
-
-  Write-ConsoleBanner -Title "Software Audit (FAILED)" -Color 'Red'
-  Write-UiLine ("Error: {0}" -f $errMsg) -ForegroundColor 'Red'
-
-  if ($_.InvocationInfo) {
-    Write-UiLine ("Line:    {0}" -f $_.InvocationInfo.ScriptLineNumber) -ForegroundColor 'DarkGray'
-    Write-UiLine ("Cmd:     {0}" -f $_.InvocationInfo.Line.Trim()) -ForegroundColor 'DarkGray'
-  }
-
-  Write-UiLine ""
-}
-
-# V2 output contract
-$resultToken = if ($runtimeError -or $status.EventId -eq 4902) { 'FAIL' } elseif ($status.EventId -eq 4901) { 'WARN' } else { 'OK' }
-$v2Summary = if ($result) {
-  $result
-} else {
-  [pscustomobject]@{
-    ComputerName = $env:COMPUTERNAME
-    Timestamp    = Get-Date
-    Error        = $runtimeError
-  }
-}
-$v2Result = Get-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($findings) -Summary $v2Summary -Metadata @{}
+$completion = Invoke-SoftwareAudit -CatalogPathProvided:$PSBoundParameters.ContainsKey('CatalogPath') -ConfigPathProvided:$PSBoundParameters.ContainsKey('ConfigPath')
+$resultToken = $completion.ResultToken
+$v2Result = Get-V2ResultObject -ScriptName '19-Software-Audit.ps1' -Mode $Mode -Result $resultToken -Findings @($completion.Findings) -Summary $completion.Summary -Metadata @{}
 Write-ResultObject -ResultObject $v2Result -OutputFormat $OutputFormat -OutputPath $OutputPath
 if ($PassThru) { $v2Result }
 exit (Get-V2ExitCode -Result $resultToken)

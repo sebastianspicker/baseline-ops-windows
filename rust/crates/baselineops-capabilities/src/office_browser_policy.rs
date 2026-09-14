@@ -10,8 +10,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Typed snapshot of one fixed registry policy value.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "status", content = "value", rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum PolicyValueSnapshot {
     /// The value does not exist.
     Missing,
@@ -22,8 +27,8 @@ pub enum PolicyValueSnapshot {
 }
 
 /// Fixed Office and Edge policy fields supported by the native foundation.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum OfficeBrowserField {
     /// Word VBA warning mode.
     WordVbaWarnings,
@@ -86,8 +91,8 @@ pub enum OfficeBrowserField {
 }
 
 /// Observed fixed Office and Edge policy values.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct OfficeBrowserObservation {
     /// Values keyed by finite field identity.
     pub values: BTreeMap<OfficeBrowserField, PolicyValueSnapshot>,
@@ -390,6 +395,21 @@ fn insert_edge_values(
     expected: &mut BTreeMap<OfficeBrowserField, PolicyValueSnapshot>,
     edge: &EdgeConfig,
 ) {
+    insert_edge_boolean_values(expected, edge);
+    expected.insert(
+        OfficeBrowserField::EdgeSslVersionMin,
+        PolicyValueSnapshot::String(edge_tls_version(edge).into()),
+    );
+    expected.insert(
+        OfficeBrowserField::EdgeTrackingPrevention,
+        PolicyValueSnapshot::Dword(edge_tracking_prevention(edge)),
+    );
+}
+
+fn insert_edge_boolean_values(
+    expected: &mut BTreeMap<OfficeBrowserField, PolicyValueSnapshot>,
+    edge: &EdgeConfig,
+) {
     for (field, value) in [
         (
             OfficeBrowserField::EdgeSmartScreen,
@@ -415,26 +435,23 @@ fn insert_edge_values(
             OfficeBrowserField::EdgeSyncDisabled,
             PolicyValueSnapshot::Dword(u32::from(edge.sync_disabled)),
         ),
-        (
-            OfficeBrowserField::EdgeSslVersionMin,
-            PolicyValueSnapshot::String(
-                match edge.ssl_version_min {
-                    TlsMinimum::Tls12 => "tls1.2",
-                    TlsMinimum::Tls13 => "tls1.3",
-                }
-                .into(),
-            ),
-        ),
-        (
-            OfficeBrowserField::EdgeTrackingPrevention,
-            PolicyValueSnapshot::Dword(match edge.tracking_prevention {
-                TrackingPrevention::Basic => 1,
-                TrackingPrevention::Balanced => 2,
-                TrackingPrevention::Strict => 3,
-            }),
-        ),
     ] {
         expected.insert(field, value);
+    }
+}
+
+const fn edge_tls_version(edge: &EdgeConfig) -> &'static str {
+    match edge.ssl_version_min {
+        TlsMinimum::Tls12 => "tls1.2",
+        TlsMinimum::Tls13 => "tls1.3",
+    }
+}
+
+const fn edge_tracking_prevention(edge: &EdgeConfig) -> u32 {
+    match edge.tracking_prevention {
+        TrackingPrevention::Basic => 1,
+        TrackingPrevention::Balanced => 2,
+        TrackingPrevention::Strict => 3,
     }
 }
 

@@ -72,19 +72,27 @@ fn verify_identity(
         ))
     })?;
     let signer = SignerCertificate::new(signer)?;
+    verify_signer_identity(signer.as_ptr(), expected_subject, expected_spki_sha256)?;
+    verify_code_signing_chain(signer.as_ptr())
+}
+
+fn verify_signer_identity(
+    signer: *const CERT_CONTEXT,
+    expected_subject: &str,
+    expected_spki_sha256: Option<&SignerSpkiSha256>,
+) -> Result<(), PlatformError> {
     match expected_spki_sha256 {
         Some(expected_spki_sha256) => {
-            verify_certificate_identity(signer.as_ptr(), expected_subject, expected_spki_sha256)?;
+            verify_certificate_identity(signer, expected_subject, expected_spki_sha256)
         }
-        None if canonical_subject_only(signer.as_ptr())? != expected_subject => {
-            return Err(PlatformError::TrustFailure(
+        None if canonical_subject_only(signer)? != expected_subject => {
+            Err(PlatformError::TrustFailure(
                 "detached manifest signer subject does not exactly match the external policy"
                     .into(),
-            ));
+            ))
         }
-        None => {}
+        None => Ok(()),
     }
-    verify_code_signing_chain(signer.as_ptr())
 }
 
 fn canonical_subject_only(context: *const CERT_CONTEXT) -> Result<String, PlatformError> {
@@ -97,6 +105,13 @@ fn canonical_subject_only(context: *const CERT_CONTEXT) -> Result<String, Platfo
 }
 
 fn verify_code_signing_chain(signer: *const CERT_CONTEXT) -> Result<(), PlatformError> {
+    let chain = build_code_signing_chain(signer)?;
+    verify_authenticode_chain_policy(chain.as_ptr())
+}
+
+fn build_code_signing_chain(
+    signer: *const CERT_CONTEXT,
+) -> Result<CertificateChain, PlatformError> {
     let mut code_signing_oid = PSTR(szOID_PKIX_KP_CODE_SIGNING.0.cast_mut());
     let usage = CTL_USAGE {
         cUsageIdentifier: 1,
@@ -130,7 +145,10 @@ fn verify_code_signing_chain(signer: *const CERT_CONTEXT) -> Result<(), Platform
             "code-signing certificate chain validation failed: {error}"
         ))
     })?;
-    let chain = CertificateChain::new(chain)?;
+    CertificateChain::new(chain)
+}
+
+fn verify_authenticode_chain_policy(chain: *const CERT_CHAIN_CONTEXT) -> Result<(), PlatformError> {
     let policy_parameters = CERT_CHAIN_POLICY_PARA {
         cbSize: u32::try_from(size_of::<CERT_CHAIN_POLICY_PARA>())
             .expect("CERT_CHAIN_POLICY_PARA size"),
@@ -144,7 +162,7 @@ fn verify_code_signing_chain(signer: *const CERT_CONTEXT) -> Result<(), Platform
     let policy_call = unsafe {
         CertVerifyCertificateChainPolicy(
             CERT_CHAIN_POLICY_AUTHENTICODE,
-            chain.as_ptr(),
+            chain,
             &raw const policy_parameters,
             &raw mut policy_status,
         )

@@ -1,14 +1,29 @@
 #![cfg_attr(windows, allow(unsafe_code))]
 
 use crate::PlatformError;
+use baselineops_domain::Sha256Digest;
+use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod resolve;
 
 /// Default upper bound for operator-supplied JSON documents.
 pub const MAX_INPUT_BYTES: u64 = 1024 * 1024;
+
+const HASH_BUFFER_BYTES: usize = 64 * 1024;
+
+/// Digest and exact byte count read from one retained file handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundedFileHash {
+    /// SHA-256 digest of the exact bytes read from the retained handle.
+    pub digest: Sha256Digest,
+    /// Number of bytes that contributed to `digest`.
+    pub size_bytes: u64,
+}
 
 /// Containment requirements for an untrusted path.
 #[derive(Clone, Debug)]
@@ -58,31 +73,32 @@ impl PathPolicy {
     /// Returns an error when the path escapes the root, traverses a reparse point,
     /// is an unapproved UNC path, or does not name a regular file.
     pub fn existing_file(&self, candidate: impl AsRef<Path>) -> Result<PathBuf, PlatformError> {
-        let candidate = candidate.as_ref();
-        reject_lexical_escape(candidate)?;
-        reject_unc(candidate, self.allow_unc)?;
-        let joined = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            self.root.join(candidate)
-        };
-        if self.reject_reparse_points {
-            reject_reparse_chain(&joined)?;
-        }
-        let canonical = fs::canonicalize(&joined)?;
-        if !canonical.starts_with(&self.root) {
-            return Err(PlatformError::UntrustedPath {
-                path: joined,
-                reason: "canonical path escaped the trusted root".into(),
-            });
-        }
-        if !canonical.is_file() {
-            return Err(PlatformError::UntrustedPath {
-                path: canonical,
-                reason: "expected a regular file".into(),
-            });
-        }
-        Ok(canonical)
+        resolve::existing(
+            &self.root,
+            self.allow_unc,
+            self.reject_reparse_points,
+            candidate.as_ref(),
+            resolve::PathKind::File,
+        )
+    }
+
+    /// Resolve an existing directory and prove that every component stays under the root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path escapes the root, traverses a reparse point,
+    /// is an unapproved UNC path, or does not name a directory.
+    pub fn existing_directory(
+        &self,
+        candidate: impl AsRef<Path>,
+    ) -> Result<PathBuf, PlatformError> {
+        resolve::existing(
+            &self.root,
+            self.allow_unc,
+            self.reject_reparse_points,
+            candidate.as_ref(),
+            resolve::PathKind::Directory,
+        )
     }
 
     /// Resolve a future output path while proving its parent is trusted.
@@ -92,41 +108,7 @@ impl PathPolicy {
     /// Returns an error when the path or its parent violates containment, reparse,
     /// UNC, or file-name policy.
     pub fn output_file(&self, candidate: impl AsRef<Path>) -> Result<PathBuf, PlatformError> {
-        let candidate = candidate.as_ref();
-        reject_lexical_escape(candidate)?;
-        reject_unc(candidate, self.allow_unc)?;
-        let joined = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            self.root.join(candidate)
-        };
-        let parent = joined
-            .parent()
-            .ok_or_else(|| PlatformError::UntrustedPath {
-                path: joined.clone(),
-                reason: "output has no parent directory".into(),
-            })?;
-        reject_reparse_chain(parent)?;
-        let canonical_parent = fs::canonicalize(parent)?;
-        if !canonical_parent.starts_with(&self.root) {
-            return Err(PlatformError::UntrustedPath {
-                path: joined,
-                reason: "output parent escaped the trusted root".into(),
-            });
-        }
-        let name = joined
-            .file_name()
-            .ok_or_else(|| PlatformError::UntrustedPath {
-                path: joined.clone(),
-                reason: "output has no file name".into(),
-            })?;
-        if name == OsStr::new(".") || name == OsStr::new("..") {
-            return Err(PlatformError::UntrustedPath {
-                path: joined,
-                reason: "invalid output file name".into(),
-            });
-        }
-        Ok(canonical_parent.join(name))
+        resolve::output(&self.root, self.allow_unc, candidate.as_ref())
     }
 }
 
@@ -139,31 +121,7 @@ impl PathPolicy {
 pub fn read_bounded_utf8(path: impl AsRef<Path>, limit: u64) -> Result<String, PlatformError> {
     let path = path.as_ref();
     let file = File::open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(PlatformError::UntrustedPath {
-            path: path.to_path_buf(),
-            reason: "expected a regular file".into(),
-        });
-    }
-    if metadata.len() > limit {
-        return Err(PlatformError::InputTooLarge {
-            path: path.to_path_buf(),
-            limit,
-        });
-    }
-    let capacity = usize::try_from(metadata.len()).unwrap_or(0);
-    let mut bytes = Vec::with_capacity(capacity);
-    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
-        return Err(PlatformError::InputTooLarge {
-            path: path.to_path_buf(),
-            limit,
-        });
-    }
-    String::from_utf8(bytes).map_err(|_| PlatformError::InvalidUtf8 {
-        path: path.to_path_buf(),
-    })
+    read_bounded_utf8_from_file(file, path, limit)
 }
 
 /// Read bounded UTF-8 through one retained, non-reparse file handle.
@@ -188,6 +146,129 @@ pub fn read_bounded_utf8_no_follow(
     {
         read_bounded_utf8(path, limit)
     }
+}
+
+/// Stream SHA-256 from one retained regular-file handle with a fixed 64 KiB buffer.
+///
+/// The byte limit is checked before opening and after every read, so a file that
+/// grows after validation cannot bypass the bound. On Windows, the leaf is opened
+/// without following a reparse point and its final handle path must match `path`.
+///
+/// # Errors
+///
+/// Returns an error when the path is a reparse point or symbolic link, does not
+/// name a regular file, exceeds `limit`, changes identity on Windows, or cannot
+/// be read.
+pub fn hash_bounded_file_no_follow(
+    path: impl AsRef<Path>,
+    limit: u64,
+) -> Result<BoundedFileHash, PlatformError> {
+    let path = path.as_ref();
+    let file = open_regular_file_no_follow(path)?;
+    hash_bounded_file_from_handle(file, path, limit)
+}
+
+fn open_regular_file_no_follow(path: &Path) -> Result<File, PlatformError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || resolve::has_windows_reparse_attribute(&metadata) {
+        return Err(PlatformError::UntrustedPath {
+            path: path.to_path_buf(),
+            reason: "retained input handle is not a regular non-reparse file".into(),
+        });
+    }
+    open_regular_file(path)
+}
+
+#[cfg(not(windows))]
+fn open_regular_file(path: &Path) -> Result<File, PlatformError> {
+    let file = File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(PlatformError::UntrustedPath {
+            path: path.to_path_buf(),
+            reason: "expected a regular file".into(),
+        });
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn open_regular_file(path: &Path) -> Result<File, PlatformError> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
+        return Err(PlatformError::UntrustedPath {
+            path: path.to_path_buf(),
+            reason: "retained input handle is not a regular non-reparse file".into(),
+        });
+    }
+    let final_path = final_handle_path(&file)?;
+    validate_retained_identity(path, &final_path)?;
+    Ok(file)
+}
+
+fn hash_bounded_file_from_handle(
+    mut file: File,
+    path: &Path,
+    limit: u64,
+) -> Result<BoundedFileHash, PlatformError> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(PlatformError::UntrustedPath {
+            path: path.to_path_buf(),
+            reason: "expected a regular file".into(),
+        });
+    }
+    reject_oversized(path, metadata.len(), limit)?;
+    let mut digest = Sha256::new();
+    let mut size_bytes = 0_u64;
+    let mut buffer = vec![0_u8; HASH_BUFFER_BYTES].into_boxed_slice();
+    while let Some(count) = read_hash_chunk(&mut file, &mut buffer)? {
+        size_bytes = bounded_size_after_read(path, size_bytes, count, limit)?;
+        digest.update(&buffer[..count]);
+    }
+    Ok(BoundedFileHash {
+        digest: Sha256Digest::from_digest_bytes(digest.finalize().into()),
+        size_bytes,
+    })
+}
+
+fn read_hash_chunk(file: &mut File, buffer: &mut [u8]) -> Result<Option<usize>, PlatformError> {
+    let count = file.read(buffer)?;
+    Ok((count != 0).then_some(count))
+}
+
+fn bounded_size_after_read(
+    path: &Path,
+    size: u64,
+    count: usize,
+    limit: u64,
+) -> Result<u64, PlatformError> {
+    let count = u64::try_from(count).expect("64 KiB read count fits u64");
+    let size = size
+        .checked_add(count)
+        .ok_or_else(|| PlatformError::InputTooLarge {
+            path: path.to_path_buf(),
+            limit,
+        })?;
+    reject_oversized(path, size, limit)?;
+    Ok(size)
+}
+
+fn reject_oversized(path: &Path, size: u64, limit: u64) -> Result<(), PlatformError> {
+    if size > limit {
+        return Err(PlatformError::InputTooLarge {
+            path: path.to_path_buf(),
+            limit,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -226,9 +307,9 @@ fn validate_retained_identity(expected: &Path, actual: &Path) -> Result<(), Plat
 #[cfg(any(windows, test))]
 fn normalize_final_path(path: &Path) -> String {
     let text = path.as_os_str().to_string_lossy();
-    let text = text.strip_prefix(r"\\?\UNC\").map_or_else(
-        || text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
-        |unc| format!(r"\\{unc}"),
+    let text = text.strip_prefix("\\\\?\\UNC\\").map_or_else(
+        || text.strip_prefix("\\\\?\\").unwrap_or(&text).to_owned(),
+        |unc| format!("\\\\{unc}"),
     );
     text.trim_end_matches(['\\', '/']).to_ascii_lowercase()
 }
@@ -266,7 +347,6 @@ fn final_handle_path(file: &File) -> Result<PathBuf, PlatformError> {
     })?))
 }
 
-#[cfg(windows)]
 fn read_bounded_utf8_from_file(
     file: File,
     path: &Path,
@@ -307,6 +387,15 @@ fn read_bounded_utf8_from_file(
 /// synchronization, or atomic rename fails.
 pub fn atomic_write(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), PlatformError> {
     let path = path.as_ref();
+    let (parent, temporary) = atomic_paths(path)?;
+    let write_result = write_and_replace(&parent, &temporary, path, bytes);
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+fn atomic_paths(path: &Path) -> Result<(PathBuf, PathBuf), PlatformError> {
     let parent = path.parent().ok_or_else(|| PlatformError::UntrustedPath {
         path: path.to_path_buf(),
         reason: "output has no parent".into(),
@@ -322,6 +411,24 @@ pub fn atomic_write(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), Platform
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
+    Ok((parent.to_path_buf(), temporary))
+}
+
+fn write_and_replace(
+    parent: &Path,
+    temporary: &Path,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), PlatformError> {
+    let mut file = atomic_options().open(temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(temporary, path)?;
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn atomic_options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -329,73 +436,7 @@ pub fn atomic_write(path: impl AsRef<Path>, bytes: &[u8]) -> Result<(), Platform
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let write_result = (|| -> Result<(), PlatformError> {
-        let mut file = options.open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)?;
-        File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    write_result
-}
-
-fn reject_lexical_escape(path: &Path) -> Result<(), PlatformError> {
-    if path
-        .components()
-        .any(|component| component == Component::ParentDir)
-    {
-        return Err(PlatformError::UntrustedPath {
-            path: path.to_path_buf(),
-            reason: "parent traversal is forbidden".into(),
-        });
-    }
-    Ok(())
-}
-
-fn reject_unc(path: &Path, allow_unc: bool) -> Result<(), PlatformError> {
-    let text = path.as_os_str().to_string_lossy();
-    if !allow_unc && (text.starts_with("\\\\") || text.starts_with("//")) {
-        return Err(PlatformError::UntrustedPath {
-            path: path.to_path_buf(),
-            reason: "UNC paths are forbidden".into(),
-        });
-    }
-    Ok(())
-}
-
-fn reject_reparse_chain(path: &Path) -> Result<(), PlatformError> {
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        current.push(component.as_os_str());
-        let metadata = match fs::symlink_metadata(&current) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.into()),
-        };
-        if metadata.file_type().is_symlink() || has_windows_reparse_attribute(&metadata) {
-            return Err(PlatformError::UntrustedPath {
-                path: current,
-                reason: "reparse points and symbolic links are forbidden".into(),
-            });
-        }
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn has_windows_reparse_attribute(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-const fn has_windows_reparse_attribute(_metadata: &fs::Metadata) -> bool {
-    false
+    options
 }
 
 #[cfg(test)]
@@ -432,6 +473,63 @@ mod tests {
         assert!(matches!(
             read_bounded_utf8_no_follow(&path, 4),
             Err(PlatformError::InputTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn streamed_hash_matches_exact_bytes_and_size() {
+        let root = tempfile::tempdir().expect("root");
+        let path = root.path().join("resource.bin");
+        let bytes = vec![0x5a; HASH_BUFFER_BYTES * 2 + 17];
+        fs::write(&path, &bytes).expect("write");
+        let actual = hash_bounded_file_no_follow(&path, bytes.len() as u64).expect("hash");
+        assert_eq!(actual.digest, Sha256Digest::of_bytes(&bytes));
+        assert_eq!(actual.size_bytes, bytes.len() as u64);
+    }
+
+    #[test]
+    fn streamed_hash_accepts_exact_limit_and_rejects_one_more_byte() {
+        let root = tempfile::tempdir().expect("root");
+        let path = root.path().join("bounded.bin");
+        fs::write(&path, b"12345").expect("write");
+        assert!(hash_bounded_file_no_follow(&path, 5).is_ok());
+        assert!(matches!(
+            hash_bounded_file_no_follow(&path, 4),
+            Err(PlatformError::InputTooLarge { limit: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn streamed_hash_rejects_growth_after_handle_validation() {
+        let root = tempfile::tempdir().expect("root");
+        let path = root.path().join("growing.bin");
+        fs::write(&path, b"1234").expect("write");
+        let file = File::open(&path).expect("retained handle");
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("append handle")
+            .write_all(b"5")
+            .expect("grow fixture");
+        assert!(matches!(
+            hash_bounded_file_from_handle(file, &path, 4),
+            Err(PlatformError::InputTooLarge { limit: 4, .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn streamed_hash_does_not_follow_a_symbolic_link() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("root");
+        let target = root.path().join("target.bin");
+        let link = root.path().join("link.bin");
+        fs::write(&target, b"fixture").expect("write target");
+        symlink(&target, &link).expect("create link");
+        assert!(matches!(
+            hash_bounded_file_no_follow(link, 1024),
+            Err(PlatformError::UntrustedPath { .. })
         ));
     }
 

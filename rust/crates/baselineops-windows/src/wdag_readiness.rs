@@ -46,14 +46,44 @@ pub fn audit_wdag_readiness() -> Result<WdagReadinessObservation, PlatformError>
 
 #[cfg(windows)]
 fn feature(feature_name: &str) -> Observation<OptionalFeatureState> {
-    let Ok(executable) = crate::trust::windows_system32_file("dism.exe") else {
+    let Ok(policy) = feature_policy() else {
         return Observation::Unparsed;
     };
+    let args = vec![
+        "/Online".into(),
+        "/Get-FeatureInfo".into(),
+        format!("/FeatureName:{feature_name}"),
+        "/English".into(),
+    ];
+    match run_native(
+        &policy,
+        &NativeProcessSpec {
+            args,
+            timeout: TIMEOUT,
+            output_limit: OUTPUT_LIMIT,
+        },
+    ) {
+        Ok(result) => decode_feature_result(&result, feature_name),
+        Err(PlatformError::ProcessTimeout { .. }) => Observation::TimedOut,
+        Err(PlatformError::OutputTooLarge { .. }) => Observation::Truncated,
+        Err(PlatformError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Observation::Missing
+        }
+        Err(PlatformError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            Observation::AccessDenied
+        }
+        Err(_) => Observation::Unparsed,
+    }
+}
+
+#[cfg(windows)]
+fn feature_policy() -> Result<NativeProcessPolicy, PlatformError> {
+    let executable = crate::trust::windows_system32_file("dism.exe")?;
     let working_directory = executable
         .parent()
         .expect("an API-resolved System32 executable has a parent")
         .to_path_buf();
-    let policy = NativeProcessPolicy {
+    Ok(NativeProcessPolicy {
         executable,
         executable_trust: NativeExecutableTrust::WindowsSystemPublisher,
         working_directory,
@@ -74,51 +104,29 @@ fn feature(feature_name: &str) -> Observation<OptionalFeatureState> {
         environment: BTreeMap::<OsString, OsString>::new(),
         max_timeout: TIMEOUT,
         max_output_limit: OUTPUT_LIMIT,
-    };
-    let args = vec![
-        "/Online".into(),
-        "/Get-FeatureInfo".into(),
-        format!("/FeatureName:{feature_name}"),
-        "/English".into(),
-    ];
-    match run_native(
-        &policy,
-        &NativeProcessSpec {
-            args,
-            timeout: TIMEOUT,
-            output_limit: OUTPUT_LIMIT,
+    })
+}
+
+#[cfg(windows)]
+fn decode_feature_result(
+    result: &crate::NativeProcessResult,
+    feature_name: &str,
+) -> Observation<OptionalFeatureState> {
+    let stdout = decode_native_output(&result.stdout, NativeEncoding::Utf8);
+    let stderr = decode_native_output(&result.stderr, NativeEncoding::Utf8);
+    match (stdout, stderr) {
+        (Ok(stdout), Ok(stderr)) if result.exit_code == 0 && stderr.trim().is_empty() => {
+            parse_dism_feature_info(&stdout, feature_name)
+        }
+        (Ok(stdout), Ok(stderr))
+            if is_exact_absent_feature_error(&format!("{stdout}\n{stderr}"), feature_name) =>
+        {
+            Observation::Present(OptionalFeatureState::Absent)
+        }
+        (Ok(_), Ok(_)) => Observation::Failed {
+            exit_code: result.exit_code,
         },
-    ) {
-        Ok(result) => {
-            let stdout = decode_native_output(&result.stdout, NativeEncoding::Utf8);
-            let stderr = decode_native_output(&result.stderr, NativeEncoding::Utf8);
-            match (stdout, stderr) {
-                (Ok(stdout), Ok(stderr)) if result.exit_code == 0 && stderr.trim().is_empty() => {
-                    parse_dism_feature_info(&stdout, feature_name)
-                }
-                (Ok(stdout), Ok(stderr))
-                    if is_exact_absent_feature_error(
-                        &format!("{stdout}\n{stderr}"),
-                        feature_name,
-                    ) =>
-                {
-                    Observation::Present(OptionalFeatureState::Absent)
-                }
-                (Ok(_), Ok(_)) => Observation::Failed {
-                    exit_code: result.exit_code,
-                },
-                _ => Observation::Unparsed,
-            }
-        }
-        Err(PlatformError::ProcessTimeout { .. }) => Observation::TimedOut,
-        Err(PlatformError::OutputTooLarge { .. }) => Observation::Truncated,
-        Err(PlatformError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            Observation::Missing
-        }
-        Err(PlatformError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            Observation::AccessDenied
-        }
-        Err(_) => Observation::Unparsed,
+        _ => Observation::Unparsed,
     }
 }
 

@@ -1,0 +1,4972 @@
+{
+  "SchemaVersion": 1,
+  "Entries": [
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "001c58096937edc7f0350c863e2640ccd8608e700ce2556476c72aaa3b9bca04",
+      "Fingerprint": "584b934a4e0e6e6bf27d9bfd36527131f85ef70292a3fd58f0526e83e33decbd",
+      "Rationale": "Two evidence-store failure scenarios assert their own recovery contract (error variant plus persisted-manifest outcome); sharing setup would hide which failure path is under test.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/evidence_tests.rs",
+          "StartLine": 142,
+          "EndLine": 150
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/evidence_tests.rs",
+          "StartLine": 169,
+          "EndLine": 177
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "005225ce75af5a8ea54241b2850d23fb5806643177849a0442e48f193360aded",
+      "Fingerprint": "a43bae3353711e674383a6610ba513491b6a8eff2681f841c87f7b2c1c0f2e10",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/defender_asr_allowlist.rs, rust/crates/baselineops-windows/src/defender_ransomware.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 60,
+          "EndLine": 70
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 48,
+          "EndLine": 57
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "015b6b7af8a1eb53a33fb45b762876cca2e61cd0d913ead424a17b6b1de87502",
+      "Fingerprint": "0bc9102ae55f4e17366e143db1ad0442f9635bdb883cd7d9883d05a04fa8ff04",
+      "Rationale": "Remote guardrail and remote surface policy retain local finding constructors that explicitly mark their own fixed observation contracts read-only. The matching observation-state labels and test-module boundary do not merge their different completeness, severity or proposed-change decisions. This fingerprint changed only at the adjacent test-module declaration after moving existing tests.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/remote_guardrails_policy.rs",
+          "StartLine": 501,
+          "EndLine": 533
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/remote_surface_policy.rs",
+          "StartLine": 186,
+          "EndLine": 218
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "01d404e97863d77fd6eb5baea457389519f8f5ffbf8c3a7176bb81f9e7bb29e1",
+      "Fingerprint": "9ff9c0ffea88d31b6ef634adf13b1861b08c54d5062fc4a0625f0df05e95296a",
+      "Rationale": "Each capability owns the human evidence wording for its public policy result. The same Observation enum spelling does not make AMI, network inventory, and software inventory one policy boundary.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 198,
+          "EndLine": 211
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/network_service_inventory_policy.rs",
+          "StartLine": 303,
+          "EndLine": 317
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/software_inventory_policy.rs",
+          "StartLine": 154,
+          "EndLine": 167
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "024eb8a578c40b63711378015ac911d27a51cb6f56b37e87993da086c4032623",
+      "Fingerprint": "0be7b37e84b399139110c2c479ea519a5fd2efe4ca9aea6b4ee8b1e7ff52c8a6",
+      "Rationale": "Event-triage and software-inventory deliberately assign capability-specific codes and labels when evidence is incomplete; a shared helper would centralize observable policy text across independent contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/event_triage_policy.rs",
+          "StartLine": 180,
+          "EndLine": 190
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/software_inventory_policy.rs",
+          "StartLine": 134,
+          "EndLine": 144
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "04bc71ce7484f68df5c7703a6a25f94d7c9de535136a31e3c3b0caceebacfeec",
+      "Fingerprint": "b8dcc078334902615262dd09a4d4be2347bee5baccf7912b7f2dd8be0748b759",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/time_sync.rs, rust/crates/baselineops-windows/src/wef.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 9,
+          "EndLine": 15
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wef.rs",
+          "StartLine": 7,
+          "EndLine": 13
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "09516f80977c610a7d33e2b40f2d6d7b7350d512d1299087a911ba1a5f0d7330",
+      "Fingerprint": "8ffd6674096f6c420eaa36dea536a70a65f0801196a8e39463d5f1fadb5981ae",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_inventory.rs, rust/crates/baselineops-engine/src/wave_network_services.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_inventory.rs",
+          "StartLine": 91,
+          "EndLine": 98
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_network_services.rs",
+          "StartLine": 53,
+          "EndLine": 60
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "12196c96841b50378d1d3bc47751bfafde2edd95fcf5c38918219f6430aff385",
+      "Fingerprint": "7cff864d8fc0573db6b2d3735689fbb11ca7ed38a72f44ae26ee1747af97c70a",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/cert_health_policy.rs, rust/crates/baselineops-capabilities/src/laps_hygiene_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/cert_health_policy.rs",
+          "StartLine": 232,
+          "EndLine": 268
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/laps_hygiene_policy.rs",
+          "StartLine": 221,
+          "EndLine": 257
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "13f16e8c35b8a4c09a62fe6d56455e0d49b98c3995b80d7ab1df607b9a51c9a5",
+      "Fingerprint": "4fdaae2aee684e1babaa8d79dcb583123832aa46e7fc8101aa85eaa5ed20a6bc",
+      "Rationale": "Accepted: rust/apps/baselineops-cli/src/main.rs, rust/apps/baselineops-worker/src/trust.rs sit on separate application/process boundaries. Similar protocol or lifecycle code remains independently auditable for its caller and public compatibility contract.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-cli/src/main.rs",
+          "StartLine": 327,
+          "EndLine": 337
+        },
+        {
+          "Path": "rust/apps/baselineops-worker/src/trust.rs",
+          "StartLine": 23,
+          "EndLine": 33
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "166062ff72f15f394d456c3fd639a3814a5bbe54df3366cf77446b3937ad3f95",
+      "Fingerprint": "686147dd972b25a1c35df5e9e83828ba3571f73fa737c434540a646877233c3f",
+      "Rationale": "The repeated SERVICE_STATUS_PROCESS allocation is only the opening of three service probes; services, Sysmon, and update-health classify missing/access/error and project findings differently. Do not share an unsafe handle/query surface without a separate contract.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/services.rs",
+          "StartLine": 104,
+          "EndLine": 110
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/sysmon.rs",
+          "StartLine": 173,
+          "EndLine": 180
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/update_health.rs",
+          "StartLine": 110,
+          "EndLine": 116
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "167d77146f1987d24c0ccbd7f83e745c239295ee6135a8aae4f8af1c6df8ac0b",
+      "Fingerprint": "1e6be6035110dc8a8d8fc2d2a97827853f3e6f11f2f4090a08a86ab13b4897ea",
+      "Rationale": "The two LAPS properties both convert a WMI number but carry different property-presence and observation propagation semantics. The small conversion is clearer next to each property reader.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/laps_hygiene.rs",
+          "StartLine": 145,
+          "EndLine": 158
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/laps_hygiene.rs",
+          "StartLine": 161,
+          "EndLine": 174
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "16ac631e7defe2f75822cc7ab5397bc85e9863ec7416a5ba47555673851b2bbb",
+      "Fingerprint": "607377fb330638fc1bcd37697af4bf0fe725511720c20efa89f8e7a45fc84574",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/defender_asr_allowlist.rs, rust/crates/baselineops-windows/src/defender_ransomware.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 96,
+          "EndLine": 106
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 96,
+          "EndLine": 106
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "1b83fa6b024c83d8a1746be5d6b2dff83b59b768be4d4104974fe927c2bb0d33",
+      "Fingerprint": "efa444f89f7c1100188e9a45949856c105884135d396eb73dc9615db9778afb5",
+      "Rationale": "File History registry presence is evidence for two different readiness policies. Their fixed key, missing-key interpretation, and policy finding are intentionally capability-local.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 130,
+          "EndLine": 154
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wdag_readiness.rs",
+          "StartLine": 236,
+          "EndLine": 260
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "1e8317f964f6fe35e34b5448ff6a32e69ebe0339bc26caad588e1a87a8b54c41",
+      "Fingerprint": "d45f6628a0591bf2cd85cde53d85d3487ec5b72393e0229b2e41d86832d63a63",
+      "Rationale": "advanced_audit and WDAG map timeout/process failures at distinct native command boundaries. Identical Observation arms do not imply common executable, bound, or error policy.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/advanced_audit.rs",
+          "StartLine": 65,
+          "EndLine": 79
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wdag_readiness.rs",
+          "StartLine": 66,
+          "EndLine": 80
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "1f9d29d2e8cdfdf621369590ae3fe5dcbebce6d43f0d25eb14dfb15d2a1f3162",
+      "Fingerprint": "96965e0b379c312877fd3e37fbdedf1d3cee9e8b91821b3ba6243eb9eb122848",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_boot_security.rs, rust/crates/baselineops-engine/src/wave_office_browser.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_boot_security.rs",
+          "StartLine": 57,
+          "EndLine": 68
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_office_browser.rs",
+          "StartLine": 59,
+          "EndLine": 72
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "202c2fa2145fad85923eaaaba92d2726c9f0c0528b8571528680e5637f445ffc",
+      "Fingerprint": "725946d831d4d64f688b22c9367d877f9aa39416bec8f894c913b02326b5ee5f",
+      "Rationale": "Time-sync and WEF now import the shared status converter. The remaining match is UTF-16 name encoding, private registry-handle cleanup, and test-module scaffolding. Keep ownership and fixed-key reads local to each adapter; no shared input or observation policy is implied.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 299,
+          "EndLine": 322
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wef.rs",
+          "StartLine": 214,
+          "EndLine": 237
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "20314680e09fdeef3b45998b4578dc3d36c34572c24e2c74f0da184f2bf8c2ba",
+      "Fingerprint": "b65e904c6828f8c61f0974d4a897158a028240b17e41ada2ba3fff589ec93ea0",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_office_browser.rs, rust/crates/baselineops-engine/src/wave_security_options.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_office_browser.rs",
+          "StartLine": 58,
+          "EndLine": 72
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_security_options.rs",
+          "StartLine": 63,
+          "EndLine": 77
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "2135515ad0294279c9d596b906971c6b281b6b4e1312a6ef586a6b1be541c5a8",
+      "Fingerprint": "065f1e620887d51dbdd74551c27fe16cd8a386c790f7232d4300db5a69080f57",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/scheduled_tasks.rs, rust/crates/baselineops-windows/src/update_health.rs, rust/crates/baselineops-windows/src/winget.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/scheduled_tasks.rs",
+          "StartLine": 21,
+          "EndLine": 33
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/update_health.rs",
+          "StartLine": 20,
+          "EndLine": 32
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/winget.rs",
+          "StartLine": 24,
+          "EndLine": 36
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "21a8df8e254fe8e00c55b0bef94c049037a63a8da189c7fb654eecb06df19cd8",
+      "Fingerprint": "1c59e2ae38e56c1cf8aa38d50e3c5b163257103eb692261f277a8daf0b185394",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_local_admins.rs, rust/crates/baselineops-engine/src/wave_two.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_local_admins.rs",
+          "StartLine": 67,
+          "EndLine": 84
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_two.rs",
+          "StartLine": 109,
+          "EndLine": 126
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "2332f26435457ee14f691f6e078ce177bb1229ff761c5eec2e9cd487ecde4755",
+      "Fingerprint": "1913acfb581aa20194bd9372802fddca63eada1ca9c9477481ca8d94910073f8",
+      "Rationale": "The trailing read-only finding and observation-state formatter are emitted under separate AMI, scheduled-task, and storage-reliability policy codes; retain the visible policy contract with each evaluator.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 194,
+          "EndLine": 215
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/scheduled_tasks_policy.rs",
+          "StartLine": 237,
+          "EndLine": 258
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/storage_reliability_policy.rs",
+          "StartLine": 425,
+          "EndLine": 446
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "2422d2a5e1983afa943a267c40604aec443a081475e5eb1fc48d80d3ac9319fb",
+      "Fingerprint": "152b85c2975dbedd464f79f1d7c24d2a91aaac4a5045bfccc07b0e7fd58e3ee7",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/time_sync.rs, rust/crates/baselineops-windows/src/wef.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 122,
+          "EndLine": 131
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wef.rs",
+          "StartLine": 75,
+          "EndLine": 84
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "24c4087b59f67a87e4479cf4cf1f6147b9ef06f529975d0a2f03f704e5a7b463",
+      "Fingerprint": "5797ff38ce1101c7e10e643fd5eaa996f04eccde19ec55a3e557e660afabf37c",
+      "Rationale": "The initial RegQueryValueExW calls are inside separate fixed allowlisted readers. A generic raw registry query would widen native input authority and duplicate later type/size checks.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/policy_registry.rs",
+          "StartLine": 214,
+          "EndLine": 226
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 259,
+          "EndLine": 271
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "2b5689bcec82b98de6dbd43a0275ae6f09f91c42780430893a395fd3239b0407",
+      "Fingerprint": "ff07ac6f3fc39e349463e8e21905ed72b9640eb5ae3a9fbb7a087c7d19ed8704",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_application_control.rs, rust/crates/baselineops-engine/src/wave_boot_security.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_application_control.rs",
+          "StartLine": 91,
+          "EndLine": 96
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_boot_security.rs",
+          "StartLine": 57,
+          "EndLine": 62
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "2dcb0056bde536094125a8e03b3c796f55c8a31a457841f6d8ef5d529580b893",
+      "Fingerprint": "0999237e5eb3fa89397fa6c743582ef9fde9153b5c9cbba3bc551f92a3958959",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_firewall_baseline.rs, rust/crates/baselineops-engine/src/wave_firewall_logging.rs, rust/crates/baselineops-engine/src/wave_remote_guardrails.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_firewall_baseline.rs",
+          "StartLine": 63,
+          "EndLine": 70
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_firewall_logging.rs",
+          "StartLine": 54,
+          "EndLine": 61
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_remote_guardrails.rs",
+          "StartLine": 65,
+          "EndLine": 72
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "2f1b3947d1537f33231ffcf1ab3d77a57a0ce60418eb51f3d8d9abced5af3102",
+      "Fingerprint": "ab2eb5aca9798619af882e8346b60ddb73634ac58e81e17498c98a693135bca1",
+      "Rationale": "GUI audit and profile-audit workers differ in captured inputs, progress channel behavior, reports, and cancellation lifecycle. Their similar successful-spawn state update is a UI state-machine boundary.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-gui/src/platform.rs",
+          "StartLine": 279,
+          "EndLine": 293
+        },
+        {
+          "Path": "rust/apps/baselineops-gui/src/platform.rs",
+          "StartLine": 344,
+          "EndLine": 358
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "2f82d7b35525604c4629bf9f016510357e8f9b4c8a3bde3dd08450626fa10897",
+      "Fingerprint": "a0feea8bb09d93291a11e32b9f71cd4ae9d3bbf51fc387fb6c275e238a1ed4aa",
+      "Rationale": "Both readers clear a VARIANT, but defender ransomware and hardware trust validate different WMI VARTYPE/property contracts. Keep cleanup adjacent to the unsafe ownership proof.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 273,
+          "EndLine": 282
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/hardware_trust.rs",
+          "StartLine": 359,
+          "EndLine": 368
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "30861c1480b58445d3d3751d4e09be702d55e8e3cf99d316356c30e2135382b0",
+      "Fingerprint": "d9f3a0f883a91f2335abf5c6e4d84464f94c330e159f71672e899c05db5617e5",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_application_control.rs, rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs, rust/crates/baselineops-engine/src/wave_firewall_baseline.rs, rust/crates/baselineops-engine/src/wave_firewall_logging.rs, rust/crates/baselineops-engine/src/wave_remote_guardrails.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_application_control.rs",
+          "StartLine": 41,
+          "EndLine": 54
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs",
+          "StartLine": 33,
+          "EndLine": 46
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_firewall_baseline.rs",
+          "StartLine": 33,
+          "EndLine": 46
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_firewall_logging.rs",
+          "StartLine": 26,
+          "EndLine": 39
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_remote_guardrails.rs",
+          "StartLine": 35,
+          "EndLine": 48
+        }
+      ],
+      "Multiplicity": 5
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "3152d89f3a6ec2d09a32f0ad2c8d127c2ee7ca7023b229314231dad0ee37cb2a",
+      "Fingerprint": "ac12bc50453738a944ebb138f1b7152fd3978a12c76f2d2a46bec5348b31c487",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/backup_readiness.rs, rust/crates/baselineops-windows/src/remote_surface.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 130,
+          "EndLine": 142
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/remote_surface.rs",
+          "StartLine": 117,
+          "EndLine": 129
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "34ea77e075d76e1cab33fb8bbf0ef968a6c8148ed365b035be77ef958db3865c",
+      "Fingerprint": "07b830d590c680e27e0d181f83cafeb29515f7dc3faf153939ca163ccd9fa4e4",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/remote_surface_policy.rs, rust/crates/baselineops-capabilities/src/wdag_readiness_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/remote_surface_policy.rs",
+          "StartLine": 182,
+          "EndLine": 212
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/wdag_readiness_policy.rs",
+          "StartLine": 177,
+          "EndLine": 207
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "35ca790010fe5aecace9a2d40efcd1d637ab66256668c5bf3e9cba3f27f5f07f",
+      "Fingerprint": "8f4ea9b0b417c9b7ad31b4354e5fbef8ac81e75cddcc46fa4dcef61c4c18d1e6",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/backup_readiness.rs, rust/crates/baselineops-windows/src/laps_hygiene.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 84,
+          "EndLine": 92
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/laps_hygiene.rs",
+          "StartLine": 133,
+          "EndLine": 141
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "35ce9f378c9fc15ca59286df2850a89ab78694dad280471d3712ca9ab5545d93",
+      "Fingerprint": "b795f5d29f2a4773419ddbba95b476ff13e07c07a2f0f2e33cf381dcd79f6def",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/amsi.rs, rust/crates/baselineops-windows/src/client_baseline.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/amsi.rs",
+          "StartLine": 40,
+          "EndLine": 58
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/client_baseline.rs",
+          "StartLine": 105,
+          "EndLine": 123
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "36fb683f706cf94a24c077c30d664cc834263f135c9947d4536535e64ac7926d",
+      "Fingerprint": "3aff6115d6a1e177ee4da9acb64c0df24dd03e28ba248cc2c81feae96536643a",
+      "Rationale": "storage_reliability reads a VT_BSTR identity while its paired property logic reads bounded unsigned counter values. The similar VARIANT lifetime is not an identical decoder; retain the VARTYPE-specific reads and VariantClear proof together.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/storage_reliability.rs",
+          "StartLine": 199,
+          "EndLine": 205
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/storage_reliability.rs",
+          "StartLine": 215,
+          "EndLine": 221
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "3832ab00bb09128cb4551516857462804819ec463f14715ab598dcbc9a3e1294",
+      "Fingerprint": "776e60ca531760d2159b4d6a0286f367ec2f247648db75e75d9a9a3091886c03",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/firewall.rs, rust/crates/baselineops-windows/src/firewall_baseline.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall.rs",
+          "StartLine": 180,
+          "EndLine": 195
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall_baseline.rs",
+          "StartLine": 95,
+          "EndLine": 110
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "3d4a1acb339e6185a14a506ce1033ebc0f6eac7f51bb400a709f1f1e3dec55fd",
+      "Fingerprint": "7b55f884bc1e8cfb14bbe033c1d2cd84cf8feb402a7eca54974699b1ddcaae93",
+      "Rationale": "The duplicated test fixture makes two persistence-failure setups independently readable and keeps the test-specific failing verifier explicit.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/evidence_tests.rs",
+          "StartLine": 130,
+          "EndLine": 137
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/evidence_tests.rs",
+          "StartLine": 157,
+          "EndLine": 164
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "3d7f21c004217bd9b9bef8da31c623678e2972b2dd2f7dab47d6853d1ab0ca21",
+      "Fingerprint": "5eb867aa6cc19767269aa147305c81186b76ef54037803b2b48fe0cb64c166e5",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/laps_hygiene_policy.rs, rust/crates/baselineops-capabilities/src/local_admins_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/laps_hygiene_policy.rs",
+          "StartLine": 221,
+          "EndLine": 257
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/local_admins_policy.rs",
+          "StartLine": 277,
+          "EndLine": 313
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "41367fe5f59123ccc3f059decdd85d967e2b2658285ddbb27954fe6fb606642e",
+      "Fingerprint": "71b60e0f3672053a145ac7a3090927e1d94dde545a3347e4fb7329892722416b",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/laps_hygiene.rs, rust/crates/baselineops-windows/src/time_sync.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/laps_hygiene.rs",
+          "StartLine": 147,
+          "EndLine": 153
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 111,
+          "EndLine": 117
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "44ec688c7b9c65a325032032d3b03b234dce2d1c33194b60bf2a3c0a9cde9e83",
+      "Fingerprint": "c6c90fc980ff1253385b69708a7cf56b847004d96bf7a75b12b8fb94c604bd93",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_office_browser.rs, rust/crates/baselineops-engine/src/wave_windows_update.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_office_browser.rs",
+          "StartLine": 57,
+          "EndLine": 73
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_windows_update.rs",
+          "StartLine": 56,
+          "EndLine": 72
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "4518cd1ad44c0a0c2887052d2df518886b5655f0771377606fe0ac479a65ece6",
+      "Fingerprint": "115d47dc36ac65ebc88db2b73bcbd142c1d8c45976f635062a91927d91656d0d",
+      "Rationale": "The similarly named open_regular_file implementations are cfg-specific: Windows retains a no-reparse handle and validates final identity while the portable path cannot. One body would weaken or obscure this trust distinction.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
+          "StartLine": 195,
+          "EndLine": 212
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
+          "StartLine": 275,
+          "EndLine": 292
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "472785b42428be93731a74367ee59261c51a19150ecbfee0e7ecac863b901057",
+      "Fingerprint": "3ea197eb492ae08afd065d33212e16fc2ff6606bce71a2c70a7388ea36114e2a",
+      "Rationale": "The look-alike assertions are fixtures for unrelated scheduled-task and WEF policy outcomes; tests should state their own externally observable findings.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/scheduled_tasks_policy.rs",
+          "StartLine": 299,
+          "EndLine": 310
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/wef_time_policy/helpers.rs",
+          "StartLine": 24,
+          "EndLine": 35
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "47c5d847d03b2a57fe8a60873c34d13d3644197d3368d99d912929bb9183a214",
+      "Fingerprint": "e87a30d99ac885267b2d5dd57c1de9e2ebf835c1cea80cb52aeb2cc2e3d4880f",
+      "Rationale": "Sysmon runtime hashing and xtask support hashing occupy release-runtime versus build-tool boundaries with different file provenance. Do not make xtask depend on a Windows platform helper for a coincidental SHA loop.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/sysmon.rs",
+          "StartLine": 274,
+          "EndLine": 285
+        },
+        {
+          "Path": "rust/xtask/src/support.rs",
+          "StartLine": 90,
+          "EndLine": 101
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "48dc07d1e061424727a11fc3d08e35fe07d043fc01ac5c003581c6d2ebcb9123",
+      "Fingerprint": "dc7b1b64aca272219a73baf9433aa608ef7164bceabee0502f54ed9ee1c6cb94",
+      "Rationale": "Known-service naming and Win32 error conversion are coupled to each module's service inventory and missing-service policy; the identical arms are not a shared public service contract.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/services.rs",
+          "StartLine": 169,
+          "EndLine": 179
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/sysmon.rs",
+          "StartLine": 361,
+          "EndLine": 371
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "4b4e4f5ed8bc8789b3c1bac2b597390c570860afff339275fac1440fd8e37b26",
+      "Fingerprint": "3595e53c8ca6543bc0186a650096fcf5519284b645093221aef859f6a4fb05cb",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/cert_health_policy.rs, rust/crates/baselineops-capabilities/src/defender_asr_allowlist_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/cert_health_policy.rs",
+          "StartLine": 245,
+          "EndLine": 289
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/defender_asr_allowlist_policy.rs",
+          "StartLine": 208,
+          "EndLine": 240
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "4ff1834bb07308c37e5f5fab433131a4d47b0bbf6b6ff15597fa5ea06bcdffa5",
+      "Fingerprint": "d0367d1ccfd7fd5e4c4df953d606a58114de921ddfded4977e64a4357fc3c6f3",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_hardware_trust.rs, rust/crates/baselineops-engine/src/wave_remote_wdag.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_hardware_trust.rs",
+          "StartLine": 57,
+          "EndLine": 86
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_remote_wdag.rs",
+          "StartLine": 47,
+          "EndLine": 76
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "513cb397958fe37a60cc87adeed0985b358ca31917a2c8d1d99d75c50651fa9e",
+      "Fingerprint": "09e9b3a750867430c094a053efccdf4fb2b797176a3a418388f919fc8d1f7312",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_defender_ransomware.rs, rust/crates/baselineops-engine/src/wave_legacy_only_foundations.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_ransomware.rs",
+          "StartLine": 83,
+          "EndLine": 96
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_legacy_only_foundations.rs",
+          "StartLine": 240,
+          "EndLine": 253
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "5341d9d9305900cac13dd778541224baaa8e2c5bff8445c00ac30e730995a478",
+      "Fingerprint": "d9db4800ba3005954bb4e49f3f06f0e6b982eeb4877967e532db024253084e81",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/applocker.rs, rust/crates/baselineops-windows/src/cert_health.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/applocker.rs",
+          "StartLine": 71,
+          "EndLine": 76
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/cert_health.rs",
+          "StartLine": 46,
+          "EndLine": 51
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "53ced163e11d0e622f7b150942abe9b7d8e818637d9901264306e12dcad9ae14",
+      "Fingerprint": "581621102fff8d69c65700c55acc2e900a728543532ab26d73e0d65a7033b179",
+      "Rationale": "ASR allowlist and ransomware use different PREFERENCE_QUERY projections and property contracts. Their locally classified HRESULT/Observation handling must stay with each fixed query; do not introduce a generalized Defender WMI transport.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 403,
+          "EndLine": 430
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 280,
+          "EndLine": 307
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "5b2609966263f52fde93c3a827e22d94da520117c12a2f036b2ef0047c6ad0bc",
+      "Fingerprint": "5729d3bc18e09ad52a0b93d39a83b65a41e8df8b740f3c981bd671dd5dfcb80c",
+      "Rationale": "GUI invalid-profile tests intentionally construct and remove their own invalid file before asserting each controller flow's report.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-gui/src/controller_tests.rs",
+          "StartLine": 55,
+          "EndLine": 63
+        },
+        {
+          "Path": "rust/apps/baselineops-gui/src/controller_tests.rs",
+          "StartLine": 79,
+          "EndLine": 87
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "5c28b1c0533e57e8b5f388a5d468eacaf40f10b4867de8ec862b0a084fa10c12",
+      "Fingerprint": "652c459140378dc902c553c570d4f89104e2f0b8bb7b4f4c56c076bee4a2edc2",
+      "Rationale": "Journal tests set independent partial-frame offsets around separate recovery assertions; shared setup would conceal the byte-boundary under test.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/journal_tests.rs",
+          "StartLine": 235,
+          "EndLine": 242
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/journal_tests.rs",
+          "StartLine": 260,
+          "EndLine": 267
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "5f1a366ba2f4d38e40841d3c692889c4775224510522ca3bb5941492eeaaf620",
+      "Fingerprint": "9986a1edc1a2d0d3e9b75b15afff0517da16b62eb709b7e5b223c0644a7398de",
+      "Rationale": "CLI resource admission and engine support-bundle parsing each enforce reparse rejection at their own untrusted-path boundary; a common predicate would not eliminate the separate validation duty.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-cli/src/resources.rs",
+          "StartLine": 282,
+          "EndLine": 288
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/support_bundle_parser.rs",
+          "StartLine": 190,
+          "EndLine": 196
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "60915ac707c32a32ffc7192a39b2887c60b1563ae4ff9457267cad5754c259c5",
+      "Fingerprint": "c74b6a1af1778a72dc89fa9592802bb3aef3bce9b8f3c94abe65186be7fab8d1",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/amsi_policy.rs, rust/crates/baselineops-capabilities/src/app_control_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 180,
+          "EndLine": 198
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/app_control_policy.rs",
+          "StartLine": 133,
+          "EndLine": 153
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "60f1d364147521d9a98056aef5b1de53e5c1e5af3606897602acdf7d44904255",
+      "Fingerprint": "580ef0a0d3665b672bdeb9ffc12a59f3395e93e84bff7462a3be2e4abe9a2a29",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/policy_registry.rs, rust/crates/baselineops-windows/src/wef.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/policy_registry.rs",
+          "StartLine": 97,
+          "EndLine": 111
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wef.rs",
+          "StartLine": 139,
+          "EndLine": 153
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "62382995b055a482789cd5861d210623f8ce9b5904d42044470be1a7d3ed68d9",
+      "Fingerprint": "22f5dc76d567e4be4f06a520e4f31194ab1a750716e8dd916c008d76f4737a5e",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/cert_health_policy.rs, rust/crates/baselineops-capabilities/src/update_health_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/cert_health_policy.rs",
+          "StartLine": 231,
+          "EndLine": 250
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/update_health_policy.rs",
+          "StartLine": 321,
+          "EndLine": 339
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "648a8733517aabc2b4a0e74815c47c953c48bcd1c1b8317a6374adb6f7343597",
+      "Fingerprint": "ae480b6b5a2330f208c27bf935fe7ecf55cb2557475979c2a66ddf0446d3b967",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_powershell_logging.rs, rust/crates/baselineops-engine/src/wave_two.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_powershell_logging.rs",
+          "StartLine": 95,
+          "EndLine": 103
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_two.rs",
+          "StartLine": 128,
+          "EndLine": 136
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "69a235be2656b8e38ec0211b01adda1a8ca7af4091f099254ca5b51faceddbce",
+      "Fingerprint": "5a974cd6c293743fc6b6bc7c31540473dbbfa762863187c8326595453f2ed427",
+      "Rationale": "The same reparse attribute check is deliberately duplicated where CLI resource discovery and installed-package parsing establish different roots and error behavior.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-cli/src/resources.rs",
+          "StartLine": 282,
+          "EndLine": 287
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/installed_package.rs",
+          "StartLine": 209,
+          "EndLine": 214
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "6fadd5db07ff1685924ab0061622f50784a260365bd0700b757b259db8f04cbf",
+      "Fingerprint": "552e4c03d0677644af2e4cb2f416579c80313ae098ccf4b87f7ea145496b5f24",
+      "Rationale": "These imports name COM types required by two distinct fixed Defender preference projections. COM security initialization is shared; ASR aggregation and ransomware property acquisition retain their separate query and decoder authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 49,
+          "EndLine": 56
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 39,
+          "EndLine": 46
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "70d64d68ac08e61a02720f83a55cfbe10afe8742d46032eaca8849744f8687e2",
+      "Fingerprint": "dd45c132d08059f16433c942302b9364ae99149f6774475438f329c0dc48588e",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_scheduled_tasks.rs, rust/crates/baselineops-engine/src/wave_update_health.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_scheduled_tasks.rs",
+          "StartLine": 87,
+          "EndLine": 105
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_update_health.rs",
+          "StartLine": 85,
+          "EndLine": 103
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "71027141dc09fd192ebddcc2a634d1f7035312543cc53ef8330f1e56c573d00c",
+      "Fingerprint": "69e25ec11288689f784d1be5f8ff7f3bdeaf4e9ef9a020e5ba4d9385c589fcaa",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_firewall_baseline.rs, rust/crates/baselineops-engine/src/wave_remote_guardrails.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_firewall_baseline.rs",
+          "StartLine": 87,
+          "EndLine": 101
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_remote_guardrails.rs",
+          "StartLine": 92,
+          "EndLine": 106
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "7990222922880ce6a3bd72a8017e67f2a8e81abac65fb38b039253d8f176e01f",
+      "Fingerprint": "41fbf6c9cb69bf9a5da99a74fe0847e4a01dee16dd5c7500a19892f41e6cd11a",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/app_control.rs, rust/crates/baselineops-engine/src/wave_cert_health.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/app_control.rs",
+          "StartLine": 48,
+          "EndLine": 65
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_cert_health.rs",
+          "StartLine": 76,
+          "EndLine": 93
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "7a1c263a87fefad20b77eebebcf8a680e4ccd7dd3200ab2abacdb5f49061202f",
+      "Fingerprint": "39ff2a005e2477a4b514caa6d863492023f3624d1974704c8747b64e40ea9a6f",
+      "Rationale": "observations.rs bool_property accepts VT_BOOL, while age_property accepts signed and unsigned integer VARTYPEs. Their matching allocation and cleanup are necessary but the contracts and outputs differ.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/observations.rs",
+          "StartLine": 421,
+          "EndLine": 432
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/observations.rs",
+          "StartLine": 444,
+          "EndLine": 455
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "7db2a407d0a0c3e43624dd3bcaab58e6e79ca4f497a304bb404468cd1652ee8e",
+      "Fingerprint": "61d38b8567b92d1bb9d665fb2e07c8a1f5b8a6a4c7c301f91cbf0474ff590e86",
+      "Rationale": "AMSI and remote guardrail policies retain their explicit read-only evidence projection beside separate finding and completeness contracts. Their observation-state text intentionally differs for access denied, timed out and not run (underscores versus spaces); a shared formatter would change accepted output. The new fingerprint ends at the moved test-module boundary.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 188,
+          "EndLine": 211
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/remote_guardrails_policy.rs",
+          "StartLine": 508,
+          "EndLine": 531
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "81d0bfa182f7de2bf2b591cdbf775398bc3311c9312d5f222d44511904f4ae38",
+      "Fingerprint": "5354195e0a1296d84cc2977b4384b6ba78bc26cf5a140bb4c442c86862ba3557",
+      "Rationale": "The two hash paths have distinct preconditions despite matching metadata checks: one follows no-follow retained-file validation and the other supports its own bounded pipeline. Combining risks reopening a TOCTOU path.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
+          "StartLine": 220,
+          "EndLine": 227
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
+          "StartLine": 354,
+          "EndLine": 361
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "84f423ff961586fdae3772481dd4474fb9867f37597bd64e19fa815637b5e585",
+      "Fingerprint": "1f39938f9408a3f3e995913746c3f162fee4f9e7eb7b7464c2d715d69d5eb24a",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/firewall.rs, rust/crates/baselineops-windows/src/firewall_baseline.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall.rs",
+          "StartLine": 221,
+          "EndLine": 238
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall_baseline.rs",
+          "StartLine": 130,
+          "EndLine": 147
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "85679fcb761bec6bfe1aaf8051abc90618838a3d90c9c44baf6032296bae1275",
+      "Fingerprint": "d8018a5f86eaaba286fe32d4bfd31713d665dc137057fe888b169e409494e96a",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_local_admins.rs, rust/crates/baselineops-engine/src/wave_sysmon.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_local_admins.rs",
+          "StartLine": 68,
+          "EndLine": 84
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_sysmon.rs",
+          "StartLine": 69,
+          "EndLine": 85
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "88692d6e3f85291f48eceff3785bcd8c324ad819ca27a6c49ee30ad0e775a58c",
+      "Fingerprint": "3b8a5a142043f2b677fadb68a47d1aa6d642315af87cf76721e06b06edf099c2",
+      "Rationale": "The serialization/failure tail belongs to three distinct engine executor contracts, each with its own evidence and unavailable-operation meaning.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/app_control.rs",
+          "StartLine": 49,
+          "EndLine": 62
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/support_bundle_parser.rs",
+          "StartLine": 431,
+          "EndLine": 444
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_legacy_only_foundations.rs",
+          "StartLine": 199,
+          "EndLine": 212
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "8876ffdbdc2cf1c84faae0aff2b5956b0956628c1f2216eba8b287bdf6637884",
+      "Fingerprint": "b93bae51deacb80856845bc98d0051bed381753538a28ecc33f36e25a85ad4d6",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs, rust/crates/baselineops-engine/src/wave_scheduled_tasks.rs, rust/crates/baselineops-engine/src/wave_update_health.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs",
+          "StartLine": 66,
+          "EndLine": 87
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_scheduled_tasks.rs",
+          "StartLine": 64,
+          "EndLine": 86
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_update_health.rs",
+          "StartLine": 62,
+          "EndLine": 84
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "88f3a1551ad1f2d7486a4ca25e993d1ef5f3c4e30808ce65a8328147afd67ba2",
+      "Fingerprint": "8d1fd42fdfb2adcb3c1edcefd0e8e1f1071b2d63995aa0a292960db15ce6f001",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/firewall.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall.rs",
+          "StartLine": 132,
+          "EndLine": 144
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall.rs",
+          "StartLine": 171,
+          "EndLine": 183
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "8916c3feb1d15800ecfcca9ef46f661c4c6f2cdf9d60c0f9d021d2fa2fccd1d7",
+      "Fingerprint": "b4df58d940895a4d8a5d95e99670cf9a951e0cff0bad3fcf45451893aa9dd9f2",
+      "Rationale": "Certificate-health and LAPS waves independently define unavailable operation and payload serialization; retaining local helpers keeps capability release behavior inspectable.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_cert_health.rs",
+          "StartLine": 72,
+          "EndLine": 93
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_laps_hygiene.rs",
+          "StartLine": 61,
+          "EndLine": 82
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "897a0c832d5fc63263eb9e3e721d17cb1f98c26cdaf6fe2f18220e6d363013a1",
+      "Fingerprint": "37f0e8bd53926acce6a406d3946548b23dbbd5c66f7b7ae8adda7253b1c993b5",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/defender_ransomware_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/defender_ransomware_policy.rs",
+          "StartLine": 29,
+          "EndLine": 36
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/defender_ransomware_policy.rs",
+          "StartLine": 57,
+          "EndLine": 64
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "8ac5a7dea05c21bb34b86cd66c21db0d7d53ac01d330fdba0c06234ebcf7eee3",
+      "Fingerprint": "605d04e5939c6155553b3bba5e51ddb84d6663d22ddee65d9463f86383686a0b",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_scheduled_tasks.rs, rust/crates/baselineops-engine/src/wave_update_health.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_scheduled_tasks.rs",
+          "StartLine": 26,
+          "EndLine": 50
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_update_health.rs",
+          "StartLine": 26,
+          "EndLine": 50
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "8bdf06a52f814ca7ca1fc909509495a19525af6cd2a5069768b65fa4df689904",
+      "Fingerprint": "42112365f425d39a545247d447eaac8acc46768f511ed806d23e55336124681d",
+      "Rationale": "Package hashing and Sysmon file hashing have different trusted-open and file-limit contracts around the identical SHA buffer loop.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/package.rs",
+          "StartLine": 368,
+          "EndLine": 374
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/sysmon.rs",
+          "StartLine": 276,
+          "EndLine": 282
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "8cbdc2736f38563487fadca2ea3624cf480669d63cf0694d366148934302deb4",
+      "Fingerprint": "1a09ffdd854a36539c7a083e59061cce2821c8966846334ff5e5ea751e128438",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/scheduled_tasks.rs, rust/crates/baselineops-windows/src/update_health.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/scheduled_tasks.rs",
+          "StartLine": 90,
+          "EndLine": 97
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/update_health.rs",
+          "StartLine": 177,
+          "EndLine": 184
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "8e47b9117751c34225dbb4cfc810e66f0138439fa6ad720de2b6d76bdbaaac85",
+      "Fingerprint": "a24c271f3919c67ea805fe4adcfb13399cc0de0d213cab189e8a1ee21acd55b1",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/app_control.rs, rust/crates/baselineops-engine/src/wave_advanced_audit.rs, rust/crates/baselineops-engine/src/wave_boot_security.rs, rust/crates/baselineops-engine/src/wave_network_services.rs, rust/crates/baselineops-engine/src/wave_wef_time.rs, rust/crates/baselineops-engine/src/wave_winget.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/app_control.rs",
+          "StartLine": 49,
+          "EndLine": 65
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_advanced_audit.rs",
+          "StartLine": 46,
+          "EndLine": 62
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_boot_security.rs",
+          "StartLine": 65,
+          "EndLine": 81
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_network_services.rs",
+          "StartLine": 61,
+          "EndLine": 77
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_wef_time.rs",
+          "StartLine": 54,
+          "EndLine": 71
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_winget.rs",
+          "StartLine": 74,
+          "EndLine": 90
+        }
+      ],
+      "Multiplicity": 6
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "8f875795b087c768a179063e037ff5f3d4c34874bcfe83331fcc33752487a1ca",
+      "Fingerprint": "0ea0da0a9393b759ad11d3b0bc2e5d6b3ad898ce176d63dc18540a8d97798a9e",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_application_control.rs, rust/crates/baselineops-engine/src/wave_defender_ransomware.rs, rust/crates/baselineops-engine/src/wave_office_browser.rs, rust/crates/baselineops-engine/src/wave_security_options.rs, rust/crates/baselineops-engine/src/wave_smb_encryption.rs, rust/crates/baselineops-engine/src/wave_windows_update.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_application_control.rs",
+          "StartLine": 41,
+          "EndLine": 55
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_ransomware.rs",
+          "StartLine": 35,
+          "EndLine": 50
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_office_browser.rs",
+          "StartLine": 30,
+          "EndLine": 43
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_security_options.rs",
+          "StartLine": 32,
+          "EndLine": 45
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_smb_encryption.rs",
+          "StartLine": 32,
+          "EndLine": 45
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_windows_update.rs",
+          "StartLine": 28,
+          "EndLine": 41
+        }
+      ],
+      "Multiplicity": 6
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "92a31dd66616dc5ee21f9fa8df75a9a32cc6284941a3496fa56914edd0f7c9ae",
+      "Fingerprint": "ee2d7e7f7a792876d8f716d162336ae2c7618d6aba3a7b0762ce5500510e89d2",
+      "Rationale": "Wave One and Wave Two test calls name different executor, descriptor, and capability contracts; the visual invocation shape is test scaffolding.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_one.rs",
+          "StartLine": 501,
+          "EndLine": 509
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_two.rs",
+          "StartLine": 141,
+          "EndLine": 149
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "92e86ccf6aa25335f7183d72b9dc83a7371452a919a998d289ef5cfe130cb4b4",
+      "Fingerprint": "abcef39b7905cf71d2148011d557019b3fce2511059fdac2f5a9e8d0aa0089fb",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/amsi_policy.rs, rust/crates/baselineops-capabilities/src/cert_health_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 196,
+          "EndLine": 209
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/cert_health_policy.rs",
+          "StartLine": 234,
+          "EndLine": 247
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "942b973d6a2c839f54ba875d0980be1f5da738af5ec106d6c5ef40be70716d26",
+      "Fingerprint": "0887167412c4ba2f5d3a225dbc2db111cebf2fbd99d3d3778aff0ce1072160bb",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/time_sync.rs, rust/crates/baselineops-windows/src/wef.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 199,
+          "EndLine": 207
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wef.rs",
+          "StartLine": 183,
+          "EndLine": 191
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "94a6d68507f0dec425aa4195107ce8d1036c846624b790425121accc2281e95d",
+      "Fingerprint": "aa52be8d67723a9a74376c7ae51ef0939a790f58ca7b8450af178582746724aa",
+      "Rationale": "Remote guardrails assesses bool and DWORD desired states separately so JSON evidence and drift representation stay type-accurate; the common parameters are superficial.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/remote_guardrails_policy.rs",
+          "StartLine": 426,
+          "EndLine": 435
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/remote_guardrails_policy.rs",
+          "StartLine": 452,
+          "EndLine": 461
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "9524148af0b79b6be9b9b937547f37841c668039098e392b5d98e7ab472c20c5",
+      "Fingerprint": "7ddbb0edae0aed73e76fc4143be3ba159e0d7d470f57905ff9d6a8febcc494b7",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/defender_ransomware.rs, rust/crates/baselineops-windows/src/observations.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 46,
+          "EndLine": 54
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/observations.rs",
+          "StartLine": 149,
+          "EndLine": 157
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "959182c600e30debde7c6cd3a17d35a60faa3cb98acab5661977f4d3305a61dd",
+      "Fingerprint": "a2bb486c13fbca004501bc03b1e7c554d01a9800e83ccee4934a97d8a561b2d6",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/app_control.rs, rust/crates/baselineops-engine/src/wave_hardware_trust.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/app_control.rs",
+          "StartLine": 44,
+          "EndLine": 65
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_hardware_trust.rs",
+          "StartLine": 65,
+          "EndLine": 86
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "97a779b59f5837ca6d5f14d2da31e1cc62770b86a643f155df5cd5fdc25aadd5",
+      "Fingerprint": "5ccc1417e511ab2db08146a0ca3fccf08e3d0a7f505ae7edcef887341f9b16bb",
+      "Rationale": "observations.rs and services.rs begin independent Win32 service probes; their buffer setup is followed by different service enumeration and projection logic.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/observations.rs",
+          "StartLine": 244,
+          "EndLine": 249
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/services.rs",
+          "StartLine": 105,
+          "EndLine": 110
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "98171da51ee49d96964389d17a7e1a1824e50d4b612834505b4207e3f983e25c",
+      "Fingerprint": "ffff3e6a7b32072857a39b99b7f3f18da775d172ae42d3eb7ba51d4f183fda6c",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/applocker.rs, rust/crates/baselineops-windows/src/driver_integrity.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/applocker.rs",
+          "StartLine": 67,
+          "EndLine": 78
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/driver_integrity.rs",
+          "StartLine": 98,
+          "EndLine": 111
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "9ae6b51ccf86c63b3879dd71524532128094fedee3c01ec0b0623bb3743540d4",
+      "Fingerprint": "863875afa04bc871750bcc1c2c0f913b5e6fcda6385dfef6b6290c7ca14810f3",
+      "Rationale": "The matching ServiceObservation projection follows different query and missing-service decisions in services, Sysmon and update-health.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/services.rs",
+          "StartLine": 138,
+          "EndLine": 146
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/sysmon.rs",
+          "StartLine": 158,
+          "EndLine": 166
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/update_health.rs",
+          "StartLine": 136,
+          "EndLine": 144
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "9b0ab55433e0602630ce0790839fc0dd10a5d78174f6d36a988f50eb881484ee",
+      "Fingerprint": "0853bc40cb665c1cc6e7196de3f9ec2bd8c1ed1296b7c124ba9d5193f424fcfc",
+      "Rationale": "Package and trust hashing process bytes from different integrity gates; share neither open path nor digest loop without retaining all handle and limit guarantees.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/package.rs",
+          "StartLine": 368,
+          "EndLine": 376
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/trust.rs",
+          "StartLine": 151,
+          "EndLine": 159
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "9bc4934bcdaeccf60a43cdc219db30a41338cc41037f8b5fadee213decd32ddd",
+      "Fingerprint": "b006236074fefbcb52db62b8e7c8ff4ef5173105a8b2e587eeff4e432b074ae4",
+      "Rationale": "The one-result enumeration follows different ASR and ransomware PREFERENCE_QUERY projections. Preserve the strict one-object check with the query-specific classification boundary.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 170,
+          "EndLine": 194
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 177,
+          "EndLine": 201
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "9d6d7c7bd72fda18bbe486abccb69ae9c2ee7bfcb195f20d1983943b19942da1",
+      "Fingerprint": "eae45b411a579b5c86dd4e402dd742798a01d597a73680af760635b81d95e625",
+      "Rationale": "Registry mutation and time-sync observation retain private OwnedKey destruction next to their different fixed-key and access-right contracts. The matching UTF-16 name encoder, close-on-drop body, and test-module boundary do not justify moving unsafe handle ownership out of these adapters.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/registry.rs",
+          "StartLine": 513,
+          "EndLine": 532
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 304,
+          "EndLine": 322
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "9e9c382574a21319a7968f24a629544457a3574caa8efcd51b8541e151cfdfdb",
+      "Fingerprint": "f91a6a0be7b3347a713d644479e5f50652ceffe6bf3480ea67ee1964ab0d3890",
+      "Rationale": "Service and Sysmon probes map the same Win32 open statuses into different typed observations. Keep those typed error projections with each service probe; their value-only start-mode conversion is now shared.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/services.rs",
+          "StartLine": 152,
+          "EndLine": 162
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/sysmon.rs",
+          "StartLine": 348,
+          "EndLine": 358
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "9f6c0b4e35768909b6253b4e4018ecc91f358bffa202d54fd80e09aeca1aa8f1",
+      "Fingerprint": "2e0b4bc7ec18b214f0ffffc3e07b4da2c1a9b3db854c3631b25624c622894f1c",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/amsi.rs, rust/crates/baselineops-windows/src/backup_readiness.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/amsi.rs",
+          "StartLine": 45,
+          "EndLine": 52
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 85,
+          "EndLine": 92
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "a115b0d32ee60bb6bc60f4e595385d0a14c87ed5ddd35bfc4e21c64eafb06444",
+      "Fingerprint": "b87e5c08d34801f5a4808441043a49c7629bceb4eb66d048cd835f65eb7f8578",
+      "Rationale": "Accepted: rust/apps/baselineops-cli/src/main.rs, rust/apps/baselineops-worker/src/trust.rs sit on separate application/process boundaries. Similar protocol or lifecycle code remains independently auditable for its caller and public compatibility contract.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-cli/src/main.rs",
+          "StartLine": 384,
+          "EndLine": 396
+        },
+        {
+          "Path": "rust/apps/baselineops-worker/src/trust.rs",
+          "StartLine": 122,
+          "EndLine": 134
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "a4848cd38d74e0b5fd6373c17c24b2f1dd4f4a57e7c4e3a1ccb4b68ecefaabba",
+      "Fingerprint": "b2596a32132029ed6eff4d81370ab88b0a3c472a53efa3605956d744712c3c27",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/policy_registry.rs, rust/crates/baselineops-windows/src/time_sync.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/policy_registry.rs",
+          "StartLine": 96,
+          "EndLine": 107
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 189,
+          "EndLine": 200
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "a592b394c7ce01afbe9f4a3fe8d87c6e307b94809585b69ddf7ac4e814bc1609",
+      "Fingerprint": "f8ce2efdee5c8958d1acf4093979e3031c2981c2982edcf5cd293480e88447dd",
+      "Rationale": "Evidence tests deliberately repeat the persistence-failure test shape while varying failure timing and cleanup assertion; the fixture is the oracle.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/evidence_tests.rs",
+          "StartLine": 127,
+          "EndLine": 135
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/evidence_tests.rs",
+          "StartLine": 183,
+          "EndLine": 191
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "a594a850beec62303cfc8e3faeda8b9392526412184128a40fec44c8cf8a3f49",
+      "Fingerprint": "836c65771700683afaf939b60f995d015b4ea2d59b8beabbae685439680ca03b",
+      "Rationale": "Remote-guardrails and scheduled-tasks have independent PolicyFinding evidence maps and stable capability codes despite the common constructor signature.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/remote_guardrails_policy.rs",
+          "StartLine": 504,
+          "EndLine": 514
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/scheduled_tasks_policy.rs",
+          "StartLine": 224,
+          "EndLine": 235
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "a6388fd62e250d4b1c732ef172d8eced9a4dba1bd83045a470f2724aa211bde2",
+      "Fingerprint": "1902a2e09c8a52fab9d1b88c0aed81d9ed887e896787f9d612640fde4528cd7f",
+      "Rationale": "Backup readiness and ransomware policy expose their own incomplete-evidence wording and codes; observation-state text is part of each public audit record.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/backup_readiness_policy.rs",
+          "StartLine": 238,
+          "EndLine": 254
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/defender_ransomware_policy.rs",
+          "StartLine": 371,
+          "EndLine": 388
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "a705f6b9be3dc875fccc9e0aa803188c6d2c17cbbece506a60a1eb1a3a8c8f67",
+      "Fingerprint": "f31b603706c15babed5b0da7541b3618e3680f7419812999debb8758e5e2a98f",
+      "Rationale": "Advanced audit and AMSI must retain capability-local finding construction because their severity/code/message choices are policy authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/advanced_audit_policy.rs",
+          "StartLine": 252,
+          "EndLine": 267
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 181,
+          "EndLine": 196
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "a76fe401d5dcf9208a67c5b735c58969c59d0d8b37a7a4cc76c47bf261cc5947",
+      "Fingerprint": "a2190f62c9c36f7795eee0ee07886796342649b8ec35d23265b20f9ddf25577e",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_hardware_trust.rs, rust/crates/baselineops-engine/src/wave_inventory.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_hardware_trust.rs",
+          "StartLine": 64,
+          "EndLine": 86
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_inventory.rs",
+          "StartLine": 96,
+          "EndLine": 119
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "aa6690b70ccfe9465103509da43d5bb403700c96f9031fb90b6c80119e59ccf0",
+      "Fingerprint": "e38ed47c5bbc317e2761dcf68506328ad04ca25f4bf1088024b26cd48f6a2ec3",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/backup_readiness.rs, rust/crates/baselineops-windows/src/driver_integrity.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 75,
+          "EndLine": 85
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/driver_integrity.rs",
+          "StartLine": 81,
+          "EndLine": 93
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "aaf0616a78b25a85388db10581e5f5740cce4db1c8a70ea672a3ea75cb97b60d",
+      "Fingerprint": "541d517b856a7ceaf0266d37fec4cfac1309b7842cc4d5b14997132ba146f72a",
+      "Rationale": "Advanced audit, cert health and exploit protection each own a visible audit policy; common struct literal syntax is not common policy behavior.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/advanced_audit_policy.rs",
+          "StartLine": 252,
+          "EndLine": 272
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/cert_health_policy.rs",
+          "StartLine": 247,
+          "EndLine": 268
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/exploit_protection_policy.rs",
+          "StartLine": 225,
+          "EndLine": 247
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ab406516e05f25b375a2505b98dc51bdd2cf927968b191ce065d657129fa6c15",
+      "Fingerprint": "702bd7af3b1aa3ee8d531f73de183ba6456160984676890e9fd91f93dc325331",
+      "Rationale": "Defender ransomware and generic observations inspect distinct WMI VARIANT type contracts. The cleanup code must remain adjacent to each unsafe type decision.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 260,
+          "EndLine": 278
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/observations.rs",
+          "StartLine": 452,
+          "EndLine": 470
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ac9435a2eb41768da71c9db22f29ee31476a3a17b049f6ecfd011ea5520ae90a",
+      "Fingerprint": "c49f09d3ef527d3f2c848c81168c1ab0d12026b434020177b61d9cc1f404e35d",
+      "Rationale": "Event triage and missing-patch incomplete observations have separately owned codes and severity; preserve the independent output contract.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/event_triage_policy.rs",
+          "StartLine": 204,
+          "EndLine": 212
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/missing_patch_policy.rs",
+          "StartLine": 183,
+          "EndLine": 191
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b0f755f8004ccdf5d569e1d01becdd1a4b0c94077da982ad66f05b93ba03cab3",
+      "Fingerprint": "56ac2734b21ac1ebb30f36fb40320e1782d043d9d1b1703114717569cde5c5cd",
+      "Rationale": "The second occurrence is an update-health test expectation. Production and test must intentionally repeat the exact finding shape to assert the public result.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/update_health_policy.rs",
+          "StartLine": 312,
+          "EndLine": 323
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/update_health_policy_tests.rs",
+          "StartLine": 208,
+          "EndLine": 219
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b1239049a8fbdb016ae7df99e18d5f586d2712f191da76a1cfeea3c646cc8599",
+      "Fingerprint": "c579b32506ec732e3dde5892958789ca38de0d066d95f1073943e56bdccd6fe5",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/advanced_audit.rs, rust/crates/baselineops-windows/src/backup_readiness.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/advanced_audit.rs",
+          "StartLine": 63,
+          "EndLine": 69
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 77,
+          "EndLine": 82
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b1a8bcf0b4426dc804ecc789d1cb45e96de969af2e7a45b0395e815b3d54f695",
+      "Fingerprint": "3aba7dd7c82e63074b2e501af47ba498c3baa7a11f918c9d732e096b756918e9",
+      "Rationale": "Sysmon and update-health use the same service config buffer protocol but decide unparsed/missing states for different service evidence; retain local native boundary code.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/sysmon.rs",
+          "StartLine": 201,
+          "EndLine": 207
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/update_health.rs",
+          "StartLine": 126,
+          "EndLine": 132
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b2181ca59566c071da6c4abb838402e9844543578ec35f2a01c10dad09590974",
+      "Fingerprint": "245a5c40efa6063515eb634b29e596454f7b92595e5b67eb980161eae41f2bcf",
+      "Rationale": "The apparent WMI property overlap is a string decoder beside separate u32/u64 VARTYPE decoders in distinct provider logic, rather than two interchangeable string readers. Retain each unsafe decoder locally.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/hardware_trust.rs",
+          "StartLine": 331,
+          "EndLine": 338
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/hardware_trust.rs",
+          "StartLine": 348,
+          "EndLine": 355
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b2826631748b05be871b404c9b1d1d54886fadbb81e2847fcfd7cd4b42bb9025",
+      "Fingerprint": "fe32da2f60b7fdf06ab7dce77623c5a017d30416b74d31869983767b074e7c04",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs, rust/crates/baselineops-engine/src/wave_defender_ransomware.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs",
+          "StartLine": 66,
+          "EndLine": 81
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_ransomware.rs",
+          "StartLine": 66,
+          "EndLine": 81
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b4612a046708d496914a74e26368782b87cd1d7c2705691de26391dbe055074c",
+      "Fingerprint": "cb3319247729393af08f582d11dde5b459d6c3366d936e645975abbf301f65c5",
+      "Rationale": "AMSI and backup-readiness are independently read-only, but their findings remain independently versioned capability output.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 193,
+          "EndLine": 202
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/backup_readiness_policy.rs",
+          "StartLine": 235,
+          "EndLine": 243
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b53b1cb8fa88167aeaae51641694f597c588700ae22d7d363296aca4e6e9ad9a",
+      "Fingerprint": "164484bb22696a576775f0201da1e76c4502154dc43686c930b02923ec2eb794",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/app_control_policy.rs, rust/crates/baselineops-capabilities/src/applocker_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/app_control_policy.rs",
+          "StartLine": 132,
+          "EndLine": 155
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/applocker_policy.rs",
+          "StartLine": 225,
+          "EndLine": 247
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b64e9f03e0ccac11efb440dde3392d3854e513fbfc3c03123c906400a8238cdb",
+      "Fingerprint": "9e107887f1935f2ac8a268ad97e23e5a8ecee9809788413c00e081a0f692d45b",
+      "Rationale": "Both resolve a fixed System32 executable, yet vssadmin and driver-integrity commands have different argument and interpretation policies. Retain the trust resolution at each executable authority boundary.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 46,
+          "EndLine": 58
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/driver_integrity.rs",
+          "StartLine": 52,
+          "EndLine": 64
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "b7da7e11d887664cb1d53163f45e78d208b35b52e4b95fa05dd76d8e8828e6dd",
+      "Fingerprint": "95a1c731f2a56f1218cf63ac78a15bf419ca3419e7b23453d2a5ee5f4268b073",
+      "Rationale": "Backup readiness and SMB encryption emit capability-specific status text; human-readable Observation mapping is part of their audit output.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/backup_readiness_policy.rs",
+          "StartLine": 239,
+          "EndLine": 255
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/smb_encryption_policy.rs",
+          "StartLine": 254,
+          "EndLine": 271
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ba1ea95755a55d48ef1eccd14837d6bbd05b4a26232b33046371c6376c08b5cc",
+      "Fingerprint": "84f79b7b1092eaa6d7221af93fb1031900662a24a05d17102bcd09e4d88b7db9",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/amsi.rs, rust/crates/baselineops-windows/src/boot_security.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/amsi.rs",
+          "StartLine": 38,
+          "EndLine": 50
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/boot_security.rs",
+          "StartLine": 66,
+          "EndLine": 80
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "bd1942ed531f440f4d2158d46d9bb113b3fde67ebd02a88e7e277a2cf30bbb00",
+      "Fingerprint": "cde70a7f1d073c819c20a6e29ced9f01d553154cfafc06369156fdc68796cf97",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs, rust/crates/baselineops-engine/src/wave_defender_ransomware.rs, rust/crates/baselineops-engine/src/wave_firewall_baseline.rs, rust/crates/baselineops-engine/src/wave_remote_guardrails.rs, rust/crates/baselineops-engine/src/wave_security_options.rs, rust/crates/baselineops-engine/src/wave_smb_encryption.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs",
+          "StartLine": 22,
+          "EndLine": 30
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_ransomware.rs",
+          "StartLine": 23,
+          "EndLine": 32
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_firewall_baseline.rs",
+          "StartLine": 22,
+          "EndLine": 30
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_remote_guardrails.rs",
+          "StartLine": 24,
+          "EndLine": 32
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_security_options.rs",
+          "StartLine": 21,
+          "EndLine": 29
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_smb_encryption.rs",
+          "StartLine": 21,
+          "EndLine": 29
+        }
+      ],
+      "Multiplicity": 6
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "bdcc85808595804dc3c772a6abaf781bf45df6412e9583b174ec1aab89b57f88",
+      "Fingerprint": "92a67f0a219a31aa5993ae4c3c87e2abe09ed85a22f526f83d57c4580fd747e9",
+      "Rationale": "The two evaluators describe different incomplete evidence conditions and each must own its finding construction.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/event_triage_policy.rs",
+          "StartLine": 191,
+          "EndLine": 204
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/missing_patch_policy.rs",
+          "StartLine": 170,
+          "EndLine": 183
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "c2882a12a53b4809a13883ebe4b62664c893c565d61cd31a889cf36474daf131",
+      "Fingerprint": "b07907dcccaf30d0df65ad7515222624fd5ef26829c0541cbe22d529797af561",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/amsi.rs, rust/crates/baselineops-windows/src/remote_guardrails.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/amsi.rs",
+          "StartLine": 44,
+          "EndLine": 55
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/remote_guardrails.rs",
+          "StartLine": 84,
+          "EndLine": 98
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "c4a3367e7715eb9a682360ad24e85ff5fcb98cdb50d9859c275ddd0b1ce78d12",
+      "Fingerprint": "b7e094c19d6a32fd3ebad535ec3b2d23387c4963d51645f9d1e7b7e411be3418",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/client_baseline.rs, rust/crates/baselineops-windows/src/exploit_protection.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/client_baseline.rs",
+          "StartLine": 104,
+          "EndLine": 120
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/exploit_protection.rs",
+          "StartLine": 82,
+          "EndLine": 97
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "c5a776162fd25eb29aba3b3d1b4cc909d9d338da231ffe9f71c24d04be030be7",
+      "Fingerprint": "1a5bf037ffd08ace47284d06c9a4a454d05a61dd6e1f2e06ff1afe27cefa4c7f",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/driver_integrity.rs, rust/crates/baselineops-windows/src/storage_reliability.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/driver_integrity.rs",
+          "StartLine": 14,
+          "EndLine": 26
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/storage_reliability.rs",
+          "StartLine": 16,
+          "EndLine": 28
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "c715bee5566ed27587e8b3cb3335afd2671feb7259d1b4992a1bc8afa35008ef",
+      "Fingerprint": "9139cceae6f5694bd75fcc404f20e1e28c41ac910dcf21e234b97e1c67960c3c",
+      "Rationale": "Policy-registry and time-sync decode their separately allowlisted UTF-16 values and impose different type/absence error framing. Avoid a broad raw registry abstraction.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/policy_registry.rs",
+          "StartLine": 273,
+          "EndLine": 284
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 221,
+          "EndLine": 232
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "c9f496cc8120622f694d8902026121dcd4f112d8786040dc97f918b9fd5eea60",
+      "Fingerprint": "34335b6dc22d95648768ecd2f9cd68e361774a6cf4df5c91aa18a5e0871dab7e",
+      "Rationale": "Accepted: rust/apps/baselineops-cli/src/plan.rs, rust/apps/baselineops-worker/src/broker.rs sit on separate application/process boundaries. Similar protocol or lifecycle code remains independently auditable for its caller and public compatibility contract.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-cli/src/plan.rs",
+          "StartLine": 62,
+          "EndLine": 71
+        },
+        {
+          "Path": "rust/apps/baselineops-worker/src/broker.rs",
+          "StartLine": 330,
+          "EndLine": 339
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "cc3292ecd4e17c42300d05c64a327f077601f3ec28849ec4edf5505d0f7f220a",
+      "Fingerprint": "ad5e8fd1e5564050f1128131105e90ba10810a2af7e5445b107250c7260deb6c",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/app_control.rs, rust/crates/baselineops-engine/src/wave_local_admins.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/app_control.rs",
+          "StartLine": 50,
+          "EndLine": 65
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_local_admins.rs",
+          "StartLine": 69,
+          "EndLine": 84
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ccb74567c763b675ec117e1366fe114215a91eb5aa23eb38027a518106fc601a",
+      "Fingerprint": "d38cf467b047cd588d03cf5bb9c8fe338538fa53819ce11fb395adce75f15de9",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/boot_security.rs, rust/crates/baselineops-windows/src/driver_integrity.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/boot_security.rs",
+          "StartLine": 78,
+          "EndLine": 89
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/driver_integrity.rs",
+          "StartLine": 109,
+          "EndLine": 120
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "cd506ed9807934623de89a4c8ac26380df0db93f84ffd44012e3b6e1b2511d18",
+      "Fingerprint": "c19ab7c618d31623e7830374e992cee767d4c1fa80472d57a7d89e02c8c8a42b",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/backup_readiness.rs, rust/crates/baselineops-windows/src/remote_surface.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 130,
+          "EndLine": 155
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/remote_surface.rs",
+          "StartLine": 89,
+          "EndLine": 115
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ce49c73c89dba5813ede2def0d29856b41cf734ab4ec04946e669e0db2bb1097",
+      "Fingerprint": "f2ad6a1ac3c2ff6b530c18e6ac575c7a7ae46f66fea5591481ef9f494604a910",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/firewall.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall.rs",
+          "StartLine": 133,
+          "EndLine": 144
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall.rs",
+          "StartLine": 153,
+          "EndLine": 164
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "cf07d7196a51cc7fd52ba2e72b36b4c639819d405ee322dad9caa3e128b42861",
+      "Fingerprint": "142390829f949b0453535db7143af35546ea7ac995e60bc8d9b8dbb70776bc9c",
+      "Rationale": "The provider connection embeds different PREFERENCE_QUERY projection and resulting property semantics for ASR allowlist versus ransomware. Keep namespace/proxy/query and classification local.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 132,
+          "EndLine": 167
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_ransomware.rs",
+          "StartLine": 140,
+          "EndLine": 175
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "d099e2797f03280aff7c87c96cf3d0cce508d9974622e08067c9d33a250184ee",
+      "Fingerprint": "54c3e4aaf0baa33ec6249815b27544a4bd3ba9f8d0bb730b4dc26ce5f59fa636",
+      "Rationale": "The two GUI queue tests are distinct coalescing and rendering scenarios. Their duplicated channel setup is intentionally test-local.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-gui/src/controller_tests.rs",
+          "StartLine": 217,
+          "EndLine": 228
+        },
+        {
+          "Path": "rust/apps/baselineops-gui/src/controller_tests.rs",
+          "StartLine": 235,
+          "EndLine": 246
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "d1aedecd1cf8f9a914758110c6d3b31ea79cd2f882103856e0f018712ded212f",
+      "Fingerprint": "2f502a62527233257f7b0293eb92265d8de04775c964b7bf41b5380675636aa2",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/amsi_policy.rs, rust/crates/baselineops-capabilities/src/event_triage_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 199,
+          "EndLine": 208
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/event_triage_policy.rs",
+          "StartLine": 191,
+          "EndLine": 200
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "d21d69d0f5b716df5e049b06e331ec42b164356b9934af44911dc97ec52a99be",
+      "Fingerprint": "5338b03847dd2114db66ab761a50df8f01190d227c312481cac92262f0409bfc",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_application_control.rs, rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_application_control.rs",
+          "StartLine": 94,
+          "EndLine": 104
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs",
+          "StartLine": 70,
+          "EndLine": 80
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "d2cacc59a47d380d626e7050d232adf87ed8f82ec0c9f404188caa3347828e8a",
+      "Fingerprint": "89926a38579a7eb12a06b59d2eac2a909b08e95dc67d9794065d45bfc1d3ea85",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_network_services.rs, rust/crates/baselineops-engine/src/wave_wef_time.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_network_services.rs",
+          "StartLine": 79,
+          "EndLine": 87
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_wef_time.rs",
+          "StartLine": 73,
+          "EndLine": 81
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "d5694610590cd474bb80c205a84f51d1740ac942ec1e02d57fbc03c846b519ea",
+      "Fingerprint": "2a75976fce430d03afc4fe804501c377bd079c265020566c9c846306ab50a68d",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/applocker.rs, rust/crates/baselineops-windows/src/smb_encryption.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/applocker.rs",
+          "StartLine": 71,
+          "EndLine": 80
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/smb_encryption.rs",
+          "StartLine": 53,
+          "EndLine": 64
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "d76e3be09f146c813951f223bbcd42ad719f730403e1af39b63a2d825b8372b6",
+      "Fingerprint": "c0ee05813ecbba879b7f8be1f0ebe119a0c644b6b46351717a190423b2625a49",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_advanced_audit.rs, rust/crates/baselineops-engine/src/wave_winget.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_advanced_audit.rs",
+          "StartLine": 31,
+          "EndLine": 40
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_winget.rs",
+          "StartLine": 40,
+          "EndLine": 49
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "d9f3c14e9407422e346c7ae5571faa6276263b4090c6144094cc50ae50f92c43",
+      "Fingerprint": "72ace7f8ae22c8133df9e93c35ddef21cbf67217c31e15894ff607baab23859e",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/advanced_audit.rs, rust/crates/baselineops-windows/src/time_sync.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/advanced_audit.rs",
+          "StartLine": 42,
+          "EndLine": 60
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 75,
+          "EndLine": 93
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "df15fab7ae454d332d9758304a603326d7db24f12b7f3736d69a9f6d1a3c3fcc",
+      "Fingerprint": "2c33a44d2ae08615fb873a03c1764826b866be9ba717ecfcdebaa3fb327ca6e4",
+      "Rationale": "App-control and driver-integrity findings express separate security policies, codes, and required evidence.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/app_control_policy.rs",
+          "StartLine": 132,
+          "EndLine": 153
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/driver_integrity_policy.rs",
+          "StartLine": 175,
+          "EndLine": 196
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "e06b05c032b7209e8577ddb67dfdba91df977c70ab4dcffc56fccce7433f3c71",
+      "Fingerprint": "30d843cba201a96211712f5e370ee65957671b53ab8c747767827b81b047aa2a",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/amsi.rs, rust/crates/baselineops-windows/src/applocker.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/amsi.rs",
+          "StartLine": 48,
+          "EndLine": 58
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/applocker.rs",
+          "StartLine": 88,
+          "EndLine": 98
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "e42507d3236db742f5c96491cf95690afa1473178e4558da06985c3e84122349",
+      "Fingerprint": "b277ee29109f2172a70f0670efe90858d9c6ac1d1622c3bf26ecf4338d82cb07",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_firewall_baseline.rs, rust/crates/baselineops-engine/src/wave_remote_guardrails.rs, rust/crates/baselineops-engine/src/wave_sysmon.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_firewall_baseline.rs",
+          "StartLine": 103,
+          "EndLine": 117
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_remote_guardrails.rs",
+          "StartLine": 108,
+          "EndLine": 122
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_sysmon.rs",
+          "StartLine": 107,
+          "EndLine": 121
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "e601aa1f923ab3b01cf73368fdd3361e28dcba3114d8a95b418430059e6ca7a9",
+      "Fingerprint": "cb1f1cf93a787df24f3dc8e2bd705e8b37df1d880ced9675596c37567ca7e667",
+      "Rationale": "hardware_trust connects to the Volume Encryption namespace with BitLocker-specific errors; storage_reliability connects to the Storage namespace with storage-specific provider/proxy errors. They are distinct authority boundaries.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/hardware_trust.rs",
+          "StartLine": 243,
+          "EndLine": 249
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/storage_reliability.rs",
+          "StartLine": 108,
+          "EndLine": 114
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "e6bc1e795f56f8b7295bb3f8f913fa13888287f3b81b8fcc3866af538b62d4ac",
+      "Fingerprint": "bb961527bb7681c3f3e18511341e3356a7838d454d8b088492b572bd2c0938cd",
+      "Rationale": "The repeated Get/VARIANT fragment precedes different ASR array/action VARTYPE parsing. Keep acquisition, validation, and VariantClear adjacent to the unsafe decoder rather than returning a general raw VARIANT helper.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 199,
+          "EndLine": 206
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 222,
+          "EndLine": 229
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "e7c3af56d46fb06c2e006a8f4e69a29ab1809150fa62698451b2939e6ed8c27a",
+      "Fingerprint": "f572865684adee7d30aaf023cef997ff1488950716a87a982d1e995e525a4a25",
+      "Rationale": "apply_authority derives executable trusted steps, while registry_deriver constructs a different derivation result. Matching ExecutionStep fields retain different validation and authority context.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/apply_authority.rs",
+          "StartLine": 355,
+          "EndLine": 362
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/registry_deriver.rs",
+          "StartLine": 91,
+          "EndLine": 98
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "e94e828146494aff8e5e62b76925fb308ff495a4c95f45799d00a3e16026eae8",
+      "Fingerprint": "0208736776e84fd364c9f0140473c2f2a4f096a4a00b94cbe54db19ddf07a534",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs, rust/crates/baselineops-engine/src/wave_legacy_only_foundations.rs, rust/crates/baselineops-engine/src/wave_local_admins.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_defender_asr_allowlist.rs",
+          "StartLine": 67,
+          "EndLine": 74
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_legacy_only_foundations.rs",
+          "StartLine": 177,
+          "EndLine": 184
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_local_admins.rs",
+          "StartLine": 56,
+          "EndLine": 63
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ea250cbc4c3e450f69935d44b77590435329f50512fb6a8f11e6ee06dd54b2a1",
+      "Fingerprint": "6ea4f457f76f2b3e2fc2fb1ff7113b131ccd630d2e69e68419006ffa8022f09c",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/time_sync.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 211,
+          "EndLine": 220
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 237,
+          "EndLine": 246
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ead2cf3827058a62ab45ee77f1d7381ede8a95689fd0f59feebb896ddbe2264d",
+      "Fingerprint": "e683d664a8443fd4ad2b1a575064a7f538692d537a8bdd7ff5a16942d77f51d4",
+      "Rationale": "Hardware trust and winget status wording belongs in their public capability reports even though each maps the same Observation variants.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/hardware_trust_policy.rs",
+          "StartLine": 306,
+          "EndLine": 323
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/winget_policy.rs",
+          "StartLine": 274,
+          "EndLine": 291
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "eae86ba7a2ebf66a0e8f693dc62cfa2ddedce8f60132d16bf60c4276f58cfe48",
+      "Fingerprint": "7ec0e8930baada074806105b4ecad607c53456f1e2dfe8fa9a31a350c2d0d399",
+      "Rationale": "Policy-registry and registry validate different legal registry type sets and package different trust-failure context around equivalent UTF-16 decoding.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/policy_registry.rs",
+          "StartLine": 272,
+          "EndLine": 278
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/registry.rs",
+          "StartLine": 404,
+          "EndLine": 410
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ed3f5596e7af6675475598f9dc19f5c8d06fdc88bb62ce987a7ceca4781f5b51",
+      "Fingerprint": "61c2d83e60c84d3d14b30637f60394789acb2c7045534cb849dbb91c008d21e6",
+      "Rationale": "ASR and LAPS propagate Observation states into different property-level evidence types; the generic-looking arms preserve different local semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/defender_asr_allowlist.rs",
+          "StartLine": 415,
+          "EndLine": 420
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/laps_hygiene.rs",
+          "StartLine": 148,
+          "EndLine": 152
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ed984dd5de30f04cc21e496da1c2e5463328b9bddecc5cf5a5210b449518faf7",
+      "Fingerprint": "cca1f7ea4a9db622eb0f3bf7cea80cd54d2a1c725ab98f0e7f6fb52b1f9c6640",
+      "Rationale": "The two initial time-sync registry size queries sit in readers with different key/value and missing-value meanings. Extracting a raw probe would widen the local allowlist boundary.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 197,
+          "EndLine": 207
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/time_sync.rs",
+          "StartLine": 267,
+          "EndLine": 277
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ef272681d3fd51b6b74bb3971ed5af7db4692dfb232929fed7cb8cc7ce242b41",
+      "Fingerprint": "23e18f92c18a74ab4764f2de5815069437af40002264dc7d0b54b07826c8f796",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/backup_readiness.rs, rust/crates/baselineops-windows/src/wdag_readiness.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/backup_readiness.rs",
+          "StartLine": 11,
+          "EndLine": 22
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wdag_readiness.rs",
+          "StartLine": 11,
+          "EndLine": 22
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "f3932a6109b3b3e6560028b5964464b55eaa1b44cf6e3492deb3f3ab7473eb9c",
+      "Fingerprint": "32a1ae64efbffffe8089583a7828f7314875820aa320d7330e78669974f2cad7",
+      "Rationale": "Evidence-store tests use similar temp roots only to assert distinct ordering and rollback scenarios; retain clear per-test setup.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/evidence_tests.rs",
+          "StartLine": 103,
+          "EndLine": 108
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/evidence_tests.rs",
+          "StartLine": 154,
+          "EndLine": 159
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "f3a92ae4b7c21ac7bf534df1b5fef0f38e806d62c730ba51b1b320a13bd11bca",
+      "Fingerprint": "a460b0eb996f4e17e3531337167316466bcf583a0cb0710064b47558c96f8f42",
+      "Rationale": "AMSI and hardware trust must each control wording/codes for their public policy results.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 199,
+          "EndLine": 215
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/hardware_trust_policy.rs",
+          "StartLine": 307,
+          "EndLine": 323
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "f67d923c2224d59a1767d56a24fb5282c738fad4d5340731ea8c99b53261865a",
+      "Fingerprint": "b892cd5d6de076079bc7289c1058e79f7e1998d379a4f7d38496560f225b2429",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_hardware_trust.rs, rust/crates/baselineops-engine/src/wave_storage_backup.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_hardware_trust.rs",
+          "StartLine": 57,
+          "EndLine": 87
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_storage_backup.rs",
+          "StartLine": 59,
+          "EndLine": 89
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "fa4fac3396c5f06696f609bf65f6381bc76b94250dd3513cff98527790a88534",
+      "Fingerprint": "741ba87a5d2a5e624d48cc186ebf89b0b86271ea949ee6657efd1b3b77329725",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/amsi_policy.rs, rust/crates/baselineops-capabilities/src/sysmon_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/amsi_policy.rs",
+          "StartLine": 178,
+          "EndLine": 213
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/sysmon_policy.rs",
+          "StartLine": 311,
+          "EndLine": 346
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "fbef02714cc82ea7004ee832eb940f02b8edf0ad653f4d63057419930cdf70e1",
+      "Fingerprint": "9590a3dc0abd5996699b8a1bfa0fe1fea8af357dc26a658bdf96d4d8794f51b0",
+      "Rationale": "Accepted: rust/apps/baselineops-cli/src/main.rs, rust/apps/baselineops-worker/src/trust.rs sit on separate application/process boundaries. Similar protocol or lifecycle code remains independently auditable for its caller and public compatibility contract.",
+      "Occurrences": [
+        {
+          "Path": "rust/apps/baselineops-cli/src/main.rs",
+          "StartLine": 316,
+          "EndLine": 325
+        },
+        {
+          "Path": "rust/apps/baselineops-worker/src/trust.rs",
+          "StartLine": 12,
+          "EndLine": 21
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "fd026447a13211151e99e92b78b295b509eba61c0e4065bda7f0e50465e63936",
+      "Fingerprint": "565a67be1004db4b78d243934bb793576d9652c16f3a61689c27380c360ef012",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/inventory.rs, rust/crates/baselineops-windows/src/policy_registry.rs, rust/crates/baselineops-windows/src/wef.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/inventory.rs",
+          "StartLine": 35,
+          "EndLine": 43
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/policy_registry.rs",
+          "StartLine": 60,
+          "EndLine": 68
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/wef.rs",
+          "StartLine": 102,
+          "EndLine": 111
+        }
+      ],
+      "Multiplicity": 3
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "fdc121fbb9dd5ff810daabb5e003648a483004b578a07f7284eabc1d9e1273a7",
+      "Fingerprint": "ccb1b827243cfd168ac8d12f951242d61913551d6829fb38590eafa8b93392e0",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/exploit_protection_policy.rs, rust/crates/baselineops-capabilities/src/wdag_readiness_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/exploit_protection_policy.rs",
+          "StartLine": 141,
+          "EndLine": 149
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/wdag_readiness_policy.rs",
+          "StartLine": 155,
+          "EndLine": 163
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "fe508ba774f57b26591b1eacdaead9242561a722eaea084b2188e30ba6646303",
+      "Fingerprint": "f2b1cee6d985c790ad2e1178685863fb87c5d2163426d88686792fc44814f35b",
+      "Rationale": "Accepted: rust/crates/baselineops-windows/src/firewall.rs, rust/crates/baselineops-windows/src/firewall_baseline.rs bind different Windows observations, registry locations, or native APIs. Keeping the local handling explicit preserves platform evidence and prevents a generic helper from widening native authority.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall.rs",
+          "StartLine": 11,
+          "EndLine": 26
+        },
+        {
+          "Path": "rust/crates/baselineops-windows/src/firewall_baseline.rs",
+          "StartLine": 17,
+          "EndLine": 32
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "fe9a6c8be228dc1be5a2abd67d59576c64b16ab8dedca5e1ba5d26e699e70640",
+      "Fingerprint": "f2c7822aefd6a8c982eb40b06590faf1c569736a5dd688ad202c11a17d0f3a8d",
+      "Rationale": "Accepted: rust/crates/baselineops-capabilities/src/office_browser_policy.rs, rust/crates/baselineops-capabilities/src/windows_update_policy.rs own distinct untrusted parameter schemas and policy findings. Local repetition makes each capability\u2019s validation and result semantics independently reviewable; cross-policy extraction would blur those contracts.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/office_browser_policy.rs",
+          "StartLine": 323,
+          "EndLine": 329
+        },
+        {
+          "Path": "rust/crates/baselineops-capabilities/src/windows_update_policy.rs",
+          "StartLine": 243,
+          "EndLine": 249
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "fefe658e7584c4369714b4f1d545f810a45f5fcf5c992bd951289219e070a2b8",
+      "Fingerprint": "aa79e2918c40c710fb43af7cb585e5bb0e47894fadd7d17b631cbad63f9b8364",
+      "Rationale": "Domain and planner tests each construct ProfileV3 fixtures to assert their own validation/derivation contracts; keep test data near each oracle.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-domain/src/tests.rs",
+          "StartLine": 55,
+          "EndLine": 62
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/planner_tests.rs",
+          "StartLine": 14,
+          "EndLine": 21
+        }
+      ],
+      "Multiplicity": 2
+    },
+    {
+      "SchemaVersion": 1,
+      "Detector": {
+        "Name": "jscpd",
+        "Version": "5.1.2",
+        "Mode": "mild",
+        "MinTokens": 50,
+        "MinLines": 5,
+        "ScanRoot": "rust + tests/RustV3Oracle*.ps1",
+        "Languages": [
+          "rust",
+          "powershell"
+        ]
+      },
+      "Language": "Rust",
+      "NormalizedContentHash": "ff7e9d80908f8d18f263e0c01b0ee65de6e10eb4be7a022fb850468ee02fca0d",
+      "Fingerprint": "7f6814584f517aea68db52c924545bee6d6da2f0e5c373efe5264570798186de",
+      "Rationale": "Accepted: rust/crates/baselineops-engine/src/wave_scheduled_tasks.rs, rust/crates/baselineops-engine/src/wave_winget.rs are separate capability executors. The duplicated shape keeps each capability ID, operation gate, policy type, and native seam auditable; a shared executor risks coupling distinct authorization semantics.",
+      "Occurrences": [
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_scheduled_tasks.rs",
+          "StartLine": 87,
+          "EndLine": 102
+        },
+        {
+          "Path": "rust/crates/baselineops-engine/src/wave_winget.rs",
+          "StartLine": 93,
+          "EndLine": 108
+        }
+      ],
+      "Multiplicity": 2
+    }
+  ]
+}

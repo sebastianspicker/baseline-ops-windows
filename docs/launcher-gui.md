@@ -1,8 +1,12 @@
 # Windows Forms launcher
 
-`tools/Launcher-GUI.ps1` is an optional Windows Forms interface for running one numbered script or one orchestration profile. It launches work through `tools/Launcher-Worker.ps1` and uses policy and process helpers from `tools/Launcher.Core.psm1`.
+`tools/Launcher-GUI.ps1` provides an optional Windows Forms interface for
+operators who want to run one numbered script or one orchestration profile. It
+sends each run through `tools/Launcher-Worker.ps1` and uses the policy and
+process helpers in `tools/Launcher.Core.psm1`.
 
-The launcher does not replace the command-line runners. It does not expose batch execution or `-WhatIf`.
+The command-line runners remain the full interface. The launcher does not offer
+batch execution or `-WhatIf`.
 
 ## Requirements
 
@@ -11,13 +15,19 @@ The launcher does not replace the command-line runners. It does not expose batch
 - Endpoint features and permissions required by the selected script
 - Elevation to select Remediate mode
 
-Automated tests cover launcher policy, worker manifests, argument parsing, stream bounds, output capture, exit mapping, and process-tree termination. The interactive form still requires manual testing for keyboard navigation, UI Automation, screen readers, High Contrast, scaling, minimum size, long paths, and live endpoint remediation.
+Automated tests cover launcher policy, worker manifests, argument parsing,
+stream bounds, output capture, exit mapping, and process-tree termination. They
+do not verify the interactive form. Before deployment, manually test keyboard
+navigation, UI Automation, screen readers, High Contrast, scaling, minimum
+size, long paths, and live endpoint remediation.
 
 ## Start the launcher
 
-Do not start an elevated launcher from a user-owned Git checkout or Downloads extraction. Install authenticated release files in a protected directory first.
+Before elevating the launcher, install authenticated release files in a
+protected directory. A user-owned Git checkout or Downloads extraction is not a
+safe root for elevated execution.
 
-Start the Windows PowerShell 5.1 path from that directory:
+From the protected directory, start the Windows PowerShell 5.1 version with:
 
 ```powershell
 $ProgramFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
@@ -26,14 +36,18 @@ Set-Location -LiteralPath $KitRoot
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\Launcher-GUI.ps1
 ```
 
-Start the PowerShell 7.6.3 path:
+For PowerShell 7.6.3, use:
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -Command `
   "if (`$PSVersionTable.PSVersion.ToString() -cne '7.6.3') { throw 'PowerShell 7.6.3 is required.' }; & .\tools\Launcher-GUI.ps1"
 ```
 
-When elevated, the launcher enables `Require valid signature` by default. The repository source files are unsigned, so the default rejects them. Sign deployment scripts under the applicable trust policy. Clearing the requirement is suitable only for an isolated lab after source review and does not bypass protected-path checks.
+An elevated launcher enables `Require valid signature` by default. Repository
+source files are unsigned and will be rejected with this setting. Sign the
+deployment scripts according to the applicable trust policy. Clear the setting
+only in an isolated lab after reviewing the source. Clearing it does not bypass
+the protected-path checks.
 
 ## Run a script
 
@@ -45,9 +59,14 @@ When elevated, the launcher enables `Require valid signature` by default. The re
 6. Review mode, target, arguments, and integrity policy.
 7. Start the run.
 
-The launcher excludes `00-*` control scripts from the selectable list. It rejects advanced arguments that try to override mode, toolkit root, target, output, confirmation, signature, or hash policy. It accepts quoted argument values and literal `$true` or `$false` values, but rejects executable PowerShell syntax.
+The selection list contains numbered capabilities only; it excludes all `00-*`
+control scripts. Advanced arguments cannot override the mode, toolkit root,
+target, output, confirmation, signature, or hash policy. Quoted values and the
+literals `$true` and `$false` are accepted. Executable PowerShell syntax is
+rejected.
 
-Audit is the default. Audit can still write evidence when the selected script collects or exports data.
+Audit is the default mode. An audit can still write evidence when the selected
+script collects or exports data.
 
 ## Run a profile
 
@@ -57,9 +76,13 @@ Audit is the default. Audit can still write evidence when the selected script co
 4. Select the effective GUI mode.
 5. Confirm remediation if Remediate mode is selected.
 
-The profile is validated before execution. Its settings may enable strict handling or signature requirements, but cannot select remediation without the operator's GUI selection.
+The launcher validates the profile before execution. Profile settings may
+enable strict handling or require signatures, but only the operator's GUI
+selection can enable remediation.
 
-For a no-child-execution preview, close the launcher and use the command-line profile runner:
+The launcher has no preview control. To check profile control flow without
+running child scripts, close the launcher and use the command-line profile
+runner:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 `
@@ -70,7 +93,9 @@ pwsh -NoProfile -File .\scripts\00-Run-Profile.ps1 `
 
 ## Output and process control
 
-Each run starts a child of the current PowerShell executable using a schema-versioned JSON manifest. Runner values are passed as data, not interpolated into a command string.
+Each run starts a child process from the current PowerShell executable. A
+schema-versioned JSON manifest passes runner values as data; values are never
+interpolated into a command string.
 
 The launcher maps process results as follows:
 
@@ -81,15 +106,27 @@ The launcher maps process results as follows:
 | Exit `1` or another code | Failed |
 | Worker terminated by `Stop run` | Stopped |
 
-`Stop run` terminates the worker process tree. It does not roll back changes already completed by an endpoint script. Run the corresponding audit after stopping remediation to determine current state.
+`Stop run` terminates the entire worker process tree. Any endpoint changes that
+finished before termination remain in place. After stopping remediation, run
+the matching audit to determine the endpoint's current state.
 
-The live view retains the latest 10,000 lines and uses a bounded 5,000-line pending queue. The temporary full log is limited to 25 MiB. `Clear view` clears the display but does not remove that log. `Save captured output` copies the temporary log to a selected path, and a truncated log contains a truncation marker.
+The live view keeps the latest 10,000 lines and has a bounded 5,000-line pending
+queue. The temporary full log is limited to 25 MiB. Buffered output is flushed
+every 250 ms or after 64 KiB. It is also flushed when output is saved, the run
+finishes, or the collector closes. `Clear view` clears only the display; it does
+not delete the temporary log. `Save captured output` copies that log to a path
+selected by the operator. If the log was truncated, the saved file includes a
+truncation marker.
 
-Temporary logs are stored under `%TEMP%\baselineops-windows-launcher`. The launcher removes the previous temporary log before a run and attempts cleanup on normal close. Files can remain after a crash. Saved output remains until the operator removes it.
+Temporary logs are stored under `%TEMP%\baselineops-windows-launcher`. Before a
+new run, the launcher removes the previous temporary log. It also attempts to
+clean up when the form closes normally, but files can remain after a crash.
+Saved output remains until the operator removes it.
 
 ## Manual validation checklist
 
-Before approving the launcher for an environment, test the actual form under each deployed PowerShell host:
+Before deployment, test the actual form under every PowerShell host used in the
+target environment:
 
 - Audit and remediation on a disposable Windows endpoint
 - Keyboard-only operation and visible focus
@@ -102,4 +139,4 @@ Before approving the launcher for an environment, test the actual form under eac
 - High-volume output and UI responsiveness
 - Cleanup and review of temporary and saved logs
 
-Do not treat the automated worker tests as evidence that these interactive checks passed.
+Automated worker tests do not show that any of these interactive checks passed.

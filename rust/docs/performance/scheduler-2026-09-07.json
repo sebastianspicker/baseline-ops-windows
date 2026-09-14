@@ -1,0 +1,272 @@
+{
+  "measurement_date": "2026-09-07",
+  "platform": "aarch64-apple-darwin",
+  "toolchain": "1.96.0",
+  "profile": "release; workspace defaults including LTO",
+  "warmups_per_algorithm": 10,
+  "samples_per_algorithm": 100,
+  "pairing": "alternating first algorithm in each consecutive pair, same process and input",
+  "source_sha256": {
+    "rust/crates/baselineops-engine/src/scheduler/order.rs": "5ab0f1bd5c57d5af57aa99d678ddf1ef17cec91afc65c67795ec6351a2c7aaf9",
+    "rust/crates/baselineops-engine/src/scheduler_bench.rs": "33a23367b02a54e75bb0f3351413d3ae0e17326f74309be0bf848b5e4b08d6af"
+  },
+  "initial_before": [
+    {
+      "algorithm": "reference",
+      "shape": "independent",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 8417,
+      "p95_ns": 8500,
+      "p99_ns": 8625
+    },
+    {
+      "algorithm": "reference",
+      "shape": "chain",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 19417,
+      "p95_ns": 21916,
+      "p99_ns": 31666
+    },
+    {
+      "algorithm": "reference",
+      "shape": "layered",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 23083,
+      "p95_ns": 33125,
+      "p99_ns": 51917
+    },
+    {
+      "algorithm": "reference",
+      "shape": "independent",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 879750,
+      "p95_ns": 1168250,
+      "p99_ns": 1537750
+    },
+    {
+      "algorithm": "reference",
+      "shape": "chain",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 2881917,
+      "p95_ns": 5409625,
+      "p99_ns": 8971375
+    },
+    {
+      "algorithm": "reference",
+      "shape": "layered",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 3115458,
+      "p95_ns": 6421709,
+      "p99_ns": 7439208
+    },
+    {
+      "algorithm": "reference",
+      "shape": "independent",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 57384125,
+      "p95_ns": 263770542,
+      "p99_ns": 417237541
+    },
+    {
+      "algorithm": "reference",
+      "shape": "chain",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 83837541,
+      "p95_ns": 228522334,
+      "p99_ns": 423797750
+    },
+    {
+      "algorithm": "reference",
+      "shape": "layered",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 72063542,
+      "p95_ns": 114127666,
+      "p99_ns": 220490375
+    }
+  ],
+  "paired_runtime": [
+    {
+      "algorithm": "reference",
+      "shape": "independent",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 8375,
+      "p95_ns": 8583,
+      "p99_ns": 9000
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "independent",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 2000,
+      "p95_ns": 2084,
+      "p99_ns": 2208
+    },
+    {
+      "algorithm": "reference",
+      "shape": "chain",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 16500,
+      "p95_ns": 16625,
+      "p99_ns": 16791
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "chain",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 3333,
+      "p95_ns": 3458,
+      "p99_ns": 3583
+    },
+    {
+      "algorithm": "reference",
+      "shape": "layered",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 18916,
+      "p95_ns": 24000,
+      "p99_ns": 32958
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "layered",
+      "actions": 32,
+      "samples": 100,
+      "p50_ns": 8666,
+      "p95_ns": 10625,
+      "p99_ns": 12084
+    },
+    {
+      "algorithm": "reference",
+      "shape": "independent",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 871166,
+      "p95_ns": 1663375,
+      "p99_ns": 2485125
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "independent",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 16333,
+      "p95_ns": 27459,
+      "p99_ns": 52333
+    },
+    {
+      "algorithm": "reference",
+      "shape": "chain",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 1948625,
+      "p95_ns": 2875500,
+      "p99_ns": 3440458
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "chain",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 33583,
+      "p95_ns": 41875,
+      "p99_ns": 43833
+    },
+    {
+      "algorithm": "reference",
+      "shape": "layered",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 2086917,
+      "p95_ns": 2984625,
+      "p99_ns": 3424750
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "layered",
+      "actions": 256,
+      "samples": 100,
+      "p50_ns": 122125,
+      "p95_ns": 156209,
+      "p99_ns": 200833
+    },
+    {
+      "algorithm": "reference",
+      "shape": "independent",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 18550625,
+      "p95_ns": 22912417,
+      "p99_ns": 23712708
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "independent",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 64500,
+      "p95_ns": 91125,
+      "p99_ns": 173583
+    },
+    {
+      "algorithm": "reference",
+      "shape": "chain",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 48213959,
+      "p95_ns": 100022375,
+      "p99_ns": 147768667
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "chain",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 142959,
+      "p95_ns": 173083,
+      "p99_ns": 490291
+    },
+    {
+      "algorithm": "reference",
+      "shape": "layered",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 57667375,
+      "p95_ns": 125502875,
+      "p99_ns": 221748125
+    },
+    {
+      "algorithm": "indexed",
+      "shape": "layered",
+      "actions": 1024,
+      "samples": 100,
+      "p50_ns": 700875,
+      "p95_ns": 1713375,
+      "p99_ns": 2417375
+    }
+  ],
+  "paired_process_maximum_resident_bytes": 8224768,
+  "paired_process_peak_footprint_bytes": 3014992,
+  "limitations": [
+    "Shared host contention; quantiles are observations, not latency guarantees.",
+    "Memory is whole paired benchmark process; no per-algorithm memory comparison.",
+    "No Windows performance, native mutation, evidence, journal or package costs measured."
+  ],
+  "host": {
+    "os": "macOS 26.6.2",
+    "architecture": "arm64",
+    "cpu": "Apple M4"
+  }
+}

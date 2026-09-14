@@ -1,9 +1,11 @@
 //! Capability-registry action derivation with exhaustive domain mappings.
 
 use crate::TrustedActionDeriver;
+#[cfg(test)]
+use baselineops_capabilities::Reversibility as RegistryReversibility;
 use baselineops_capabilities::{
     ImplementationMaturity, Operation as RegistryOperation, Privilege as RegistryPrivilege,
-    Reboot as RegistryReboot, Reversibility as RegistryReversibility, Risk as RegistryRisk, lookup,
+    Reboot as RegistryReboot, Risk as RegistryRisk, lookup,
 };
 use baselineops_domain::{
     ExecutionIntent, ObservedStateV3, PlannedActionV3, PreconditionV3, Privilege, ProfileStepV3,
@@ -21,64 +23,156 @@ impl TrustedActionDeriver for RegistryActionDeriver {
         intent: ExecutionIntent,
         observed_state: &ObservedStateV3,
     ) -> Result<PlannedActionV3, String> {
-        let descriptor = lookup(step.capability_id.as_str())
-            .ok_or_else(|| format!("unknown capability {}", step.capability_id))?;
-        let operation = registry_operation(intent);
-        if !descriptor.operations.supports(operation) {
-            return Err(format!(
-                "capability {} does not support {operation:?}",
-                descriptor.id
-            ));
-        }
-        if descriptor.maturity != ImplementationMaturity::Implemented {
-            return Err(format!(
-                "capability {} is not independently evidenced as implemented",
-                descriptor.id
-            ));
-        }
-        if !observed_state.values.contains_key(&step.capability_id) {
-            return Err(format!(
+        let descriptor = supported_descriptor(step, intent)?;
+        let observed = observed_state.values.get(&step.step_id).ok_or_else(|| {
+            format!(
                 "trusted observation is absent for capability {}",
                 descriptor.id
-            ));
+            )
+        })?;
+        if observed.capability != step.capability_id
+            || observed.parameters_digest
+                != baselineops_domain::canonical_json_digest(&step.parameters)
+                    .map_err(|error| error.to_string())?
+        {
+            return Err(
+                "observation does not match the profile step capability and parameters".into(),
+            );
         }
-        let privilege = domain_privilege(descriptor.privilege, intent);
-        let mut preconditions = vec![
-            PreconditionV3::CapabilityAvailable {
-                capability: step.capability_id.clone(),
-            },
-            PreconditionV3::ObservedStateDigest {
-                digest: observed_state.digest,
-            },
-        ];
-        if privilege == Privilege::Administrator {
-            preconditions.push(PreconditionV3::Elevation { required: true });
-        }
-        Ok(PlannedActionV3 {
-            // Reusing the validated source-step ID makes independent derivation deterministic.
-            id: step.step_id,
-            source_step: step.step_id,
-            capability: step.capability_id.clone(),
-            operation: intent.into(),
-            parameters: step.parameters.clone(),
-            depends_on: step.depends_on.clone(),
-            continue_on_error: step.continue_on_error,
-            facts_digest: observed_state.digest,
-            preconditions,
-            risk: domain_risk(descriptor.risk),
-            reversibility: domain_reversibility(descriptor.reversibility),
-            reboot: domain_reboot(descriptor.reboot),
-            privileges: vec![privilege],
-            metadata: BTreeMap::default(),
-        })
+        planned_action(step, intent, observed_state, &observed.facts, descriptor)
     }
+}
+
+fn supported_descriptor(
+    step: &ProfileStepV3,
+    intent: ExecutionIntent,
+) -> Result<&'static baselineops_capabilities::CapabilityDescriptor, String> {
+    let descriptor = lookup(step.capability_id.as_str())
+        .ok_or_else(|| format!("unknown capability {}", step.capability_id))?;
+    if !descriptor.operations.audit {
+        return Err(format!(
+            "capability {} does not support {:?}",
+            descriptor.id,
+            registry_operation(intent)
+        ));
+    }
+    if !matches!(
+        descriptor.maturity,
+        ImplementationMaturity::CodeComplete | ImplementationMaturity::Implemented
+    ) {
+        return Err(format!(
+            "capability {} has no code-complete native planner",
+            descriptor.id
+        ));
+    }
+    Ok(descriptor)
+}
+
+fn planned_action(
+    step: &ProfileStepV3,
+    intent: ExecutionIntent,
+    observed_state: &ObservedStateV3,
+    facts: &baselineops_domain::JsonMap,
+    descriptor: &baselineops_capabilities::CapabilityDescriptor,
+) -> Result<PlannedActionV3, String> {
+    let native = facts
+        .get("native_result")
+        .ok_or("captured native result is absent")?;
+    let semantic = baselineops_capabilities::plan_observed(
+        descriptor.id,
+        &serde_json::to_value(&step.parameters).map_err(|error| error.to_string())?,
+        native,
+    )?;
+    let changes = semantic.proposes_changes();
+    let privilege = proposal_privilege(descriptor.privilege, changes, intent);
+    let metadata = proposal_metadata(facts, &semantic, descriptor)?;
+    Ok(PlannedActionV3 {
+        // Reusing the validated source-step ID makes independent derivation deterministic.
+        id: step.step_id,
+        source_step: step.step_id,
+        capability: step.capability_id.clone(),
+        operation: intent.into(),
+        parameters: step.parameters.clone(),
+        depends_on: step.depends_on.clone(),
+        continue_on_error: step.continue_on_error,
+        facts_digest: observed_state.digest,
+        preconditions: preconditions(step, observed_state.digest, privilege),
+        risk: domain_risk(descriptor.risk),
+        reversibility: if changes {
+            // Until native recovery is implemented, retaining a snapshot does not
+            // promise an executable rollback path.
+            Reversibility::Irreversible
+        } else {
+            Reversibility::NotApplicable
+        },
+        reboot: if changes {
+            domain_reboot(descriptor.reboot)
+        } else {
+            RebootRequirement::NotRequired
+        },
+        privileges: vec![privilege],
+        metadata,
+    })
+}
+
+fn proposal_privilege(
+    registry: RegistryPrivilege,
+    changes: bool,
+    intent: ExecutionIntent,
+) -> Privilege {
+    if changes && intent == ExecutionIntent::Apply {
+        Privilege::Administrator
+    } else {
+        domain_privilege(registry, ExecutionIntent::Audit)
+    }
+}
+
+fn proposal_metadata(
+    facts: &baselineops_domain::JsonMap,
+    semantic: &baselineops_capabilities::SemanticPlan,
+    descriptor: &baselineops_capabilities::CapabilityDescriptor,
+) -> Result<baselineops_domain::JsonMap, String> {
+    Ok(BTreeMap::from([
+        (
+            "pre_state".into(),
+            serde_json::to_value(facts).map_err(|error| error.to_string())?,
+        ),
+        (
+            "semantic_plan".into(),
+            serde_json::to_value(semantic).map_err(|error| error.to_string())?,
+        ),
+        (
+            "apply_eligibility".into(),
+            serde_json::to_value(descriptor.apply_eligibility)
+                .map_err(|error| error.to_string())?,
+        ),
+    ]))
+}
+
+fn preconditions(
+    step: &ProfileStepV3,
+    digest: baselineops_domain::Sha256Digest,
+    privilege: Privilege,
+) -> Vec<PreconditionV3> {
+    let mut values = vec![
+        PreconditionV3::CapabilityAvailable {
+            capability: step.capability_id.clone(),
+        },
+        PreconditionV3::ObservedStateDigest { digest },
+    ];
+    if privilege == Privilege::Administrator {
+        values.push(PreconditionV3::Elevation { required: true });
+    }
+    values
 }
 
 const fn registry_operation(intent: ExecutionIntent) -> RegistryOperation {
     match intent {
         ExecutionIntent::Audit => RegistryOperation::Audit,
-        ExecutionIntent::Plan => RegistryOperation::Plan,
-        ExecutionIntent::Apply => RegistryOperation::Apply,
+        // An Apply command first derives and displays a semantic proposal. The
+        // separate worker eligibility gate decides whether that proposal may
+        // ever reach a mutator.
+        ExecutionIntent::Plan | ExecutionIntent::Apply => RegistryOperation::Plan,
     }
 }
 
@@ -101,6 +195,7 @@ const fn domain_risk(value: RegistryRisk) -> RiskLevel {
     }
 }
 
+#[cfg(test)]
 const fn domain_reversibility(value: RegistryReversibility) -> Reversibility {
     match value {
         RegistryReversibility::NotApplicable => Reversibility::NotApplicable,
@@ -142,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_capability_cannot_mint_a_worker_action() {
+    fn code_complete_capability_can_mint_a_reviewable_action() {
         let capability = CapabilityId::new("v3.doh.audit").expect("capability");
         let step = ProfileStepV3 {
             step_id: ActionId::new(),
@@ -157,14 +252,25 @@ mod tests {
             values: BTreeMap::default(),
         };
         state.values.insert(
-            capability,
+            step.step_id,
             baselineops_domain::ObservedValueV3 {
+                capability,
+                parameters_digest: baselineops_domain::canonical_json_digest(&step.parameters)
+                    .unwrap(),
                 observed_at: chrono::Utc::now(),
-                facts: JsonMap::new(),
+                facts: BTreeMap::from([(
+                    "native_result".into(),
+                    serde_json::json!({"observed":true}),
+                )]),
             },
         );
         state.digest = state.calculated_digest().expect("facts digest");
         let result = RegistryActionDeriver.derive(&step, ExecutionIntent::Audit, &state);
-        assert!(result.is_err());
+        let action = result.expect("code-complete planner");
+        assert_eq!(
+            action.capability,
+            CapabilityId::new("v3.doh.audit").expect("capability")
+        );
+        assert_eq!(action.metadata["apply_eligibility"], "evidence_required");
     }
 }

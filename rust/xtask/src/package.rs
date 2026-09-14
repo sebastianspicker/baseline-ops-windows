@@ -30,6 +30,10 @@ pub(crate) fn stage_package(
     stage_package_inputs(roots, target, output)?;
     reject_shell_payload(output)?;
 
+    write_stage_manifest(output, target, signer)
+}
+
+fn write_stage_manifest(output: &Path, target: &str, signer: String) -> Result<()> {
     let manifest = PackageManifestV1 {
         schema_version: "1.0".into(),
         product: "BaselineOps for Windows".into(),
@@ -64,19 +68,23 @@ pub(crate) fn finalize_package(stage: &Path, output: &Path) -> Result<()> {
 
 fn prepare_stage_root(stage: &Path) -> Result<()> {
     match fs::symlink_metadata(stage) {
-        Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
-            bail!("staging path is not a directory: {}", stage.display())
-        }
-        Ok(_) if fs::read_dir(stage)?.next().transpose()?.is_some() => {
-            bail!("staging directory must be empty: {}", stage.display())
-        }
-        Ok(_) => Ok(()),
+        Ok(metadata) => validate_existing_stage(stage, &metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             fs::create_dir_all(stage)?;
             Ok(())
         }
         Err(error) => Err(error.into()),
     }
+}
+
+fn validate_existing_stage(stage: &Path, metadata: &fs::Metadata) -> Result<()> {
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("staging path is not a directory: {}", stage.display());
+    }
+    if fs::read_dir(stage)?.next().transpose()?.is_some() {
+        bail!("staging directory must be empty: {}", stage.display());
+    }
+    Ok(())
 }
 
 fn stage_package_inputs(roots: &Roots, target: &str, stage_root: &Path) -> Result<()> {
@@ -88,18 +96,28 @@ fn stage_package_inputs(roots: &Roots, target: &str, stage_root: &Path) -> Resul
     ] {
         copy_regular(&binaries.join(name), &stage_root.join("bin").join(name))?;
     }
-    copy_tree(&roots.rust.join("schemas"), &stage_root.join("schemas"))?;
-    copy_tree(&roots.rust.join("examples"), &stage_root.join("examples"))?;
-    copy_tree(&roots.rust.join("docs"), &stage_root.join("docs"))?;
-    copy_tree(&roots.rust.join("ledger"), &stage_root.join("ledger"))?;
-    copy_tree(&roots.rust.join("release"), &stage_root.join("release"))?;
+    stage_documentation(roots, stage_root)?;
+    stage_entry_documents(roots, stage_root)?;
+    let sbom = generate_sbom(roots)?;
+    baselineops_windows::atomic_write(stage_root.join("sbom.cdx.json"), &sbom)?;
+    Ok(())
+}
+
+fn stage_entry_documents(roots: &Roots, stage_root: &Path) -> Result<()> {
     copy_regular(&roots.rust.join("README.md"), &stage_root.join("README.md"))?;
     copy_regular(
         &roots.repository.join("LICENSE"),
         &stage_root.join("LICENSE"),
     )?;
-    let sbom = generate_sbom(roots)?;
-    baselineops_windows::atomic_write(stage_root.join("sbom.cdx.json"), &sbom)?;
+    Ok(())
+}
+
+fn stage_documentation(roots: &Roots, stage_root: &Path) -> Result<()> {
+    copy_tree(&roots.rust.join("schemas"), &stage_root.join("schemas"))?;
+    copy_tree(&roots.rust.join("examples"), &stage_root.join("examples"))?;
+    copy_tree(&roots.rust.join("docs"), &stage_root.join("docs"))?;
+    copy_tree(&roots.rust.join("ledger"), &stage_root.join("ledger"))?;
+    copy_tree(&roots.rust.join("release"), &stage_root.join("release"))?;
     Ok(())
 }
 
@@ -108,6 +126,12 @@ fn write_package_outputs(root: &Path, output: &Path, manifest_bytes: &[u8]) -> R
         fs::create_dir_all(parent)?;
     }
     write_zip(root, output)?;
+    write_package_digest(output)?;
+    baselineops_windows::atomic_write(output.with_extension("zip.manifest.json"), manifest_bytes)?;
+    Ok(())
+}
+
+fn write_package_digest(output: &Path) -> Result<()> {
     let package_digest = hash_file(output)?;
     let file_name = output
         .file_name()
@@ -117,7 +141,6 @@ fn write_package_outputs(root: &Path, output: &Path, manifest_bytes: &[u8]) -> R
         output.with_extension("zip.sha256"),
         format!("{}  {file_name}\n", package_digest.to_hex()).as_bytes(),
     )?;
-    baselineops_windows::atomic_write(output.with_extension("zip.manifest.json"), manifest_bytes)?;
     Ok(())
 }
 
@@ -210,14 +233,18 @@ fn manifest_files(root: &Path) -> Result<Vec<ManifestFile>> {
         if relative == MANIFEST_NAME || relative == MANIFEST_SIGNATURE_NAME {
             continue;
         }
-        files.push(ManifestFile {
-            path: relative,
-            size_bytes: path.metadata()?.len(),
-            sha256: hash_file(&path)?,
-        });
+        files.push(manifest_file(&path, relative)?);
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(files)
+}
+
+fn manifest_file(path: &Path, relative: String) -> Result<ManifestFile> {
+    Ok(ManifestFile {
+        path: relative,
+        size_bytes: path.metadata()?.len(),
+        sha256: hash_file(path)?,
+    })
 }
 
 fn write_zip(root: &Path, output: &Path) -> Result<()> {
@@ -227,15 +254,25 @@ fn write_zip(root: &Path, output: &Path) -> Result<()> {
         .compression_method(zip::CompressionMethod::Stored)
         .unix_permissions(0o644);
     for path in sorted_files_recursive(root)? {
-        let relative = path
-            .strip_prefix(root)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        writer.start_file(relative, options)?;
-        let mut source = File::open(path)?;
-        std::io::copy(&mut source, &mut writer)?;
+        append_zip_file(root, &path, &mut writer, options)?;
     }
     writer.finish()?.sync_all()?;
+    Ok(())
+}
+
+fn append_zip_file(
+    root: &Path,
+    path: &Path,
+    writer: &mut zip::ZipWriter<File>,
+    options: SimpleFileOptions,
+) -> Result<()> {
+    let relative = path
+        .strip_prefix(root)?
+        .to_string_lossy()
+        .replace('\\', "/");
+    writer.start_file(relative, options)?;
+    let mut source = File::open(path)?;
+    std::io::copy(&mut source, writer)?;
     Ok(())
 }
 

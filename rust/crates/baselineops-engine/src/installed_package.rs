@@ -62,31 +62,62 @@ pub fn verify_installed_package(
 ) -> Result<InstalledPackageIdentity, PackageError> {
     validate_expectation(expected)?;
     let policy = baselineops_windows::PathPolicy::new(root)?;
-    let manifest_path = policy.existing_file(MANIFEST_PATH)?;
-    let signature_path = policy.existing_file(MANIFEST_SIGNATURE_PATH)?;
-    let manifest_bytes =
-        baselineops_windows::read_bounded_utf8_no_follow(&manifest_path, MAX_MANIFEST_BYTES)?
-            .into_bytes();
-    let manifest_signature_bytes =
-        read_bounded_file(&signature_path, MAX_MANIFEST_SIGNATURE_BYTES)?;
-    detached_signature_verifier.verify(
-        &manifest_bytes,
-        &manifest_signature_bytes,
-        expected.signer_subject,
+    let (manifest, binding_digest) =
+        authenticated_installed_manifest(&policy, expected, detached_signature_verifier)?;
+    validate_inventory(
+        &policy,
+        &manifest,
+        &collect_regular_payloads(policy.root())?,
     )?;
-    let manifest: PackageManifestV1 = serde_json::from_slice(&manifest_bytes)?;
+    verify_installed_executables(&policy, expected.signer_subject, signature_verifier)?;
+    Ok(InstalledPackageIdentity { binding_digest })
+}
+
+fn authenticated_installed_manifest(
+    policy: &baselineops_windows::PathPolicy,
+    expected: InstalledPackageExpectation<'_>,
+    verifier: &dyn DetachedSignatureVerifier,
+) -> Result<(PackageManifestV1, Sha256Digest), PackageError> {
+    let (manifest_bytes, signature_bytes) = installed_manifest_bytes(policy)?;
+    verifier.verify(&manifest_bytes, &signature_bytes, expected.signer_subject)?;
+    let manifest = parse_installed_manifest(&manifest_bytes, expected)?;
+    Ok((manifest, Sha256Digest::of_bytes(manifest_bytes)))
+}
+
+fn installed_manifest_bytes(
+    policy: &baselineops_windows::PathPolicy,
+) -> Result<(Vec<u8>, Vec<u8>), PackageError> {
+    let manifest = baselineops_windows::read_bounded_utf8_no_follow(
+        &policy.existing_file(MANIFEST_PATH)?,
+        MAX_MANIFEST_BYTES,
+    )?
+    .into_bytes();
+    let signature = read_bounded_file(
+        &policy.existing_file(MANIFEST_SIGNATURE_PATH)?,
+        MAX_MANIFEST_SIGNATURE_BYTES,
+    )?;
+    Ok((manifest, signature))
+}
+
+fn parse_installed_manifest(
+    bytes: &[u8],
+    expected: InstalledPackageExpectation<'_>,
+) -> Result<PackageManifestV1, PackageError> {
+    let manifest = serde_json::from_slice(bytes)?;
     validate_manifest(&manifest)?;
     validate_exact_identity(&manifest, expected)?;
+    Ok(manifest)
+}
 
-    let actual = collect_regular_payloads(policy.root())?;
-    validate_inventory(&policy, &manifest, &actual)?;
+fn verify_installed_executables(
+    policy: &baselineops_windows::PathPolicy,
+    subject: &str,
+    verifier: &dyn SignatureVerifier,
+) -> Result<(), PackageError> {
     for executable in REQUIRED_EXECUTABLES {
-        let path = policy.existing_file(executable)?;
-        signature_verifier.verify(&path, expected.signer_subject)?;
+        verifier.verify(&policy.existing_file(executable)?, subject)?;
     }
-    Ok(InstalledPackageIdentity {
-        binding_digest: Sha256Digest::of_bytes(manifest_bytes),
-    })
+    Ok(())
 }
 
 fn validate_expectation(expected: InstalledPackageExpectation<'_>) -> Result<(), PackageError> {
@@ -131,31 +162,45 @@ fn collect_regular_payloads_at(
 ) -> Result<(), PackageError> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
-            return Err(PackageError::InventoryMismatch(
-                "installed package contains a symbolic link or reparse point".into(),
-            ));
-        }
-        if metadata.is_dir() {
-            collect_regular_payloads_at(root, &path, files)?;
-            continue;
-        }
-        if !metadata.is_file() {
-            continue;
-        }
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| PackageError::InventoryMismatch("payload escaped package root".into()))?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let key = relative.to_ascii_lowercase();
-        if files.insert(key, path).is_some() {
-            return Err(PackageError::InventoryMismatch(
-                "installed package has case-ambiguous payload paths".into(),
-            ));
-        }
+        collect_payload_entry(root, entry.path(), files)?;
+    }
+    Ok(())
+}
+
+fn collect_payload_entry(
+    root: &Path,
+    path: PathBuf,
+    files: &mut BTreeMap<String, PathBuf>,
+) -> Result<(), PackageError> {
+    let metadata = fs::symlink_metadata(&path)?;
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+        return Err(PackageError::InventoryMismatch(
+            "installed package contains a symbolic link or reparse point".into(),
+        ));
+    }
+    if metadata.is_dir() {
+        return collect_regular_payloads_at(root, &path, files);
+    }
+    if metadata.is_file() {
+        insert_payload(root, path, files)?;
+    }
+    Ok(())
+}
+
+fn insert_payload(
+    root: &Path,
+    path: PathBuf,
+    files: &mut BTreeMap<String, PathBuf>,
+) -> Result<(), PackageError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| PackageError::InventoryMismatch("payload escaped package root".into()))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    if files.insert(relative.to_ascii_lowercase(), path).is_some() {
+        return Err(PackageError::InventoryMismatch(
+            "installed package has case-ambiguous payload paths".into(),
+        ));
     }
     Ok(())
 }
@@ -185,35 +230,8 @@ fn validate_inventory(
         .iter()
         .map(|file| (file.path.to_ascii_lowercase(), file))
         .collect::<BTreeMap<_, _>>();
-    for key in actual.keys() {
-        if !special.contains(key) && !expected.contains_key(key) {
-            return Err(PackageError::InventoryMismatch(format!(
-                "unexpected regular payload file: {key}"
-            )));
-        }
-    }
-    for (key, file) in expected {
-        let path = actual.get(&key).ok_or_else(|| {
-            PackageError::InventoryMismatch(format!("manifest file is absent: {}", file.path))
-        })?;
-        let verified_path = policy.existing_file(&file.path)?;
-        if verified_path != *path {
-            return Err(PackageError::InventoryMismatch(format!(
-                "payload path changed while being verified: {}",
-                file.path
-            )));
-        }
-        let size = verified_path.metadata()?.len();
-        if size != file.size_bytes
-            || size > MAX_PAYLOAD_BYTES
-            || hash_file(&verified_path)? != file.sha256
-        {
-            return Err(PackageError::InventoryMismatch(format!(
-                "size or digest mismatch: {}",
-                file.path
-            )));
-        }
-    }
+    reject_unexpected_payloads(actual, &special, &expected)?;
+    verify_expected_payloads(policy, actual, expected)?;
     if actual.len() != manifest.files.len() + special.len() {
         return Err(PackageError::InventoryMismatch(
             "installed package inventory has duplicate or non-regular manifest members".into(),
@@ -222,32 +240,113 @@ fn validate_inventory(
     Ok(())
 }
 
+fn reject_unexpected_payloads(
+    actual: &BTreeMap<String, PathBuf>,
+    special: &BTreeSet<String>,
+    expected: &BTreeMap<String, &crate::package::ManifestFile>,
+) -> Result<(), PackageError> {
+    if let Some(key) = actual
+        .keys()
+        .find(|key| !special.contains(*key) && !expected.contains_key(*key))
+    {
+        return Err(PackageError::InventoryMismatch(format!(
+            "unexpected regular payload file: {key}"
+        )));
+    }
+    Ok(())
+}
+
+fn verify_expected_payloads(
+    policy: &baselineops_windows::PathPolicy,
+    actual: &BTreeMap<String, PathBuf>,
+    expected: BTreeMap<String, &crate::package::ManifestFile>,
+) -> Result<(), PackageError> {
+    for (key, file) in expected {
+        verify_expected_payload(policy, actual.get(&key), file)?;
+    }
+    Ok(())
+}
+
+fn verify_expected_payload(
+    policy: &baselineops_windows::PathPolicy,
+    path: Option<&PathBuf>,
+    file: &crate::package::ManifestFile,
+) -> Result<(), PackageError> {
+    let path = path.ok_or_else(|| {
+        PackageError::InventoryMismatch(format!("manifest file is absent: {}", file.path))
+    })?;
+    let verified = policy.existing_file(&file.path)?;
+    verify_payload_path(&verified, path, file)?;
+    verify_payload_digest(&verified, file)?;
+    Ok(())
+}
+
+fn verify_payload_path(
+    verified: &Path,
+    path: &Path,
+    file: &crate::package::ManifestFile,
+) -> Result<(), PackageError> {
+    if verified != path {
+        return Err(PackageError::InventoryMismatch(format!(
+            "payload path changed while being verified: {}",
+            file.path
+        )));
+    }
+    Ok(())
+}
+fn verify_payload_digest(
+    path: &Path,
+    file: &crate::package::ManifestFile,
+) -> Result<(), PackageError> {
+    let size = path.metadata()?.len();
+    if size != file.size_bytes || size > MAX_PAYLOAD_BYTES || hash_file(path)? != file.sha256 {
+        return Err(PackageError::InventoryMismatch(format!(
+            "size or digest mismatch: {}",
+            file.path
+        )));
+    }
+    Ok(())
+}
+
 fn read_bounded_file(path: &Path, limit: u64) -> Result<Vec<u8>, PackageError> {
     let mut file = File::open(path)?;
     let metadata = file.metadata()?;
+    validate_bounded_metadata(&metadata, limit)?;
+    let capacity = bounded_capacity(metadata.len())?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.by_ref()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    ensure_unchanged_length(&bytes, metadata.len())?;
+    Ok(bytes)
+}
+
+fn bounded_capacity(length: u64) -> Result<usize, PackageError> {
+    usize::try_from(length).map_err(|_| {
+        PackageError::Signature(
+            "manifest signature exceeds this platform's allocation bounds".into(),
+        )
+    })
+}
+fn ensure_unchanged_length(bytes: &[u8], expected: u64) -> Result<(), PackageError> {
+    let observed_size = u64::try_from(bytes.len()).map_err(|_| {
+        PackageError::Signature("manifest signature read exceeds u64 bounds".into())
+    })?;
+    if observed_size != expected {
+        return Err(PackageError::Signature(
+            "manifest signature changed while being read".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bounded_metadata(metadata: &fs::Metadata, limit: u64) -> Result<(), PackageError> {
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > limit {
         return Err(PackageError::Signature(
             "manifest signature is not a bounded regular file".into(),
         ));
     }
-    let capacity = usize::try_from(metadata.len()).map_err(|_| {
-        PackageError::Signature(
-            "manifest signature exceeds this platform's allocation bounds".into(),
-        )
-    })?;
-    let mut bytes = Vec::with_capacity(capacity);
-    file.by_ref()
-        .take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    let observed_size = u64::try_from(bytes.len()).map_err(|_| {
-        PackageError::Signature("manifest signature read exceeds u64 bounds".into())
-    })?;
-    if observed_size != metadata.len() {
-        return Err(PackageError::Signature(
-            "manifest signature changed while being read".into(),
-        ));
-    }
-    Ok(bytes)
+    Ok(())
 }
 
 #[cfg(test)]

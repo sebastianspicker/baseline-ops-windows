@@ -9,6 +9,10 @@ use windows::Win32::Security::{
     GetSecurityDescriptorLength, IsValidSecurityDescriptor, OWNER_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
 };
+use windows::Win32::Storage::FileSystem::{
+    DELETE, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
+    FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
+};
 use windows::core::{PCWSTR, w};
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
@@ -17,7 +21,17 @@ const TRUSTED_INSTALLER_SID: &str =
     "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
 const GENERIC_ALL: u32 = 0x1000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
-const WRITE_OR_REPLACE_MASK: u32 = 0x000f_0176 | GENERIC_ALL | GENERIC_WRITE;
+// READ_CONTROL and FILE_EXECUTE/FILE_TRAVERSE are not mutation rights.
+const WRITE_OR_REPLACE_MASK: u32 = DELETE.0
+    | WRITE_DAC.0
+    | WRITE_OWNER.0
+    | FILE_WRITE_DATA.0
+    | FILE_APPEND_DATA.0
+    | FILE_WRITE_EA.0
+    | FILE_DELETE_CHILD.0
+    | FILE_WRITE_ATTRIBUTES.0
+    | GENERIC_ALL
+    | GENERIC_WRITE;
 const ACL_HEADER_SIZE: usize = 8;
 const ACE_HEADER_SIZE: usize = 4;
 const ACCESS_ACE_PREFIX_SIZE: usize = 8;
@@ -91,7 +105,15 @@ pub(super) fn verify_object_acl(
     trusted_sids: &TrustedSids,
     require_protected_dacl: bool,
 ) -> Result<(), PlatformError> {
-    let descriptor = SecurityDescriptor::for_handle(object.handle())?;
+    verify_handle_acl(object.handle(), trusted_sids, require_protected_dacl)
+}
+
+pub(super) fn verify_handle_acl(
+    handle: windows::Win32::Foundation::HANDLE,
+    trusted_sids: &TrustedSids,
+    require_protected_dacl: bool,
+) -> Result<(), PlatformError> {
+    let descriptor = SecurityDescriptor::for_handle(handle)?;
     if !trusted_sids.contains(descriptor.owner) {
         return Err(trust_error(
             "protected path owner is not SYSTEM, Administrators, or TrustedInstaller",
@@ -114,24 +136,7 @@ struct SecurityDescriptor {
 
 impl SecurityDescriptor {
     fn for_handle(handle: windows::Win32::Foundation::HANDLE) -> Result<Self, PlatformError> {
-        let mut owner = PSID::default();
-        let mut dacl = std::ptr::null_mut();
-        let mut descriptor = PSECURITY_DESCRIPTOR::default();
-        let status = unsafe {
-            GetSecurityInfo(
-                handle,
-                SE_FILE_OBJECT,
-                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-                Some(&raw mut owner),
-                None,
-                Some(&raw mut dacl),
-                None,
-                Some(&raw mut descriptor),
-            )
-        };
-        if status.0 != 0 || owner.is_invalid() || dacl.is_null() || descriptor.is_invalid() {
-            return Err(trust_error("could not obtain an explicit owner and DACL"));
-        }
+        let (owner, dacl, descriptor) = security_info(handle)?;
         let extent = DescriptorExtent::from_security_descriptor(descriptor)?;
         validate_sid_pointer(extent, owner)?;
         extent.bytes_at(dacl.cast(), size_of::<ACL>(), DWORD_ALIGNMENT)?;
@@ -143,6 +148,50 @@ impl SecurityDescriptor {
         })
     }
 
+    fn reject_untrusted_writers(&self, trusted_sids: &TrustedSids) -> Result<(), PlatformError> {
+        walk_acl_aces(self.acl_bytes()?, |ace_type, ace| {
+            reject_untrusted_writer(ace_type, ace, trusted_sids)
+        })
+    }
+
+    fn acl_bytes(&self) -> Result<&[u8], PlatformError> {
+        let acl_header =
+            self.extent
+                .bytes_at(self.dacl.cast(), ACL_HEADER_SIZE, DWORD_ALIGNMENT)?;
+        let acl_size = usize::from(read_u16(acl_header, 2)?);
+        if acl_size < ACL_HEADER_SIZE {
+            return Err(trust_error("DACL is smaller than its required header"));
+        }
+        self.extent
+            .bytes_at(self.dacl.cast(), acl_size, DWORD_ALIGNMENT)
+    }
+}
+
+fn security_info(
+    handle: windows::Win32::Foundation::HANDLE,
+) -> Result<(PSID, *mut ACL, PSECURITY_DESCRIPTOR), PlatformError> {
+    let mut owner = PSID::default();
+    let mut dacl = std::ptr::null_mut();
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    let status = unsafe {
+        GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            Some(&raw mut owner),
+            None,
+            Some(&raw mut dacl),
+            None,
+            Some(&raw mut descriptor),
+        )
+    };
+    if status.0 != 0 || owner.is_invalid() || dacl.is_null() || descriptor.is_invalid() {
+        return Err(trust_error("could not obtain an explicit owner and DACL"));
+    }
+    Ok((owner, dacl, descriptor))
+}
+
+impl SecurityDescriptor {
     fn dacl_protected(&self) -> Result<bool, PlatformError> {
         let mut control = 0_u16;
         let mut revision = 0_u32;
@@ -152,39 +201,30 @@ impl SecurityDescriptor {
         .map_err(|error| trust_error(&format!("could not read DACL control: {error}")))?;
         Ok(control & SE_DACL_PROTECTED.0 != 0)
     }
+}
 
-    fn reject_untrusted_writers(&self, trusted_sids: &TrustedSids) -> Result<(), PlatformError> {
-        let acl_header =
-            self.extent
-                .bytes_at(self.dacl.cast(), ACL_HEADER_SIZE, DWORD_ALIGNMENT)?;
-        let acl_size = usize::from(read_u16(acl_header, 2)?);
-        if acl_size < ACL_HEADER_SIZE {
-            return Err(trust_error("DACL is smaller than its required header"));
-        }
-        let acl = self
-            .extent
-            .bytes_at(self.dacl.cast(), acl_size, DWORD_ALIGNMENT)?;
-
-        walk_acl_aces(acl, |ace_type, ace| {
-            if ace_type == ACCESS_ALLOWED_ACE_TYPE
-                && read_u32(ace, ACE_HEADER_SIZE)? & WRITE_OR_REPLACE_MASK != 0
-            {
-                let sid = PSID(
-                    ace.as_ptr()
-                        .wrapping_add(ACCESS_ACE_PREFIX_SIZE)
-                        .cast_mut()
-                        .cast::<c_void>(),
-                );
-                if !trusted_sids.contains(sid) {
-                    return Err(trust_error(
-                        "DACL grants write or replacement rights to an untrusted SID",
-                    ));
-                }
-            }
-            Ok(())
-        })?;
-        Ok(())
+fn reject_untrusted_writer(
+    ace_type: u8,
+    ace: &[u8],
+    trusted_sids: &TrustedSids,
+) -> Result<(), PlatformError> {
+    if ace_type != ACCESS_ALLOWED_ACE_TYPE
+        || read_u32(ace, ACE_HEADER_SIZE)? & WRITE_OR_REPLACE_MASK == 0
+    {
+        return Ok(());
     }
+    let sid = PSID(
+        ace.as_ptr()
+            .wrapping_add(ACCESS_ACE_PREFIX_SIZE)
+            .cast_mut()
+            .cast::<c_void>(),
+    );
+    if !trusted_sids.contains(sid) {
+        return Err(trust_error(
+            "DACL grants write or replacement rights to an untrusted SID",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -253,43 +293,66 @@ fn walk_acl_aces(
     acl: &[u8],
     mut visitor: impl FnMut(u8, &[u8]) -> Result<(), PlatformError>,
 ) -> Result<(), PlatformError> {
-    if acl.len() < ACL_HEADER_SIZE {
-        return Err(trust_error("DACL is smaller than its required header"));
-    }
-    let acl_size = usize::from(read_u16(acl, 2)?);
-    if acl_size != acl.len() {
-        return Err(trust_error("DACL extent does not match its declared size"));
-    }
-    let ace_count = usize::from(read_u16(acl, 4)?);
+    let ace_count = validated_acl_header(acl)?;
     let mut offset = ACL_HEADER_SIZE;
     for _ in 0..ace_count {
-        let header = acl
-            .get(
-                offset
-                    ..offset
-                        .checked_add(ACE_HEADER_SIZE)
-                        .ok_or_else(|| trust_error("DACL ACE offset overflows this process"))?,
-            )
-            .ok_or_else(|| trust_error("DACL ACE header exceeds the declared DACL size"))?;
-        let ace_length = usize::from(read_u16(header, 2)?);
-        if ace_length < ACCESS_ACE_PREFIX_SIZE || !ace_length.is_multiple_of(DWORD_ALIGNMENT) {
-            return Err(trust_error("DACL ACE has an invalid size or alignment"));
-        }
-        let end = offset
-            .checked_add(ace_length)
-            .ok_or_else(|| trust_error("DACL ACE size overflows this process"))?;
-        let ace = acl
-            .get(offset..end)
-            .ok_or_else(|| trust_error("DACL ACE exceeds the declared DACL size"))?;
+        let (ace, end) = bounded_ace(acl, offset)?;
         let ace_type = ace[0];
-        if ace_type != ACCESS_ALLOWED_ACE_TYPE && ace_type != ACCESS_DENIED_ACE_TYPE {
-            return Err(trust_error(
-                "DACL contains an unsupported ACE type; cannot prove writer policy",
-            ));
-        }
+        reject_unsupported_ace(ace_type)?;
         validate_sid_bytes(&ace[ACCESS_ACE_PREFIX_SIZE..])?;
         visitor(ace_type, ace)?;
         offset = end;
+    }
+    Ok(())
+}
+
+fn validated_acl_header(acl: &[u8]) -> Result<usize, PlatformError> {
+    if acl.len() < ACL_HEADER_SIZE {
+        return Err(trust_error("DACL is smaller than its required header"));
+    }
+    if usize::from(read_u16(acl, 2)?) != acl.len() {
+        return Err(trust_error("DACL extent does not match its declared size"));
+    }
+    Ok(usize::from(read_u16(acl, 4)?))
+}
+
+fn bounded_ace(acl: &[u8], offset: usize) -> Result<(&[u8], usize), PlatformError> {
+    let header = ace_header(acl, offset)?;
+    let ace_length = validated_ace_length(header)?;
+    let end = ace_end(offset, ace_length)?;
+    let ace = acl
+        .get(offset..end)
+        .ok_or_else(|| trust_error("DACL ACE exceeds the declared DACL size"))?;
+    Ok((ace, end))
+}
+
+fn validated_ace_length(header: &[u8]) -> Result<usize, PlatformError> {
+    let ace_length = usize::from(read_u16(header, 2)?);
+    if ace_length < ACCESS_ACE_PREFIX_SIZE || !ace_length.is_multiple_of(DWORD_ALIGNMENT) {
+        return Err(trust_error("DACL ACE has an invalid size or alignment"));
+    }
+    Ok(ace_length)
+}
+
+fn ace_header(acl: &[u8], offset: usize) -> Result<&[u8], PlatformError> {
+    let end = offset
+        .checked_add(ACE_HEADER_SIZE)
+        .ok_or_else(|| trust_error("DACL ACE offset overflows this process"))?;
+    acl.get(offset..end)
+        .ok_or_else(|| trust_error("DACL ACE header exceeds the declared DACL size"))
+}
+
+fn ace_end(offset: usize, ace_length: usize) -> Result<usize, PlatformError> {
+    offset
+        .checked_add(ace_length)
+        .ok_or_else(|| trust_error("DACL ACE size overflows this process"))
+}
+
+fn reject_unsupported_ace(ace_type: u8) -> Result<(), PlatformError> {
+    if ace_type != ACCESS_ALLOWED_ACE_TYPE && ace_type != ACCESS_DENIED_ACE_TYPE {
+        return Err(trust_error(
+            "DACL contains an unsupported ACE type; cannot prove writer policy",
+        ));
     }
     Ok(())
 }
@@ -303,9 +366,7 @@ fn validate_sid_bytes(sid: &[u8]) -> Result<(), PlatformError> {
 }
 
 fn sid_length(sid: &[u8]) -> Result<usize, PlatformError> {
-    let header = sid
-        .get(..SID_HEADER_SIZE)
-        .ok_or_else(|| trust_error("SID is smaller than its required header"))?;
+    let header = sid_header(sid)?;
     if header[0] != SID_REVISION {
         return Err(trust_error("SID has an unsupported revision"));
     }
@@ -313,12 +374,20 @@ fn sid_length(sid: &[u8]) -> Result<usize, PlatformError> {
     if subauthorities > SID_MAX_SUBAUTHORITIES {
         return Err(trust_error("SID has too many subauthorities"));
     }
+    sid_size(subauthorities)
+}
+
+fn sid_header(sid: &[u8]) -> Result<&[u8], PlatformError> {
+    sid.get(..SID_HEADER_SIZE)
+        .ok_or_else(|| trust_error("SID is smaller than its required header"))
+}
+
+fn sid_size(subauthorities: usize) -> Result<usize, PlatformError> {
+    let suffix = subauthorities
+        .checked_mul(SID_SUBAUTHORITY_SIZE)
+        .ok_or_else(|| trust_error("SID size overflows this process"))?;
     SID_HEADER_SIZE
-        .checked_add(
-            subauthorities
-                .checked_mul(SID_SUBAUTHORITY_SIZE)
-                .ok_or_else(|| trust_error("SID size overflows this process"))?,
-        )
+        .checked_add(suffix)
         .ok_or_else(|| trust_error("SID size overflows this process"))
 }
 
@@ -391,6 +460,38 @@ mod tests {
         assert_ne!(WRITE_OR_REPLACE_MASK & 0x0008_0000, 0);
         assert_ne!(WRITE_OR_REPLACE_MASK & GENERIC_WRITE, 0);
         assert_ne!(WRITE_OR_REPLACE_MASK & GENERIC_ALL, 0);
+    }
+
+    #[test]
+    fn ordinary_read_and_traverse_rights_are_not_writers() {
+        use windows::Win32::Storage::FileSystem::{
+            FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, READ_CONTROL,
+        };
+        for rights in [READ_CONTROL.0, FILE_GENERIC_READ.0, FILE_GENERIC_EXECUTE.0] {
+            assert_eq!(WRITE_OR_REPLACE_MASK & rights, 0);
+        }
+    }
+
+    #[test]
+    fn every_content_and_directory_mutation_right_is_still_rejected() {
+        use windows::Win32::Storage::FileSystem::{
+            FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_GENERIC_WRITE,
+        };
+        for rights in [
+            FILE_WRITE_DATA.0,
+            FILE_APPEND_DATA.0,
+            FILE_WRITE_EA.0,
+            FILE_DELETE_CHILD.0,
+            FILE_WRITE_ATTRIBUTES.0,
+            DELETE.0,
+            WRITE_DAC.0,
+            WRITE_OWNER.0,
+            FILE_ADD_FILE.0,
+            FILE_ADD_SUBDIRECTORY.0,
+            FILE_GENERIC_WRITE.0,
+        ] {
+            assert_ne!(WRITE_OR_REPLACE_MASK & rights, 0);
+        }
     }
 
     #[test]

@@ -4,7 +4,8 @@
 
 Security fixes target the current `main` branch. Reports against the latest published prerelease are also accepted. Backports to older tags are not guaranteed.
 
-This repository contains privileged endpoint code. Validate selected audit and remediation behavior on disposable Windows devices before deployment.
+Test the audits and remediation you intend to use on disposable Windows devices
+before deployment. Some operations require administrator or LocalSystem access.
 
 ## In scope
 
@@ -24,9 +25,48 @@ This repository contains privileged endpoint code. Validate selected audit and r
 
 ## Execution trust boundary
 
-Do not run elevated repository code from a user-owned checkout, Downloads extraction, writable ancestor, or reparse-point path. Elevated runners and the launcher check the toolkit root and relevant ancestors before importing repository modules or executing endpoint scripts. Use the protected installation procedure in the [release guide](docs/alpha-release.md#install-a-protected-windows-copy).
+Before running as administrator, follow the [protected installation procedure](docs/alpha-release.md#install-a-protected-windows-copy).
+Do not run elevated code from a user-owned checkout, a Downloads extraction,
+a path with a writable parent directory, or a reparse point. The runners and
+launcher check the toolkit directory and its relevant parents before loading
+modules or running endpoint scripts.
 
-On Windows, `tools/verify.ps1` and `tools/secret-scan.ps1` accept a bare Git executable only from standard Program Files locations. If trusted Git is unavailable, they fall back to recursive package discovery. That fallback is intended for extracted packages and can include ignored local files in a checkout. Do not substitute a per-user Git shim to bypass this policy.
+For privileged runs, write reports and evidence only to protected directories
+that untrusted users cannot rename, replace, or redirect. The application checks
+paths and reparse points before writing, but does not keep a directory handle
+open to ensure the write reaches the same directory it checked.
+
+`RequireSigned` validates an Authenticode certificate chain; it does not check
+that the signer is the BaselineOps publisher. A hash supplied by a profile is
+only as trustworthy as that profile. Verify the release provenance first, then
+use trusted signer identities or hashes set by your deployment policy.
+
+The profile runner keeps a private execution lease until it finishes writing
+the result. This lease retains handles to the named runner control files and
+the `lib`, `scripts/_lib`, and `scripts/internal` trees in both the runner and
+target directories. On Windows, the read-sharing handles are intended to
+prevent those open files from being written, deleted, or replaced.
+
+A child runner can reuse a lease only while its registered identity is live,
+for the exact canonical runner and target directories, and when invoked directly
+by the owning profile runner. Profile fields and result metadata cannot grant
+access to it. A direct local run acquires its own lease. Target-file, signature,
+hash, ACL, and reparse-point checks still run independently.
+
+Portable tests cover lease identity and lifetime. Windows tests must separately
+verify that the file handles deny changes and that ACL checks work before a
+release is approved.
+
+The launcher assigns its worker to a Windows Job Object before signaling that
+it may import repository code and run the requested operation. PowerShell and
+the CLR have already started at that point; the Job Object does not contain
+that earlier startup work.
+
+On Windows, `tools/verify.ps1` and `tools/secret-scan.ps1` accept a bare `git`
+command only when it resolves to a standard Program Files location. Otherwise,
+they inspect files recursively, as they would in an extracted package. In a
+checkout, that fallback may include ignored local files. Do not substitute a
+per-user Git shim to bypass this restriction.
 
 `tools/Test-Documentation.ps1` uses the Git executable found on `PATH` for repository file discovery. It does not execute endpoint scripts.
 
@@ -46,12 +86,10 @@ Keep them outside the repository, restrict access, redact before sharing, and de
 
 Do not open a public issue containing exploit details, secrets, logs, screenshots, or environment identifiers.
 
-Use one of these private channels:
+Open a [private GitHub security advisory][security-advisory].
 
-- Open a [GitHub security advisory][security-advisory].
-- Contact the maintainer through the email listed on the GitHub profile.
-
-If neither channel is available, open a public issue without technical details and request private contact.
+If the advisory form is unavailable, open a public issue without technical details
+and request private contact.
 
 Include:
 

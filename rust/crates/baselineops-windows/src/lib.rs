@@ -3,6 +3,8 @@
 //! Cross-platform callers can validate untrusted files and construct policies.
 //! Endpoint operations return [`PlatformError::UnsupportedPlatform`] outside Windows.
 
+pub mod console_cancellation;
+
 mod advanced_audit;
 mod amsi;
 mod app_control;
@@ -12,27 +14,37 @@ mod backup_readiness;
 mod boot_security;
 mod cert_health;
 mod client_baseline;
+#[cfg(windows)]
+mod com_security;
+#[cfg(any(windows, test))]
+mod command_line;
 mod defender_asr_allowlist;
+mod defender_ioc_sweep;
 mod defender_ransomware;
 mod driver_integrity;
 mod elevation;
+mod emergency_isolation;
 mod eventlog;
 mod exploit_protection;
 mod firewall;
 mod firewall_baseline;
 mod hardware_trust;
 mod host_identity;
+mod incident_artifact_grabber;
 mod inventory;
 pub mod ipc;
 mod laps_hygiene;
 mod local_admins;
 mod native_process;
+#[cfg(windows)]
+mod native_values;
 mod network;
 mod observations;
 mod office_browser;
 mod output;
 mod policy_registry;
 pub mod powershell_logging;
+mod protected_run;
 pub mod registry;
 mod remote_guardrails;
 mod remote_surface;
@@ -43,6 +55,7 @@ mod service_process_inventory;
 mod services;
 mod smb_encryption;
 mod storage_reliability;
+mod support_bundle_collection;
 mod sysmon;
 mod time_sync;
 mod trust;
@@ -61,17 +74,21 @@ pub use boot_security::audit_boot_security;
 pub use cert_health::audit_cert_health;
 pub use client_baseline::audit_client_baseline;
 pub use defender_asr_allowlist::audit_defender_asr_allowlist;
+pub use defender_ioc_sweep::audit_defender_ioc_sweep;
 pub use defender_ransomware::audit_defender_ransomware;
 pub use driver_integrity::audit_driver_integrity;
 pub use elevation::{
     ElevatedLaunchPolicy, ElevatedLaunchResult, ElevatedLaunchStatus, launch_elevated,
+    wait_for_worker_containment,
 };
+pub use emergency_isolation::audit_emergency_isolation;
 pub use eventlog::audit_event_log;
 pub use exploit_protection::audit_exploit_protection;
 pub use firewall::observe_firewall;
 pub use firewall_baseline::observe_firewall_baseline;
 pub use hardware_trust::{audit_bitlocker_os_volume, audit_hardware_tpm, audit_secure_boot};
 pub use host_identity::collect_host_identity;
+pub use incident_artifact_grabber::audit_incident_artifact_grabber;
 pub use inventory::{audit_installed_kbs, audit_software_inventory};
 pub use ipc::{
     BrokerBinding, BrokerFrame, BrokerMessage, FrameCodec, MAX_FRAME_BYTES, PROTOCOL_VERSION,
@@ -91,10 +108,16 @@ pub use observations::{
 pub use office_browser::observe_office_browser_policy;
 pub use output::{NativeEncoding, decode_native_output};
 pub use powershell_logging::observe_powershell_logging;
+pub use protected_run::{
+    MAX_EVIDENCE_BYTES, MAX_JOURNAL_BYTES, ProtectedJournalFile, ProtectedRunArtifactKind,
+    ProtectedRunArtifacts, ProtectedRunDirectory, create_protected_run_directory,
+    read_protected_run_artifacts,
+};
 pub use remote_guardrails::audit_remote_guardrails;
 pub use remote_surface::audit_remote_surface;
 pub use safe_path::{
-    MAX_INPUT_BYTES, PathPolicy, atomic_write, read_bounded_utf8, read_bounded_utf8_no_follow,
+    BoundedFileHash, MAX_INPUT_BYTES, PathPolicy, atomic_write, hash_bounded_file_no_follow,
+    read_bounded_utf8, read_bounded_utf8_no_follow,
 };
 pub use scheduled_tasks::audit_scheduled_tasks;
 pub use security_options::observe_security_options;
@@ -102,6 +125,7 @@ pub use service_process_inventory::audit_service_process_inventory;
 pub use services::{KnownService, observe_service};
 pub use smb_encryption::audit_smb_encryption;
 pub use storage_reliability::audit_storage_reliability;
+pub use support_bundle_collection::audit_support_bundle_collection;
 pub use sysmon::audit_sysmon;
 pub use time_sync::audit_time_sync;
 pub use trust::{
@@ -112,7 +136,7 @@ pub use trust::{
 pub use update_health::audit_update_health;
 pub use wdag_readiness::audit_wdag_readiness;
 pub use wef::audit_wef_readiness;
-pub use windows_update::observe_windows_update_policy;
+pub use windows_update::{apply_windows_update_mutation, observe_windows_update_policy};
 pub use winget::audit_winget;
 
 use std::io;

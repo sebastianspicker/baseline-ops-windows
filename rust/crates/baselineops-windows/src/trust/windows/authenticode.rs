@@ -39,55 +39,83 @@ fn verify_identity(
     expected_subject: &str,
     expected_spki_sha256: Option<&SignerSpkiSha256>,
 ) -> Result<(), PlatformError> {
-    let path = wide_path(final_path)?;
-    let mut file_info = WINTRUST_FILE_INFO {
-        cbStruct: u32::try_from(size_of::<WINTRUST_FILE_INFO>()).expect("WINTRUST_FILE_INFO size"),
-        pcwszFilePath: PCWSTR(path.as_ptr()),
-        hFile: handle,
-        pgKnownSubject: std::ptr::null_mut(),
-    };
-    let mut trust_data = WINTRUST_DATA {
-        cbStruct: u32::try_from(size_of::<WINTRUST_DATA>()).expect("WINTRUST_DATA size"),
-        dwUIChoice: WTD_UI_NONE,
-        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
-        dwUnionChoice: WTD_CHOICE_FILE,
-        Anonymous: WINTRUST_DATA_0 {
-            pFile: &raw mut file_info,
-        },
-        dwStateAction: WTD_STATEACTION_VERIFY,
-        dwProvFlags: WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT,
-        dwUIContext: WTD_UICONTEXT_EXECUTE,
-        ..Default::default()
-    };
-    let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-    let status = unsafe {
-        WinVerifyTrust(
-            HWND::default(),
-            &raw mut action,
-            (&raw mut trust_data).cast(),
-        )
-    };
-    let verification_result = if status != 0 {
-        Err(PlatformError::TrustFailure(format!(
-            "WinVerifyTrust rejected the executable (0x{:08x})",
-            status.cast_unsigned()
-        )))
-    } else {
-        unsafe {
-            signed_certificate(trust_data.hWVTStateData).and_then(|context| {
-                match expected_spki_sha256 {
-                    Some(expected_spki_sha256) => {
-                        verify_certificate_identity(context, expected_subject, expected_spki_sha256)
-                    }
-                    None => verify_subject_only(context, expected_subject),
-                }
-            })
-        }
-    };
+    let mut verification = TrustVerification::open(handle, final_path)?;
+    let verification_result = verification.verify_signer(expected_subject, expected_spki_sha256);
     // A VERIFY call must always be paired with exactly one CLOSE call, including
     // a rejected verification whose state data cannot be inspected.
-    let close_status = unsafe { close_state(&mut action, &mut trust_data) };
+    let close_status = verification.close();
     finish_verification(verification_result, close_status)
+}
+
+struct TrustVerification {
+    _path: Vec<u16>,
+    _file_info: Box<WINTRUST_FILE_INFO>,
+    action: windows::core::GUID,
+    trust_data: WINTRUST_DATA,
+    status: i32,
+}
+
+impl TrustVerification {
+    fn open(handle: HANDLE, final_path: &Path) -> Result<Self, PlatformError> {
+        let path = wide_path(final_path)?;
+        let mut file_info = Box::new(WINTRUST_FILE_INFO {
+            cbStruct: u32::try_from(size_of::<WINTRUST_FILE_INFO>())
+                .expect("WINTRUST_FILE_INFO size"),
+            pcwszFilePath: PCWSTR(path.as_ptr()),
+            hFile: handle,
+            pgKnownSubject: std::ptr::null_mut(),
+        });
+        let mut trust_data = WINTRUST_DATA {
+            cbStruct: u32::try_from(size_of::<WINTRUST_DATA>()).expect("WINTRUST_DATA size"),
+            dwUIChoice: WTD_UI_NONE,
+            fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
+            dwUnionChoice: WTD_CHOICE_FILE,
+            Anonymous: WINTRUST_DATA_0 {
+                pFile: &raw mut *file_info,
+            },
+            dwStateAction: WTD_STATEACTION_VERIFY,
+            dwProvFlags: WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT,
+            dwUIContext: WTD_UICONTEXT_EXECUTE,
+            ..Default::default()
+        };
+        let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        let status = unsafe {
+            WinVerifyTrust(
+                HWND::default(),
+                &raw mut action,
+                (&raw mut trust_data).cast(),
+            )
+        };
+        Ok(Self {
+            _path: path,
+            _file_info: file_info,
+            action,
+            trust_data,
+            status,
+        })
+    }
+
+    fn verify_signer(
+        &self,
+        expected_subject: &str,
+        expected_spki_sha256: Option<&SignerSpkiSha256>,
+    ) -> Result<(), PlatformError> {
+        if self.status != 0 {
+            return Err(PlatformError::TrustFailure(format!(
+                "WinVerifyTrust rejected the executable (0x{:08x})",
+                self.status.cast_unsigned()
+            )));
+        }
+        let context = unsafe { signed_certificate(self.trust_data.hWVTStateData)? };
+        match expected_spki_sha256 {
+            Some(pin) => verify_certificate_identity(context, expected_subject, pin),
+            None => unsafe { verify_subject_only(context, expected_subject) },
+        }
+    }
+
+    fn close(&mut self) -> i32 {
+        unsafe { close_state(&mut self.action, &mut self.trust_data) }
+    }
 }
 
 fn finish_verification(
@@ -160,9 +188,7 @@ unsafe fn close_state(action: &mut windows::core::GUID, trust_data: &mut WINTRUS
 }
 
 fn wide_path(path: &Path) -> Result<Vec<u16>, PlatformError> {
-    use std::os::windows::ffi::OsStrExt;
-
-    let mut value: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut value = super::handle_path::encoded_wide_path(path);
     if value.contains(&0) {
         return Err(PlatformError::TrustFailure(
             "executable path contains an interior NUL".into(),

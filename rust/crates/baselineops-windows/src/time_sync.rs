@@ -147,9 +147,7 @@ mod platform {
     #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
     use super::{Observation, PlatformError, RegistryObservation};
-    use windows::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, WIN32_ERROR,
-    };
+    use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND};
     use windows::Win32::System::Registry::{
         HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD, REG_SZ, REG_VALUE_TYPE, RegCloseKey,
         RegOpenKeyExW, RegQueryValueExW,
@@ -301,15 +299,8 @@ mod platform {
         Ok(Some((kind, bytes)))
     }
 
-    fn check(status: WIN32_ERROR) -> Result<(), PlatformError> {
-        if status == ERROR_SUCCESS {
-            Ok(())
-        } else {
-            Err(PlatformError::Io(std::io::Error::from_raw_os_error(
-                i32::try_from(status.0).unwrap_or(i32::MAX),
-            )))
-        }
-    }
+    use crate::native_values::check_status as check;
+
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }

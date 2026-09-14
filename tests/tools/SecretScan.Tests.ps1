@@ -25,4 +25,25 @@ Describe 'tools/secret-scan.ps1 hostile untracked input' -Tag 'Security' {
     $output | Should -Match ([regex]::Escape($hostileName))
     $output | Should -Not -Match ([regex]::Escape($secretValue))
   }
+
+  It 'scans Rust sources without treating identifier assignments as secrets' {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+      Set-ItResult -Skipped -Because 'git is not available.'
+      return
+    }
+    $root = Join-Path $TestDrive 'rust-source'
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    & git -C $root init --quiet
+    'let token = open_process_token(process)?;' |
+      Set-Content -LiteralPath (Join-Path $root 'identifier.rs') -Encoding UTF8
+    $secretValue = 'ghp_' + ('b' * 36)
+    ('const CREDENTIAL: &str = "{0}";' -f $secretValue) |
+      Set-Content -LiteralPath (Join-Path $root 'leak.rs') -Encoding UTF8
+
+    $output = & (Join-Path $PSScriptRoot '../../tools/secret-scan.ps1') -RootPath $root -NoFail 6>&1 | Out-String
+    $LASTEXITCODE | Should -Be 0
+    $output | Should -Match 'leak\.rs'
+    $output | Should -Not -Match 'identifier\.rs'
+    $output | Should -Not -Match ([regex]::Escape($secretValue))
+  }
 }

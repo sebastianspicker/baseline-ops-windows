@@ -95,8 +95,149 @@ pub enum ImplementationMaturity {
     LegacyOnly,
     /// A typed executor seam exists, but no native implementation evidence exists yet.
     InDevelopment,
+    /// Native observation, evaluation, and semantic planning are complete, but
+    /// production mutation evidence has not been closed.
+    CodeComplete,
     /// A native implementation has been independently verified.
     Implemented,
+}
+
+/// Independent production-Apply eligibility compiled into the registry.
+///
+/// Maturity describes how much native code exists. Eligibility is a separate
+/// authority and may be enabled only after an `Implemented` capability has
+/// closed external Windows evidence.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplyEligibility {
+    /// No production mutation path is defined for this capability.
+    NotApplicable,
+    /// Mutation code may exist, but reviewed external evidence is still open.
+    EvidenceRequired,
+    /// The sealed worker dispatcher may execute the capability.
+    Enabled,
+}
+
+impl ApplyEligibility {
+    /// Returns whether the protected worker may consider production Apply.
+    #[must_use]
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+/// Identity of a sealed worker-owned native mutation handler.
+///
+/// No production handler is registered while the v3 evidence gates remain open.
+/// The private field and absence of deserialization prevent applications from
+/// manufacturing a handler registration from a plan or IPC payload.
+///
+/// ```compile_fail
+/// use baselineops_capabilities::NativeApplyHandler;
+/// let handler: NativeApplyHandler = serde_json::from_str(
+///     r#"{"action_schema_version": 4}"#,
+/// ).unwrap();
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct NativeApplyHandler {
+    action_schema_version: u16,
+}
+
+impl NativeApplyHandler {
+    /// Action schema version accepted by the sealed mutation dispatcher.
+    #[must_use]
+    pub const fn action_schema_version(self) -> u16 {
+        self.action_schema_version
+    }
+}
+
+/// Compile-time identity of the native observer/evaluator/planner handler.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(missing_docs)]
+pub enum NativeHandler {
+    DefenderAsrAllowlist,
+    LapsHygiene,
+    LocalAdmins,
+    OfficeBrowser,
+    WindowsUpdate,
+    UpdateHealth,
+    ScheduledTasks,
+    Winget,
+    SupportBundleCollect,
+    SupportBundleParse,
+    DefenderIocSweep,
+    ArtifactGrabber,
+    BootSecurity,
+    RemoteGuardrails,
+    HardwareTrust,
+    Sysmon,
+    FirewallBaseline,
+    Inventory,
+    EmergencyIsolation,
+    SmbEncryption,
+    CertHealth,
+    WaveOne,
+    NetworkServices,
+    PowerShellLogging,
+    FirewallLogging,
+    AdvancedAudit,
+    WefTime,
+    StorageBackup,
+    RemoteWdag,
+    SecurityOptions,
+    WaveTwo,
+    ApplicationControl,
+    AppControl,
+    DefenderRansomware,
+}
+
+impl NativeHandler {
+    /// Resolve the only handler assigned to a legacy capability number.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `number` is outside the authoritative 1 through 52 registry range.
+    #[must_use]
+    pub const fn for_legacy(number: u8) -> Self {
+        match number {
+            1 => Self::DefenderAsrAllowlist,
+            2 => Self::LapsHygiene,
+            3 => Self::LocalAdmins,
+            4 => Self::OfficeBrowser,
+            5 => Self::WindowsUpdate,
+            6 => Self::UpdateHealth,
+            7 => Self::ScheduledTasks,
+            8 | 25 => Self::Winget,
+            9 => Self::SupportBundleCollect,
+            10 => Self::SupportBundleParse,
+            11 => Self::DefenderIocSweep,
+            12 => Self::ArtifactGrabber,
+            13 | 39 | 40 => Self::BootSecurity,
+            14 => Self::RemoteGuardrails,
+            15 | 23 | 46 => Self::HardwareTrust,
+            16 | 17 => Self::Sysmon,
+            18 => Self::FirewallBaseline,
+            19 | 20 | 26 => Self::Inventory,
+            21 => Self::EmergencyIsolation,
+            22 => Self::SmbEncryption,
+            24 => Self::CertHealth,
+            27 | 28 => Self::WaveOne,
+            29 | 30 => Self::NetworkServices,
+            31 => Self::PowerShellLogging,
+            32 => Self::FirewallLogging,
+            33 => Self::AdvancedAudit,
+            34 | 45 => Self::WefTime,
+            35 | 36 => Self::StorageBackup,
+            37 | 47 => Self::RemoteWdag,
+            38 => Self::SecurityOptions,
+            41 | 52 => Self::WaveTwo,
+            42 | 48 | 49 | 50 | 51 => Self::ApplicationControl,
+            43 => Self::AppControl,
+            44 => Self::DefenderRansomware,
+            _ => panic!("legacy capability number is outside 1 through 52"),
+        }
+    }
 }
 
 /// Curated legacy runner memberships.
@@ -146,6 +287,12 @@ pub struct CapabilityDescriptor {
     pub requirements: &'static [&'static str],
     /// Native Rust implementation status.
     pub maturity: ImplementationMaturity,
+    /// Single compiled native handler used by every application surface.
+    pub handler: NativeHandler,
+    /// Independent production mutation authority.
+    pub apply_eligibility: ApplyEligibility,
+    /// Sealed worker mutation handler, absent until evidence-backed promotion.
+    pub apply_handler: Option<NativeApplyHandler>,
     /// Legacy runner batches containing this script.
     pub batches: &'static [Batch],
 }

@@ -11,8 +11,8 @@ use baselineops_windows::{
 
 /// Native Windows executor for the first registry-backed read-only capabilities.
 ///
-/// Registry maturity remains `in_development` until authoritative Windows VM
-/// evidence is retained and compared with the legacy semantic oracle.
+/// Registry maturity is `code_complete`; authoritative Windows VM comparison
+/// with the legacy semantic oracle remains an open release gate.
 pub struct WaveTwoWindowsExecutor;
 
 impl CapabilityExecutor for WaveTwoWindowsExecutor {

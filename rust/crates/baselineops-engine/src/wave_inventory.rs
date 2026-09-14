@@ -12,9 +12,9 @@ use baselineops_windows::{
 
 /// Native Windows executor for capabilities 19, 20, and 26.
 ///
-/// This executor remains `in_development` pending Windows inventory,
-/// update-history, Event Log, and legacy-oracle evidence. It accepts no shell,
-/// native tool, path, URL, export, or mutation parameter.
+/// This executor is `code_complete`; Windows inventory, update-history, Event
+/// Log, and legacy-oracle evidence remain open release gates. It accepts no
+/// shell, native tool, path, URL, export, or mutation parameter.
 pub struct WaveInventoryWindowsExecutor;
 
 impl CapabilityExecutor for WaveInventoryWindowsExecutor {

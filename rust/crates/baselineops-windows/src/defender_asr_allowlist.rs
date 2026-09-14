@@ -47,10 +47,10 @@ mod platform {
 mod platform {
     use super::{DefenderAsrAllowlistObservation, MAX_ASR_ONLY_EXCLUSIONS, MAX_ASR_RULE_ACTIONS};
     use baselineops_capabilities::{AsrRuleActionCounts, Observation};
-    use windows::Win32::Foundation::{E_ACCESSDENIED, RPC_E_TOO_LATE};
+    use windows::Win32::Foundation::E_ACCESSDENIED;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-        CoInitializeSecurity, CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
+        CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
         RPC_C_IMP_LEVEL_IMPERSONATE,
     };
     use windows::Win32::System::Ole::{
@@ -107,76 +107,8 @@ mod platform {
         // SAFETY: calls use fixed process-wide COM security settings, then only
         // provider interfaces and BSTRs owned for the duration of this function.
         unsafe {
-            if let Err(error) = CoInitializeSecurity(
-                None,
-                -1,
-                None,
-                None,
-                RPC_C_AUTHN_LEVEL_CALL,
-                RPC_C_IMP_LEVEL_IMPERSONATE,
-                None,
-                EOAC_NONE,
-                None,
-            ) && error.code().0 != RPC_E_TOO_LATE.0
-            {
-                return Err(classify(&error));
-            }
-            let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
-                .map_err(|error| classify(&error))?;
-            let empty = BSTR::new();
-            let services = locator
-                .ConnectServer(
-                    &BSTR::from(DEFENDER_NAMESPACE),
-                    &empty,
-                    &empty,
-                    &empty,
-                    0,
-                    &empty,
-                    None,
-                )
-                .map_err(|error| classify(&error))?;
-            CoSetProxyBlanket(
-                &services,
-                RPC_C_AUTHN_WINNT,
-                RPC_C_AUTHZ_NONE,
-                PCWSTR::null(),
-                RPC_C_AUTHN_LEVEL_CALL,
-                RPC_C_IMP_LEVEL_IMPERSONATE,
-                None,
-                EOAC_NONE,
-            )
-            .map_err(|error| classify(&error))?;
-            let enumerator: IEnumWbemClassObject = services
-                .ExecQuery(
-                    &BSTR::from("WQL"),
-                    &BSTR::from(PREFERENCE_QUERY),
-                    WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
-                    None,
-                )
-                .map_err(|error| classify(&error))?;
-            let mut values = [None];
-            let mut returned = 0_u32;
-            enumerator
-                .Next(WBEM_INFINITE, &mut values, &raw mut returned)
-                .ok()
-                .map_err(|error| classify(&error))?;
-            if returned != 1 {
-                return Err(Observation::Missing);
-            }
-            let object = values[0].take().ok_or(Observation::Unparsed)?;
-            let mut additional_values = [None];
-            let mut additional_returned = 0_u32;
-            enumerator
-                .Next(
-                    WBEM_INFINITE,
-                    &mut additional_values,
-                    &raw mut additional_returned,
-                )
-                .ok()
-                .map_err(|error| classify(&error))?;
-            if additional_returned != 0 {
-                return Err(Observation::Unparsed);
-            }
+            initialize_security()?;
+            let object = preference_object()?;
             Ok(ProviderEvidence {
                 asr_only_exclusion_count: exclusion_count_property(
                     &object,
@@ -187,6 +119,77 @@ mod platform {
                     "AttackSurfaceReductionRules_Actions",
                 ),
             })
+        }
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe fn initialize_security() -> Result<(), Observation<()>> {
+        crate::com_security::initialize_wmi_security().map_err(|error| classify(&error))?;
+        Ok(())
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe fn preference_object() -> Result<IWbemClassObject, Observation<()>> {
+        let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| classify(&error))?;
+        let empty = BSTR::new();
+        let services = locator
+            .ConnectServer(
+                &BSTR::from(DEFENDER_NAMESPACE),
+                &empty,
+                &empty,
+                &empty,
+                0,
+                &empty,
+                None,
+            )
+            .map_err(|error| classify(&error))?;
+        CoSetProxyBlanket(
+            &services,
+            RPC_C_AUTHN_WINNT,
+            RPC_C_AUTHZ_NONE,
+            PCWSTR::null(),
+            RPC_C_AUTHN_LEVEL_CALL,
+            RPC_C_IMP_LEVEL_IMPERSONATE,
+            None,
+            EOAC_NONE,
+        )
+        .map_err(|error| classify(&error))?;
+        let query: IEnumWbemClassObject = services
+            .ExecQuery(
+                &BSTR::from("WQL"),
+                &BSTR::from(PREFERENCE_QUERY),
+                WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+                None,
+            )
+            .map_err(|error| classify(&error))?;
+        one_preference(&query)
+    }
+
+    #[allow(unsafe_op_in_unsafe_fn)]
+    unsafe fn one_preference(
+        enumerator: &IEnumWbemClassObject,
+    ) -> Result<IWbemClassObject, Observation<()>> {
+        let mut values = [None];
+        let mut returned = 0_u32;
+        enumerator
+            .Next(WBEM_INFINITE, &mut values, &raw mut returned)
+            .ok()
+            .map_err(|error| classify(&error))?;
+        if returned != 1 {
+            return Err(Observation::Missing);
+        }
+        let object = values[0].take().ok_or(Observation::Unparsed)?;
+        let mut extra = [None];
+        let mut extra_returned = 0_u32;
+        enumerator
+            .Next(WBEM_INFINITE, &mut extra, &raw mut extra_returned)
+            .ok()
+            .map_err(|error| classify(&error))?;
+        if extra_returned == 0 {
+            Ok(object)
+        } else {
+            Err(Observation::Unparsed)
         }
     }
 

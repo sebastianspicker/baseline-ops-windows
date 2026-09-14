@@ -5,6 +5,8 @@ use serde_json::Value;
 
 use crate::{DomainError, DomainResult, PlanV3, ProfileV3};
 
+mod bounds;
+
 /// Bounds applied before decoding any untrusted JSON document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JsonLoadLimits {
@@ -52,7 +54,7 @@ pub fn load_json<T: DeserializeOwned>(bytes: &[u8], limits: JsonLoadLimits) -> D
     }
     let text = std::str::from_utf8(bytes)?;
     let value: Value = serde_json::from_str(text)?;
-    validate_json_bounds(&value, limits, 0, &mut 0)?;
+    bounds::validate_json_bounds(&value, limits, 0, &mut 0)?;
     Ok(serde_json::from_value(value)?)
 }
 
@@ -93,7 +95,7 @@ pub fn load_profile_json(bytes: &[u8], limits: JsonLoadLimits) -> DomainResult<P
     Ok(profile)
 }
 
-/// Loads a strict v3 plan and validates its internal consistency.
+/// Loads a strict v4 plan and validates its internal consistency.
 ///
 /// Host, tool, source, input, and state bindings need live context and are
 /// intentionally checked by [`PlanV3::validate_against`](crate::PlanV3::validate_against).
@@ -102,66 +104,11 @@ pub fn load_profile_json(bytes: &[u8], limits: JsonLoadLimits) -> DomainResult<P
 ///
 /// Returns an error when decoding or internal plan validation fails.
 pub fn load_plan_json(bytes: &[u8], limits: JsonLoadLimits) -> DomainResult<PlanV3> {
-    let plan: PlanV3 = load_json(bytes, limits)?;
+    let value: Value = load_json(bytes, limits)?;
+    if value.get("schema_version").and_then(Value::as_str) != Some("4.0") {
+        return Err(DomainError::Validation("saved plan contract is obsolete or unsupported; regenerate the plan and approve its new digest".into()));
+    }
+    let plan: PlanV3 = serde_json::from_value(value)?;
     plan.validate_structure()?;
     Ok(plan)
-}
-
-fn validate_json_bounds(
-    value: &Value,
-    limits: JsonLoadLimits,
-    depth: usize,
-    nodes: &mut usize,
-) -> DomainResult<()> {
-    *nodes += 1;
-    if *nodes > limits.max_nodes {
-        return Err(DomainError::LimitExceeded {
-            limit_name: "JSON value count",
-            limit: limits.max_nodes,
-        });
-    }
-    if depth > limits.max_depth {
-        return Err(DomainError::LimitExceeded {
-            limit_name: "JSON nesting depth",
-            limit: limits.max_depth,
-        });
-    }
-    match value {
-        Value::String(value) if value.len() > limits.max_string_bytes => {
-            return Err(DomainError::LimitExceeded {
-                limit_name: "JSON string size",
-                limit: limits.max_string_bytes,
-            });
-        }
-        Value::Array(values) => {
-            if values.len() > limits.max_array_entries {
-                return Err(DomainError::LimitExceeded {
-                    limit_name: "JSON array entry count",
-                    limit: limits.max_array_entries,
-                });
-            }
-            for item in values {
-                validate_json_bounds(item, limits, depth + 1, nodes)?;
-            }
-        }
-        Value::Object(values) => {
-            if values.len() > limits.max_object_entries {
-                return Err(DomainError::LimitExceeded {
-                    limit_name: "JSON object entry count",
-                    limit: limits.max_object_entries,
-                });
-            }
-            for (key, item) in values {
-                if key.len() > limits.max_string_bytes {
-                    return Err(DomainError::LimitExceeded {
-                        limit_name: "JSON property name size",
-                        limit: limits.max_string_bytes,
-                    });
-                }
-                validate_json_bounds(item, limits, depth + 1, nodes)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
 }

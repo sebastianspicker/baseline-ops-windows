@@ -119,6 +119,39 @@ mod platform {
         policy: &NativeProcessPolicy,
         spec: &NativeProcessSpec,
     ) -> Result<NativeProcessResult, PlatformError> {
+        let (mut child, stdout, stderr) = spawn_child(validated, policy, spec)?;
+        let limit = spec.output_limit;
+        let stdout_thread = thread::spawn(move || read_capped(stdout, limit, "stdout"));
+        let stderr_thread = thread::spawn(move || read_capped(stderr, limit, "stderr"));
+        let status = match wait_for_child(&mut child, spec.timeout) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                return Err(error);
+            }
+        };
+        let stdout = join_reader(stdout_thread, "stdout")?;
+        let stderr = join_reader(stderr_thread, "stderr")?;
+        Ok(NativeProcessResult {
+            exit_code: status.code().unwrap_or(-1),
+            stdout,
+            stderr,
+        })
+    }
+
+    fn spawn_child(
+        validated: &ValidatedRequest,
+        policy: &NativeProcessPolicy,
+        spec: &NativeProcessSpec,
+    ) -> Result<
+        (
+            std::process::Child,
+            std::process::ChildStdout,
+            std::process::ChildStderr,
+        ),
+        PlatformError,
+    > {
         let mut command = Command::new(&validated.executable);
         command
             .args(&spec.args)
@@ -135,36 +168,36 @@ mod platform {
         let stderr = child.stderr.take().ok_or_else(|| {
             PlatformError::ProcessRejected("stderr capture was not established".into())
         })?;
-        let limit = spec.output_limit;
-        let stdout_thread = thread::spawn(move || read_capped(stdout, limit, "stdout"));
-        let stderr_thread = thread::spawn(move || read_capped(stderr, limit, "stderr"));
+        Ok((child, stdout, stderr))
+    }
+
+    fn wait_for_child(
+        child: &mut std::process::Child,
+        timeout: Duration,
+    ) -> Result<std::process::ExitStatus, PlatformError> {
         let started = Instant::now();
-        let status = loop {
+        loop {
             if let Some(status) = child.try_wait()? {
-                break status;
+                return Ok(status);
             }
-            if started.elapsed() >= spec.timeout {
+            if started.elapsed() >= timeout {
                 child.kill()?;
                 let _ = child.wait();
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
                 return Err(PlatformError::ProcessTimeout {
-                    seconds: spec.timeout.as_secs(),
+                    seconds: timeout.as_secs(),
                 });
             }
             thread::sleep(Duration::from_millis(10));
-        };
-        let stdout = stdout_thread
+        }
+    }
+
+    fn join_reader(
+        reader: thread::JoinHandle<Result<Vec<u8>, PlatformError>>,
+        stream: &'static str,
+    ) -> Result<Vec<u8>, PlatformError> {
+        reader
             .join()
-            .map_err(|_| PlatformError::ProcessRejected("stdout reader panicked".into()))??;
-        let stderr = stderr_thread
-            .join()
-            .map_err(|_| PlatformError::ProcessRejected("stderr reader panicked".into()))??;
-        Ok(NativeProcessResult {
-            exit_code: status.code().unwrap_or(-1),
-            stdout,
-            stderr,
-        })
+            .map_err(|_| PlatformError::ProcessRejected(format!("{stream} reader panicked")))?
     }
 }
 
@@ -176,29 +209,44 @@ fn validate_request(
     policy: &NativeProcessPolicy,
     spec: &NativeProcessSpec,
 ) -> Result<ValidatedRequest, PlatformError> {
-    if !policy.executable.is_absolute() || !policy.working_directory.is_absolute() {
-        return Err(PlatformError::ProcessRejected(
-            "adapter executable and working directory must be absolute".into(),
-        ));
-    }
-    let executable = std::fs::canonicalize(&policy.executable)?;
-    if !executable.is_file() {
-        return Err(PlatformError::ProcessRejected(
-            "adapter executable is not a regular file".into(),
-        ));
-    }
-    let working_directory = std::fs::canonicalize(&policy.working_directory)?;
-    if !working_directory.is_dir() {
-        return Err(PlatformError::ProcessRejected(
-            "adapter working directory is not a directory".into(),
-        ));
-    }
+    validate_adapter_paths(policy)?;
+    let executable = canonical_regular_file(&policy.executable)?;
+    let working_directory = canonical_directory(&policy.working_directory)?;
     validate_limits(policy, spec)?;
     validate_arguments(policy, &spec.args)?;
     Ok(ValidatedRequest {
         executable,
         working_directory,
     })
+}
+
+fn validate_adapter_paths(policy: &NativeProcessPolicy) -> Result<(), PlatformError> {
+    if !policy.executable.is_absolute() || !policy.working_directory.is_absolute() {
+        return Err(PlatformError::ProcessRejected(
+            "adapter executable and working directory must be absolute".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn canonical_regular_file(path: &std::path::Path) -> Result<PathBuf, PlatformError> {
+    let executable = std::fs::canonicalize(path)?;
+    if !executable.is_file() {
+        return Err(PlatformError::ProcessRejected(
+            "adapter executable is not a regular file".into(),
+        ));
+    }
+    Ok(executable)
+}
+
+fn canonical_directory(path: &std::path::Path) -> Result<PathBuf, PlatformError> {
+    let directory = std::fs::canonicalize(path)?;
+    if !directory.is_dir() {
+        return Err(PlatformError::ProcessRejected(
+            "adapter working directory is not a directory".into(),
+        ));
+    }
+    Ok(directory)
 }
 
 fn validate_limits(

@@ -143,6 +143,19 @@ fn evaluate_disk(
     policy: &StorageReliabilityPolicy,
     findings: &mut Vec<PolicyFinding>,
 ) {
+    evaluate_disk_health(disk, findings);
+    let Observation::Present(counters) = &disk.reliability else {
+        incomplete(
+            "STO-ReliabilityIncomplete",
+            observation_state(&disk.reliability),
+            findings,
+        );
+        return;
+    };
+    evaluate_reliability(disk, counters, policy, findings);
+}
+
+fn evaluate_disk_health(disk: &PhysicalDiskObservation, findings: &mut Vec<PolicyFinding>) {
     evaluate_bool(
         &DiskRule::new(
             "STO-HealthNotHealthy",
@@ -167,14 +180,24 @@ fn evaluate_disk(
         &disk.operational_ok,
         findings,
     );
-    let Observation::Present(counters) = &disk.reliability else {
-        incomplete(
-            "STO-ReliabilityIncomplete",
-            observation_state(&disk.reliability),
-            findings,
-        );
-        return;
-    };
+}
+
+fn evaluate_reliability(
+    disk: &PhysicalDiskObservation,
+    counters: &ReliabilityCounters,
+    policy: &StorageReliabilityPolicy,
+    findings: &mut Vec<PolicyFinding>,
+) {
+    evaluate_temperature_and_wear(disk, counters, policy, findings);
+    evaluate_error_counts(disk, counters, policy, findings);
+}
+
+fn evaluate_temperature_and_wear(
+    disk: &PhysicalDiskObservation,
+    counters: &ReliabilityCounters,
+    policy: &StorageReliabilityPolicy,
+    findings: &mut Vec<PolicyFinding>,
+) {
     threshold(
         &RangeRule {
             warning: DiskRule::new(
@@ -203,6 +226,14 @@ fn evaluate_disk(
         &counters.wear_percent_remaining,
         findings,
     );
+}
+
+fn evaluate_error_counts(
+    disk: &PhysicalDiskObservation,
+    counters: &ReliabilityCounters,
+    policy: &StorageReliabilityPolicy,
+    findings: &mut Vec<PolicyFinding>,
+) {
     minimum(
         &DiskRule::new(
             "STO-UncorrectableErrors",

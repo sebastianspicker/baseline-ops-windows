@@ -18,6 +18,7 @@ secret_status="NOT_RUN"
 documentation_status="NOT_RUN"
 static_status="NOT_RUN"
 analyzer_status="NOT_RUN"
+quality_status="NOT_RUN"
 tests_status="NOT_RUN"
 overall_status="PASS"
 summary_printed=0
@@ -36,6 +37,7 @@ print_summary() {
   printf '| %-13s | %-8s |\n' "Documentation" "$documentation_status"
   printf '| %-13s | %-8s |\n' "Static" "$static_status"
   printf '| %-13s | %-8s |\n' "Analyzer" "$analyzer_status"
+  printf '| %-13s | %-8s |\n' "CodeQuality" "$quality_status"
   printf '| %-13s | %-8s |\n' "Tests" "$tests_status"
   printf '| %-13s | %-8s |\n' "Overall" "$overall_status"
 }
@@ -90,6 +92,15 @@ if ((Get-Module -Name PSScriptAnalyzer).Version.ToString() -cne '$psa_version') 
   fi
 else
   analyzer_status="SKIPPED"
+fi
+
+quality_status="RUN"
+if "$pwsh_bin" -NoProfile -File "$root_dir/tools/quality/Test-CodeQuality.ps1" -ReleaseLine PowerShell -SkipAnalyzer; then
+  quality_status="PASS"
+else
+  exit_code=$?
+  quality_status="FAILED"
+  fail_with_summary "$exit_code"
 fi
 
 if [[ -z "$skip_tests" ]]; then

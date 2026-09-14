@@ -74,31 +74,56 @@ pub fn inspect_process(process_id: u32) -> Result<ProcessTokenIdentity, Platform
     if process_id == 0 {
         return Err(rejected("process identifier may not be zero"));
     }
-    let process =
-        Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) })?;
-    let image_path = query_image(process.0)?;
-    let mut raw_token = 0_isize;
-    if unsafe { OpenProcessToken(process.0, TOKEN_QUERY, &raw mut raw_token) } == 0
-        || raw_token == 0
-    {
-        return Err(last_error("OpenProcessToken"));
-    }
-    let token = Handle::new(raw_token)?;
-    let user_sid = token_sid(&token, TOKEN_USER)?;
-    let integrity_sid = token_sid(&token, TOKEN_INTEGRITY_LEVEL)?;
-    let logon_sid = token_logon_sid(&token)?;
-    let mut session_id = 0_u32;
-    if unsafe { ProcessIdToSessionId(process_id, &raw mut session_id) } == 0 {
-        return Err(last_error("ProcessIdToSessionId"));
-    }
+    inspect_nonzero_process(process_id)
+}
+
+fn inspect_nonzero_process(process_id: u32) -> Result<ProcessTokenIdentity, PlatformError> {
+    let (process, image_path) = inspected_process(process_id)?;
+    let (user_sid, logon_sid, integrity_rid) = inspected_token(process.0)?;
+    let session_id = process_session_id(process_id)?;
     Ok(ProcessTokenIdentity {
         process_id,
         session_id,
         user_sid,
         logon_sid,
-        integrity_rid: integrity_rid(&integrity_sid)?,
+        integrity_rid,
         image_path,
     })
+}
+
+fn inspected_process(process_id: u32) -> Result<(Handle, PathBuf), PlatformError> {
+    let process = open_process(process_id)?;
+    let image_path = query_image(process.0)?;
+    Ok((process, image_path))
+}
+
+fn inspected_token(process: isize) -> Result<(String, String, u32), PlatformError> {
+    let token = open_process_token(process)?;
+    let user_sid = token_sid(&token, TOKEN_USER)?;
+    let integrity_sid = token_sid(&token, TOKEN_INTEGRITY_LEVEL)?;
+    let logon_sid = token_logon_sid(&token)?;
+    Ok((user_sid, logon_sid, integrity_rid(&integrity_sid)?))
+}
+
+fn open_process(process_id: u32) -> Result<Handle, PlatformError> {
+    Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) })
+}
+
+fn open_process_token(process: isize) -> Result<Handle, PlatformError> {
+    let mut raw_token = 0_isize;
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut raw_token) } == 0 || raw_token == 0
+    {
+        return Err(last_error("OpenProcessToken"));
+    }
+    Handle::new(raw_token)
+}
+
+fn process_session_id(process_id: u32) -> Result<u32, PlatformError> {
+    let mut session_id = 0_u32;
+    if unsafe { ProcessIdToSessionId(process_id, &raw mut session_id) } == 0 {
+        return Err(last_error("ProcessIdToSessionId"));
+    }
+    Ok(session_id)
 }
 
 struct Handle(isize);
@@ -133,12 +158,25 @@ fn query_image(process: isize) -> Result<PathBuf, PlatformError> {
 }
 
 fn token_information(token: &Handle, class: u32) -> Result<Vec<u8>, PlatformError> {
+    let required = required_token_information_bytes(token, class)?;
+    read_token_information(token, class, required)
+}
+
+fn required_token_information_bytes(token: &Handle, class: u32) -> Result<u32, PlatformError> {
     let mut required = 0_u32;
     let _ =
         unsafe { GetTokenInformation(token.0, class, std::ptr::null_mut(), 0, &raw mut required) };
     if required == 0 || required > MAX_TOKEN_BYTES {
         return Err(rejected("token information size is invalid"));
     }
+    Ok(required)
+}
+
+fn read_token_information(
+    token: &Handle,
+    class: u32,
+    required: u32,
+) -> Result<Vec<u8>, PlatformError> {
     let mut bytes = vec![
         0_u8;
         usize::try_from(required)
@@ -173,41 +211,51 @@ fn token_sid(token: &Handle, class: u32) -> Result<String, PlatformError> {
 
 fn token_logon_sid(token: &Handle) -> Result<String, PlatformError> {
     let bytes = token_information(token, TOKEN_GROUPS)?;
+    let (start, stride) = token_group_layout(&bytes)?;
+    let pointer_size = std::mem::size_of::<usize>();
+    find_logon_sid(&bytes, start, stride, pointer_size)
+}
+
+fn token_group_layout(bytes: &[u8]) -> Result<(usize, usize), PlatformError> {
     let pointer_size = std::mem::size_of::<usize>();
     let start = align_up(4, pointer_size)?;
     let stride = align_up(pointer_size.saturating_add(4), pointer_size)?;
-    let count = usize::try_from(read_u32(&bytes, 0)?)
-        .map_err(|_| rejected("token group count overflow"))?;
-    if start
-        .checked_add(
-            stride
-                .checked_mul(count)
-                .ok_or_else(|| rejected("token group array overflows its buffer"))?,
-        )
-        .is_none_or(|end| end > bytes.len())
-    {
+    let count =
+        usize::try_from(read_u32(bytes, 0)?).map_err(|_| rejected("token group count overflow"))?;
+    if token_group_end(start, stride, count)? > bytes.len() {
         return Err(rejected("token group array is truncated"));
     }
+    Ok((start, stride))
+}
+
+fn token_group_end(start: usize, stride: usize, count: usize) -> Result<usize, PlatformError> {
+    let body = stride
+        .checked_mul(count)
+        .ok_or_else(|| rejected("token group array overflows its buffer"))?;
+    start
+        .checked_add(body)
+        .ok_or_else(|| rejected("token group array overflows its buffer"))
+}
+
+fn find_logon_sid(
+    bytes: &[u8],
+    start: usize,
+    stride: usize,
+    pointer_size: usize,
+) -> Result<String, PlatformError> {
+    let count =
+        usize::try_from(read_u32(bytes, 0)?).map_err(|_| rejected("token group count overflow"))?;
     for index in 0..count {
         let offset = start + index * stride;
-        if read_u32(&bytes, offset + pointer_size)? & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID {
-            return sid_text_from_buffer(&bytes, read_pointer(&bytes, offset)?);
+        if read_u32(bytes, offset + pointer_size)? & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID {
+            return sid_text_from_buffer(bytes, read_pointer(bytes, offset)?);
         }
     }
     Err(rejected("token has no logon SID"))
 }
 
 fn sid_text_from_buffer(bytes: &[u8], address: usize) -> Result<String, PlatformError> {
-    let start = bytes.as_ptr() as usize;
-    let end = start
-        .checked_add(bytes.len())
-        .ok_or_else(|| rejected("token buffer address overflows"))?;
-    if address < start || address >= end {
-        return Err(rejected("token SID is outside its buffer"));
-    }
-    let offset = address
-        .checked_sub(start)
-        .ok_or_else(|| rejected("token SID offset underflows"))?;
+    let offset = token_buffer_offset(bytes, address)?;
     let declared_length = sid_length_in_buffer(bytes, offset)?;
     let sid = address as *const c_void;
     if unsafe { IsValidSid(sid) } == 0 {
@@ -221,16 +269,22 @@ fn sid_text_from_buffer(bytes: &[u8], address: usize) -> Result<String, Platform
     sid_to_string(sid)
 }
 
+fn token_buffer_offset(bytes: &[u8], address: usize) -> Result<usize, PlatformError> {
+    let start = bytes.as_ptr() as usize;
+    let end = start
+        .checked_add(bytes.len())
+        .ok_or_else(|| rejected("token buffer address overflows"))?;
+    if address < start || address >= end {
+        return Err(rejected("token SID is outside its buffer"));
+    }
+    address
+        .checked_sub(start)
+        .ok_or_else(|| rejected("token SID offset underflows"))
+}
+
 /// Bound a SID before passing its address to Win32 validation helpers.
 fn sid_length_in_buffer(bytes: &[u8], offset: usize) -> Result<usize, PlatformError> {
-    let header = bytes
-        .get(
-            offset
-                ..offset
-                    .checked_add(SID_HEADER_BYTES)
-                    .ok_or_else(|| rejected("token SID header offset overflows"))?,
-        )
-        .ok_or_else(|| rejected("token SID header is truncated"))?;
+    let header = sid_header(bytes, offset)?;
     let sub_authority_count = usize::from(header[1]);
     let length = SID_HEADER_BYTES
         .checked_add(
@@ -239,6 +293,22 @@ fn sid_length_in_buffer(bytes: &[u8], offset: usize) -> Result<usize, PlatformEr
                 .ok_or_else(|| rejected("token SID subauthorities overflow"))?,
         )
         .ok_or_else(|| rejected("token SID length overflows"))?;
+    require_sid_in_buffer(bytes, offset, length)?;
+    Ok(length)
+}
+
+fn sid_header(bytes: &[u8], offset: usize) -> Result<&[u8], PlatformError> {
+    bytes
+        .get(
+            offset
+                ..offset
+                    .checked_add(SID_HEADER_BYTES)
+                    .ok_or_else(|| rejected("token SID header offset overflows"))?,
+        )
+        .ok_or_else(|| rejected("token SID header is truncated"))
+}
+
+fn require_sid_in_buffer(bytes: &[u8], offset: usize, length: usize) -> Result<(), PlatformError> {
     if bytes
         .get(
             offset
@@ -250,7 +320,7 @@ fn sid_length_in_buffer(bytes: &[u8], offset: usize) -> Result<usize, PlatformEr
     {
         return Err(rejected("token SID exceeds its buffer"));
     }
-    Ok(length)
+    Ok(())
 }
 
 fn sid_to_string(sid: *const c_void) -> Result<String, PlatformError> {
@@ -307,23 +377,26 @@ fn read_pointer(bytes: &[u8], offset: usize) -> Result<usize, PlatformError> {
                     .ok_or_else(|| rejected("token pointer offset overflows"))?,
         )
         .ok_or_else(|| rejected("token pointer field is truncated"))?;
-    let value = if size == 8 {
-        usize::try_from(u64::from_ne_bytes(
-            raw.try_into()
-                .map_err(|_| rejected("token pointer field is invalid"))?,
-        ))
-        .map_err(|_| rejected("token pointer overflows usize"))?
-    } else {
-        usize::try_from(u32::from_ne_bytes(
-            raw.try_into()
-                .map_err(|_| rejected("token pointer field is invalid"))?,
-        ))
-        .map_err(|_| rejected("token pointer overflows usize"))?
-    };
+    let value = native_pointer_value(raw, size)?;
     if value == 0 {
         return Err(rejected("token SID pointer is null"));
     }
     Ok(value)
+}
+
+fn native_pointer_value(raw: &[u8], size: usize) -> Result<usize, PlatformError> {
+    if size == 8 {
+        return usize::try_from(u64::from_ne_bytes(
+            raw.try_into()
+                .map_err(|_| rejected("token pointer field is invalid"))?,
+        ))
+        .map_err(|_| rejected("token pointer overflows usize"));
+    }
+    usize::try_from(u32::from_ne_bytes(
+        raw.try_into()
+            .map_err(|_| rejected("token pointer field is invalid"))?,
+    ))
+    .map_err(|_| rejected("token pointer overflows usize"))
 }
 fn align_up(value: usize, alignment: usize) -> Result<usize, PlatformError> {
     value

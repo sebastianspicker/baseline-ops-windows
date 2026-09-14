@@ -5,15 +5,20 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    ActionId, ActionResultV3, ArtifactV3, DomainError, DomainResult, ExecutionIntent, FindingV3,
+    ActionId, ActionResultV3, ArtifactV3, DomainError, DomainResult, ExecutionIntent,
     HostIdentityV3, InputIdentityV3, JsonMap, MAX_TYPED_MAP_ENTRIES, ObservedStateV3, PlanV3,
-    PlannedActionV3, ProfileStepV3, ProfileV3, ResultV3, Sha256Digest, SourceIdentityV3,
-    ToolIdentityV3, canonical_json_digest,
+    PlannedActionV3, ProfileStepV3, ProfileV3, Sha256Digest, SourceIdentityV3, ToolIdentityV3,
+    canonical_json_digest,
 };
 
 mod graph;
+mod observation;
+mod result;
+mod worker;
 
 use graph::validate_dependency_graph;
+use observation::validate_plan_observation_bindings;
+pub(crate) use worker::validate_worker_result;
 
 /// Deterministic action ordering that honors every declared dependency.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,18 +95,9 @@ impl ProfileV3 {
     ///
     /// Returns an error for invalid field bounds, metadata, expiry, dependencies, or cycles.
     pub fn validate(&self) -> DomainResult<ProfileValidation> {
-        validate_nonempty("profile name", &self.name, 256)?;
-        validate_nonempty("profile version", &self.version, 128)?;
-        validate_optional_text("profile description", self.description.as_deref(), 4096)?;
-        if let Some(expires_at) = self.expires_at
-            && expires_at <= self.created_at
-        {
-            return validation("profile expiry must be after its creation time");
-        }
-        validate_json_map("profile metadata", &self.metadata)?;
-        Ok(ProfileValidation {
-            topological_order: validate_profile_steps(&self.steps)?,
-        })
+        validate_profile_header(self)?;
+        validate_profile_expiry(self)?;
+        validate_profile_payload(self)
     }
 
     /// Returns a deterministic dependency-safe action order after validation.
@@ -138,17 +134,63 @@ impl HostIdentityV3 {
     ///
     /// Returns an error if an identity field is invalid or the fingerprint does not match.
     pub fn validate(&self) -> DomainResult<()> {
-        validate_nonempty("host ID", &self.host_id, 256)?;
-        validate_nonempty("boot ID", &self.boot_id, 256)?;
-        validate_nonempty("session ID", &self.session_id, 256)?;
-        validate_nonempty("hostname", &self.hostname, 255)?;
-        validate_nonempty("OS version", &self.os_version, 128)?;
-        validate_nonempty("architecture", &self.architecture, 64)?;
-        if self.calculated_fingerprint()? != self.fingerprint {
-            return validation("host fingerprint does not match the host identity fields");
-        }
-        Ok(())
+        validate_host_fields(self)?;
+        validate_host_fingerprint(self)
     }
+}
+
+fn validate_profile_header(profile: &ProfileV3) -> DomainResult<()> {
+    validate_nonempty("profile name", &profile.name, 256)?;
+    validate_nonempty("profile version", &profile.version, 128)?;
+    validate_optional_text("profile description", profile.description.as_deref(), 4096)
+}
+
+fn validate_profile_expiry(profile: &ProfileV3) -> DomainResult<()> {
+    let Some(expires_at) = profile.expires_at else {
+        return Ok(());
+    };
+    validate_profile_expiry_order(expires_at, profile.created_at)
+}
+
+fn validate_profile_expiry_order(
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+) -> DomainResult<()> {
+    if expires_at <= created_at {
+        return validation("profile expiry must be after its creation time");
+    }
+    Ok(())
+}
+
+fn validate_profile_payload(profile: &ProfileV3) -> DomainResult<ProfileValidation> {
+    validate_json_map("profile metadata", &profile.metadata)?;
+    Ok(ProfileValidation {
+        topological_order: validate_profile_steps(&profile.steps)?,
+    })
+}
+
+fn validate_host_fields(host: &HostIdentityV3) -> DomainResult<()> {
+    validate_host_identifiers(host)?;
+    validate_host_platform(host)
+}
+
+fn validate_host_identifiers(host: &HostIdentityV3) -> DomainResult<()> {
+    validate_nonempty("host ID", &host.host_id, 256)?;
+    validate_nonempty("boot ID", &host.boot_id, 256)?;
+    validate_nonempty("session ID", &host.session_id, 256)
+}
+
+fn validate_host_platform(host: &HostIdentityV3) -> DomainResult<()> {
+    validate_nonempty("hostname", &host.hostname, 255)?;
+    validate_nonempty("OS version", &host.os_version, 128)?;
+    validate_nonempty("architecture", &host.architecture, 64)
+}
+
+fn validate_host_fingerprint(host: &HostIdentityV3) -> DomainResult<()> {
+    if host.calculated_fingerprint()? != host.fingerprint {
+        return validation("host fingerprint does not match the host identity fields");
+    }
+    Ok(())
 }
 
 impl ObservedStateV3 {
@@ -161,7 +203,12 @@ impl ObservedStateV3 {
         let facts = self
             .values
             .iter()
-            .map(|(capability, value)| (capability, &value.facts))
+            .map(|(step, value)| {
+                (
+                    step,
+                    (&value.capability, value.parameters_digest, &value.facts),
+                )
+            })
             .collect::<BTreeMap<_, _>>();
         canonical_json_digest(&facts)
     }
@@ -175,8 +222,12 @@ impl ObservedStateV3 {
         if self.values.is_empty() {
             return validation("observed state must contain at least one capability value");
         }
-        for (capability, value) in &self.values {
-            validate_nonempty("observed-state capability ID", capability.as_str(), 128)?;
+        for value in self.values.values() {
+            validate_nonempty(
+                "observed-state capability ID",
+                value.capability.as_str(),
+                128,
+            )?;
             validate_json_map("observed-state facts", &value.facts)?;
         }
         if self.calculated_digest()? != self.digest {
@@ -193,25 +244,9 @@ impl PlanV3 {
     ///
     /// Returns an error for invalid expiry, identity, source, state, metadata, or action graph data.
     pub fn validate_structure(&self) -> DomainResult<TopologicalOrder> {
-        if self.expires_at <= self.issued_at {
-            return validation("plan expiry must be after its issue time");
-        }
-        self.host.validate()?;
-        validate_tool(&self.tool)?;
-        validate_source(&self.source)?;
-        if self.input.size_bytes == 0 {
-            return validation("plan input size must be non-zero");
-        }
-        self.observed_state.validate()?;
-        validate_json_map("plan metadata", &self.metadata)?;
+        validate_plan_static_fields(self)?;
         let order = validate_planned_actions(&self.actions)?;
-        if self
-            .actions
-            .iter()
-            .any(|action| action.facts_digest != self.observed_state.digest)
-        {
-            return validation("planned action facts do not match the plan observation binding");
-        }
+        validate_plan_observation_bindings(self)?;
         Ok(order)
     }
 
@@ -241,25 +276,8 @@ impl PlanV3 {
         if self.intent != context.intent {
             return validation("plan intent does not match the requested execution intent");
         }
-        context.host.validate()?;
-        if self.host != context.host {
-            return validation("plan host identity does not match the current host");
-        }
-        if self.tool != context.tool {
-            return validation("plan tool identity does not match the current worker");
-        }
-        if self.package_digest != context.package_digest {
-            return validation("plan package digest does not match the verified package");
-        }
-        if self.source != context.source {
-            return validation("plan source identity does not match the re-verified source");
-        }
-        if self.input != context.input {
-            return validation("plan input identity does not match the re-verified input");
-        }
-        if self.observed_state.digest != context.observed_state_digest {
-            return validation("plan observed state does not match the current state binding");
-        }
+        validate_context_host_and_tool(self, context)?;
+        validate_context_bindings(self, context)?;
         Ok(order)
     }
 
@@ -278,48 +296,72 @@ impl PlanV3 {
     }
 }
 
-impl ResultV3 {
-    /// Validates result timestamps, references, findings, and bounded evidence.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid timestamps, identity, summary, metadata, references, or evidence.
-    pub fn validate(&self) -> DomainResult<()> {
-        if self.completed_at < self.started_at {
-            return validation("result completion time must not precede its start time");
-        }
-        self.host.validate()?;
-        validate_nonempty("result summary", &self.summary, 4096)?;
-        validate_json_map("result metadata", &self.metadata)?;
-        let mut action_ids = BTreeSet::new();
-        for action in &self.actions {
-            validate_action_result(action)?;
-            if !action_ids.insert(action.action_id) {
-                return validation("result contains duplicate action result IDs");
-            }
-        }
-        let mut finding_ids = BTreeSet::new();
-        for finding in &self.findings {
-            finding.validate()?;
-            if !finding_ids.insert(finding.id) {
-                return validation("result contains duplicate finding IDs");
-            }
-        }
-        validate_artifacts(&self.artifacts)
+fn validate_plan_static_fields(plan: &PlanV3) -> DomainResult<()> {
+    if plan.expires_at <= plan.issued_at {
+        return validation("plan expiry must be after its issue time");
     }
+    plan.host.validate()?;
+    validate_tool(&plan.tool)?;
+    validate_source(&plan.source)?;
+    validate_plan_input(plan)?;
+    plan.observed_state.validate()?;
+    validate_json_map("plan metadata", &plan.metadata)
 }
 
-impl FindingV3 {
-    /// Validates a finding's stable automation fields and evidence bounds.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid code, message, or evidence.
-    pub fn validate(&self) -> DomainResult<()> {
-        validate_nonempty("finding code", &self.code, 128)?;
-        validate_nonempty("finding message", &self.message, 4096)?;
-        validate_json_map("finding evidence", &self.evidence)
+fn validate_plan_input(plan: &PlanV3) -> DomainResult<()> {
+    if plan.input.size_bytes == 0 {
+        return validation("plan input size must be non-zero");
     }
+    Ok(())
+}
+
+fn validate_context_host_and_tool(
+    plan: &PlanV3,
+    context: &PlanValidationContext,
+) -> DomainResult<()> {
+    context.host.validate()?;
+    validate_equal(
+        &plan.host,
+        &context.host,
+        "plan host identity does not match the current host",
+    )?;
+    validate_equal(
+        &plan.tool,
+        &context.tool,
+        "plan tool identity does not match the current worker",
+    )?;
+    Ok(())
+}
+
+fn validate_context_bindings(plan: &PlanV3, context: &PlanValidationContext) -> DomainResult<()> {
+    validate_equal(
+        &plan.package_digest,
+        &context.package_digest,
+        "plan package digest does not match the verified package",
+    )?;
+    validate_equal(
+        &plan.source,
+        &context.source,
+        "plan source identity does not match the re-verified source",
+    )?;
+    validate_equal(
+        &plan.input,
+        &context.input,
+        "plan input identity does not match the re-verified input",
+    )?;
+    validate_equal(
+        &plan.observed_state.digest,
+        &context.observed_state_digest,
+        "plan observed state does not match the current state binding",
+    )?;
+    Ok(())
+}
+
+fn validate_equal<T: PartialEq>(expected: &T, actual: &T, message: &str) -> DomainResult<()> {
+    if expected != actual {
+        return validation(message);
+    }
+    Ok(())
 }
 
 fn validate_profile_steps(steps: &[ProfileStepV3]) -> DomainResult<TopologicalOrder> {
@@ -428,9 +470,18 @@ fn validate_json_map(name: &str, map: &JsonMap) -> DomainResult<()> {
 }
 
 fn validate_value(value: &Value, depth: usize, nodes: &mut usize) -> DomainResult<()> {
+    validate_value_position(depth, nodes)?;
+    match value {
+        Value::String(value) => validate_typed_string(value),
+        Value::Array(values) => validate_typed_array(values, depth, nodes),
+        Value::Object(values) => validate_typed_object(values, depth, nodes),
+        _ => Ok(()),
+    }
+}
+
+fn validate_value_position(depth: usize, nodes: &mut usize) -> DomainResult<()> {
     const MAX_DEPTH: usize = 16;
     const MAX_NODES: usize = 4096;
-    const MAX_STRING_BYTES: usize = 64 * 1024;
     *nodes += 1;
     if *nodes > MAX_NODES {
         return validation("typed JSON value exceeds the 4096 node limit");
@@ -438,31 +489,53 @@ fn validate_value(value: &Value, depth: usize, nodes: &mut usize) -> DomainResul
     if depth > MAX_DEPTH {
         return validation("typed JSON value exceeds the 16-level nesting limit");
     }
-    match value {
-        Value::String(value) if value.len() > MAX_STRING_BYTES => {
-            validation("typed JSON string exceeds the 64 KiB limit")
-        }
-        Value::Array(values) => {
-            if values.len() > MAX_TYPED_MAP_ENTRIES {
-                return validation("typed JSON array exceeds the 256 entry limit");
-            }
-            for item in values {
-                validate_value(item, depth + 1, nodes)?;
-            }
-            Ok(())
-        }
-        Value::Object(values) => {
-            if values.len() > MAX_TYPED_MAP_ENTRIES {
-                return validation("typed JSON object exceeds the 256 entry limit");
-            }
-            for (key, item) in values {
-                validate_nonempty("typed JSON property name", key, 256)?;
-                validate_value(item, depth + 1, nodes)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
+    Ok(())
+}
+
+fn validate_typed_string(value: &str) -> DomainResult<()> {
+    if value.len() > 64 * 1024 {
+        return validation("typed JSON string exceeds the 64 KiB limit");
     }
+    Ok(())
+}
+
+fn validate_typed_array(values: &[Value], depth: usize, nodes: &mut usize) -> DomainResult<()> {
+    if values.len() > MAX_TYPED_MAP_ENTRIES {
+        return validation("typed JSON array exceeds the 256 entry limit");
+    }
+    for item in values {
+        validate_value(item, depth + 1, nodes)?;
+    }
+    Ok(())
+}
+
+fn validate_typed_object(
+    values: &serde_json::Map<String, Value>,
+    depth: usize,
+    nodes: &mut usize,
+) -> DomainResult<()> {
+    validate_typed_object_size(values)?;
+    for (key, item) in values {
+        validate_typed_member(key, item, depth, nodes)?;
+    }
+    Ok(())
+}
+
+fn validate_typed_object_size(values: &serde_json::Map<String, Value>) -> DomainResult<()> {
+    if values.len() > MAX_TYPED_MAP_ENTRIES {
+        return validation("typed JSON object exceeds the 256 entry limit");
+    }
+    Ok(())
+}
+
+fn validate_typed_member(
+    key: &str,
+    value: &Value,
+    depth: usize,
+    nodes: &mut usize,
+) -> DomainResult<()> {
+    validate_nonempty("typed JSON property name", key, 256)?;
+    validate_value(value, depth + 1, nodes)
 }
 
 fn validate_optional_text(name: &str, value: Option<&str>, max_bytes: usize) -> DomainResult<()> {

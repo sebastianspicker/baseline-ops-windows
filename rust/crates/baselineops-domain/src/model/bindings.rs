@@ -4,7 +4,10 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{CapabilityId, Sha256Digest};
+use crate::{
+    ActionId, CapabilityId, DomainError, DomainResult, LogicalResourceId, Sha256Digest,
+    canonical_json_digest,
+};
 
 use super::{JsonMap, OsFamily};
 
@@ -79,10 +82,71 @@ pub struct InputIdentityV3 {
     pub size_bytes: u64,
 }
 
+/// Shape of an operator-bound external resource.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceKind {
+    /// One bounded regular file.
+    File,
+    /// A deterministic manifest of bounded regular files.
+    DirectoryManifest,
+}
+
+/// Path-free digest binding for one logical external resource.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ResourceBindingV3 {
+    /// Logical identifier referenced by typed capability input.
+    pub logical_id: LogicalResourceId,
+    /// Whether the broker bound a file or a directory manifest.
+    pub kind: ResourceKind,
+    /// Digest of the file bytes or canonical directory manifest.
+    pub digest: Sha256Digest,
+    /// Total bounded input bytes represented by this binding.
+    pub size_bytes: u64,
+}
+
+impl InputIdentityV3 {
+    /// Bind profile bytes and every external resource into one input closure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if resource sizes overflow or the canonical closure cannot be encoded.
+    pub fn from_resources(
+        profile_digest: Sha256Digest,
+        profile_size: u64,
+        resources: &[ResourceBindingV3],
+    ) -> DomainResult<Self> {
+        #[derive(Serialize)]
+        struct InputClosure<'a> {
+            profile_digest: Sha256Digest,
+            resources: &'a [ResourceBindingV3],
+        }
+        let resource_size = resources.iter().try_fold(0_u64, |total, resource| {
+            total
+                .checked_add(resource.size_bytes)
+                .ok_or_else(|| DomainError::Validation("input resource size overflowed".into()))
+        })?;
+        Ok(Self {
+            digest: canonical_json_digest(&InputClosure {
+                profile_digest,
+                resources,
+            })?,
+            size_bytes: profile_size
+                .checked_add(resource_size)
+                .ok_or_else(|| DomainError::Validation("input closure size overflowed".into()))?,
+        })
+    }
+}
+
 /// A capability-provided value captured before planning.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ObservedValueV3 {
+    /// Capability observed for this exact profile step.
+    pub capability: CapabilityId,
+    /// Canonical digest of the parameters used during observation.
+    pub parameters_digest: Sha256Digest,
     /// Time the capability observed this value.
     pub observed_at: DateTime<Utc>,
     /// Capability-defined bounded facts.
@@ -98,6 +162,6 @@ pub struct ObservedStateV3 {
     pub captured_at: DateTime<Utc>,
     /// Canonical digest of the exact observation bundle.
     pub digest: Sha256Digest,
-    /// Capability-keyed observations.
-    pub values: BTreeMap<CapabilityId, ObservedValueV3>,
+    /// Profile-step-keyed observations; repeated capabilities remain distinct.
+    pub values: BTreeMap<ActionId, ObservedValueV3>,
 }
