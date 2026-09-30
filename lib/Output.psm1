@@ -155,75 +155,6 @@ function Write-UiLine {
 
 <#
 .SYNOPSIS
-  Creates ordered severity counts for a UI summary.
-#>
-function Get-UiSummaryCounts {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][psobject]$Stats)
-
-  return [ordered]@{
-    Critical = $Stats.Critical; High = $Stats.High; Error = $Stats.Error; Medium = $Stats.Medium; Low = $Stats.Low
-    Info = $Stats.Info; Skipped = $Stats.Skip; Debug = $Stats.Debug; OK = $Stats.OK
-  }
-}
-
-<#
-.SYNOPSIS
-  Tests whether severity counts represent a failed result.
-#>
-function Test-UiSummaryFailure {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][hashtable]$Counts)
-
-  return ($Counts.Critical -gt 0 -or $Counts.High -gt 0 -or $Counts.Error -gt 0)
-}
-
-<#
-.SYNOPSIS
-  Gets the style for a summary total.
-#>
-function Get-UiSummaryTotalStyle {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][hashtable]$Counts,
-    [Parameter(Mandatory)][int]$Total
-  )
-
-  if (Test-UiSummaryFailure -Counts $Counts) { return 'Error' }
-  if ($Counts.Medium -gt 0) { return 'Warn' }
-  if ($Total -eq 0 -or $Counts.OK -gt 0) { return 'Success' }
-  return 'Info'
-}
-
-<#
-.SYNOPSIS
-  Writes nonzero severity rows for a UI summary.
-#>
-function Write-UiSummaryRows {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][hashtable]$Counts)
-
-  $styles = @{ Critical = 'Error'; High = 'Error'; Error = 'Error'; Medium = 'Warn'; Low = 'Info'; Info = 'Muted'; Skipped = 'Muted'; Debug = 'Muted'; OK = 'Success' }
-  foreach ($name in $styles.Keys) {
-    if ($Counts[$name] -gt 0) { Write-KeyValue -Key ('  ' + $name) -Value ([string]$Counts[$name]) -ValueStyle $styles[$name] }
-  }
-}
-
-<#
-.SYNOPSIS
-  Gets the overall summary result and style.
-#>
-function Get-UiSummaryResult {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][hashtable]$Counts)
-
-  if (Test-UiSummaryFailure -Counts $Counts) { return [pscustomobject]@{ Result = 'FAIL'; Style = 'Error' } }
-  if ($Counts.Medium -gt 0) { return [pscustomobject]@{ Result = 'WARN'; Style = 'Warn' } }
-  return [pscustomobject]@{ Result = 'PASS'; Style = 'Success' }
-}
-
-<#
-.SYNOPSIS
   Writes one legacy console line.
 .DESCRIPTION
   Preserves the compatibility output surface through the shared UI writer.
@@ -602,25 +533,6 @@ function Write-UiList {
 
 <#
 .SYNOPSIS
-  Writes a blank line through the UI output surface.
-.DESCRIPTION
-  Supports direct information-stream output when requested by callers.
-#>
-function Write-UiBlankLine {
-  [CmdletBinding()]
-  param(
-    [switch]$UseWriteInformation,
-    [switch]$UseInformationStream
-  )
-  if ($UseWriteInformation -or $UseInformationStream) {
-    Write-UiLine -Message '' -UseWriteInformation:$UseWriteInformation -UseInformationStream:$UseInformationStream
-    return
-  }
-  Write-BlankLine
-}
-
-<#
-.SYNOPSIS
   Writes a Boolean value as a styled key-value pair.
 .DESCRIPTION
   Uses success or muted styling to make the value easy to scan.
@@ -719,57 +631,15 @@ function Write-UiProgress {
   Write-UiLine -Message $text -Style 'Header'
 }
 
-<#
-.SYNOPSIS
-  Writes a formatted summary table of finding counts by severity.
-.PARAMETER Findings
-  Collection of finding objects to summarize.
-.PARAMETER Title
-  Optional title above the table (default: 'Findings Summary').
-.PARAMETER Width
-  Width of the decorative rule (default: 70).
-#>
-function Write-UiSummaryTable {
-  [CmdletBinding()]
-  param(
-    [AllowNull()][System.Collections.IEnumerable]$Findings = @(),
-    [string]$Title = 'Findings Summary',
-    [int]$Width = $script:UiDefaults.SectionWidth
-  )
-
-  $findingsList = @()
-  if ($null -ne $Findings) { $findingsList = @($Findings) }
-
-  $stats = Console\Get-FindingStats -Findings $findingsList
-  $counts = Get-UiSummaryCounts -Stats $stats
-
-  Write-Section -Title $Title -Width $Width
-  $total = $findingsList.Count
-  $totalStyle = Get-UiSummaryTotalStyle -Counts $counts -Total $total
-
-  Write-KeyValue -Key 'Total findings' -Value ([string]$total) -ValueStyle $totalStyle
-  Write-UiSummaryRows -Counts $counts
-  $result = Get-UiSummaryResult -Counts $counts
-  Write-KeyValue -Key 'Overall result' -Value $result.Result -ValueStyle $result.Style
-  Write-UiLine -Message ('=' * $Width) -Style 'Dim'
-}
-
-Set-Alias -Name Write-UiSection -Value Write-Section -WhatIf:$false
-Set-Alias -Name Write-ColorLine -Value Write-UiLine -WhatIf:$false
-Set-Alias -Name Write-InfoLine -Value Write-Info -WhatIf:$false
-Set-Alias -Name Write-WarnLine -Value Write-Warn -WhatIf:$false
-
 $script:OutputExportedFunctions = @(
   'Write-UiLine'
   'Write-ConsoleLine'
   'Write-ConsoleHeader'
   'Write-Section'
-  'Write-BlankLine'
   'Write-Info'
   'Write-Warn'
   'Write-ErrorLine'
   'Write-Success'
-  'Write-StatusLine'
   'Write-UiRule'
   'Write-UiHeader'
   'Write-UiSeparator'
@@ -777,19 +647,10 @@ $script:OutputExportedFunctions = @(
   'Write-UiStatus'
   'Write-UiBullet'
   'Write-UiList'
-  'Write-UiBlankLine'
   'Write-UiBool'
   'Write-ConsoleBanner'
   'Write-ConsoleInfo'
   'Write-ConsoleList'
-  'Write-UiSummaryTable'
 )
 
-$script:OutputExportedAliases = @(
-  'Write-UiSection'
-  'Write-ColorLine'
-  'Write-InfoLine'
-  'Write-WarnLine'
-)
-
-Export-ModuleMember -Function $script:OutputExportedFunctions -Alias $script:OutputExportedAliases
+Export-ModuleMember -Function $script:OutputExportedFunctions

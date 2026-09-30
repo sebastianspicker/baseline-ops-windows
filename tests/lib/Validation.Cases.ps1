@@ -23,12 +23,6 @@ function Test-ValidationRejectsNullOrEmptyRef {
     Test-ValidGitRef -Ref '   ' | Should -Be $false
 }
 
-function Test-ValidationRejectsNullOrEmpty {
-    Test-SafeUrl -Url $null | Should -Be $false
-    Test-SafeUrl -Url '' | Should -Be $false
-    Test-SafeUrl -Url '   ' | Should -Be $false
-}
-
 function Test-ValidationReturnsTrueWhenPathIsUnderRoot {
     $tempRoot = if ([string]::IsNullOrWhiteSpace($env:TEMP)) { [System.IO.Path]::GetTempPath() } else { $env:TEMP }
     $child = Join-Path $tempRoot 'subdir/file.txt'
@@ -105,7 +99,7 @@ function Test-ValidationAllowsEffectiveUsersReadAndExecuteButRejectsAnAtomicUser
       return
     }
 
-    Test-TrustedWindowsPathAcl -Path $path | Should -BeTrue
+    { Assert-TrustedWindowsPathAcl -Path $path | Out-Null } | Should -Not -Throw
     $unsafe = Get-Acl -LiteralPath $path
     [void]$unsafe.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
           $users,
@@ -114,7 +108,7 @@ function Test-ValidationAllowsEffectiveUsersReadAndExecuteButRejectsAnAtomicUser
           [System.Security.AccessControl.PropagationFlags]::None,
           [System.Security.AccessControl.AccessControlType]::Allow)))
     Set-Acl -LiteralPath $path -AclObject $unsafe -ErrorAction Stop
-    Test-TrustedWindowsPathAcl -Path $path | Should -BeFalse
+    { Assert-TrustedWindowsPathAcl -Path $path | Out-Null } | Should -Throw
 }
 
 function Test-ValidationPreservesTheFilesystemRootWhileWalkingPathComponents {

@@ -14,7 +14,6 @@ baselineops-domain.workspace = true
 baselineops-windows.workspace = true
 chrono.workspace = true
 csv.workspace = true
-hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

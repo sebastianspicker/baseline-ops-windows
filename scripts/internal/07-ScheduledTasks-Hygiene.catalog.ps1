@@ -118,19 +118,20 @@ function Add-MissingTaskCatalogCollections {
 
 function Add-MissingTaskCatalogOutputs {
   param([object]$Catalog, [object]$Fallback)
+  # $Fallback carries the RunState.Inputs defaults; Initialize-ScheduledTaskHygiene coalesces any remaining gap.
   if ($null -eq (Get-PropValue $Catalog 'PurgeUnapproved' $null)) {
     $Catalog | Add-Member -NotePropertyName 'PurgeUnapproved' -NotePropertyValue $false -Force
   }
   if ([string]::IsNullOrWhiteSpace([string](Get-PropValue $Catalog 'QuarantineDir' $null))) {
-    $Catalog | Add-Member -NotePropertyName 'QuarantineDir' -NotePropertyValue (Get-PropValue $Fallback 'QuarantineDir' $DefaultQuarantineDir) -Force
+    $Catalog | Add-Member -NotePropertyName 'QuarantineDir' -NotePropertyValue (Get-PropValue $Fallback 'QuarantineDir' $null) -Force
   }
   $proof = Get-PropValue $Catalog 'Proof' $null
   if ($null -eq $proof) {
-    $Catalog | Add-Member -NotePropertyName 'Proof' -NotePropertyValue ([pscustomobject]([ordered]@{ OutFile = (Get-PropValue $Fallback.Proof 'OutFile' $DefaultProofOutFile) })) -Force
+    $Catalog | Add-Member -NotePropertyName 'Proof' -NotePropertyValue ([pscustomobject]([ordered]@{ OutFile = (Get-PropValue $Fallback.Proof 'OutFile' $null) })) -Force
   } else {
     $out = Get-PropValue $proof 'OutFile' $null
     if ([string]::IsNullOrWhiteSpace([string]$out)) {
-      $proof | Add-Member -NotePropertyName 'OutFile' -NotePropertyValue (Get-PropValue $Fallback.Proof 'OutFile' $DefaultProofOutFile) -Force
+      $proof | Add-Member -NotePropertyName 'OutFile' -NotePropertyValue (Get-PropValue $Fallback.Proof 'OutFile' $null) -Force
     }
   }
 }

@@ -68,6 +68,7 @@ function Initialize-Capability45Runtime {
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Config.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
@@ -218,7 +219,11 @@ function Invoke-WecutilQc {
 
   try {
     # wecutil command reference.
-    return (wecutil qc /q 2>&1 | Out-String).Trim()
+    $native = Invoke-NativeCommand -Command 'wecutil.exe' -Arguments @('qc', '/q') -CaptureOutput -Quiet `
+      -TimeoutSeconds 60 -MaxOutputBytes 262144 -WarningAction SilentlyContinue
+    if ($null -eq $native) { throw 'wecutil.exe could not be resolved.' }
+    if ($native.TimedOut) { throw 'wecutil.exe timed out.' }
+    return (([string]$native.Stdout) + ([string]$native.Stderr)).Trim()
   }
   catch {
     $null = Add-Finding -FindingList $script:Findings -Code 'WEF-WecutilQcFailed' -Severity 'Low' -Message ("wecutil qc /q failed: {0}" -f $_.Exception.Message)

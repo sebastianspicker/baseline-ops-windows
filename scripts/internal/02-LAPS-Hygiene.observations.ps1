@@ -119,8 +119,10 @@ function Get-LocalAdminInfo {
 function Get-AADJoin {
   # Always return [bool]
   try {
-    $out = (dsregcmd /status) 2>$null
-    return [bool]($out -match 'AzureAdJoined\s*:\s*YES')
+    $native = Invoke-NativeCommand -Command 'dsregcmd.exe' -Arguments @('/status') -CaptureOutput -Quiet `
+      -TimeoutSeconds 30 -MaxOutputBytes 262144 -WarningAction SilentlyContinue
+    if ($null -eq $native -or $native.TimedOut) { return $false }
+    return [bool]([string]$native.Stdout -match 'AzureAdJoined\s*:\s*YES')
   }
   catch {
     Write-Verbose ("Azure AD join detection failed: {0}" -f $_.Exception.Message)

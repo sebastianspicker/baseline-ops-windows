@@ -34,13 +34,10 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Values)
 
 function Test-ExternalKeepsTheFacadeExportContractStableWhileLoadingFocusedPlatformImplementations {
     $expected = @(
-      'Enable-EventLog', 'Ensure-Cmdlet', 'Ensure-Exe', 'Export-EventLog',
-      'Export-RegistryKey', 'Get-AuditPolSubcategories', 'Get-EventLogInfo',
-      'Invoke-Auditpol', 'Invoke-Git', 'Invoke-NativeCommand', 'Invoke-RegExe',
-      'Invoke-Schtasks', 'Invoke-Wecutil', 'Invoke-Wevtutil', 'Invoke-WinrmCommand',
-      'New-MdmScheduledTask', 'Remove-ScheduledTask', 'Resolve-NativeExecutablePath',
+      'Ensure-Cmdlet', 'Ensure-Exe', 'Invoke-Auditpol', 'Invoke-NativeCommand',
+      'Invoke-RegExe', 'Invoke-Wevtutil', 'Invoke-WinrmCommand',
       'Resolve-TrustedGitPath', 'Resolve-TrustedWindowsSystemFile',
-      'Resolve-TrustedWingetPath', 'Set-EventLogMaxSize', 'Test-CommandExists'
+      'Resolve-TrustedWingetPath', 'Test-CommandExists'
     ) | Sort-Object
 
     $actual = Get-Command -Module External -CommandType Function |
@@ -53,7 +50,6 @@ function Test-ExternalKeepsTheFacadeExportContractStableWhileLoadingFocusedPlatf
     $facade | Should -Match 'Join-Path \$platformRoot ''Executable\.ps1'''
     $facade | Should -Match 'Join-Path \$platformRoot ''NativeProcess\.ps1'''
     $facade | Should -Match 'Join-Path \$platformRoot ''NativeTools\.ps1'''
-    $facade | Should -Match 'Join-Path \$platformRoot ''WindowsOperations\.ps1'''
   }
 
 function Test-ExternalResolvesRequiredExecutablesThroughTheCanonicalTrustPolicy {

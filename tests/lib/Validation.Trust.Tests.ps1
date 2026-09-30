@@ -20,7 +20,6 @@ Describe 'Windows privileged-path ACL validation' {
   It 'uses the same atomic leaf write capabilities in every duplicated privileged-path guard' { Test-ValidationUsesTheSameAtomicLeafWriteCapabilitiesInEveryDuplicatedPrivilegedPathGuard }
 
   It 'is a portable no-op on non-Windows hosts' -Skip:([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
-    Test-TrustedWindowsPathAcl -Path $TestDrive | Should -BeTrue
     { Assert-TrustedWindowsPathAcl -Path $TestDrive | Out-Null } | Should -Not -Throw
   }
 

@@ -17,10 +17,8 @@ $platformRoot = Join-Path $PSScriptRoot 'platform'
 . (Join-Path $platformRoot 'Executable.ps1')
 . (Join-Path $platformRoot 'NativeProcess.ps1')
 . (Join-Path $platformRoot 'NativeTools.ps1')
-. (Join-Path $platformRoot 'WindowsOperations.ps1')
 
 Export-ModuleMember -Function @(
-  'Resolve-NativeExecutablePath',
   'Resolve-TrustedWindowsSystemFile',
   'Resolve-TrustedWingetPath',
   'Resolve-TrustedGitPath',
@@ -28,19 +26,8 @@ Export-ModuleMember -Function @(
   'Ensure-Cmdlet',
   'Ensure-Exe',
   'Invoke-NativeCommand',
-  'Invoke-Schtasks',
   'Invoke-Auditpol',
   'Invoke-Wevtutil',
-  'Invoke-Wecutil',
   'Invoke-RegExe',
-  'Invoke-WinrmCommand',
-  'Invoke-Git',
-  'Get-AuditPolSubcategories',
-  'Get-EventLogInfo',
-  'Enable-EventLog',
-  'Set-EventLogMaxSize',
-  'Export-EventLog',
-  'New-MdmScheduledTask',
-  'Remove-ScheduledTask',
-  'Export-RegistryKey'
+  'Invoke-WinrmCommand'
 )

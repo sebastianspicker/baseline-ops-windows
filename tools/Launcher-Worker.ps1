@@ -71,6 +71,7 @@ function Get-LauncherWorkerCommand {
     'validate-profile' { return @{ Path = (Join-Path $scripts '00-Validate-Profile.ps1'); Parameters = @{ ProfilePath = [string]$Manifest.target; RootPath = [string]$Manifest.root; OutputFormat = 'Console' } } }
     'run-script' { return Get-LauncherWorkerScriptCommand -Manifest $Manifest -ScriptsPath $scripts }
     'run-profile' { return Get-LauncherWorkerProfileCommand -Manifest $Manifest -ScriptsPath $scripts }
+    default { throw "Unsupported launcher operation '$($Manifest.operation)'." }
   }
 }
 
@@ -93,6 +94,14 @@ function Get-LauncherWorkerProfileCommand {
   return @{ Path = (Join-Path $ScriptsPath '00-Run-Profile.ps1'); Parameters = $parameters }
 }
 
+function Invoke-LauncherEntryPoint {
+  param($Command)
+  $parameters = $Command.Parameters
+  $global:LASTEXITCODE = $null
+  & $Command.Path @parameters *>&1 | ForEach-Object { Write-Output ([string]$_) }
+  $script:LauncherWorkerExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+}
+
 function Invoke-LauncherWorker {
   param([string]$WorkerManifestPath, [string]$WorkerManifestBase64)
   $closure = $null; $locks = $null
@@ -106,12 +115,12 @@ function Invoke-LauncherWorker {
     $closure = Enter-LauncherTrustedClosure -RootPath ([string]$manifest.root) -AdditionalPaths @($PSCommandPath, (Join-Path $PSScriptRoot 'Launcher.Core.psm1'), (Join-Path $PSScriptRoot '../lib/Validation.psm1'), $(if ($manifest.operation -in @('validate-profile', 'run-profile')) { [string]$manifest.target })) -Operation ([string]$manifest.operation) -SelectedExecutionPath $selected
     $command = Get-LauncherWorkerCommand -Manifest $manifest
     if (-not (Test-Path -LiteralPath $command.Path -PathType Leaf)) { throw "Launcher entry point not found: $($command.Path)" }
-    & $command.Path @($command.Parameters) *>&1 | ForEach-Object { Write-Output ([string]$_) }
-    return $(if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE })
+    Invoke-LauncherEntryPoint -Command $command
   } finally {
     Close-LauncherWorkerResources -Closure $closure -Locks $locks
   }
 }
 
-try { exit (Invoke-LauncherWorker -WorkerManifestPath $ManifestPath -WorkerManifestBase64 $ManifestBase64) }
+$script:LauncherWorkerExitCode = 1
+try { Invoke-LauncherWorker -WorkerManifestPath $ManifestPath -WorkerManifestBase64 $ManifestBase64; exit $script:LauncherWorkerExitCode }
 catch { [Console]::Error.WriteLine("Launcher worker failed: {0}" -f $_.Exception.Message); exit 1 }

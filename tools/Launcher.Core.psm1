@@ -675,26 +675,6 @@ function Get-LauncherTrustedSystem32Path {
 
 <#
 .SYNOPSIS
-  Discovers scripts available to the launcher.
-.DESCRIPTION
-  Returns a safe catalog only when the requested kit root is trusted.
-#>
-function Get-LauncherScriptCatalog {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$RootPath)
-
-  if (-not (Test-LauncherKitRoot -RootPath $RootPath)) { return @() }
-  try {
-    $resolvedRoot = (Resolve-Path -LiteralPath $RootPath -ErrorAction Stop).ProviderPath
-    return @([LauncherCatalogDiscovery]::Discover($resolvedRoot))
-  } catch {
-    Write-Verbose ("Launcher catalog discovery failed: {0}" -f $_.Exception.Message)
-    return @()
-  }
-}
-
-<#
-.SYNOPSIS
   Reads the safe summary of a launcher profile.
 .DESCRIPTION
   Extracts profile metadata and validated step details for display.
@@ -1002,7 +982,7 @@ function Stop-LauncherPortableProcess {
 
 Export-ModuleMember -Function @(
   'ConvertFrom-LauncherArgumentString', 'Assert-LauncherArgumentsAllowed',
-  'Test-LauncherKitRoot', 'Get-LauncherScriptCatalog', 'Get-LauncherProfileSummary',
+  'Test-LauncherKitRoot', 'Get-LauncherProfileSummary',
   'ConvertTo-LauncherManifest', 'Assert-LauncherManifest', 'Get-LauncherTerminalState',
   'Add-LauncherPendingLine', 'New-LauncherProcessJob', 'Add-LauncherProcessToJob',
   'Stop-LauncherProcessTree', 'Enter-LauncherTrustedClosure', 'Exit-LauncherTrustedClosure',

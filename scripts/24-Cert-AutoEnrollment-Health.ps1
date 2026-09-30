@@ -301,9 +301,9 @@ $status = Get-HealthStatus -ResultObject $RunState.ResultObject
   Write-UiLine ("===  {0}  ===" -f $headline) -ForegroundColor Cyan
   Write-UiLine $line -ForegroundColor DarkGray
 
-  Write-KeyValue -Label 'Status' -Value $status -LabelColor Gray -ValueColor $statusColor
-  Write-KeyValue -Label 'ComputerName' -Value $RunState.ResultObject.ComputerName -LabelColor Gray -ValueColor White
-  Write-KeyValue -Label 'Timestamp' -Value ([string]$RunState.ResultObject.Timestamp) -LabelColor Gray -ValueColor White
+  Write-KeyValue -Key 'Status' -Value $status -KeyColor Gray -ValueColor $statusColor
+  Write-KeyValue -Key 'ComputerName' -Value $RunState.ResultObject.ComputerName -KeyColor Gray -ValueColor White
+  Write-KeyValue -Key 'Timestamp' -Value ([string]$RunState.ResultObject.Timestamp) -KeyColor Gray -ValueColor White
 
   Write-UiLine ""
   Write-UiLine "Configuration" -ForegroundColor Cyan
@@ -311,10 +311,10 @@ $status = Get-HealthStatus -ResultObject $RunState.ResultObject
 
   $cfgLoadedColor = 'Warning'
   if ($RunState.ResultObject.ConfigLoaded) { $cfgLoadedColor = 'Green' }
-  Write-KeyValue -Label 'ConfigLoaded' -Value ([string]$RunState.ResultObject.ConfigLoaded) -ValueColor $cfgLoadedColor
+  Write-KeyValue -Key 'ConfigLoaded' -Value ([string]$RunState.ResultObject.ConfigLoaded) -ValueColor $cfgLoadedColor
 
   if ($RunState.ResultObject.ConfigPath) {
-    Write-KeyValue -Label 'ConfigPath' -Value $RunState.ResultObject.ConfigPath -ValueColor DarkGray
+    Write-KeyValue -Key 'ConfigPath' -Value $RunState.ResultObject.ConfigPath -ValueColor DarkGray
   }
 
   Write-UiLine ""
@@ -325,14 +325,14 @@ $status = Get-HealthStatus -ResultObject $RunState.ResultObject
 function Show-ConsoleSummarySection02 {
   param([hashtable]$RunState)
 if ($RunState.ResultObject.NoPulse) {
-    Write-KeyValue -Label 'Pulse' -Value 'Skipped (NoPulse)' -ValueColor DarkGray
+    Write-KeyValue -Key 'Pulse' -Value 'Skipped (NoPulse)' -ValueColor DarkGray
   } else {
     $pulseColor = 'Red'
     if ($RunState.ResultObject.AutoEnrollmentTriggered) { $pulseColor = 'Green' }
-    Write-KeyValue -Label 'PulseTriggered' -Value ([string]$RunState.ResultObject.AutoEnrollmentTriggered) -ValueColor $pulseColor
+    Write-KeyValue -Key 'PulseTriggered' -Value ([string]$RunState.ResultObject.AutoEnrollmentTriggered) -ValueColor $pulseColor
 
     if ($RunState.ResultObject.AutoEnrollmentError) {
-      Write-KeyValue -Label 'PulseError' -Value $RunState.ResultObject.AutoEnrollmentError -ValueColor Red
+      Write-KeyValue -Key 'PulseError' -Value $RunState.ResultObject.AutoEnrollmentError -ValueColor Red
     }
   }
 
@@ -343,10 +343,10 @@ if ($RunState.ResultObject.NoPulse) {
   $modeColor = 'Warning'
   if ($RunState.ResultObject.EventQueryMode -eq 'Operational') { $modeColor = 'Green' }
   if ($RunState.ResultObject.EventQueryMode -eq 'None') { $modeColor = 'Red' }
-  Write-KeyValue -Label 'QueryMode' -Value $RunState.ResultObject.EventQueryMode -ValueColor $modeColor
+  Write-KeyValue -Key 'QueryMode' -Value $RunState.ResultObject.EventQueryMode -ValueColor $modeColor
 
-  Write-KeyValue -Label 'LogNameUsed' -Value ([string]$RunState.ResultObject.LogNameUsed) -ValueColor White
-  Write-KeyValue -Label 'HoursBack' -Value ([string]$RunState.ResultObject.HoursBack) -ValueColor White
+  Write-KeyValue -Key 'LogNameUsed' -Value ([string]$RunState.ResultObject.LogNameUsed) -ValueColor White
+  Write-KeyValue -Key 'HoursBack' -Value ([string]$RunState.ResultObject.HoursBack) -ValueColor White
 
   $RunState.eventsColor = 'Gray'
 }
@@ -354,26 +354,26 @@ if ($RunState.ResultObject.NoPulse) {
 function Show-ConsoleSummarySection03 {
   param([hashtable]$RunState)
 if ($RunState.ResultObject.EventsFound -gt 0) { $RunState.eventsColor = 'Warning' }
-  Write-KeyValue -Label 'EventsFound' -Value ([string]$RunState.ResultObject.EventsFound) -ValueColor $RunState.eventsColor
+  Write-KeyValue -Key 'EventsFound' -Value ([string]$RunState.ResultObject.EventsFound) -ValueColor $RunState.eventsColor
 
   if ($RunState.ResultObject.EventQueryError) {
-    Write-KeyValue -Label 'EventQueryError' -Value $RunState.ResultObject.EventQueryError -ValueColor DarkYellow
+    Write-KeyValue -Key 'EventQueryError' -Value $RunState.ResultObject.EventQueryError -ValueColor DarkYellow
   }
 
   Write-UiLine ""
   Write-UiLine "Certificates (LocalMachine\\My)" -ForegroundColor Cyan
   Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
-  Write-KeyValue -Label 'WarnDays' -Value ([string]$RunState.ResultObject.WarnDays) -ValueColor White
-  Write-KeyValue -Label 'IncludeExpired' -Value ([string]$RunState.ResultObject.IncludeExpired) -ValueColor White
-  Write-KeyValue -Label 'RequirePrivateKey' -Value ([string]$RunState.ResultObject.RequirePrivateKey) -ValueColor White
+  Write-KeyValue -Key 'WarnDays' -Value ([string]$RunState.ResultObject.WarnDays) -ValueColor White
+  Write-KeyValue -Key 'IncludeExpired' -Value ([string]$RunState.ResultObject.IncludeExpired) -ValueColor White
+  Write-KeyValue -Key 'RequirePrivateKey' -Value ([string]$RunState.ResultObject.RequirePrivateKey) -ValueColor White
 
   $expColor = 'Green'
   if ($RunState.ResultObject.ExpiringCertsFound -gt 0) { $expColor = 'Yellow' }
-  Write-KeyValue -Label 'ExpiringCertsFound' -Value ([string]$RunState.ResultObject.ExpiringCertsFound) -ValueColor $expColor
+  Write-KeyValue -Key 'ExpiringCertsFound' -Value ([string]$RunState.ResultObject.ExpiringCertsFound) -ValueColor $expColor
 
   if ($RunState.ResultObject.CertificateReadError) {
-    Write-KeyValue -Label 'CertificateReadError' -Value $RunState.ResultObject.CertificateReadError -ValueColor Red
+    Write-KeyValue -Key 'CertificateReadError' -Value $RunState.ResultObject.CertificateReadError -ValueColor Red
   }
 
   Write-UiLine ""
@@ -381,10 +381,10 @@ if ($RunState.ResultObject.EventsFound -gt 0) { $RunState.eventsColor = 'Warning
   Write-UiLine ('-' * 40) -ForegroundColor DarkGray
 
   if ($RunState.ResultObject.ExportBasePath) {
-    Write-KeyValue -Label 'CSV Export' -Value 'Enabled' -ValueColor Green
-    Write-KeyValue -Label 'ExportBasePath' -Value $RunState.ResultObject.ExportBasePath -ValueColor White
+    Write-KeyValue -Key 'CSV Export' -Value 'Enabled' -ValueColor Green
+    Write-KeyValue -Key 'ExportBasePath' -Value $RunState.ResultObject.ExportBasePath -ValueColor White
   } else {
-    Write-KeyValue -Label 'CSV Export' -Value 'Disabled' -ValueColor DarkGray
+    Write-KeyValue -Key 'CSV Export' -Value 'Disabled' -ValueColor DarkGray
   }
 
   Write-UiLine $line -ForegroundColor DarkGray

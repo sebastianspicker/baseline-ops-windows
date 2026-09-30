@@ -14,16 +14,16 @@ imports only the modules it needs.
 | `Console.psm1` | Finding-oriented console summaries, severity styles, and statistics |
 | `EventLog.psm1` | Event source creation and health-event writes |
 | `Evidence.psm1` | Environment expansion, SHA-256 calculation, and evidence copies |
-| `Execution.psm1` | Argument-token parsing and bounded child-script execution |
+| `Execution.psm1` | Argument-token parsing for the runner path |
 | `External.psm1` | Stable facade for native command execution and Windows command-line tools |
 | `JsonInput.psm1` | Private bounded UTF-8 JSON read and parse primitive for shared adapters |
 | `JsonCatalog.psm1` | JSON catalog reads with status or data-only return values |
 | `Output.psm1` | Capture-friendly sections, key/value lines, warnings, and status output |
 | `ProfileExecutionLease.psm1` | Private runner lease registry and retained execution-closure handles |
-| `Registry.psm1` | Registry reads, writes, existence checks, and removal helpers |
+| `Registry.psm1` | Registry DWord and String reads, writes, and value removal helpers |
 | `Results.psm1` | Finding collections and finding object construction |
 | `Serialization.psm1` | v2 results, exit codes, JSON and CSV serialization, and output path validation |
-| `Validation.psm1` | Script-name, Git reference, URL, bounded-file, traversal, reparse-point, and Windows ACL validation |
+| `Validation.psm1` | Script-name, Git reference, Winget source URL, bounded-file, traversal, reparse-point, and Windows ACL validation |
 
 ## Usage
 
@@ -41,9 +41,9 @@ When adding shared behavior, choose the module by responsibility:
 - Use `Console.psm1` for finding summaries and severity presentation.
 - Use `Results.psm1` to create finding objects and collections.
 - Use `Serialization.psm1` for final v2 results and JSON or CSV output.
-- Use `Execution.psm1` for child PowerShell invocation through the runner path.
+- Use `Execution.psm1` for argument-token parsing on the runner path.
 - Use `External.psm1` for bounded native process calls and Windows command wrappers.
-- Use `Validation.psm1` for untrusted names, paths, references, URLs, and bounded text files.
+- Use `Validation.psm1` for untrusted names, paths, references, Winget source URLs, and bounded text files.
 - `JsonInput.psm1` is the low-level bounded UTF-8 JSON primitive; keep caller-specific fallback and status behavior in its adapter.
 - Use `Config.psm1` or `JsonCatalog.psm1` instead of direct, repeated JSON-loading code.
 
@@ -85,7 +85,7 @@ every capability run.
 
 `Get-V2ExitCode` maps `OK` to `0`, `FAIL` to `1`, and `WARN` to `2`.
 `Write-ResultObject` writes the selected `Console`, `Json`, `Csv`, or `None`
-format. `ConvertTo-V2Json` provides consistent JSON serialization.
+format.
 
 ## Finding object
 

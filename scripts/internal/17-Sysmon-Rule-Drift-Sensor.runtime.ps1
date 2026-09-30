@@ -254,15 +254,20 @@ function Get-SysmonRemediationExecutionClosure {
 
   $closurePaths = @(
     $expectedEntryScript,
-    (Join-Path $scriptsDirectory 'internal\16-Sysmon-Config-Updater.helpers.ps1'),
     (Join-Path $scriptsDirectory '_lib\Bootstrap.ps1')
   )
-  foreach ($moduleName in @('Output.psm1','Common.psm1','EventLog.psm1','Evidence.psm1','External.psm1','Results.psm1','Serialization.psm1','Validation.psm1')) {
+  # 16-Sysmon-Config-Updater.dependencies.ps1 dot-sources these internal files
+  # in this order; every one of them runs inside the privileged launch.
+  foreach ($internalPart in @('dependencies','helpers','manifest','trust','presentation','runtime')) {
+    $closurePaths += Join-Path $scriptsDirectory ('internal\16-Sysmon-Config-Updater.{0}.ps1' -f $internalPart)
+  }
+  # Output.psm1 imports Console.psm1; lock it with the modules the updater imports directly.
+  foreach ($moduleName in @('Output.psm1','Console.psm1','Common.psm1','EventLog.psm1','Evidence.psm1','External.psm1','Results.psm1','Serialization.psm1','Validation.psm1')) {
     $closurePaths += Join-Path $repositoryRoot (Join-Path 'lib' $moduleName)
   }
   # External.psm1 dot-sources these platform implementations. Lock them with
   # the facade so a privileged launch cannot observe an unlocked code path.
-  foreach ($platformFile in @('Executable.ps1','NativeProcess.ps1','NativeTools.ps1','WindowsOperations.ps1')) {
+  foreach ($platformFile in @('Executable.ps1','NativeProcess.ps1','NativeTools.ps1')) {
     $closurePaths += Join-Path $repositoryRoot (Join-Path 'lib\platform' $platformFile)
   }
   return @($closurePaths)

@@ -178,14 +178,85 @@ function Test-V217SysmonRuleDriftSensorLocksEveryPlatformImplementationLoadedByE
     $expectedPlatformClosure = @(
       'Executable.ps1',
       'NativeProcess.ps1',
-      'NativeTools.ps1',
-      'WindowsOperations.ps1'
+      'NativeTools.ps1'
     ) | ForEach-Object { Join-Path $repositoryRoot (Join-Path 'lib/platform' $_) }
 
     $actualPlatformClosure | Should -HaveCount $expectedPlatformClosure.Count
     for ($index = 0; $index -lt $expectedPlatformClosure.Count; $index++) {
       $actualPlatformClosure[$index] | Should -BeExactly $expectedPlatformClosure[$index]
     }
+  }
+
+function Get-V2CodeLoadCommand {
+  param([Parameter(Mandatory)]$Ast)
+  return @($Ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and (
+          $node.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Dot -or
+          [string]$node.GetCommandName() -match '(^|\\)Import-Module$')
+      }, $true))
+}
+
+function Get-V2CodeLoadPathElement {
+  param([Parameter(Mandatory)]$Load)
+  if ($Load.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Dot) { return $Load.CommandElements[0] }
+  return $Load.CommandElements[1]
+}
+
+function Resolve-V2CodeLoadTarget {
+  param([Parameter(Mandatory)]$Load, [Parameter(Mandatory)][hashtable]$Bases, [Parameter(Mandatory)][string]$File)
+  $target = Get-V2CodeLoadPathElement -Load $Load
+  $leaf = @($target.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $node.Value -match '\.psm?1$'
+      }, $true))
+  $base = @($target.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.VariableExpressionAst] -and $Bases.ContainsKey(($node.VariablePath.UserPath -replace '^script:', ''))
+      }, $true))
+  if ($leaf.Count -ne 1 -or $base.Count -ne 1) { throw "Unresolvable code load in ${File}: $($Load.Extent.Text)" }
+  $basePath = $Bases[($base[0].VariablePath.UserPath -replace '^script:', '')]
+  return [IO.Path]::GetFullPath((Join-Path $basePath $leaf[0].Value))
+}
+
+function Get-V2LoadedCodeClosure {
+  param([Parameter(Mandatory)][string]$EntryPath, [Parameter(Mandatory)][string]$RepositoryRoot)
+  $bases = @{
+    PSScriptRoot = $null
+    LibPath = Join-Path $RepositoryRoot 'lib'
+    platformRoot = Join-Path $RepositoryRoot 'lib/platform'
+  }
+  $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  $queue = New-Object System.Collections.Generic.Queue[string]
+  $queue.Enqueue([IO.Path]::GetFullPath($EntryPath))
+  while ($queue.Count -gt 0) {
+    $file = $queue.Dequeue()
+    if (-not $visited.Add($file)) { continue }
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$tokens, [ref]$errors)
+    $bases.PSScriptRoot = Split-Path -Parent $file
+    foreach ($load in (Get-V2CodeLoadCommand -Ast $ast)) {
+      $queue.Enqueue((Resolve-V2CodeLoadTarget -Load $load -Bases $bases -File $file))
+    }
+  }
+  return @($visited | Sort-Object)
+}
+
+function Test-V217SysmonRuleDriftSensorLocksExactlyTheCodeClosureLoadedByScript16 {
+    $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).ProviderPath
+    $updaterPath = Join-Path $repositoryRoot 'scripts/16-Sysmon-Config-Updater.ps1'
+    . (Join-Path $repositoryRoot 'scripts/internal/17-Sysmon-Rule-Drift-Sensor.helpers.ps1')
+
+    $expected = Get-V2LoadedCodeClosure -EntryPath $updaterPath -RepositoryRoot $repositoryRoot
+    $expected | Should -Contain ([IO.Path]::GetFullPath((Join-Path $repositoryRoot 'scripts/internal/16-Sysmon-Config-Updater.runtime.ps1')))
+    $actual = @(
+      Get-SysmonRemediationExecutionClosure -ScriptPath $updaterPath |
+        ForEach-Object { [IO.Path]::GetFullPath($_) } |
+        Sort-Object
+    )
+
+    $actual | Should -Be $expected
   }
 
 function Test-V2AdvertisedStrictHasTerminalWARNToFAILHandlingInAuditedScripts {

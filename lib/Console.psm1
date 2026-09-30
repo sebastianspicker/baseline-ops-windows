@@ -346,32 +346,6 @@ function Write-DecorativeRule {
 
 <#
 .SYNOPSIS
-  Writes the common audit summary header.
-.DESCRIPTION
-  Displays title, host, time, and finding count with consistent formatting.
-#>
-function Write-SummaryHeader {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [string]$Title,
-    [string]$ComputerName,
-    [string]$Timestamp,
-    [int]$FindingsCount,
-    [int]$Width = 70
-  )
-
-  Write-DecorativeRule -Title $Title -Width $Width
-  Write-ColoredLine -Text " Computer : $ComputerName" -Color 'Gray'
-  Write-ColoredLine -Text " Time     : $Timestamp" -Color 'Gray'
-  
-  $findingsColor = if ($FindingsCount -gt 0) { 'Yellow' } else { 'Green' }
-  Write-ColoredLine -Text " Findings : $FindingsCount" -Color $findingsColor
-  Write-ColoredLine -Text '' -Color 'Gray'
-}
-
-<#
-.SYNOPSIS
   Writes a single severity-colored finding line.
 .DESCRIPTION
   Combines the configured prefix, finding code, and optional message.
@@ -485,26 +459,17 @@ function Get-FindingStats {
   return [pscustomobject]$stats
 }
 
-Set-Alias -Name Write-PrettyLine -Value Write-ColoredLine -WhatIf:$false
-
 $script:ConsoleExportedFunctions = @(
-  'Resolve-Severity'
   'Get-SeverityColor'
   'Get-StatusColor'
   'Get-ConsoleColor'
   'Get-SeverityRank'
   'Get-SeverityPrefix'
-  'Write-ColoredLine'
   'Write-HostConsoleLine'
   'Write-DecorativeRule'
-  'Write-SummaryHeader'
   'Write-FindingLine'
   'Write-ConsoleSummary'
   'Get-FindingStats'
 )
 
-$script:ConsoleExportedAliases = @(
-  'Write-PrettyLine'
-)
-
-Export-ModuleMember -Function $script:ConsoleExportedFunctions -Alias $script:ConsoleExportedAliases
+Export-ModuleMember -Function $script:ConsoleExportedFunctions

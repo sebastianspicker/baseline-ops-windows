@@ -161,4 +161,4 @@ function Add-Finding {
   }
 }
 
-Export-ModuleMember -Function Get-FindingsList,Get-FindingObject,Add-Finding
+Export-ModuleMember -Function Get-FindingsList,Add-Finding

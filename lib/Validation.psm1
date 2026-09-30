@@ -115,37 +115,6 @@ function Test-ValidGitRef {
 
 <#
 .SYNOPSIS
-  Validates that a URL uses an allowed scheme and is well-formed.
-.PARAMETER Url
-  URL string to validate.
-.PARAMETER AllowedSchemes
-  Permitted URI schemes (default: https, http).
-#>
-function Test-SafeUrl {
-  [CmdletBinding()]
-  param(
-    [AllowNull()]
-    [string]$Url,
-    [string[]]$AllowedSchemes = @('https', 'http')
-  )
-
-  if ([string]::IsNullOrWhiteSpace($Url)) { return $false }
-  if ($Url -match '^\s*-') { return $false }
-
-  $uri = $null
-  if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$uri)) {
-    return $false
-  }
-
-  if (-not $AllowedSchemes -or $AllowedSchemes.Count -eq 0) {
-    return $true
-  }
-
-  return ($AllowedSchemes -contains $uri.Scheme)
-}
-
-<#
-.SYNOPSIS
   Tests whether a path is contained within a root directory.
 .PARAMETER Path
   Path to check.
@@ -648,13 +617,11 @@ Export-ModuleMember -Function `
   Assert-NoPathTraversal, `
   Test-SafeScriptName, `
   Test-ValidGitRef, `
-  Test-SafeUrl, `
   Test-PathUnderRoot, `
   Test-PathContainsReparsePoint, `
   Test-SafeOutputFilePath, `
   Initialize-SafeOutputFilePath, `
   Test-WingetPrivateSourceDefinition, `
-  Test-TrustedWindowsPathAcl, `
   Assert-TrustedWindowsPathAcl, `
   Get-BoundedUtf8FileContent, `
   Get-TextSha256

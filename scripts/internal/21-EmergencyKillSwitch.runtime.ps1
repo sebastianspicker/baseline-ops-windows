@@ -23,46 +23,11 @@ function Remove-ExactJustCreatedFirewallRule {
   }
 }
 
-function New-OrReplaceRule {
-  [CmdletBinding(SupportsShouldProcess = $true)]
-  param(
-    [ValidatePattern('^[A-Za-z0-9_-]+$')]
-    [ValidateLength(1, 256)]
-    [string]$Name,
-    [string]$DisplayName,
-    [ValidateSet('Inbound', 'Outbound')]
-    [string]$Direction,
-    [ValidateSet('Block', 'Allow')]
-    [string]$Action,
-    [string[]]$RemoteAddress = @(),
-    [ValidateSet('TCP', 'UDP', 'Any')]
-    [string]$Protocol = 'Any',
-    [string]$LocalPort,
-    [string]$Description = ''
-  )
-  $data = [pscustomobject]@{
-    Name = $Name
-    DisplayName = $DisplayName
-    Direction = $Direction
-    Action = $Action
-    RemoteAddress = $RemoteAddress
-    Protocol = $Protocol
-    LocalPort = $LocalPort
-    Description = $Description
-  }
-  $compatibilityState = @{
-    Findings = $Findings
-    Run = $Run
-  }
-  return Invoke-NewOrReplaceRule -Data $data -RunState $compatibilityState -DecisionContext $PSCmdlet
-}
-
 function Invoke-NewOrReplaceRule {
   param($Data, [hashtable]$RunState, $DecisionContext)
   try { $existingRules = @(Get-NetFirewallRule -Name $Data.Name -ErrorAction SilentlyContinue | Where-Object { $null -ne $_ }) } catch { $existingRules = @() }
   if ($existingRules.Count -gt 0) { $message = "Firewall rule '$($Data.Name)' already exists; refusing to replace owner-unknown rule."; Add-RunError -Message $message -RunState $RunState; $null = Add-Finding -FindingList $RunState.Findings -Code 'Firewall-RuleCollision' -Severity 'High' -Message $message -Extra @{ RuleName = $Data.Name }; return $false }
-  # Keep the caller-scoped value available to native-command test doubles, as
-  # it was when this logic lived in New-OrReplaceRule.
+  # Keep the caller-scoped value available to native-command test doubles.
   $displayName = [string]$Data.DisplayName
   $params = Get-NewKillSwitchFirewallRuleParameters -Data $Data
   $params.DisplayName = $displayName

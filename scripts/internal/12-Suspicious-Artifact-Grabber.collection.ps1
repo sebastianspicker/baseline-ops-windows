@@ -44,7 +44,7 @@ function Collect-ArtifactTasks {
   if ($tRes.Errors.Count -gt 0) {
     $tRes.Errors | ForEach-Object { [void]$RunState.errors.Add($_) }
   }
-  if (Safe-ToInt $tRes.Counts.Suspicious 0 -gt 0) {
+  if ((Safe-ToInt $tRes.Counts.Suspicious 0) -gt 0) {
     $RunState.hasFindings = $true
   }
 

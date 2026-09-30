@@ -33,6 +33,8 @@ Describe 'v2 parameter contract' {
 
   It '17-Sysmon-Rule-Drift-Sensor locks every platform implementation loaded by External.psm1' { Test-V217SysmonRuleDriftSensorLocksEveryPlatformImplementationLoadedByExternalPsm1 }
 
+  It '17-Sysmon-Rule-Drift-Sensor locks exactly the code closure loaded by script 16' { Test-V217SysmonRuleDriftSensorLocksExactlyTheCodeClosureLoadedByScript16 }
+
   It 'advertised Strict has terminal WARN-to-FAIL handling in audited scripts' { Test-V2AdvertisedStrictHasTerminalWARNToFAILHandlingInAuditedScripts }
 }
 

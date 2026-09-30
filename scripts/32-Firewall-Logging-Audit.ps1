@@ -323,12 +323,12 @@ function Set-ProfileLoggingIfNeededSection01 {
 $current = Get-NetFirewallProfile -Name $RunState.ProfileName
 
   if ($current.LogFileName -ne $RunState.DesiredLogFileName) {
-    if ($__OriginalCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall log file to $($RunState.DesiredLogFileName)")) {
+    if ($PSCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall log file to $($RunState.DesiredLogFileName)")) {
       Set-NetFirewallProfile -Name $RunState.ProfileName -LogFileName $RunState.DesiredLogFileName
     }
   }
   if ([int]$current.LogMaxSizeKilobytes -ne $RunState.DesiredMaxKB) {
-    if ($__OriginalCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall log max size to $($RunState.DesiredMaxKB) KB")) {
+    if ($PSCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall log max size to $($RunState.DesiredMaxKB) KB")) {
       Set-NetFirewallProfile -Name $RunState.ProfileName -LogMaxSizeKilobytes $RunState.DesiredMaxKB
     }
   }
@@ -337,12 +337,12 @@ $current = Get-NetFirewallProfile -Name $RunState.ProfileName
 function Set-ProfileLoggingIfNeededSection02 {
   param([hashtable]$RunState)
 if ([bool]$current.LogBlocked -ne $RunState.DesiredLogBlocked) {
-    if ($__OriginalCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall blocked logging to $($RunState.DesiredLogBlocked)")) {
+    if ($PSCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall blocked logging to $($RunState.DesiredLogBlocked)")) {
       Set-NetFirewallProfile -Name $RunState.ProfileName -LogBlocked $RunState.DesiredLogBlocked
     }
   }
   if ([bool]$current.LogAllowed -ne $RunState.DesiredLogAllowed) {
-    if ($__OriginalCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall allowed logging to $($RunState.DesiredLogAllowed)")) {
+    if ($PSCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall allowed logging to $($RunState.DesiredLogAllowed)")) {
       Set-NetFirewallProfile -Name $RunState.ProfileName -LogAllowed $RunState.DesiredLogAllowed
     }
   }

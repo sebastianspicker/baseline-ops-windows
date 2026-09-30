@@ -19,8 +19,19 @@ if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
 
 Describe '21-EmergencyKillSwitch exact post-create verification cleanup' -Tag 'EmergencyKillSwitch' {
   BeforeAll {
+function Invoke-KillSwitchTestRuleCreation {
+    # Drives the production rule-creation path with an approving decision context.
+    $data = [pscustomobject]@{
+      Name = $script:ExactCreatedRuleName; DisplayName = 'test'; Direction = 'Inbound'; Action = 'Block'
+      RemoteAddress = @(); Protocol = 'Any'; LocalPort = $null; Description = ''
+    }
+    $approve = [pscustomobject]@{}
+    $approve | Add-Member -MemberType ScriptMethod -Name ShouldProcess -Value { param($Target, $Action) $true }
+    return Invoke-NewOrReplaceRule -Data $data -RunState @{ Findings = $script:Findings; Run = $script:Run } -DecisionContext $approve
+  }
+
 function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenVerificationReturnsNoRule {
-    $created = New-OrReplaceRule -Name $script:ExactCreatedRuleName -DisplayName 'test' -Direction Inbound -Action Block -Confirm:$false
+    $created = Invoke-KillSwitchTestRuleCreation
 
     $created | Should -BeFalse
     Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly -Scope It -ParameterFilter { $Name -eq 'KILLSWITCH-0123456789abcdef0123456789abcdef-IN-BLOCK' }
@@ -31,7 +42,7 @@ function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenVerificationReturnsNoR
 function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenVerificationSettingsMismatch {
     $script:KillSwitchRuleVerificationResult = [pscustomobject]@{ Name = $script:ExactCreatedRuleName; Enabled = 'True'; Direction = 'Outbound'; Action = 'Block' }
 
-    $created = New-OrReplaceRule -Name $script:ExactCreatedRuleName -DisplayName 'test' -Direction Inbound -Action Block -Confirm:$false
+    $created = Invoke-KillSwitchTestRuleCreation
 
     $created | Should -BeFalse
     Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly -Scope It -ParameterFilter { $Name -eq 'KILLSWITCH-0123456789abcdef0123456789abcdef-IN-BLOCK' }
@@ -41,7 +52,7 @@ function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenVerificationSettingsMi
 function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenTheVerificationQueryFails {
     $script:KillSwitchRuleVerificationMode = 'QueryError'
 
-    $created = New-OrReplaceRule -Name $script:ExactCreatedRuleName -DisplayName 'test' -Direction Inbound -Action Block -Confirm:$false
+    $created = Invoke-KillSwitchTestRuleCreation
 
     $created | Should -BeFalse
     Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly -Scope It -ParameterFilter { $Name -eq 'KILLSWITCH-0123456789abcdef0123456789abcdef-IN-BLOCK' }
@@ -51,7 +62,7 @@ function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenTheVerificationQueryFa
 function Test-KillSwitchSurfacesAnExactCleanupFailureWithoutAttemptingABroaderRemoval {
     Mock Remove-NetFirewallRule { throw 'simulated exact cleanup failure' }
 
-    $created = New-OrReplaceRule -Name $script:ExactCreatedRuleName -DisplayName 'test' -Direction Inbound -Action Block -Confirm:$false
+    $created = Invoke-KillSwitchTestRuleCreation
 
     $created | Should -BeFalse
     Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly -Scope It -ParameterFilter { $Name -eq 'KILLSWITCH-0123456789abcdef0123456789abcdef-IN-BLOCK' }

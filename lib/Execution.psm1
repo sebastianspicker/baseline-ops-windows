@@ -3,7 +3,7 @@
 Script execution and process invocation utilities.
 
 .DESCRIPTION
-Provides helpers for argument tokenization and timed script execution.
+Provides helpers for argument tokenization.
 #>
 
 Set-StrictMode -Version Latest
@@ -132,94 +132,4 @@ function Convert-ArgumentTokens {
   }
 }
 
-<#
-.SYNOPSIS
-  Gets the current global native-command exit code.
-#>
-function Get-GlobalLastExitCode {
-  [CmdletBinding()]
-  param()
-
-  $exitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
-  if ($null -eq $exitVariable) { return $null }
-  return $exitVariable.Value
-}
-
-<#
-.SYNOPSIS
-  Resolves a script exit code without treating an unchanged inherited code as failure.
-#>
-function Resolve-ScriptInvocationExitCode {
-  [CmdletBinding()]
-  param(
-    [AllowNull()][object]$PreviousExitCode,
-    [bool]$ScriptSucceeded,
-    [int]$DefaultExitCode
-  )
-
-  $currentExitCode = Get-GlobalLastExitCode
-  $isNewFailure = $null -ne $currentExitCode -and $currentExitCode -ne 0 -and
-    ((-not $ScriptSucceeded) -or $currentExitCode -ne $PreviousExitCode)
-  if ($isNewFailure) { return [int]$currentExitCode }
-  return $DefaultExitCode
-}
-
-<#
-.SYNOPSIS
-  Creates the documented timed-script result object.
-#>
-function New-ScriptTimingResult {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$ScriptPath,
-    [Parameter(Mandatory)][string[]]$Arguments,
-    [Parameter(Mandatory)][long]$DurationMs,
-    [Parameter(Mandatory)][int]$ExitCode,
-    [AllowNull()][object]$ErrorRecord
-  )
-
-  return [pscustomobject]@{
-    ScriptPath = $ScriptPath; Arguments = @($Arguments); DurationMs = $DurationMs; ExitCode = $ExitCode
-    Success = ($ExitCode -eq 0); ErrorMessage = if ($ErrorRecord) { $ErrorRecord.Exception.Message } else { $null }
-  }
-}
-
-<#
-.SYNOPSIS
-  Invokes a PowerShell script and measures its execution time.
-.PARAMETER ScriptPath
-  Path to the .ps1 script to execute.
-.PARAMETER Arguments
-  Arguments to pass to the script.
-#>
-function Invoke-ScriptWithTiming {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [string]$ScriptPath,
-    [string[]]$Arguments = @()
-  )
-
-  $sw = [System.Diagnostics.Stopwatch]::StartNew()
-  $err = $null
-  $previousExitCode = Get-GlobalLastExitCode
-  try {
-    & $ScriptPath @Arguments
-    $scriptSucceeded = $?
-    $exitCode = Resolve-ScriptInvocationExitCode -PreviousExitCode $previousExitCode `
-      -ScriptSucceeded $scriptSucceeded -DefaultExitCode 0
-  } catch {
-    $exitCode = Resolve-ScriptInvocationExitCode -PreviousExitCode $previousExitCode `
-      -ScriptSucceeded $false -DefaultExitCode 1
-    $err = $_
-  } finally {
-    $sw.Stop()
-  }
-
-  return New-ScriptTimingResult -ScriptPath $ScriptPath -Arguments $Arguments -DurationMs $sw.ElapsedMilliseconds `
-    -ExitCode $exitCode -ErrorRecord $err
-}
-
-Export-ModuleMember -Function `
-  Convert-ArgumentTokens, `
-  Invoke-ScriptWithTiming
+Export-ModuleMember -Function Convert-ArgumentTokens

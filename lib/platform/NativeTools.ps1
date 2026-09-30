@@ -9,7 +9,7 @@ function Invoke-FixedNativeTool {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]
-    [ValidateSet('schtasks.exe', 'auditpol.exe', 'wevtutil.exe', 'wecutil.exe', 'reg.exe')]
+    [ValidateSet('auditpol.exe', 'wevtutil.exe', 'reg.exe')]
     [string]$Tool,
 
     [Parameter(Mandatory)]
@@ -24,24 +24,6 @@ function Invoke-FixedNativeTool {
 
   return (Invoke-NativeCommand -Command $Tool -Arguments $Arguments `
       -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput -TimeoutSeconds $TimeoutSeconds -MaxOutputBytes $MaxOutputBytes)
-}
-
-<#
-.SYNOPSIS
-  Wrapper for schtasks.exe with exit code validation.
-#>
-function Invoke-Schtasks {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [string[]]$Arguments,
-
-    [switch]$ThrowOnError,
-
-    [switch]$CaptureOutput
-  )
-
-  return (Invoke-FixedNativeTool -Tool 'schtasks.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -78,24 +60,6 @@ function Invoke-Wevtutil {
   )
 
   return (Invoke-FixedNativeTool -Tool 'wevtutil.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
-}
-
-<#
-.SYNOPSIS
-  Wrapper for wecutil.exe with exit code validation.
-#>
-function Invoke-Wecutil {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [string[]]$Arguments,
-
-    [switch]$ThrowOnError,
-
-    [switch]$CaptureOutput
-  )
-
-  return (Invoke-FixedNativeTool -Tool 'wecutil.exe' -Arguments $Arguments -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput)
 }
 
 <#
@@ -148,51 +112,4 @@ function Invoke-WinrmCommand {
   } finally {
     if ($null -ne $scriptLock) { $scriptLock.Dispose() }
   }
-}
-
-<#
-.SYNOPSIS
-  Wrapper for git with optional working directory and exit code validation.
-.PARAMETER Arguments
-  Arguments to pass to git.
-.PARAMETER WorkingDirectory
-  Directory to run git in.
-.PARAMETER ThrowOnError
-  Throw on non-zero exit code.
-.PARAMETER CaptureOutput
-  Return structured output object.
-#>
-function Invoke-Git {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [string[]]$Arguments,
-
-    [string]$WorkingDirectory,
-
-    [switch]$ThrowOnError,
-
-    [switch]$CaptureOutput
-  )
-
-  $gitPath = Resolve-TrustedGitPath
-  if ([string]::IsNullOrWhiteSpace($gitPath)) {
-    $msg = "git command not found. Please install Git."
-    if ($ThrowOnError) {
-      throw $msg
-    }
-    Write-Warning $msg
-    return $null
-  }
-
-  # Use git -C instead of Set-Location to avoid changing process working directory
-  $gitArgs = if ($WorkingDirectory) {
-    @('-C', $WorkingDirectory) + $Arguments
-  } else {
-    $Arguments
-  }
-
-  $result = Invoke-NativeCommand -Command $gitPath -Arguments $gitArgs `
-    -ThrowOnError:$ThrowOnError -CaptureOutput:$CaptureOutput
-  return $result
 }

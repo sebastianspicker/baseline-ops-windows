@@ -298,29 +298,6 @@ function Write-ResultObject {
   }
 }
 
-<#
-.SYNOPSIS
-  Returns a v2 result object as a formatted JSON string suitable for machine consumption.
-.DESCRIPTION
-  Wraps ConvertTo-Json with consistent depth and encoding settings. The output
-  uses depth 10 by default, which is sufficient for nested finding objects with
-  Extra properties while avoiding circular reference issues.
-.PARAMETER ResultObject
-  The v2 result object to serialize.
-.PARAMETER Depth
-  JSON serialization depth (default 10).
-#>
-function ConvertTo-V2Json {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [object]$ResultObject,
-    [int]$Depth = 10
-  )
-
-  return ($ResultObject | ConvertTo-Json -Depth $Depth)
-}
-
 Export-ModuleMember -Function `
   ConvertTo-ObjectArray, `
   Save-Json, `
@@ -328,5 +305,4 @@ Export-ModuleMember -Function `
   Get-V2ResultObject, `
   Get-V2ExitCode, `
   Get-V2OutputConfigurationError, `
-  Write-ResultObject, `
-  ConvertTo-V2Json
+  Write-ResultObject

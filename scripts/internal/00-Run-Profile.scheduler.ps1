@@ -314,6 +314,8 @@ function Invoke-RunProfileSchedulePass {
       continue
     }
     $State.Pending.RemoveAt($index)
+    # Revisit this index: the next pending step shifted into it.
+    $index--
     $progress = $true
     $scriptName = [string]$step.Script
     if ($dependency.Failed) {

@@ -42,7 +42,7 @@ function Resolve-ApprovedWindowsExecutableName {
   param([Parameter(Mandatory)][string]$Name)
 
   $systemExecutables = @(
-    'auditpol.exe','bcdedit.exe','certutil.exe','cscript.exe','dism.exe','manage-bde.exe',
+    'auditpol.exe','bcdedit.exe','certutil.exe','cscript.exe','dism.exe','dsregcmd.exe','manage-bde.exe',
     'netstat.exe','reg.exe','sc.exe','schtasks.exe','taskkill.exe','vssadmin.exe',
     'wecutil.exe','wevtutil.exe','w32tm.exe'
   )

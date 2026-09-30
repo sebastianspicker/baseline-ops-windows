@@ -273,10 +273,10 @@ if ($PSCmdlet.ShouldProcess($RunState.spTarget, "Set-NetFirewallProfile")) {
             DefaultOutboundAction = $RunState.wantOut
             NotifyOnListen        = $RunState.wantNotify
           }
-          if ((Test-AllConditions -Conditions @({ $null -ne $haveLogBlocked }, { $null -ne $RunState.wantLogBlocked }))) { $setParams['LogBlocked'] = [bool]$RunState.wantLogBlocked }
-          if ((Test-AllConditions -Conditions @({ $null -ne $haveLogAllowed }, { $null -ne $RunState.wantLogAllowed }))) { $setParams['LogAllowed'] = [bool]$RunState.wantLogAllowed }
-          if ((Test-AllConditions -Conditions @({ $null -ne $haveLogKB }, { $null -ne $RunState.wantLogKB })))           { $setParams['LogMaxSizeKilobytes'] = [int]$RunState.wantLogKB }
-          if ((Test-AllConditions -Conditions @({ $null -ne $haveLogFile }, { -not [string]::IsNullOrWhiteSpace($RunState.wantLogFile) }))) { $setParams['LogFileName'] = $RunState.wantLogFile }
+          if ((Test-AllConditions -Conditions @({ $null -ne $RunState.haveLogBlocked }, { $null -ne $RunState.wantLogBlocked }))) { $setParams['LogBlocked'] = [bool]$RunState.wantLogBlocked }
+          if ((Test-AllConditions -Conditions @({ $null -ne $RunState.haveLogAllowed }, { $null -ne $RunState.wantLogAllowed }))) { $setParams['LogAllowed'] = [bool]$RunState.wantLogAllowed }
+          if ((Test-AllConditions -Conditions @({ $null -ne $RunState.haveLogKB }, { $null -ne $RunState.wantLogKB })))           { $setParams['LogMaxSizeKilobytes'] = [int]$RunState.wantLogKB }
+          if ((Test-AllConditions -Conditions @({ $null -ne $RunState.haveLogFile }, { -not [string]::IsNullOrWhiteSpace($RunState.wantLogFile) }))) { $setParams['LogFileName'] = $RunState.wantLogFile }
           Set-NetFirewallProfile @setParams | Out-Null
           $out += (Get-ResultItem -Category Profile -Target $Name -Status Changed -Message "Profile remediated")
         } catch {
@@ -307,6 +307,10 @@ function Ensure-Profile {
     $RunState.wantLogAllowed = $profileDrift.Desired.LogAllowed
     $RunState.wantLogKB = $profileDrift.Desired.LogSize
     $RunState.wantLogFile = $profileDrift.Desired.LogFile
+    $RunState.haveLogBlocked = $profileDrift.Actual.LogBlocked
+    $RunState.haveLogAllowed = $profileDrift.Actual.LogAllowed
+    $RunState.haveLogKB = $profileDrift.Actual.LogSize
+    $RunState.haveLogFile = $profileDrift.Actual.LogFile
     if ($drift.Count -eq 0) {
       $out += (Get-ResultItem -Category Profile -Target $Name -Status OK -Message "Profile matches baseline")
       return $out
@@ -549,7 +553,7 @@ function Invoke-Capability18MainPhase02 {
   }
   # Disable inbound patterns
   $patterns = @((Get-ObjProp -Object $cat -Name 'DisableInboundByNameLike' -Default @()) | Where-Object { $_ -is [string] -and $_ })
-  $RunState.inboundResults = Disable-InboundByNameLike -Patterns $patterns -Remediate:$RunState.Remediate -LocalPolicyStore $RunState.LocalPolicyStore -RunState $RunState
+  $RunState.inboundResults = Disable-InboundByNameLike -Patterns $patterns -LocalPolicyStore $RunState.LocalPolicyStore -RunState $RunState
 }
 function Invoke-Capability18MainPhase03 {
   param([hashtable]$RunState)
@@ -562,7 +566,7 @@ function Invoke-Capability18MainPhase03 {
   # Ensure rules
   $ensureRules = @((Get-ObjProp -Object $cat -Name 'EnsureRules' -Default @()) | Where-Object { $_ })
   foreach ($rule in $ensureRules) {
-    $ensureResults = Ensure-FwRule -Spec $rule -Remediate:$RunState.Remediate -LocalPolicyStore $RunState.LocalPolicyStore -RunState $RunState
+    $ensureResults = Ensure-FwRule -Spec $rule -LocalPolicyStore $RunState.LocalPolicyStore -RunState $RunState
     foreach ($r in $ensureResults) {
         $results.Add($r)
         if ($r.Status -eq 'Drift') {

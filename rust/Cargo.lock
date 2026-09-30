@@ -134,7 +134,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "thiserror",
  "uuid",
 ]
@@ -148,7 +147,6 @@ dependencies = [
  "baselineops-windows",
  "chrono",
  "csv",
- "hex",
  "serde",
  "serde_json",
  "sha2",
@@ -1190,7 +1188,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "zip",
 ]
 
