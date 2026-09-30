@@ -7,7 +7,7 @@
 
 BeforeAll {
   $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-  Import-Module (Join-Path $repoRoot 'tools/quality/PowerShellMetrics.psm1') -Force
+  Import-Module (Join-Path $repoRoot 'dev/quality/PowerShellMetrics.psm1') -Force
   $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('baseline-quality-' + [guid]::NewGuid())
   [void](New-Item -ItemType Directory -Path $fixtureRoot)
 
@@ -79,7 +79,7 @@ Describe 'PowerShell quality metrics' {
     { Get-PowerShellMetricFindings $fixtureRoot @() } | Should -Throw
     $tokens = $null; $errors = $null
     [System.Management.Automation.Language.Parser]::ParseFile(
-      (Join-Path $repoRoot 'tools/quality/Test-CodeQuality.ps1'), [ref]$tokens, [ref]$errors
+      (Join-Path $repoRoot 'dev/quality/Test-CodeQuality.ps1'), [ref]$tokens, [ref]$errors
     ) | Out-Null
     $errors | Should -BeNullOrEmpty
   }

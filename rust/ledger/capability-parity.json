@@ -5,7 +5,7 @@
   "oracle": [
     "rust/oracles/v2-capability-manifests.json",
     "rust/oracles/v2-neutral-fixtures.json",
-    "tests/RustV3Oracle.Adapter.ps1"
+    "tests/oracle/RustV3Oracle.Adapter.ps1"
   ],
   "summary": {
     "legacy_capabilities_expected": 52,

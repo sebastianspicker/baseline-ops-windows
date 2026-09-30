@@ -7,8 +7,8 @@
 
 BeforeAll {
   $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-  Import-Module (Join-Path $repoRoot 'tools/quality/ExternalAnalyzers.psm1') -Force
-  Import-Module (Join-Path $repoRoot 'tools/quality/QualityScans.psm1') -Force
+  Import-Module (Join-Path $repoRoot 'dev/quality/ExternalAnalyzers.psm1') -Force
+  Import-Module (Join-Path $repoRoot 'dev/quality/QualityScans.psm1') -Force
   $script:PowerShellExecutable = (Get-Process -Id $PID).Path
 }
 

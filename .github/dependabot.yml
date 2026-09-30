@@ -13,7 +13,7 @@ updates:
       - dependencies
       - github-actions
   - package-ecosystem: npm
-    directory: /tools/demo
+    directory: /dev/demo
     schedule:
       interval: weekly
       day: monday

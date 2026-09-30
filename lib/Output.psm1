@@ -607,30 +607,6 @@ function Write-ConsoleList {
   }
 }
 
-<#
-.SYNOPSIS
-  Displays a step progress indicator (e.g. "[3/10] Checking Defender health...").
-.PARAMETER Current
-  Current step number (1-based).
-.PARAMETER Total
-  Total number of steps.
-.PARAMETER Message
-  Description of the current step.
-#>
-function Write-UiProgress {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][int]$Current,
-    [Parameter(Mandatory)][int]$Total,
-    [Parameter(Mandatory)][string]$Message
-  )
-
-  $pct = if ($Total -gt 0) { [math]::Round(($Current / $Total) * 100) } else { 0 }
-  $prefix = "[{0}/{1}]" -f $Current, $Total
-  $text = "{0} {1} ({2}%)" -f $prefix, $Message, $pct
-  Write-UiLine -Message $text -Style 'Header'
-}
-
 $script:OutputExportedFunctions = @(
   'Write-UiLine'
   'Write-ConsoleLine'

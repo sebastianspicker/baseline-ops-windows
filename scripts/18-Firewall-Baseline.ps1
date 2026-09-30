@@ -120,20 +120,6 @@ param(
   [switch]$NoColor
 )
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability18Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -262,6 +248,14 @@ function Ensure-ProfileStage01 {
 $RunState.spTarget = "FirewallProfile/$Name"
 }
 
+function Test-FirewallProfileSettingPair {
+  param($Have, $Want)
+  return [bool](($null -ne $Have) -and ($null -ne $Want))
+}
+function Test-FirewallProfileLogFileRequested {
+  param($Have, $Want)
+  return [bool](($null -ne $Have) -and (-not [string]::IsNullOrWhiteSpace($Want)))
+}
 function Ensure-ProfileStage02 {
   param([hashtable]$RunState)
 if ($PSCmdlet.ShouldProcess($RunState.spTarget, "Set-NetFirewallProfile")) {
@@ -273,10 +267,10 @@ if ($PSCmdlet.ShouldProcess($RunState.spTarget, "Set-NetFirewallProfile")) {
             DefaultOutboundAction = $RunState.wantOut
             NotifyOnListen        = $RunState.wantNotify
           }
-          if ((Test-AllConditions -Conditions @({ $null -ne $RunState.haveLogBlocked }, { $null -ne $RunState.wantLogBlocked }))) { $setParams['LogBlocked'] = [bool]$RunState.wantLogBlocked }
-          if ((Test-AllConditions -Conditions @({ $null -ne $RunState.haveLogAllowed }, { $null -ne $RunState.wantLogAllowed }))) { $setParams['LogAllowed'] = [bool]$RunState.wantLogAllowed }
-          if ((Test-AllConditions -Conditions @({ $null -ne $RunState.haveLogKB }, { $null -ne $RunState.wantLogKB })))           { $setParams['LogMaxSizeKilobytes'] = [int]$RunState.wantLogKB }
-          if ((Test-AllConditions -Conditions @({ $null -ne $RunState.haveLogFile }, { -not [string]::IsNullOrWhiteSpace($RunState.wantLogFile) }))) { $setParams['LogFileName'] = $RunState.wantLogFile }
+          if (Test-FirewallProfileSettingPair -Have $RunState.haveLogBlocked -Want $RunState.wantLogBlocked) { $setParams['LogBlocked'] = [bool]$RunState.wantLogBlocked }
+          if (Test-FirewallProfileSettingPair -Have $RunState.haveLogAllowed -Want $RunState.wantLogAllowed) { $setParams['LogAllowed'] = [bool]$RunState.wantLogAllowed }
+          if (Test-FirewallProfileSettingPair -Have $RunState.haveLogKB -Want $RunState.wantLogKB) { $setParams['LogMaxSizeKilobytes'] = [int]$RunState.wantLogKB }
+          if (Test-FirewallProfileLogFileRequested -Have $RunState.haveLogFile -Want $RunState.wantLogFile) { $setParams['LogFileName'] = $RunState.wantLogFile }
           Set-NetFirewallProfile @setParams | Out-Null
           $out += (Get-ResultItem -Category Profile -Target $Name -Status Changed -Message "Profile remediated")
         } catch {
@@ -462,9 +456,13 @@ $setParams = @{ PolicyStore = $RunState.LocalPolicyStore; Name = $RunState.Rule.
   Set-NetFirewallRule @setParams | Out-Null
 }
 
+function Test-FirewallRuleSpecHasPortSettings {
+  param($RuleSpec)
+  return [bool]((($RuleSpec.Protocol) -or ($RuleSpec.LocalPort)) -or $RuleSpec.RemotePort)
+}
 function Set-BaselineFirewallRuleSection02 {
   param([hashtable]$RunState)
-if ($RunState.PortFilter -and ((Test-AnyCondition -Conditions @({ $RunState.RuleSpec.Protocol }, { $RunState.RuleSpec.LocalPort })) -or $RunState.RuleSpec.RemotePort)) {
+if ($RunState.PortFilter -and (Test-FirewallRuleSpecHasPortSettings -RuleSpec $RunState.RuleSpec)) {
     $portParams = @{}
     if ($RunState.RuleSpec.Protocol) { $portParams['Protocol'] = $RunState.RuleSpec.Protocol }
     if ($RunState.RuleSpec.LocalPort) { $portParams['LocalPort'] = $RunState.RuleSpec.LocalPort }

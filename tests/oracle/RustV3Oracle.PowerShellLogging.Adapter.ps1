@@ -79,7 +79,7 @@ function Invoke-RustV3OraclePowerShellLoggingDeniedRead {
 
 function Invoke-RustV3OracleV2PowerShellLoggingPolicy {
   [OutputType([pscustomobject])]
-  param([Parameter(Mandatory)] $Case, [string]$RepositoryRoot = (Join-Path $PSScriptRoot '..'))
+  param([Parameter(Mandatory)] $Case, [string]$RepositoryRoot = (Join-Path $PSScriptRoot '../..'))
 
   $definitions = @(Get-RustV3OraclePowerShellLoggingFunctionDefinition -RepositoryRoot $RepositoryRoot)
   . ([scriptblock]::Create(($definitions -join "`n")))

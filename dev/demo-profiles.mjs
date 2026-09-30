@@ -13,12 +13,12 @@ const serialized = JSON.stringify(profiles, null, 2) + "\n";
 const output = new URL("docs/demo/profiles.json", root);
 const args = process.argv.slice(2);
 if (args.length > 1 || (args.length === 1 && args[0] !== "--check")) {
-  throw new Error("Usage: node tools/demo-profiles.mjs [--check]");
+  throw new Error("Usage: node dev/demo-profiles.mjs [--check]");
 }
 if (args[0] === "--check") {
   if ((await readFile(output, "utf8")) !== serialized) {
     throw new Error(
-      "Demo profiles are stale. Run node tools/demo-profiles.mjs.",
+      "Demo profiles are stale. Run node dev/demo-profiles.mjs.",
     );
   }
   console.log("Demo profiles match all three source examples.");

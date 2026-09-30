@@ -69,17 +69,40 @@ flowchart TB
 - `lib/` provides validation, configuration, execution, results,
   serialization, presentation, and other behavior shared by capabilities.
 - `lib/platform/` contains private implementations for executable trust,
-  process control, fixed native-tool adapters, and Windows operations.
-  `lib/External.psm1` is the only public module that exposes them.
-- `tools/Launcher-GUI.ps1`, `tools/Launcher-Worker.ps1`, and
-  `tools/Launcher.Core.psm1` make up the shipped Windows Forms launcher. The
-  other files in `tools/` verify or scaffold the repository and are not
-  capability dependencies.
+  process control, and fixed native-tool adapters. `lib/External.psm1` is the
+  only public module that exposes them.
+- `tools/` contains only shipped operator tooling: the Windows Forms launcher
+  (`Launcher-GUI*`, `Launcher-Worker.ps1`, `Launcher.Core.psm1`) and the
+  release-package checks `verify.ps1`, `secret-scan.ps1`, and
+  `Test-Documentation.ps1`. These tools may use `lib/` but never import
+  development tooling, so they run unchanged from an extracted release.
+
+Development-only tooling lives outside the shipped tree: `dev/ci-local.sh` is
+the portable gate that CI also runs, `dev/quality/` holds the complexity and
+clone analyzers with their pinned versions (`tool-versions.psd1`), limits
+(`limits.psd1`), and reviewed baselines, and `dev/demo/` builds the GitHub
+Pages demo. Nothing shipped depends on `dev/` or `rust/`.
 
 Dependencies flow down the list above. Shared modules never import endpoint
 capabilities. Validation and side-effect rules that are specific to one
 capability stay with that capability, even when another script has similar
 code. This keeps each endpoint policy visible and auditable.
+
+### Where new code belongs
+
+- Behavior for one capability: its numbered script, or
+  `scripts/internal/<NN>-<Name>.<part>.ps1` when the script needs private
+  helpers. Every internal file is part of that capability's code closure.
+- Behavior with identical validation and side-effect semantics in several
+  capabilities or runners: a `lib/` module. Native execution and Windows
+  primitives: `lib/platform/`, exposed only through `External.psm1`.
+- Keep boolean logic readable. Express conditions with `-and`/`-or` or a named
+  predicate function with explicit parameters; don't add condition wrapper
+  helpers or scope-sharing `StageNN`/`PhaseNN` fragments to satisfy the
+  complexity limits. Existing fragments predate this rule.
+- Tests mirror the source tree: `tests/lib`, `tests/scripts`, `tests/tools`,
+  and `tests/dev`. `tests/oracle` runs the shared v2/v3 behavioral oracle cases
+  against the v2 policy functions.
 
 ### Principal PowerShell flow
 
@@ -209,9 +232,24 @@ tests, workflows, Rust, and development-only files. Rust `rust-v*` releases have
 their own signed binaries, schemas, examples, documentation, SBOM, manifest,
 and evidence gates. Each workflow qualifies only its own release line.
 
-`tools/verify.ps1` checks the reviewed PowerShell interface and parses and
-analyzes maintained PowerShell source. Pester covers results, serialization,
-runners, trust boundaries, and selected capability contracts. Rust has separate
-Cargo and `xtask` gates. Portable checks do not replace verification under
+`tools/verify.ps1` checks the reviewed public surface and parses and analyzes
+every PowerShell file it discovers under the root, in the repository and in an
+extracted package alike. Pester covers results, serialization, runners, profile
+validation and scheduling, the launcher worker boundary, trust boundaries,
+selected capability behavior, and static scans that reject unbound named
+parameters, never-assigned variables, and bare native executable calls in
+`scripts/`. Rust has separate Cargo and `xtask` gates.
+
+The Rust oracle binds each v3 capability to the digest of its v2 source
+closure: the numbered script plus every `scripts/internal/<stem>.*.ps1` file.
+`cargo run -p xtask -- verify` owns that check and fails when a numbered script
+or one of its internal files changes (shared `lib/` modules are not part of the
+digest), so `rust-ci.yml` also runs on `scripts/**` changes. The PowerShell
+gate deliberately does not check the digests, so rerun
+`rust/oracles/Update-NeutralFixtures.ps1` and `xtask verify` in the same change
+as any script edit, and review whether a ledger claim depends on the changed
+behavior.
+
+Portable checks do not replace verification under
 Windows PowerShell 5.1, a protected workspace, LocalSystem, a signed package,
 Windows features, hardware, or the manual launcher.

@@ -164,21 +164,6 @@ jobs:
             -File .\tools\secret-scan.ps1 -RootPath $env:GITHUB_WORKSPACE
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Cache quality analyzer dependencies
-        if: matrix.edition == 'Core'
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: .cache/quality
-          key: quality-${{ runner.os }}-${{ runner.arch }}-${{ matrix.runtime_id }}-${{ hashFiles('tools/quality/tool-versions.psd1', 'tools/quality/requirements-lizard.txt', 'tools/quality/jscpd/package-lock.json') }}
-
-      - name: PowerShell complexity and duplication
-        if: matrix.edition == 'Core'
-        shell: powershell
-        run: |
-          & $env:POWERSHELL_EXE -NoLogo -NoProfile -ExecutionPolicy Bypass `
-            -File ./tools/quality/Test-CodeQuality.ps1 -ReleaseLine PowerShell -SkipAnalyzer
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Static checks
         shell: powershell
         run: |
@@ -590,15 +575,16 @@ jobs:
             "## Test Results`n| Metric | Count |`n|--------|-------|`n| Passed | $passed |`n| Failed | $failed |`n| Skipped | $skipped |`n| Inconclusive | $inconclusive |`n| Not run | $notRun |`n| Total | $total |" >> $env:GITHUB_STEP_SUMMARY
           }
 
-  test-smoke-linux:
-    # Smoke test on Linux: runs parse-only checks (no PSScriptAnalyzer) to
-    # verify scripts are syntactically valid cross-platform.
-    name: Smoke (Linux, PowerShell 7.6.3)
+  portable-gate-linux:
+    # Runs the same portable gate contributors run locally (dev/ci-local.sh):
+    # secret scan, documentation, parse, PSScriptAnalyzer, complexity and
+    # duplication, and the full Pester suite on the pinned PowerShell runtime.
+    name: Portable gate (Linux, PowerShell 7.6.3)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     needs: verify
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
@@ -616,10 +602,12 @@ jobs:
           version: ${{ env.POWERSHELL_VERSION }}
           linux-x64-sha256: ${{ env.POWERSHELL_LINUX_X64_SHA256 }}
 
-      - name: Parse checks
-        shell: pwsh
-        run: |
-          if ($PSVersionTable.PSVersion.ToString() -cne $env:POWERSHELL_VERSION) {
-            throw "Expected PowerShell $env:POWERSHELL_VERSION exactly."
-          }
-          ./tools/verify.ps1 -RootPath $PWD -SkipAnalyzer
+      - name: Cache quality analyzer dependencies
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: .cache/quality
+          key: quality-${{ runner.os }}-${{ runner.arch }}-powershell-${{ hashFiles('dev/quality/tool-versions.psd1', 'dev/quality/requirements-lizard.txt', 'dev/quality/jscpd/package-lock.json') }}
+
+      - name: Portable gate
+        shell: bash
+        run: bash ./dev/ci-local.sh

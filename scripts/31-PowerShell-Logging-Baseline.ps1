@@ -120,20 +120,6 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability31Runtime {
   param($EntryBoundParameters)
   $RunState = @{

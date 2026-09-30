@@ -17,29 +17,6 @@ function Test-HasProperty {
 }
 
 
-function Get-PropString {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name)
-  if (-not (Test-HasProperty -Object $Object -Name $Name)) {
-    return ''
-  }
-  return [string]$Object.$Name
-}
-
-function Get-PropInt {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name, [int]$Default = 0)
-  if (-not (Test-HasProperty -Object $Object -Name $Name)) {
-    return $Default
-  }
-  try {
-    return [int]$Object.$Name
-  }
-  catch {
-    return $Default
-  }
-}
-
 function ConvertFrom-JsonSafe {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Json)

@@ -172,3 +172,37 @@ function Test-ScheduledTaskCatalogFillsOutputDefaults {
   $catalog.Proof.OutFile | Should -Be 'Q:\proof.json'
   $missingProof.Proof.OutFile | Should -Be 'Q:\proof.json'
 }
+
+function Invoke-WecutilQuickConfigCase {
+  # Runs Invoke-WecutilQc with Invoke-NativeCommand replaced by a recorder.
+  param([switch]$Preview, [int]$ExitCode = 0)
+  $script:Findings = New-Object System.Collections.Generic.List[object]
+  $script:WecutilCalls = 0
+  $script:WecutilExitCode = $ExitCode
+  function script:Invoke-NativeCommand {
+    param($Command, $Arguments, [switch]$CaptureOutput, [switch]$Quiet, $TimeoutSeconds, $MaxOutputBytes)
+    $null = $Command, $Arguments, $CaptureOutput, $Quiet, $TimeoutSeconds, $MaxOutputBytes
+    $script:WecutilCalls++
+    [pscustomobject]@{ TimedOut = $false; ExitCode = $script:WecutilExitCode; Stdout = 'out'; Stderr = 'err' }
+  }
+  $output = Invoke-WecutilQc -WhatIf:$Preview
+  return [pscustomobject]@{ Output = $output; Calls = $script:WecutilCalls; Codes = @($script:Findings | ForEach-Object Code) }
+}
+
+function Test-WecutilQuickConfigHonorsWhatIf {
+  $result = Invoke-WecutilQuickConfigCase -Preview
+  $result.Calls | Should -Be 0
+  $result.Output | Should -BeNullOrEmpty
+}
+
+function Test-WecutilQuickConfigReportsNonZeroExit {
+  $result = Invoke-WecutilQuickConfigCase -ExitCode 5
+  $result.Calls | Should -Be 1
+  $result.Output | Should -BeNullOrEmpty
+  $result.Codes | Should -Be @('WEF-WecutilQcFailed')
+}
+
+function Test-WecutilQuickConfigSeparatesStreams {
+  $result = Invoke-WecutilQuickConfigCase
+  $result.Output | Should -Be ('out' + [Environment]::NewLine + 'err')
+}

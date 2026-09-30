@@ -97,20 +97,6 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability24Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -445,6 +431,11 @@ function Invoke-Capability24MainPhase01 {
   $RunState.autoEnrollTriggered = $false
   $RunState.autoEnrollError     = $null
 }
+function Test-CertutilPulseFailed {
+  param($Result)
+  return [bool]((($null -eq $Result) -or (-not $Result.Success)) -or $Result.TimedOut -or $Result.OutputTruncated -or $Result.StderrTruncated)
+}
+
 function Invoke-Capability24MainPhase02 {
   param([hashtable]$RunState)
   if ($NoPulse) {
@@ -453,7 +444,7 @@ function Invoke-Capability24MainPhase02 {
   } else {
     try {
       $pulse = Invoke-NativeCommand -Command 'certutil.exe' -Arguments @('-pulse') -CaptureOutput -Quiet -TimeoutSeconds 120 -MaxOutputBytes 262144
-      if ((Test-AnyCondition -Conditions @({ $null -eq $pulse }, { -not $pulse.Success })) -or $pulse.TimedOut -or $pulse.OutputTruncated -or $pulse.StderrTruncated) { throw 'certutil -pulse timed out, failed, or produced truncated output.' }
+      if (Test-CertutilPulseFailed -Result $pulse) { throw 'certutil -pulse timed out, failed, or produced truncated output.' }
       $RunState.autoEnrollTriggered = $true
     } catch {
       $RunState.autoEnrollTriggered = $false

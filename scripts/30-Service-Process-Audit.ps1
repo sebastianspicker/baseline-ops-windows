@@ -78,20 +78,6 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability30Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -180,7 +166,7 @@ function Import-OptionalJsonConfig {
 function Apply-ServiceProcessDisplayConfiguration {
 if ($null -ne $jsonCfg.TopN) {
     $tmp = $jsonCfg.TopN -as [int]
-    if ((Test-AllConditions -Conditions @({ $tmp -ge 1 }, { $tmp -le 1000 }))) { $Config.TopN = $tmp }
+    if (($tmp -ge 1) -and ($tmp -le 1000)) { $Config.TopN = $tmp }
   }
 
   if ($null -ne $jsonCfg.ExportEnabled)         { $Config.ExportEnabled = [bool]$jsonCfg.ExportEnabled }
@@ -194,7 +180,7 @@ if ($null -ne $jsonCfg.ShowTopCpuInConsole)   { $Config.ShowTopCpuInConsole = [b
 
   if ($null -ne $jsonCfg.ConsoleMaxServices) {
     $tmp2 = $jsonCfg.ConsoleMaxServices -as [int]
-    if ((Test-AllConditions -Conditions @({ $tmp2 -ge 1 }, { $tmp2 -le 5000 }))) { $Config.ConsoleMaxServices = $tmp2 }
+    if (($tmp2 -ge 1) -and ($tmp2 -le 5000)) { $Config.ConsoleMaxServices = $tmp2 }
   }
 }
 
@@ -215,7 +201,7 @@ $configLoad = Import-OptionalJsonConfig -Path $ConfigJsonPath
 $jsonCfg = $configLoad.Data
 $configMeta = $configLoad.Meta
 $configPathProvided = -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)
-$configLoadIssue = (Test-AllConditions -Conditions @({ $configPathProvided }, { -not [bool]$configMeta.Loaded }))
+$configLoadIssue = [bool](($configPathProvided) -and (-not [bool]$configMeta.Loaded))
 $findings = @()
 
 if ($configLoadIssue) {
@@ -237,7 +223,7 @@ if ($null -ne $jsonCfg) {
 $RunState.effectiveTopN = [int]$Config.TopN
 
 if (-not $NoConsole) {
-  if ((Test-AllConditions -Conditions @({ $null -eq $jsonCfg }, { -not [string]::IsNullOrWhiteSpace($ConfigJsonPath) }))) {
+  if (($null -eq $jsonCfg) -and (-not [string]::IsNullOrWhiteSpace($ConfigJsonPath))) {
     Write-ConsoleInfo ("Config JSON not loaded (using defaults): {0}" -f $ConfigJsonPath)
   }
 }

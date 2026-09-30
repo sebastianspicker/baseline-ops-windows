@@ -13,6 +13,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
+mod closure;
 mod powershell_logging;
 
 pub(super) fn verify_oracle_inventory(roots: &Roots) -> Result<()> {
@@ -34,6 +35,7 @@ fn verify_manifest(
 ) -> Result<()> {
     let fixture_id = manifest["fixture_id"]
         .as_str()
+        .filter(|id| !id.trim().is_empty())
         .context("oracle manifest lacks fixture_id")?;
     verify_manifest_identity(descriptor, manifest)?;
     verify_source_closure(roots, descriptor, manifest)?;
@@ -52,10 +54,7 @@ fn verify_manifest_identity(
         .context("oracle manifest lacks legacy_script")?;
     if manifest["number"].as_u64() != Some(u64::from(descriptor.legacy_number))
         || manifest["capability_id"].as_str() != Some(descriptor.id)
-        || Path::new(legacy_script)
-            .file_name()
-            .and_then(|name| name.to_str())
-            != Some(descriptor.legacy_script)
+        || legacy_script != format!("scripts/{}", descriptor.legacy_script)
         || manifest["rust_maturity"].as_str() != Some(maturity_name(descriptor.maturity))
     {
         bail!("oracle manifest diverges at {}", descriptor.id);
@@ -77,7 +76,7 @@ fn verify_source_closure(
     for source in sources {
         verify_source_member(roots, descriptor.id, source, &mut paths, &mut closure_index)?;
     }
-    verify_helper_binding(roots, descriptor.id, legacy_script, &paths)?;
+    closure::verify_closure_membership(roots, descriptor.id, legacy_script, sources)?;
     verify_closure_digests(descriptor.id, manifest, sources, &closure_index)
 }
 
@@ -125,20 +124,6 @@ fn verify_source_digest(roots: &Roots, id: &str, path: &str, source: &Value) -> 
     Ok(actual)
 }
 
-fn verify_helper_binding(
-    roots: &Roots,
-    id: &str,
-    legacy_script: &str,
-    paths: &BTreeSet<String>,
-) -> Result<()> {
-    for companion in expected_companion_paths(legacy_script) {
-        if roots.repository.join(&companion).is_file() != paths.contains(companion.as_str()) {
-            bail!("oracle source closure companion binding drifted for {id}");
-        }
-    }
-    Ok(())
-}
-
 fn verify_closure_digests(
     id: &str,
     manifest: &Value,
@@ -153,17 +138,6 @@ fn verify_closure_digests(
         bail!("oracle source closure digest drifted for {id}");
     }
     Ok(())
-}
-
-fn expected_companion_paths(legacy_script: &str) -> [String; 2] {
-    let stem = Path::new(legacy_script)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default();
-    [
-        format!("scripts/internal/{stem}.helpers.ps1"),
-        format!("scripts/internal/{stem}.runtime.ps1"),
-    ]
 }
 
 fn verify_fixture(

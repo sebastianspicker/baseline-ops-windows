@@ -26,7 +26,7 @@ function Invoke-QualityNative {
 function Get-QualityToolPaths {
   param([Parameter(Mandatory)][string]$RootPath)
 
-  $qualityRoot = Join-Path $RootPath 'tools/quality'
+  $qualityRoot = Join-Path $RootPath 'dev/quality'
   $cacheRoot = Join-Path $RootPath '.cache/quality'
   $isWindowsHost = [System.IO.Path]::DirectorySeparatorChar -eq [char]92
   $lizard = if ($isWindowsHost) {

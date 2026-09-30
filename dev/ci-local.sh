@@ -6,9 +6,10 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pwsh_bin="${PWSH_BIN:-pwsh}"
-required_pwsh_version="7.6.3"
-psa_version="1.25.0"
-pester_version="5.8.0"
+tool_versions="$root_dir/dev/quality/tool-versions.psd1"
+required_pwsh_version=""
+psa_version=""
+pester_version=""
 
 skip_analyzer="${CI_SKIP_ANALYZER:-}"
 skip_tests="${CI_SKIP_TESTS:-}"
@@ -55,7 +56,23 @@ fi
 
 runtime_status="CHECK"
 if ! command -v "$pwsh_bin" >/dev/null 2>&1; then
-  echo "pwsh not found. Install PowerShell $required_pwsh_version or set PWSH_BIN to its executable path." >&2
+  echo "pwsh not found. Install the PowerShell version pinned in $tool_versions or set PWSH_BIN to its executable path." >&2
+  runtime_status="FAILED"
+  fail_with_summary 1
+fi
+
+# The manifest is the single source of pinned tool versions for this gate.
+if ! pinned_versions="$("$pwsh_bin" -NoLogo -NoProfile -Command "\
+\$versions = Import-PowerShellDataFile -LiteralPath '$tool_versions'
+[string]::Format('{0}|{1}|{2}', \$versions.PowerShell, \$versions.PSScriptAnalyzer, \$versions.Pester)")"; then
+  echo "Failed to read pinned tool versions from: $tool_versions" >&2
+  runtime_status="FAILED"
+  fail_with_summary 1
+fi
+pinned_versions="${pinned_versions//$'\r'/}"
+IFS='|' read -r required_pwsh_version psa_version pester_version <<<"$pinned_versions"
+if [[ -z "$required_pwsh_version" || -z "$psa_version" || -z "$pester_version" ]]; then
+  echo "Pinned tool versions are incomplete in: $tool_versions" >&2
   runtime_status="FAILED"
   fail_with_summary 1
 fi
@@ -95,7 +112,7 @@ else
 fi
 
 quality_status="RUN"
-if "$pwsh_bin" -NoProfile -File "$root_dir/tools/quality/Test-CodeQuality.ps1" -ReleaseLine PowerShell -SkipAnalyzer; then
+if "$pwsh_bin" -NoProfile -File "$root_dir/dev/quality/Test-CodeQuality.ps1" -ReleaseLine PowerShell -SkipAnalyzer; then
   quality_status="PASS"
 else
   exit_code=$?

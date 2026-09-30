@@ -3,6 +3,6 @@
   "minLines": 5,
   "mode": "mild",
   "format": ["powershell"],
-  "ignore": ["rust/**", "tests/RustV3Oracle*.ps1", ".cache/**", ".codacy/**", ".repowise/**"],
+  "ignore": ["rust/**", ".cache/**", ".codacy/**"],
   "reporters": ["json"]
 }

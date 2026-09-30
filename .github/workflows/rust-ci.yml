@@ -10,16 +10,20 @@ on:
       - 'feat/**'
     paths:
       - 'rust/**'
-      - 'tools/quality/**'
-      - 'tests/RustV3Oracle*.ps1'
+      - 'scripts/**'
+      - 'lib/**'
+      - 'dev/quality/**'
       - 'PSScriptAnalyzerSettings.psd1'
+      - '.github/actions/setup-pinned-pwsh-linux/**'
       - '.github/workflows/rust-ci.yml'
   pull_request:
     paths:
       - 'rust/**'
-      - 'tools/quality/**'
-      - 'tests/RustV3Oracle*.ps1'
+      - 'scripts/**'
+      - 'lib/**'
+      - 'dev/quality/**'
       - 'PSScriptAnalyzerSettings.psd1'
+      - '.github/actions/setup-pinned-pwsh-linux/**'
       - '.github/workflows/rust-ci.yml'
 
 permissions: {}
@@ -35,6 +39,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      # SHA-256 value published with the official PowerShell v7.6.3 release.
+      POWERSHELL_VERSION: '7.6.3'
+      POWERSHELL_LINUX_X64_SHA256: '856d0765d2332377f9d7a4aea76efdfde4de51446e7738dde2dfda41dba9e2a7'
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
@@ -45,6 +53,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Install checksum-pinned PowerShell 7.6.3
+        uses: ./.github/actions/setup-pinned-pwsh-linux
+        with:
+          version: ${{ env.POWERSHELL_VERSION }}
+          linux-x64-sha256: ${{ env.POWERSHELL_LINUX_X64_SHA256 }}
 
       - name: Install pinned Rust toolchain
         shell: bash
@@ -63,11 +77,11 @@ jobs:
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: .cache/quality
-          key: quality-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust/rust-toolchain.toml', 'tools/quality/tool-versions.psd1', 'tools/quality/requirements-lizard.txt', 'tools/quality/jscpd/package-lock.json') }}
+          key: quality-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust/rust-toolchain.toml', 'dev/quality/tool-versions.psd1', 'dev/quality/requirements-lizard.txt', 'dev/quality/jscpd/package-lock.json') }}
 
       - name: Verify Rust v3 code quality
         shell: pwsh
-        run: ./tools/quality/Test-CodeQuality.ps1 -ReleaseLine Rust
+        run: ./dev/quality/Test-CodeQuality.ps1 -ReleaseLine Rust
 
       - name: Verify workspace
         working-directory: rust
@@ -131,11 +145,11 @@ jobs:
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: .cache/quality
-          key: quality-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust/rust-toolchain.toml', 'tools/quality/tool-versions.psd1', 'tools/quality/requirements-lizard.txt', 'tools/quality/jscpd/package-lock.json') }}
+          key: quality-${{ runner.os }}-${{ runner.arch }}-rust-${{ hashFiles('rust/rust-toolchain.toml', 'dev/quality/tool-versions.psd1', 'dev/quality/requirements-lizard.txt', 'dev/quality/jscpd/package-lock.json') }}
 
       - name: Verify Rust v3 code quality
         shell: pwsh
-        run: ./tools/quality/Test-CodeQuality.ps1 -ReleaseLine Rust
+        run: ./dev/quality/Test-CodeQuality.ps1 -ReleaseLine Rust
 
       - name: Build and test Windows boundary
         working-directory: rust

@@ -7,7 +7,7 @@
 
 BeforeAll {
   $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-  Import-Module (Join-Path $repoRoot 'tools/quality/CloneBaseline.psm1') -Force
+  Import-Module (Join-Path $repoRoot 'dev/quality/CloneBaseline.psm1') -Force
   $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('baseline-clones-' + [guid]::NewGuid())
   [void](New-Item -ItemType Directory -Path $fixtureRoot)
   function New-ValidationEntry {
@@ -51,19 +51,20 @@ Describe 'Clone baseline validation' {
     { ConvertFrom-JscpdReport $report PowerShell 5.1.2 } | Should -Throw
   }
 
-  It 'accepts Rust oracle adapters only within the Rust release-line scope' {
+  It 'accepts Rust release-line occurrences only under rust/' {
     $report = [pscustomobject]@{
       Statistics = [pscustomobject]@{ Total = [pscustomobject]@{ Sources = 2 } }
       Duplicates = @([pscustomobject]@{
           Fragment = 'shared rust oracle fragment'
-          FirstFile = [pscustomobject]@{ Name = 'tests/RustV3Oracle.Adapter.ps1'; Start = 1; End = 5 }
+          FirstFile = [pscustomobject]@{ Name = 'oracles/Update-NeutralFixtures.ps1'; Start = 1; End = 5 }
           SecondFile = [pscustomobject]@{ Name = 'src/lib.rs'; Start = 1; End = 5 }
         })
     }
     $entry = @(ConvertFrom-JscpdReport $report Rust 5.1.2)[0]
+    $entry.Occurrences[0].Path | Should -Be 'rust/oracles/Update-NeutralFixtures.ps1'
     $entry.Rationale = 'Reviewed Rust oracle boundary.'
     { Read-CloneBaseline (Write-Baseline $entry 'rust-scope.json') Rust 5.1.2 } | Should -Not -Throw
-    $entry.Occurrences[0].Path = 'tests/Unrelated.Tests.ps1'
+    $entry.Occurrences[0].Path = 'tests/oracle/RustV3Oracle.Adapter.ps1'
     { Read-CloneBaseline (Write-Baseline $entry 'rust-outside.json') Rust 5.1.2 } | Should -Throw
   }
 }

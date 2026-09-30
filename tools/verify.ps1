@@ -375,37 +375,51 @@ function Complete-PublicSurfaceGate {
 
 <##
 .SYNOPSIS
-Gets parse targets from one existing path.
+Tests whether a relative path lies in a local-only or generated area.
 .DESCRIPTION
-Includes maintained PowerShell scripts and modules recursively, excluding Node dependencies.
+Excludes Git metadata, caches, Node dependencies, Rust build output, and release output.
+#>
+function Test-VerificationExcludedPath {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$RelativePath)
+
+  $segments = @($RelativePath.Replace([char]92, [char]47).Split('/', [System.StringSplitOptions]::RemoveEmptyEntries))
+  if ($segments | Where-Object { @('.git', '.cache', 'node_modules') -contains $_ }) { return $true }
+  if ($segments.Count -gt 0 -and $segments[0] -eq 'dist') { return $true }
+  return ($segments.Count -gt 1 -and $segments[0] -eq 'rust' -and $segments[1] -eq 'target')
+}
+
+<##
+.SYNOPSIS
+Gets every maintained PowerShell script and module under one root.
+.DESCRIPTION
+Discovers .ps1 and .psm1 files from the verification inventory without naming
+source directories, so repository and extracted-package layouts are both covered.
 #>
 function Get-VerificationPowerShellTargets {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Path)
 
-  $targets = @(Get-ChildItem -LiteralPath $Path -Filter '*.ps1' -File -Recurse)
-  $targets += Get-ChildItem -LiteralPath $Path -Filter '*.psm1' -File -Recurse
-  return @($targets | Where-Object { $_.FullName -notmatch '[/\\]node_modules[/\\]' })
+  $rootFull = [System.IO.Path]::GetFullPath($Path)
+  $targets = foreach ($relativePath in @(Get-PublicSurfacePaths -Path $rootFull)) {
+    if ([System.IO.Path]::GetExtension($relativePath) -notin @('.ps1', '.psm1')) { continue }
+    if (Test-VerificationExcludedPath -RelativePath $relativePath) { continue }
+    Get-Item -LiteralPath (Join-Path $rootFull $relativePath) -Force
+  }
+  return @($targets | Sort-Object FullName)
 }
 
 <##
 .SYNOPSIS
 Gets all PowerShell parser targets required by the verification contract.
 .DESCRIPTION
-Preserves the scripts, modules, tools, tests, and Rust-oracle scan set.
+Covers every maintained script and module below the verification root.
 #>
 function Get-VerificationParserTargets {
   [CmdletBinding()]
   param()
 
-  $targets = @()
-  $targets += Get-VerificationPowerShellTargets -Path (Join-Path $RootPath 'scripts')
-  $targets += Get-ChildItem -Path (Join-Path $RootPath 'lib') -Filter '*.psm1' -File -Recurse
-  foreach ($path in @('tools', 'tests', 'rust/oracles')) {
-    $candidate = Join-Path $RootPath $path
-    if (Test-Path -LiteralPath $candidate) { $targets += Get-VerificationPowerShellTargets -Path $candidate }
-  }
-  return $targets
+  return @(Get-VerificationPowerShellTargets -Path $RootPath)
 }
 
 <##
@@ -454,37 +468,48 @@ function Complete-ParseGate {
 
 <##
 .SYNOPSIS
-Gets existing analyzer roots required by the verification contract.
+Converts a verified target path into a root-relative display path.
 .DESCRIPTION
-Preserves the scripts, modules, tools, tests, and Rust-oracle analyzer set.
+Normalizes separators so analyzer findings are stable across platforms.
 #>
-function Get-VerificationAnalyzerPaths {
+function Get-VerificationRelativePath {
   [CmdletBinding()]
-  param()
+  param([Parameter(Mandatory)][string]$Path)
 
-  $paths = @()
-  foreach ($path in @('scripts', 'lib', 'tools', 'tests', 'rust/oracles')) {
-    $candidate = Join-Path $RootPath $path
-    if (Test-Path -LiteralPath $candidate) { $paths += $candidate }
-  }
-  return $paths
+  $root = [System.IO.Path]::GetFullPath($RootPath).TrimEnd([char[]]@([char]'/', [char]92))
+  return ([System.IO.Path]::GetFullPath($Path)).Substring($root.Length + 1).Replace([char]92, [char]47)
 }
 
 <##
 .SYNOPSIS
-Gets configured PSScriptAnalyzer findings for analyzer roots.
+Gets configured PSScriptAnalyzer findings for the supplied files.
 .DESCRIPTION
-Uses the shared scan implementation and fails closed on analyzer errors.
+Analyzes each file once and records analyzer failures as findings so the gate fails closed.
 #>
 function Get-VerificationAnalyzerFindings {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string[]]$Paths, [Parameter(Mandatory)][string]$SettingsPath)
 
-  Import-Module (Join-Path $PSScriptRoot 'quality/QualityScans.psm1') -Force
-  $files = @($Paths | ForEach-Object {
-      Get-VerificationPowerShellTargets -Path $_ | ForEach-Object FullName
-    } | Sort-Object -Unique)
-  return @(Invoke-PowerShellAnalyzerScan -RootPath (Split-Path -Parent $SettingsPath) -Paths $files)
+  if ($Paths.Count -eq 0) { throw 'PSScriptAnalyzer scan matched zero files.' }
+  $findings = @()
+  foreach ($path in @($Paths | Sort-Object -Unique)) {
+    try {
+      $items = @(Invoke-ScriptAnalyzer -Path $path -Settings $SettingsPath -ErrorAction Stop)
+    } catch {
+      $findings += [pscustomobject]@{
+        Kind = 'analyzer_error'; Path = Get-VerificationRelativePath -Path $path
+        Line = 0; Message = $_.Exception.Message
+      }
+      continue
+    }
+    foreach ($item in $items) {
+      $findings += [pscustomobject]@{
+        Kind = [string]$item.RuleName; Path = Get-VerificationRelativePath -Path $path
+        Line = [int]$item.Line; Message = [string]$item.Message
+      }
+    }
+  }
+  return @($findings | Sort-Object Path, Line, Kind)
 }
 
 <##
@@ -514,7 +539,7 @@ function Complete-AnalyzerGate {
     Complete-Verification -Verdict 'FAILED' -ExitCode 2
   }
   Write-Info -Message 'Running PSScriptAnalyzer...'
-  $paths = @(Get-VerificationAnalyzerPaths)
+  $paths = @(Get-VerificationPowerShellTargets -Path $RootPath | ForEach-Object FullName)
   $findings = @(Get-VerificationAnalyzerFindings -Paths $paths -SettingsPath $settingsPath)
   if ($findings.Count -gt 0) {
     Write-Warn -Message ("PSScriptAnalyzer reported {0} issue(s)." -f $findings.Count)
@@ -523,7 +548,7 @@ function Complete-AnalyzerGate {
     Complete-Verification -Verdict 'FAILED' -ExitCode 2
   }
   Write-Success -Message 'PSScriptAnalyzer: OK'
-  Add-GateResult -Name 'Analyzer' -Status 'PASS' -Detail ("{0} path(s)" -f $paths.Count)
+  Add-GateResult -Name 'Analyzer' -Status 'PASS' -Detail ("{0} file(s)" -f $paths.Count)
 }
 
 Invoke-Verification -SkipAnalyzerRequested:$SkipAnalyzer

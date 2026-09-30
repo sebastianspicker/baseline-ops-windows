@@ -112,20 +112,6 @@ $script:Findings = Get-FindingsList
 
 # Get-FindingStats imported from lib/Console.psm1
 
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Get-AuditPolText {
   # Use /r flag for CSV output (locale-independent)
   $r = Invoke-Auditpol -Arguments @('/get', '/category:*', '/r') -CaptureOutput
@@ -152,6 +138,11 @@ $RunState.policies = @()
   $RunState.seenSubcategories = @{}
 }
 
+function Test-AuditPolRowFieldsBlank {
+  param([string]$Subcategory, [string]$Setting)
+  return [bool](([string]::IsNullOrWhiteSpace($Subcategory)) -or ([string]::IsNullOrWhiteSpace($Setting)))
+}
+
 function Parse-AuditPolTextSection02 {
   param([hashtable]$RunState)
 foreach ($row in $RunState.csvRows) {
@@ -163,11 +154,11 @@ foreach ($row in $RunState.csvRows) {
     $guidText = [string]$properties[3].Value
     $set = [string]$properties[4].Value
     $guid = [guid]::Empty
-    if ((Test-AnyCondition -Conditions @({ [string]::IsNullOrWhiteSpace($sub) }, { [string]::IsNullOrWhiteSpace($set) })) -or -not [guid]::TryParse($guidText, [ref]$guid)) {
+    if ((Test-AuditPolRowFieldsBlank -Subcategory $sub -Setting $set) -or -not [guid]::TryParse($guidText, [ref]$guid)) {
       throw 'auditpol CSV contains an invalid subcategory, GUID, or inclusion setting.'
     }
     $guidKey = $guid.ToString('D')
-    if ((Test-AnyCondition -Conditions @({ $RunState.seenGuids.ContainsKey($guidKey) }, { $RunState.seenSubcategories.ContainsKey($sub) }))) {
+    if (($RunState.seenGuids.ContainsKey($guidKey)) -or ($RunState.seenSubcategories.ContainsKey($sub))) {
       throw 'auditpol CSV contains duplicate subcategory evidence.'
     }
     $RunState.seenGuids[$guidKey] = $true
@@ -245,7 +236,7 @@ function Try-ReadDesiredPolicyJson {
 
   try {
     $RunState.desired = Get-BoundedUtf8FileContent -Path $sanitized -MaximumBytes 1048576 | ConvertFrom-Json
-    if ((Test-AnyCondition -Conditions @({ $null -eq $RunState.desired }, { $RunState.desired -isnot [psobject] }))) { throw "Invalid JSON root object." }
+    if (($null -eq $RunState.desired) -or ($RunState.desired -isnot [psobject])) { throw "Invalid JSON root object." }
 
     Assert-DesiredAuditPolicy -Desired $RunState.desired
 
@@ -443,7 +434,7 @@ function Confirm-DesiredAuditPolicy {
       foreach ($catProp in $RunState.desired.PSObject.Properties) {
         foreach ($subProp in $catProp.Value.PSObject.Properties) {
           $verified = $RunState.policies | Where-Object { $_.Subcategory -eq $subProp.Name } | Select-Object -First 1
-          if ((Test-AnyCondition -Conditions @({ -not $verified }, { [string]$verified.Setting -ne [string]$subProp.Value }))) {
+          if ((-not $verified) -or ([string]$verified.Setting -ne [string]$subProp.Value)) {
             Add-Finding -FindingList $script:Findings -Code 'AuditPol-PostconditionFailed' -Severity 'High' -Message ("Post-remediation policy mismatch: {0} -> {1}." -f $catProp.Name,$subProp.Name)
           }
         }

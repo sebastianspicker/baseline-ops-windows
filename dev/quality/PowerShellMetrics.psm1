@@ -8,6 +8,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$script:Limits = (Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'limits.psd1')).PowerShell
+
 function Test-OffsetInRanges {
   param([int]$Offset, [object[]]$Ranges)
 
@@ -166,14 +168,15 @@ function Add-ScopeFindings {
     -EndOffset $Scope.Ast.Extent.EndOffset -ExcludedRanges $excluded
   $complexity = Get-ScopeComplexity -ScopeAst $Scope.Ast -ExcludedRanges $excluded
   $line = [int]$Scope.Ast.Extent.StartLineNumber
-  if ($nloc -gt 49) {
-    $Findings.Add((New-MetricFinding function_nloc $RelativePath $Scope.Name $line $nloc 49))
+  $limits = $script:Limits
+  if ($nloc -gt $limits.FunctionNloc) {
+    $Findings.Add((New-MetricFinding function_nloc $RelativePath $Scope.Name $line $nloc $limits.FunctionNloc))
   }
-  if ($complexity -gt 7) {
-    $Findings.Add((New-MetricFinding function_ccn $RelativePath $Scope.Name $line $complexity 7))
+  if ($complexity -gt $limits.FunctionCcn) {
+    $Findings.Add((New-MetricFinding function_ccn $RelativePath $Scope.Name $line $complexity $limits.FunctionCcn))
   }
-  if (-not $Scope.IsScript -and $Scope.Parameters -gt 8) {
-    $Findings.Add((New-MetricFinding function_parameters $RelativePath $Scope.Name $line $Scope.Parameters 8))
+  if (-not $Scope.IsScript -and $Scope.Parameters -gt $limits.FunctionParameters) {
+    $Findings.Add((New-MetricFinding function_parameters $RelativePath $Scope.Name $line $Scope.Parameters $limits.FunctionParameters))
   }
 }
 
@@ -193,8 +196,8 @@ function Get-PowerShellMetricFindings {
     if ($errors -and $errors.Count -gt 0) { throw "PowerShell parse failure: $path" }
     $relativePath = Get-RelativeQualityPath -Path $path -RootPath $RootPath
     $fileNloc = Get-TokenNloc -Tokens $tokens -StartOffset 0 -EndOffset ([int]::MaxValue)
-    if ($fileNloc -gt 499) {
-      $findings.Add((New-MetricFinding file_nloc $relativePath '<file>' 1 $fileNloc 499))
+    if ($fileNloc -gt $script:Limits.FileNloc) {
+      $findings.Add((New-MetricFinding file_nloc $relativePath '<file>' 1 $fileNloc $script:Limits.FileNloc))
     }
     $records = Get-ScopeRecords -Ast $ast
     foreach ($scope in $records.Scopes) {

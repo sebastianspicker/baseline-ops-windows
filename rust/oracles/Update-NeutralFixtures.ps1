@@ -30,11 +30,14 @@ function Get-SourceClosure {
   $sourcePaths = New-Object 'System.Collections.Generic.List[string]'
   $sourcePaths.Add($LegacyScript)
   $stem = [System.IO.Path]::GetFileNameWithoutExtension($LegacyScript)
-  foreach ($suffix in @('helpers', 'runtime')) {
-    $companion = 'scripts/internal/{0}.{1}.ps1' -f $stem, $suffix
-    if (Test-Path -LiteralPath (Join-Path $repositoryRoot $companion) -PathType Leaf) {
-      $sourcePaths.Add($companion)
-    }
+  # Every capability-private scripts/internal/<stem>.*.ps1 file, in ordinal order.
+  [string[]]$companions = @(
+    Get-ChildItem -LiteralPath (Join-Path $repositoryRoot 'scripts/internal') -File -Filter ('{0}.*.ps1' -f $stem) |
+      ForEach-Object Name
+  )
+  [Array]::Sort($companions, [StringComparer]::Ordinal)
+  foreach ($companion in $companions) {
+    $sourcePaths.Add(('scripts/internal/{0}' -f $companion))
   }
 
   $sourceFiles = @(

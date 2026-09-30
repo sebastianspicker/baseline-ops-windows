@@ -22,7 +22,9 @@ Optional base CSV path. Creates:
 - <ExportPath>-indicators.csv
 
 .PARAMETER IncludeWecutilCheck
-If set, runs 'wecutil qc /q' and stores output in indicators.
+If set, runs 'wecutil qc /q' and stores output in indicators. Quick-config
+changes the Windows Event Collector service configuration, so it honors
+-WhatIf and -Confirm.
 
 .PARAMETER ConfigPath
 Optional JSON config path supplied with $ConfigPath.
@@ -214,16 +216,18 @@ function Get-SubscriptionManagerPolicy {
 }
 
 function Invoke-WecutilQc {
-  [CmdletBinding()]
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param()
 
+  if (-not $PSCmdlet.ShouldProcess('Windows Event Collector service', 'wecutil qc /q')) { return $null }
   try {
     # wecutil command reference.
     $native = Invoke-NativeCommand -Command 'wecutil.exe' -Arguments @('qc', '/q') -CaptureOutput -Quiet `
       -TimeoutSeconds 60 -MaxOutputBytes 262144 -WarningAction SilentlyContinue
     if ($null -eq $native) { throw 'wecutil.exe could not be resolved.' }
     if ($native.TimedOut) { throw 'wecutil.exe timed out.' }
-    return (([string]$native.Stdout) + ([string]$native.Stderr)).Trim()
+    if ($native.ExitCode -ne 0) { throw ('wecutil.exe exited with code {0}.' -f $native.ExitCode) }
+    return (@([string]$native.Stdout, [string]$native.Stderr) -join [Environment]::NewLine).Trim()
   }
   catch {
     $null = Add-Finding -FindingList $script:Findings -Code 'WEF-WecutilQcFailed' -Severity 'Low' -Message ("wecutil qc /q failed: {0}" -f $_.Exception.Message)

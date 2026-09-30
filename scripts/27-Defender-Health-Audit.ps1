@@ -107,20 +107,6 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability27Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -275,7 +261,7 @@ function Get-ScanAgeLabel {
 function Get-HighestSeverity {
   param([System.Collections.Generic.List[object]]$Findings)
 
-  if ((Test-AnyCondition -Conditions @({ $null -eq $Findings }, { $Findings.Count -eq 0 }))) { return 'None' }
+  if (($null -eq $Findings) -or ($Findings.Count -eq 0)) { return 'None' }
 
   $ranks = $Findings | ForEach-Object { Get-SeverityRank -Severity $_.Severity }
   $max = ($ranks | Measure-Object -Maximum).Maximum

@@ -177,11 +177,7 @@ jobs:
             --output="dist/${RELEASE_ASSET}" \
             "${RELEASE_COMMIT}" \
             README.md CHANGELOG.md CONTRIBUTING.md LICENSE SECURITY.md PSScriptAnalyzerSettings.psd1 \
-            docs examples lib scripts tools \
-            ':(exclude)scripts/ci-local.sh' \
-            ':(exclude)tools/demo' \
-            ':(exclude)tools/demo-profiles.mjs' \
-            ':(exclude)tools/quality'
+            docs examples lib scripts tools
 
       - name: Generate portable checksum
         env:
@@ -227,8 +223,8 @@ jobs:
 
           for prohibited in \
             .agents .codex .github \
-            tools/demo tools/demo-profiles.mjs \
-            private tests RELEASE_STATUS.md scripts/ci-local.sh tools/quality; do
+            dev rust \
+            private tests RELEASE_STATUS.md; do
             if [[ -e "${package_root}/${prohibited}" ]]; then
               printf 'Prohibited release path: %s\n' "${prohibited}" >&2
               exit 1

@@ -17,14 +17,15 @@ The operator ZIP contains:
 - 52 numbered endpoint scripts, from prefix `01-` through prefix `52-`
 - six `00-*` validation, execution, copy, and reporting entry points
 - seven example profiles and four example configurations
-- shared PowerShell modules and the script scaffolding/verification tools
+- shared PowerShell modules and the release-package verification tools
 - the Windows Forms launcher
 - public project, contribution, security, changelog, and operator documentation
 
-The ZIP does not include `.github/`, `tests/`, private directories,
-`scripts/ci-local.sh`, `tools/quality/`, `tools/demo/`, or
-`tools/demo-profiles.mjs`. It includes browser tour assets and screenshots as
-documentation, but leaves out the browser test dependencies.
+The ZIP does not include `.github/`, `tests/`, `dev/`, `rust/`, or private
+directories. Development-only tooling, including the local gate, code-quality
+scans, browser tour checks, and the capability scaffold, lives in `dev/`. The
+ZIP includes browser tour assets and screenshots as documentation, but leaves
+out the browser test dependencies.
 
 ## Release verification
 
@@ -144,9 +145,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module PSScriptAnalyzer
 ```
 
 `verify.ps1 -SkipAnalyzer` performs only a partial parse check and does not
-replace the complete gate. Pester and `scripts/ci-local.sh` require a full
+replace the complete gate. Pester and `dev/ci-local.sh` require a full
 checkout of the release tag. The operator ZIP deliberately excludes both
-`scripts/ci-local.sh` and `tests/`.
+`dev/` and `tests/`.
 
 An extracted ZIP has no Git metadata. The verifier and secret scan therefore
 fall back to recursive package scanning. In a Windows checkout, these two tools

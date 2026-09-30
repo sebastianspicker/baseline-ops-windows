@@ -98,20 +98,6 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability39Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -363,7 +349,7 @@ if ($cfgMeta.Error) {
     -Message ("Config JSON could not be loaded; using parameters/defaults. Error: {0}" -f $cfgMeta.Error))
 }
 
-if ((Test-AllConditions -Conditions @({ $cfgMeta.Loaded }, { $null -ne $cfg }))) {
+if (($cfgMeta.Loaded) -and ($null -ne $cfg)) {
   Apply-ConfigOverrides -Config $cfg -Effective $RunState.effective -Warnings $ConfigWarnings -RunState $RunState
 }
 $RunState.rebootRequired = $false
@@ -417,7 +403,7 @@ function Add-Capability39UefiLockFinding {
   param([hashtable]$RunState)
   $currentLsaCfgFlags = $RunState.current.LsaCfgFlags
   $effectiveLsaCfgFlags = $RunState.effective.LsaCfgFlags
-if ((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ $currentLsaCfgFlags -eq 1 }, { $Mode -eq 'Remediate' })) }, { $effectiveLsaCfgFlags -ne 1 }))) {
+if ((($currentLsaCfgFlags -eq 1) -and ($Mode -eq 'Remediate')) -and ($effectiveLsaCfgFlags -ne 1)) {
   Add-Finding -FindingList $Findings -Code 'CG-UEFI-Lock-Note' -Severity 'Low' -Message 'LsaCfgFlags=1 (UEFI lock) may prevent changing/disabling it via registry.'
 }
 }

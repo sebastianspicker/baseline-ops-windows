@@ -10,7 +10,7 @@ focused, explain their effect on an endpoint, and test the behavior they change.
 - Pester 5.8.0
 - Python 3 with venv support for pinned Lizard 1.21.2
 - Node.js 18 or newer with npm for pinned jscpd 5.1.2
-- Bash for `scripts/ci-local.sh`
+- Bash for `dev/ci-local.sh`
 - Windows PowerShell 5.1 for compatibility checks
 - Rust 1.96.0 from `rust/rust-toolchain.toml` for changes under `rust/`
 - A disposable Windows test device for changes that depend on endpoint features or remediation
@@ -48,13 +48,13 @@ Adding a numbered capability changes the public product catalog. Scaffold the
 next number with:
 
 ```powershell
-pwsh -NoProfile -File .\tools\new-script.ps1 -Name 53-Example-Audit
+pwsh -NoProfile -File .\dev\new-script.ps1 -Name 53-Example-Audit
 ```
 
 Add `-SupportsRemediate` only when the script will implement guarded state changes:
 
 ```powershell
-pwsh -NoProfile -File .\tools\new-script.ps1 `
+pwsh -NoProfile -File .\dev\new-script.ps1 `
   -Name 53-Example-Audit -SupportsRemediate
 ```
 
@@ -66,14 +66,24 @@ ledger in the same change.
 Run the complete PowerShell 7 gate from Bash or Git Bash:
 
 ```bash
-bash ./scripts/ci-local.sh
+bash ./dev/ci-local.sh
 ```
 
-The wrapper requires PowerShell Core 7.6.3. Set `PWSH_BIN` to an absolute executable path when necessary:
+The wrapper requires PowerShell Core 7.6.3 and reads the pinned PowerShell,
+Pester, and PSScriptAnalyzer versions from `dev/quality/tool-versions.psd1`, the
+single version manifest; `tests/dev/ToolVersions.Tests.ps1` fails when a
+workflow pin differs from it. CI runs the same wrapper on Linux. Set `PWSH_BIN`
+to an absolute executable path when necessary:
 
 ```bash
-PWSH_BIN='/absolute/path/to/pwsh' bash ./scripts/ci-local.sh
+PWSH_BIN='/absolute/path/to/pwsh' bash ./dev/ci-local.sh
 ```
+
+A change to a numbered script or its `scripts/internal/` files also changes the
+Rust oracle binding. In the same change, run
+`rust/oracles/Update-NeutralFixtures.ps1` and then `cargo run -p xtask -- verify`
+from `rust/`, and check that no Rust capability-ledger claim depends on the
+changed behavior.
 
 Run individual PowerShell 7 checks:
 
@@ -84,7 +94,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command `
   "Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force; & .\tools\verify.ps1 -RootPath ."
 pwsh -NoProfile -Command `
   "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"
-pwsh -NoProfile -File .\tools\quality\Test-CodeQuality.ps1 -ReleaseLine PowerShell
+pwsh -NoProfile -File .\dev\quality\Test-CodeQuality.ps1 -ReleaseLine PowerShell
 ```
 
 The code-quality command installs pinned analyzers in the ignored
@@ -105,18 +115,21 @@ the overall duplication percentage falls.
 Run the Rust-only quality gate from the repository root:
 
 ```powershell
-pwsh -NoProfile -File .\tools\quality\Test-CodeQuality.ps1 -ReleaseLine Rust
+pwsh -NoProfile -File .\dev\quality\Test-CodeQuality.ps1 -ReleaseLine Rust
 ```
 
 Check both implementations, or generate an updated duplication baseline for
 review, with:
 
 ```powershell
-pwsh -NoProfile -File .\tools\quality\Test-CodeQuality.ps1 -ReleaseLine All
-pwsh -NoProfile -File .\tools\quality\Test-CodeQuality.ps1 -ReleaseLine All -UpdateDuplicationBaseline
+pwsh -NoProfile -File .\dev\quality\Test-CodeQuality.ps1 -ReleaseLine All
+pwsh -NoProfile -File .\dev\quality\Test-CodeQuality.ps1 -ReleaseLine All -UpdateDuplicationBaseline
 ```
 
-The update switch marks each new duplicate-block fingerprint `REVIEW REQUIRED`.
+The update switch keeps the reviewed rationale of a block whose normalized
+content and occurrence count are unchanged but whose lines moved, and marks every
+other new duplicate-block fingerprint `REVIEW REQUIRED`. Numeric metric limits
+live in `dev/quality/limits.psd1`.
 Review the source and remove duplication where practical. If sharing the code
 would weaken compatibility, clarity, or a security boundary, record that specific
 reason. Tool errors, scans with no files, malformed baselines, and fingerprints

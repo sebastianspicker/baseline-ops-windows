@@ -56,8 +56,49 @@ Target alpha: `v2.3.0-alpha.1`.
   release files.
 - Extracted the firewall baseline's catalog and normalization helpers into a
   script-specific internal helper without changing its parameters.
+- Development-only tooling moved out of the shipped tree into `dev/`
+  (`dev/ci-local.sh`, `dev/quality/`, `dev/demo/`, `dev/new-script.ps1`). The
+  release ZIP now contains `tools/` whole, which holds only the launcher and
+  the package checks; the scaffolding script `new-script.ps1` is no longer
+  shipped. CI runs `dev/ci-local.sh` on Linux as the single portable gate.
+- `dev/quality/tool-versions.psd1` is the single source of pinned tool
+  versions; a test keeps workflow pins and PowerShell checksums consistent
+  with it. Complexity limits live in `dev/quality/limits.psd1` (unchanged).
+- The Rust oracle's v2 source closure now covers every
+  `scripts/internal/<stem>.*.ps1` file, and `xtask verify` is the single owner
+  of the digest binding. Rust CI now also runs on `scripts/**` and `lib/**`.
+- Capabilities no longer carry `Test-AllConditions`/`Test-AnyCondition`
+  wrappers; conditions use `-and`/`-or` or named predicates. Complexity limits
+  are unchanged.
+- Removed unused shared-module functions (`Invoke-Schtasks`, `Invoke-Wecutil`,
+  `Invoke-Git`, the event-log, scheduled-task, and registry-export helpers,
+  eight unused `Registry.psm1` setters and getters, `Invoke-ScriptWithTiming`,
+  `ConvertTo-V2Json`, `Test-SafeUrl`, and several unused console helpers and
+  aliases) and stopped exporting functions used only inside their module.
 
 ### Fixed
+
+- Launcher operations passed their parameter table as one positional
+  argument, and relayed output polluted the worker exit code; the worker now
+  splats parameters and returns the child exit code exactly.
+- `18-Firewall-Baseline` no longer throws on remediation (unbound `-Remediate`
+  arguments) and applies profile logging settings again; `32-Firewall-
+  Logging-Audit` honors `ShouldProcess` again; `24-Cert-AutoEnrollment-Health`
+  console summaries no longer throw; `07-ScheduledTasks-Hygiene` no longer
+  reads undefined defaults; `12-Suspicious-Artifact-Grabber` compares the
+  suspicious count correctly.
+- `02-LAPS-Hygiene` (`dsregcmd`) and `45-WEF-Client-Forwarding-Readiness-Audit`
+  (`wecutil`) now run native tools through `External.psm1` with exact
+  resolution, timeouts, and bounded output.
+- `45-WEF-Client-Forwarding-Readiness-Audit -IncludeWecutilCheck` now honors
+  `-WhatIf`/`-Confirm` before running `wecutil qc /q`, which changes the
+  Windows Event Collector service configuration, and reports a non-zero exit.
+- `17-Sysmon-Rule-Drift-Sensor` now locks and ACL-checks every file that the
+  privileged `16-Sysmon-Config-Updater` launch loads, not only its helpers.
+- Profile steps whose dependencies are satisfied now run in declaration order;
+  the scheduler previously skipped the step after each completed one.
+- The release-package `tools/verify.ps1` check no longer fails with a missing
+  module when PSScriptAnalyzer is enabled.
 
 - Windows native command workers now redirect and forward child stdout/stderr,
   preserve bounded UTF-8 output, and force text transport so Windows PowerShell

@@ -8,20 +8,6 @@ Provides bounded event-query, remediation-closure, result, and console helpers
 loaded by the primary Sysmon helper after repository trust validation.
 #>
 
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Get-SysmonChannelXmlValue {
   param($Xml, [string]$Property)
   try { return $Xml.channel.$Property.'#text' } catch { return $null }
@@ -30,6 +16,21 @@ function Get-SysmonChannelMaxSize {
   param($Xml)
   try { return $Xml.channel.logging.maxSize.'#text' } catch { return $null }
 }
+function Test-WevtutilResultFailed {
+  param($Result)
+  return [bool](($Result) -and (-not $Result.Success))
+}
+
+function Test-WevtutilResultHasOutput {
+  param($Result)
+  return [bool](($Result) -and ($Result.Output))
+}
+
+function Test-SysmonNonEmptyText {
+  param($Text)
+  return [bool](($null -ne $Text) -and ($Text -ne ''))
+}
+
 function Get-SysmonChannelStatus {
   $info = [pscustomobject]@{
     LogName = $script:SysmonLogName
@@ -42,16 +43,16 @@ function Get-SysmonChannelStatus {
   try {
     # S9 fix: use Invoke-Wevtutil wrapper with array-based args instead of direct wevtutil call
     $wevtResult = Invoke-Wevtutil -Arguments @('gl', $script:SysmonLogName, '/f:xml') -CaptureOutput
-    if ((Test-AllConditions -Conditions @({ $wevtResult }, { -not $wevtResult.Success }))) {
+    if (Test-WevtutilResultFailed -Result $wevtResult) {
       $info.Error = (@($wevtResult.Output) -join [Environment]::NewLine).Trim()
       return $info
     }
-    $xml = if ((Test-AllConditions -Conditions @({ $wevtResult }, { $wevtResult.Output }))) { (@($wevtResult.Output) -join [Environment]::NewLine) } else { $null }
+    $xml = if (Test-WevtutilResultHasOutput -Result $wevtResult) { (@($wevtResult.Output) -join [Environment]::NewLine) } else { $null }
     if (-not $xml) { return $info }
     $x = [xml]$xml
     $info.Exists = $true
     $enabledText = Get-SysmonChannelXmlValue -Xml $x -Property 'enabled'
-    if ((Test-AllConditions -Conditions @({ $null -ne $enabledText }, { $enabledText -ne '' }))) {
+    if (Test-SysmonNonEmptyText -Text $enabledText) {
       $info.Enabled = [bool]::Parse([string]$enabledText)
     }
     $maxText = Get-SysmonChannelMaxSize -Xml $x
@@ -92,7 +93,7 @@ function Complete-BoundedSysmonEventQuery {
       $queryErrors = @($RunState.pipeline.Streams.Error)
       $materialErrors = @($queryErrors | Where-Object { $_.FullyQualifiedErrorId -notmatch '^NoMatchingEventsFound(?:,|$)' })
       if ($materialErrors.Count -gt 0) { $RunState.queryError = ($materialErrors | ForEach-Object { $_.Exception.Message } | Select-Object -Unique) -join '; ' }
-      elseif ((Test-AllConditions -Conditions @({ $invokeException }, { $queryErrors.Count -eq 0 }))) { $RunState.queryError = $invokeException }
+      elseif (($invokeException) -and ($queryErrors.Count -eq 0)) { $RunState.queryError = $invokeException }
 }
 function Invoke-BoundedSysmonEventQuerySection02 {
   param([hashtable]$RunState)
@@ -108,7 +109,7 @@ try {
   } catch { $RunState.queryError = $_.Exception.Message }
   finally {
     $RunState.stopwatch.Stop()
-    if ((Test-AllConditions -Conditions @({ $RunState.async }, { $RunState.async.AsyncWaitHandle }))) { $RunState.async.AsyncWaitHandle.Close() }
+    if (($RunState.async) -and ($RunState.async.AsyncWaitHandle)) { $RunState.async.AsyncWaitHandle.Close() }
     $RunState.pipeline.Dispose()
   }
 }
@@ -130,6 +131,11 @@ function Invoke-BoundedSysmonEventQuery {
     . Invoke-BoundedSysmonEventQuerySection01 -RunState $RunState
     . Invoke-BoundedSysmonEventQuerySection02 -RunState $RunState
     . Invoke-BoundedSysmonEventQuerySection03 -RunState $RunState
+}
+
+function Test-SysmonEvidenceComplete {
+  param($QueryError, $Truncated, $TimedOut)
+  return [bool](((-not $QueryError) -and (-not $Truncated)) -and (-not $TimedOut))
 }
 
 function Get-BoundedSysmonEventEvidence {
@@ -155,7 +161,7 @@ function Get-BoundedSysmonEventEvidence {
   } catch { $RunState.queryError = $_.Exception.Message }
   finally { if ($RunState.stopwatch.Elapsed.TotalSeconds -ge $MaximumSeconds) { $RunState.timedOut = $true }; $RunState.stopwatch.Stop() }
   [pscustomobject]@{
-    Complete = [bool]((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ -not $RunState.queryError }, { -not $truncated })) }, { -not $RunState.timedOut })))
+    Complete = Test-SysmonEvidenceComplete -QueryError $RunState.queryError -Truncated $truncated -TimedOut $RunState.timedOut
     Truncated = $truncated
     TimedOut = $RunState.timedOut
     Error = Get-SysmonEvidenceError -QueryError $RunState.queryError -TimedOut $RunState.timedOut -Truncated $truncated
@@ -182,6 +188,11 @@ function New-SysmonMessageRegex {
   return [regex]::new($Pattern,[Text.RegularExpressions.RegexOptions]::CultureInvariant,[TimeSpan]::FromSeconds(1))
 }
 
+function Test-SysmonEventRecordMatch {
+  param($EventRecord, [int]$EventId, $Regex)
+  return [bool](([int]$EventRecord.Id -eq $EventId) -and (($null -eq $Regex) -or ($Regex.IsMatch([string]$EventRecord.Message))))
+}
+
 function Get-EventCountFromEvidence {
   param([Parameter(Mandatory)]$Evidence,[Parameter(Mandatory)][int]$EventId,[string]$MessageRegex,[Parameter(Mandatory)][Diagnostics.Stopwatch]$WorkStopwatch,[Parameter(Mandatory)][int]$MaximumSeconds, [hashtable]$RunState)
   $RunState.EventId = $EventId
@@ -194,7 +205,7 @@ function Get-EventCountFromEvidence {
     $count = 0
     foreach ($eventRecord in @($Evidence.Events)) {
       if ($WorkStopwatch.Elapsed.TotalSeconds -ge $MaximumSeconds) { return [pscustomobject]@{ Success = $false; Count = $null; Error = 'Event processing exceeded its global wall-clock budget.' } }
-      if ((Test-AllConditions -Conditions @({ [int]$eventRecord.Id -eq $EventId }, { ((Test-AnyCondition -Conditions @({ $null -eq $rx }, { $rx.IsMatch([string]$eventRecord.Message) }))) }))) { $count++ }
+      if (Test-SysmonEventRecordMatch -EventRecord $eventRecord -EventId $EventId -Regex $rx) { $count++ }
     }
     return [pscustomobject]@{ Success = $true; Count = $count; Error = $null }
   } catch { return [pscustomobject]@{ Success = $false; Count = $null; Error = $_.Exception.Message } }
@@ -304,6 +315,11 @@ function Assert-SysmonRemediationSignature {
     $signature = Get-AuthenticodeSignature -FilePath $ScriptPath -ErrorAction Stop
     if ($signature.Status -ne 'Valid') { throw "Remediation script signature is not valid: $($signature.Status)." }
 }
+function Test-SysmonRemediationSucceeded {
+  param($Result)
+  return [bool]((((($Result) -and ($Result.Success)) -and (-not $Result.TimedOut)) -and (-not $Result.OutputTruncated)) -and -not $Result.StderrTruncated)
+}
+
 function Invoke-SysmonRemediationProcess {
   param([hashtable]$RunState)
     $argList = @('-NoProfile')
@@ -311,8 +327,8 @@ function Invoke-SysmonRemediationProcess {
     $argList += @('-File', $stage.Path, '-Mode', 'Remediate')
     $native = Invoke-NativeCommand -Command $windowsPowerShell -Arguments $argList -CaptureOutput -Quiet -TimeoutSeconds 300 -MaxOutputBytes 65536
     $RunState.result.ExitCode = if ($native) { $native.ExitCode } else { $null }
-    $RunState.result.Success = [bool]((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ $native }, { $native.Success })) }, { -not $native.TimedOut })) }, { -not $native.OutputTruncated })) -and -not $native.StderrTruncated)
-    if ((Test-AllConditions -Conditions @({ -not $RunState.result.Success }, { $native }))) { $RunState.result.Error = (($native.Stderr, $native.Stdout | Where-Object { $_ }) -join [Environment]::NewLine).Trim() }
+    $RunState.result.Success = Test-SysmonRemediationSucceeded -Result $native
+    if ((-not $RunState.result.Success) -and ($native)) { $RunState.result.Error = (($native.Stderr, $native.Stdout | Where-Object { $_ }) -join [Environment]::NewLine).Trim() }
 }
 function Invoke-RemediationScript {
   [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -332,7 +348,7 @@ function Invoke-RemediationScript {
   }
   try {
     $windowsPowerShell = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
-    if ((Test-AnyCondition -Conditions @({ -not [System.IO.Path]::IsPathRooted($windowsPowerShell) }, { -not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) }))) { throw 'The absolute Windows PowerShell executable could not be found.' }
+    if ((-not [System.IO.Path]::IsPathRooted($windowsPowerShell)) -or (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf))) { throw 'The absolute Windows PowerShell executable could not be found.' }
     $windowsPowerShell = (Assert-TrustedWindowsPathAcl -Path $windowsPowerShell -CheckAncestors).FullName
     if (-not $PSCmdlet.ShouldProcess($ScriptPath, 'Launch trusted remediation PowerShell process')) {
       $RunState.result.Attempted = $false

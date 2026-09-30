@@ -191,20 +191,6 @@ param(
   [switch]$NoColor
 )
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability17Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -342,14 +328,26 @@ function Get-SysmonRuleEvidence {
     $configCount = Get-EventCountFromEvidence -Evidence $eventEvidence -EventId 16 -WorkStopwatch $workStopwatch -MaximumSeconds $MaxQuerySeconds -RunState $RunState
     if ($configCount.Success) { $RunState.configChanged = [bool]($configCount.Count -gt 0) } else { $RunState.eventQueryFailed = $true }
 }
+function Test-SysmonRulePropertyTruthy {
+  param($Rule, [string]$Name)
+  return [bool](($Rule.PSObject.Properties.Name -contains $Name) -and ($Rule.$Name))
+}
 function Initialize-SysmonRuleIteration {
   param([hashtable]$RunState)
         $id = [int]$r.Id
-        $RunState.name = if ((Test-AllConditions -Conditions @({ $r.PSObject.Properties.Name -contains 'Name' }, { $r.Name }))) { [string]$r.Name } else { "EventID $id" }
-        $RunState.isCritical = [bool]((Test-AllConditions -Conditions @({ $r.PSObject.Properties.Name -contains 'Critical' }, { $r.Critical })))
-        $RunState.minWin = if ((Test-AllConditions -Conditions @({ $r.PSObject.Properties.Name -contains 'MinPerWindow' }, { $null -ne $r.MinPerWindow }))) { [Nullable[int]][int]$r.MinPerWindow } else { $null }
-        $msgRegex = if ((Test-AllConditions -Conditions @({ $r.PSObject.Properties.Name -contains 'MessageRegex' }, { $r.MessageRegex }))) { [string]$r.MessageRegex } else { $null }
+        $RunState.name = if (Test-SysmonRulePropertyTruthy -Rule $r -Name 'Name') { [string]$r.Name } else { "EventID $id" }
+        $RunState.isCritical = Test-SysmonRulePropertyTruthy -Rule $r -Name 'Critical'
+        $RunState.minWin = if (Test-CatalogRuleValuePresent -Rule $r -Name 'MinPerWindow') { [Nullable[int]][int]$r.MinPerWindow } else { $null }
+        $msgRegex = if (Test-SysmonRulePropertyTruthy -Rule $r -Name 'MessageRegex') { [string]$r.MessageRegex } else { $null }
         $RunState.countResult = Get-EventCountFromEvidence -Evidence $eventEvidence -EventId $id -MessageRegex $msgRegex -WorkStopwatch $workStopwatch -MaximumSeconds $MaxQuerySeconds -RunState $RunState
+}
+function Test-SysmonCountBelowMinimum {
+  param($Count, $Minimum)
+  return [bool](($null -ne $Minimum) -and ($Count -lt $Minimum))
+}
+function Test-SysmonRatioSurge {
+  param($IncludeSurge, $Ratio, $RatioUpper)
+  return [bool]((($IncludeSurge) -and ($null -ne $Ratio)) -and ($Ratio -gt $RatioUpper))
 }
 function Resolve-SysmonRuleStatus {
   param([hashtable]$RunState)
@@ -357,21 +355,25 @@ function Resolve-SysmonRuleStatus {
         $minimumWindowCount = $RunState.minWin
         $ratioFloor = $RunState.RatioFloor
         $ratioUpper = $RunState.RatioUpper
-        if ((Test-AllConditions -Conditions @({ $isCritical }, { $count -eq 0 }))) { return 'HARDZERO' }
-        if ((Test-AllConditions -Conditions @({ $null -ne $minimumWindowCount }, { $count -lt $minimumWindowCount }))) { return 'LOW' }
-        if ((Test-AllConditions -Conditions @({ $null -ne $ratio }, { $ratio -lt $ratioFloor }))) { return 'DRIFT_DOWN' }
-        if ((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ $IncludeSurge }, { $null -ne $ratio })) }, { $ratio -gt $ratioUpper }))) { return 'SURGE' }
+        if (($isCritical) -and ($count -eq 0)) { return 'HARDZERO' }
+        if (Test-SysmonCountBelowMinimum -Count $count -Minimum $minimumWindowCount) { return 'LOW' }
+        if (($null -ne $ratio) -and ($ratio -lt $ratioFloor)) { return 'DRIFT_DOWN' }
+        if (Test-SysmonRatioSurge -IncludeSurge $IncludeSurge -Ratio $ratio -RatioUpper $ratioUpper) { return 'SURGE' }
         return 'OK'
+}
+function Test-SysmonBaselineComparable {
+  param($PriorBaseline, $MinimumBaseline)
+  return [bool]((($null -ne $PriorBaseline) -and ($PriorBaseline -ge [double]$MinimumBaseline)) -and ($PriorBaseline -gt 0))
 }
 function Add-SysmonSuccessfulRuleMeasurement {
   param([hashtable]$RunState)
         $count = [int]$RunState.countResult.Count; $priorBase = $null
         if ($RunState.baseline.ContainsKey("$id")) { try { $priorBase = [double]$RunState.baseline["$id"] } catch { $priorBase = $null } }
         $ratio = $null
-        if ((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ $null -ne $priorBase }, { $priorBase -ge [double]$RunState.MinBaselineToCompare })) }, { $priorBase -gt 0 }))) { $ratio = [math]::Round($count / $priorBase,2) }
+        if (Test-SysmonBaselineComparable -PriorBaseline $priorBase -MinimumBaseline $RunState.MinBaselineToCompare) { $ratio = [math]::Round($count / $priorBase,2) }
         $status = Resolve-SysmonRuleStatus -RunState $RunState
         $newBase = [double]$count
-        if ((Test-AllConditions -Conditions @({ -not $Rebaseline }, { $null -ne $priorBase }))) { $newBase = [double]::Round(($RunState.Alpha * $count) + ((1 - $RunState.Alpha) * $priorBase),2) }
+        if ((-not $Rebaseline) -and ($null -ne $priorBase)) { $newBase = [double]::Round(($RunState.Alpha * $count) + ((1 - $RunState.Alpha) * $priorBase),2) }
         $RunState.baseline["$id"] = $newBase
         $RunState.ruleResults += Get-RuleResult ([pscustomobject]@{ Id=$id; Name=$RunState.name; Count=$count; PriorBaseline=$priorBase; NewBaseline=$newBase; Ratio=$ratio; MinPerWindow=$RunState.minWin; IsCritical=$RunState.isCritical; Status=$status; MessageRegex=$msgRegex; QueryError=$null })
 }
@@ -397,14 +399,18 @@ function Complete-SysmonEvidenceCollection {
         try { Write-SysmonState -InputObject $stateObj -Path $StatePath -RunState $RunState; $RunState.stateWriteOk = $true } catch { Write-Verbose ("Sysmon drift state write failed: {0}" -f $_.Exception.Message) }
     }
 }
+function Test-SysmonReapplyRequested {
+  param([string]$Mode, $TriggerReapply)
+  return [bool](($Mode -eq 'Remediate') -and ($TriggerReapply))
+}
 function Invoke-SysmonReapplyIfNeeded {
   param([hashtable]$RunState)
     $overallStatus = Resolve-SysmonOverallStatus -Rules $RunState.ruleResults -StateWriteOk $RunState.stateWriteOk -EvidenceComplete $evidenceComplete
-    if ((Test-AllConditions -Conditions @({ $Mode -eq 'Remediate' }, { $TriggerReapply })) -and $evidenceComplete -and $overallStatus -ne 'ERROR') {
+    if ((Test-SysmonReapplyRequested -Mode $Mode -TriggerReapply $TriggerReapply) -and $evidenceComplete -and $overallStatus -ne 'ERROR') {
         $hasHardZero = @($RunState.ruleResults | Where-Object { $_.Status -eq 'HARDZERO' }).Count -gt 0
         if ($hasHardZero) {
           $RunState.remediationResult = Invoke-RemediationScript -ScriptPath $RemediationScriptPath -RequireSignature:$RequireSignedRemediationScript -RunState $RunState
-          if ((Test-AllConditions -Conditions @({ $RunState.remediationResult.Attempted }, { -not $RunState.remediationResult.Success }))) {
+          if (($RunState.remediationResult.Attempted) -and (-not $RunState.remediationResult.Success)) {
             $overallStatus = 'ERROR'
           }
         }

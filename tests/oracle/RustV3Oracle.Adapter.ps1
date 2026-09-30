@@ -1,15 +1,15 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-Validates Rust v3 oracle bindings and runs supported v2 policy comparisons.
+Runs supported v2 policy comparisons for the shared Rust v3 behavioral cases.
 
 .DESCRIPTION
-Provides Pester helpers for structural source closures and bounded executable
-comparisons of selected actual PowerShell v2 policy functions.
+Provides Pester helpers for bounded executable comparisons of selected actual
+PowerShell v2 policy functions. Structural source-closure bindings are verified
+by the Rust workspace (`cargo run -p xtask -- verify`), not by this adapter.
 #>
 
 Set-StrictMode -Version Latest
-. (Join-Path $PSScriptRoot '../rust/oracles/Oracle.Common.ps1')
 
 function Get-RustV3OracleProperty {
   [OutputType([object])]
@@ -34,207 +34,18 @@ function Test-RustV3OraclePropertyExists {
 
 function Get-RustV3OracleDocuments {
   [OutputType([pscustomobject])]
-  param([string]$RepositoryRoot = (Join-Path $PSScriptRoot '..'))
+  param([string]$RepositoryRoot = (Join-Path $PSScriptRoot '../..'))
 
   $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
-  $oracleRoot = Join-Path $root 'rust/oracles'
   [pscustomobject]@{
     RepositoryRoot = $root
-    Manifest = Get-Content -LiteralPath (Join-Path $oracleRoot 'v2-capability-manifests.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    Fixture = Get-Content -LiteralPath (Join-Path $oracleRoot 'v2-neutral-fixtures.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    Behavioral = Get-Content -LiteralPath (Join-Path $oracleRoot 'v2-rust-behavioral-cases.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    Ledger = Get-Content -LiteralPath (Join-Path $root 'rust/ledger/capability-parity.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-  }
-}
-
-function Add-RustV3OracleInventoryErrors {
-  param($Documents, $Manifests, $Fixtures, $Errors)
-
-  $expected = [int]$Documents.Ledger.summary.legacy_capabilities_expected
-  if ($Documents.Manifest.schema_version -ne 2) { $Errors.Add('Manifest schema_version must be 2.') }
-  if ($Documents.Fixture.schema_version -ne 2) { $Errors.Add('Fixture schema_version must be 2.') }
-  if ($Documents.Behavioral.schema_version -ne 1) { $Errors.Add('Behavioral schema_version must be 1.') }
-  if ($Manifests.Count -ne $expected) { $Errors.Add(('Expected {0} manifests, found {1}.' -f $expected, $Manifests.Count)) }
-  if ($Fixtures.Count -ne $expected) { $Errors.Add(('Expected {0} fixtures, found {1}.' -f $expected, $Fixtures.Count)) }
-}
-
-function Add-RustV3OracleSourceErrors {
-  param($Documents, $Manifest, $Errors)
-
-  $id = [string]$Manifest.capability_id
-  $script = [string]$Manifest.legacy_script
-  $sourceFiles = @($Manifest.source_files)
-  if (-not (Test-RustV3OracleSourceHeader $script $sourceFiles $id $Errors)) { return }
-  Add-RustV3OracleHelperBindingError $Documents $script $sourceFiles $id $Errors
-  $closureIndex = Get-RustV3OracleClosureIndex $Documents $sourceFiles $id $Errors
-  Add-RustV3OracleClosureDigestError $Manifest $sourceFiles $closureIndex $id $Errors
-}
-
-function Test-RustV3OracleSourceHeader {
-  [OutputType([bool])]
-  param($Script, $SourceFiles, $Id, $Errors)
-  if ($script -notmatch '^scripts/[0-5][0-9]-[^/]+\.ps1$' -or $sourceFiles.Count -eq 0 -or $sourceFiles[0].path -ne $script) {
-    [void]$Errors.Add(('Invalid source closure for {0}.' -f $id))
-    return $false
-  }
-  return $true
-}
-
-function Add-RustV3OracleHelperBindingError {
-  param($Documents, $Script, $SourceFiles, $Id, $Errors)
-  $stem = [System.IO.Path]::GetFileNameWithoutExtension($script)
-  foreach ($suffix in @('helpers', 'runtime')) {
-    $companion = 'scripts/internal/{0}.{1}.ps1' -f $stem, $suffix
-    $exists = Test-Path -LiteralPath (Join-Path $Documents.RepositoryRoot $companion) -PathType Leaf
-    $bound = @($sourceFiles | Where-Object { $_.path -eq $companion }).Count -eq 1
-    if ($exists -ne $bound) { [void]$Errors.Add(('Companion closure binding drift for {0}: {1}.' -f $id, $companion)) }
-  }
-}
-
-function Get-RustV3OracleClosureIndex {
-  [OutputType([string])]
-  param($Documents, $SourceFiles, $Id, $Errors)
-  $closureIndex = ''
-  $seen = @{}
-  foreach ($source in $sourceFiles) {
-    $path = [string]$source.path
-    $digest = [string]$source.sha256
-    if ($path -notmatch '^scripts/(internal/)?[^/]+\.ps1$' -or $seen.ContainsKey($path) -or $digest -notmatch '^[0-9a-f]{64}$') {
-      [void]$Errors.Add(('Invalid source closure member for {0}: {1}.' -f $id, $path))
-      continue
-    }
-    $seen[$path] = $true
-    $sourcePath = Join-Path $Documents.RepositoryRoot $path
-    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-      [void]$Errors.Add(('Missing source for {0}: {1}.' -f $id, $path))
-      continue
-    }
-    $actual = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne $digest) { [void]$Errors.Add(('Source digest drift for {0}: {1}.' -f $id, $path)) }
-    $closureIndex += '{0}  {1}' -f $actual, $path
-    $closureIndex += "`n"
-  }
-  return $closureIndex
-}
-
-function Add-RustV3OracleClosureDigestError {
-  param($Manifest, $SourceFiles, $ClosureIndex, $Id, $Errors)
-  $closureDigest = Get-RustV3OracleSha256 -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes($closureIndex))
-  if ($Manifest.source_sha256 -ne $sourceFiles[0].sha256 -or $Manifest.source_closure_sha256 -ne $closureDigest) {
-    [void]$Errors.Add(('Source closure digest drift for {0}.' -f $id))
-  }
-}
-
-function Add-RustV3OracleManifestErrors {
-  param($Documents, $Manifest, $ManifestByFixture, $LedgerEntries, $Errors)
-
-  $number = Get-RustV3OracleProperty $Manifest 'number'
-  $id = Get-RustV3OracleProperty $Manifest 'capability_id'
-  $fixtureId = Get-RustV3OracleProperty $Manifest 'fixture_id'
-  if (-not (Test-RustV3OracleManifestIdentity $Manifest $number $id $fixtureId $Errors)) { return }
-  if ($ManifestByFixture.ContainsKey($fixtureId)) { [void]$Errors.Add(('Duplicate fixture_id: {0}.' -f $fixtureId)) }
-  $ManifestByFixture[$fixtureId] = $Manifest
-  Add-RustV3OracleSourceErrors $Documents $Manifest $Errors
-  Add-RustV3OracleLedgerBindingError $Manifest $LedgerEntries $number $id $Errors
-}
-
-function Test-RustV3OracleManifestIdentity {
-  [OutputType([bool])]
-  param($Manifest, $Number, $Id, $FixtureId, $Errors)
-  if (($Number -notin 1..52) -or [string]::IsNullOrWhiteSpace($Id) -or [string]::IsNullOrWhiteSpace($FixtureId)) {
-    [void]$Errors.Add(('Manifest has invalid identity: {0}.' -f ($Manifest | ConvertTo-Json -Compress)))
-    return $false
-  }
-  return $true
-}
-
-function Add-RustV3OracleLedgerBindingError {
-  param($Manifest, $LedgerEntries, $Number, $Id, $Errors)
-  $ledger = @($LedgerEntries | Where-Object { $_.number -eq $number })
-  if ($ledger.Count -ne 1 -or $ledger[0].id -ne $id -or $ledger[0].script -ne (Split-Path -Leaf $Manifest.legacy_script) -or $ledger[0].status -ne $Manifest.rust_maturity) {
-    [void]$Errors.Add(('Ledger binding drift for {0}.' -f $id))
-  }
-}
-
-function Add-RustV3OracleFixtureErrors {
-  param($Fixture, $ManifestByFixture, $Errors)
-
-  $fixtureId = Get-RustV3OracleProperty $Fixture 'fixture_id'
-  $manifest = $ManifestByFixture[$fixtureId]
-  if ($null -eq $manifest) { [void]$Errors.Add(('Fixture has no manifest: {0}.' -f $fixtureId)); return }
-  Add-RustV3OracleFixtureBindingError $Fixture $manifest $fixtureId $Errors
-  Add-RustV3OracleFixtureScopeError $Fixture $fixtureId $Errors
-  Add-RustV3OracleFixtureFieldErrors $Fixture $fixtureId $Errors
-}
-
-function Add-RustV3OracleFixtureBindingError {
-  param($Fixture, $Manifest, $FixtureId, $Errors)
-  if ($Fixture.capability_id -ne $manifest.capability_id -or $Fixture.source_sha256 -ne $manifest.source_sha256 -or $Fixture.source_closure_sha256 -ne $manifest.source_closure_sha256) {
-    [void]$Errors.Add(('Source binding drift for {0}.' -f $FixtureId))
-  }
-}
-
-function Add-RustV3OracleFixtureScopeError {
-  param($Fixture, $FixtureId, $Errors)
-  if ($Fixture.fixture_kind -ne 'structural_binding' -or $Fixture.proof_scope -ne 'structure_only' -or (Test-RustV3OraclePropertyExists $Fixture 'expected')) {
-    [void]$Errors.Add(('Fixture {0} overstates its structural proof scope.' -f $FixtureId))
-  }
-}
-
-function Add-RustV3OracleFixtureFieldErrors {
-  param($Fixture, $FixtureId, $Errors)
-  foreach ($name in @('typed_input', 'normalized_observation', 'limitations', 'intentional_safe_parity_differences')) {
-    if (-not (Test-RustV3OraclePropertyExists $Fixture $name)) { [void]$Errors.Add(('Fixture {0} lacks {1}.' -f $FixtureId, $name)) }
-  }
-}
-
-function Test-RustV3OracleDocuments {
-  [OutputType([pscustomobject])]
-  param([string]$RepositoryRoot = (Join-Path $PSScriptRoot '..'))
-
-  $documents = Get-RustV3OracleDocuments -RepositoryRoot $RepositoryRoot
-  $errors = New-Object 'System.Collections.Generic.List[string]'
-  $manifests = @($documents.Manifest.manifests)
-  $fixtures = @($documents.Fixture.fixtures)
-  Add-RustV3OracleInventoryErrors $documents $manifests $fixtures $errors
-  $manifestByFixture = @{}
-  foreach ($manifest in $manifests) {
-    Add-RustV3OracleManifestErrors $documents $manifest $manifestByFixture @($documents.Ledger.entries) $errors
-  }
-  foreach ($fixture in $fixtures) { Add-RustV3OracleFixtureErrors $fixture $manifestByFixture $errors }
-  Add-RustV3OracleBehavioralDocumentErrors $documents @($documents.Behavioral.cases) $errors
-  [pscustomobject]@{
-    IsValid = ($errors.Count -eq 0)
-    Errors = @($errors)
-    Manifests = $manifests
-    Fixtures = $fixtures
-    BehavioralCases = @($documents.Behavioral.cases)
-  }
-}
-
-function Add-RustV3OracleBehavioralDocumentErrors {
-  param($Documents, $Cases, $Errors)
-  $capabilities = @($Cases.capability_id | Sort-Object -Unique)
-  $declared = @($Documents.Behavioral.coverage.behavioral_capabilities)
-  if ($Documents.Behavioral.coverage.proof_scope -ne 'partial_policy_behavior' -or
-      (Compare-Object $capabilities $declared -SyncWindow 0) -or
-      $Documents.Behavioral.coverage.structural_only_capability_count -ne (52 - $capabilities.Count)) {
-    [void]$Errors.Add('Behavioral coverage declaration is inaccurate.')
-  }
-  foreach ($case in $Cases) { Add-RustV3OracleBehavioralSourceError $Documents $case $Errors }
-}
-
-function Add-RustV3OracleBehavioralSourceError {
-  param($Documents, $Case, $Errors)
-  $manifest = @($Documents.Manifest.manifests | Where-Object { $_.capability_id -eq $Case.capability_id })
-  if ($manifest.Count -ne 1 -or $Case.source_closure_sha256 -ne $manifest[0].source_closure_sha256) {
-    [void]$Errors.Add(('Behavioral source binding drift for {0}.' -f $Case.id))
+    Behavioral = Get-Content -LiteralPath (Join-Path $root 'rust/oracles/v2-rust-behavioral-cases.json') -Raw -Encoding UTF8 | ConvertFrom-Json
   }
 }
 
 function Invoke-RustV3OracleV2DohPolicy {
   [OutputType([pscustomobject])]
-  param([Parameter(Mandatory)] $Observation, [string]$RepositoryRoot = (Join-Path $PSScriptRoot '..'))
+  param([Parameter(Mandatory)] $Observation, [string]$RepositoryRoot = (Join-Path $PSScriptRoot '../..'))
 
   $script:RustV3OracleObservation = $Observation
   $scriptPath = Join-Path $RepositoryRoot 'scripts/52-DoH-Audit.ps1'
@@ -350,7 +161,7 @@ function ConvertTo-RustV3OracleWufbMutation {
 
 function Invoke-RustV3OracleV2WufbPolicy {
   [OutputType([pscustomobject])]
-  param([Parameter(Mandatory)] $Case, [string]$RepositoryRoot = (Join-Path $PSScriptRoot '..'))
+  param([Parameter(Mandatory)] $Case, [string]$RepositoryRoot = (Join-Path $PSScriptRoot '../..'))
   $definitions = @(Import-RustV3OracleWufbFunctions -RepositoryRoot $RepositoryRoot)
   . ([scriptblock]::Create(($definitions -join "`n")))
   $script:RustV3OracleWufbObservation = $Case.observation
@@ -447,7 +258,7 @@ function ConvertTo-RustV3OracleSecurityOptionsMutation {
 
 function Invoke-RustV3OracleV2SecurityOptionsPolicy {
   [OutputType([pscustomobject])]
-  param([Parameter(Mandatory)] $Case, [string]$RepositoryRoot = (Join-Path $PSScriptRoot '..'))
+  param([Parameter(Mandatory)] $Case, [string]$RepositoryRoot = (Join-Path $PSScriptRoot '../..'))
   $definitions = @(Import-RustV3OracleSecurityOptionsFunctions -RepositoryRoot $RepositoryRoot)
   . ([scriptblock]::Create(($definitions -join "`n")))
   $script:RustV3OracleSecurityOptionsObservation = $Case.observation
@@ -518,7 +329,7 @@ function Add-RustV3OracleDohCaseErrors {
 
 function Test-RustV3OracleV2BehavioralCases {
   [OutputType([pscustomobject])]
-  param([string]$RepositoryRoot = (Join-Path $PSScriptRoot '..'))
+  param([string]$RepositoryRoot = (Join-Path $PSScriptRoot '../..'))
 
   $documents = Get-RustV3OracleDocuments -RepositoryRoot $RepositoryRoot
   $errors = New-Object 'System.Collections.Generic.List[string]'

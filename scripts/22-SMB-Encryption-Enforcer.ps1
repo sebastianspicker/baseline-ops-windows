@@ -178,20 +178,6 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability22Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -646,7 +632,7 @@ function Invoke-SmbEncryptionRemediation {
 
           'ShareOnly' {
 
-            if ((Test-AnyCondition -Conditions @({ -not $RunState.ShareName }, { $RunState.ShareName.Count -eq 0 }))) {
+            if ((-not $RunState.ShareName) -or ($RunState.ShareName.Count -eq 0)) {
               throw 'Mode Remediate with RemediationScope=ShareOnly requires at least one -ShareName.'
             }
 

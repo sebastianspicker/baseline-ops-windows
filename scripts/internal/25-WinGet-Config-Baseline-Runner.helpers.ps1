@@ -10,20 +10,6 @@ replaceable configuration file.
 #>
 Set-StrictMode -Version Latest
 
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Test-WinGetPhaseSuccess {
   [CmdletBinding()]
   [OutputType([bool])]
@@ -119,7 +105,7 @@ function Initialize-WinGetStagingRoot {
   }
 
   $fixedRoot = Join-Path $commonApplicationData 'BaselineOpsForWindows\WinGetConfigStaging'
-  if ((Test-AllConditions -Conditions @({ -not [string]::IsNullOrWhiteSpace($StagingRoot) }, { -not [System.IO.Path]::GetFullPath($StagingRoot).Equals([System.IO.Path]::GetFullPath($fixedRoot), [System.StringComparison]::OrdinalIgnoreCase) }))) {
+  if ((-not [string]::IsNullOrWhiteSpace($StagingRoot)) -and (-not [System.IO.Path]::GetFullPath($StagingRoot).Equals([System.IO.Path]::GetFullPath($fixedRoot), [System.StringComparison]::OrdinalIgnoreCase))) {
     throw 'WinGet staging root is fixed under CommonApplicationData.'
   }
 
@@ -150,14 +136,14 @@ function New-MissingWinGetStagingRoot {
   while (-not (Test-Path -LiteralPath $current)) {
     [void]$missing.Add($current)
     $parent = Split-Path -Path $current -Parent
-    if ((Test-AnyCondition -Conditions @({ [string]::IsNullOrWhiteSpace($parent) }, { $parent -eq $current }))) {
+    if (([string]::IsNullOrWhiteSpace($parent)) -or ($parent -eq $current)) {
       throw 'WinGet staging root has no existing trusted ancestor.'
     }
     $current = $parent
   }
 
   $existing = Get-Item -LiteralPath $current -Force -ErrorAction Stop
-  if ((Test-AnyCondition -Conditions @({ -not $existing.PSIsContainer }, { ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) }))) {
+  if ((-not $existing.PSIsContainer) -or ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
     throw 'WinGet staging root ancestor is not a regular directory.'
   }
 
@@ -174,6 +160,16 @@ function New-MissingWinGetStagingRoot {
 
 # Locks the source, copies bounded bytes into protected staging, and retains a
 # read handle so WinGet consumes the exact configuration that was validated.
+function Test-WinGetConfigurationSizeInvalid {
+  param([int64]$Length, [int64]$MaximumBytes)
+  return [bool](($Length -eq 0) -or ($Length -gt $MaximumBytes))
+}
+
+function Test-WinGetWorkDirectoryPresent {
+  param($Path)
+  return [bool](($Path) -and (Test-Path -LiteralPath $Path -PathType Container))
+}
+
 function New-WinGetStagedConfiguration {
   [CmdletBinding()]
   param(
@@ -193,7 +189,7 @@ function New-WinGetStagedConfiguration {
     # Deny writers and replacement while copying the exact source bytes into
     # the protected staging directory.
     $sourceStream = [System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-    if ((Test-AnyCondition -Conditions @({ $sourceStream.Length -eq 0 }, { $sourceStream.Length -gt $MaximumBytes }))) {
+    if (Test-WinGetConfigurationSizeInvalid -Length $sourceStream.Length -MaximumBytes $MaximumBytes) {
       throw "WinGet configuration must contain 1..$MaximumBytes bytes."
     }
     $bytes = Read-WinGetConfigurationBytes -Stream $sourceStream
@@ -225,7 +221,7 @@ function New-WinGetStagedConfiguration {
   } catch {
     if ($null -ne $writeStream) { $writeStream.Dispose() }
     if ($null -ne $stageStream) { $stageStream.Dispose() }
-    if ((Test-AllConditions -Conditions @({ $workDirectory }, { (Test-Path -LiteralPath $workDirectory -PathType Container) }))) {
+    if (Test-WinGetWorkDirectoryPresent -Path $workDirectory) {
       Remove-Item -LiteralPath $workDirectory -Recurse -Force -ErrorAction SilentlyContinue
     }
     throw
@@ -348,7 +344,7 @@ function Get-WinGetConsoleFindings {
 }
 function Write-WinGetPhaseSummary {
   param($Summary)
-  if ((Test-AllConditions -Conditions @({ $Summary.Results }, { $Summary.Results.Count -gt 0 }))) {
+  if (($Summary.Results) -and ($Summary.Results.Count -gt 0)) {
     Write-UiLine ''
     Write-UiLine -Message 'Phases' -Style 'Header'
     foreach ($r in $Summary.Results) {

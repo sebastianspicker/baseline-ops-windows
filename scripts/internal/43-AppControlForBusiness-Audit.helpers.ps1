@@ -8,21 +8,7 @@ Provides bounded helper functions loaded by the matching public capability
 after repository bootstrap and trust validation complete.
 #>
 
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
 
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 
 function ConvertTo-BooleanOrNull {
   [CmdletBinding()]

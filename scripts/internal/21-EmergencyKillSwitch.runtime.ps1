@@ -121,15 +121,20 @@ if ($RunState.Rules.Count -lt 1 -or $RunState.Rules.Count -gt 3) { throw 'Manage
   $RunState.seen = @{}
 }
 
+function Test-ManagedRuleIdentityFieldsInvalid {
+  param($Rule)
+  return [bool]((($null -eq $Rule) -or (@($Rule.PSObject.Properties.Name).Count -ne 3)) -or @($Rule.PSObject.Properties.Name | Where-Object { @('Name','Direction','Action') -notcontains $_ }).Count -ne 0)
+}
+
 function Assert-ManagedFirewallRulesSection02Stage01 {
   param([hashtable]$RunState)
-if ((Test-AnyCondition -Conditions @({ $null -eq $rule }, { @($rule.PSObject.Properties.Name).Count -ne 3 })) -or @($rule.PSObject.Properties.Name | Where-Object { @('Name','Direction','Action') -notcontains $_ }).Count -ne 0) { throw 'Managed rule identity contains missing or unexpected fields.' }
-    if ((Test-AnyCondition -Conditions @({ $rule.Name -isnot [string] }, { $rule.Name -notmatch '^[A-Za-z0-9_-]+$' })) -or $rule.Name.Length -gt 256 -or $RunState.seen.ContainsKey($rule.Name)) { throw 'Managed rule identity has an invalid or duplicate name.' }
+if (Test-ManagedRuleIdentityFieldsInvalid -Rule $rule) { throw 'Managed rule identity contains missing or unexpected fields.' }
+    if ((($rule.Name -isnot [string]) -or ($rule.Name -notmatch '^[A-Za-z0-9_-]+$')) -or $rule.Name.Length -gt 256 -or $RunState.seen.ContainsKey($rule.Name)) { throw 'Managed rule identity has an invalid or duplicate name.' }
 }
 
 function Assert-ManagedFirewallRulesSection02Stage02 {
   param([hashtable]$RunState)
-if ((Test-AnyCondition -Conditions @({ @('Inbound','Outbound') -notcontains [string]$rule.Direction }, { @('Allow','Block') -notcontains [string]$rule.Action }))) { throw 'Managed rule identity has an invalid direction or action.' }
+if ((@('Inbound','Outbound') -notcontains [string]$rule.Direction) -or (@('Allow','Block') -notcontains [string]$rule.Action)) { throw 'Managed rule identity has an invalid direction or action.' }
     $RunState.seen[$rule.Name] = $true
 }
 

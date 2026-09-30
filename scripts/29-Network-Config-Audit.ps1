@@ -81,20 +81,6 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability29Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -191,6 +177,11 @@ function Get-DefaultConfig {
   }
 }
 
+function Test-NonBlankConfigValue {
+  param($Value)
+  return [bool](($null -ne $Value) -and (-not [string]::IsNullOrWhiteSpace([string]$Value)))
+}
+
 function Import-JsonConfigOrDefault {
   [CmdletBinding()]
   param(
@@ -210,7 +201,7 @@ function Import-JsonConfigOrDefault {
 
     Set-NetworkBooleanConfig -Config $cfg -Json $json
     $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'CsvEncoding'
-    if ((Test-AllConditions -Conditions @({ $null -ne $v }, { -not [string]::IsNullOrWhiteSpace([string]$v) }))) { $cfg.CsvEncoding = [string]$v }
+    if (Test-NonBlankConfigValue -Value $v) { $cfg.CsvEncoding = [string]$v }
 
     $v = Get-OptionalPropertyValue -InputObject $json -PropertyName 'ConsoleWidthHint'
     if ($null -ne $v) { $cfg.ConsoleWidthHint = [int]$v }
@@ -291,6 +282,11 @@ function Invoke-Capability29MainPhase02 {
     }
   }
 }
+function Test-NetConfigHasDnsServers {
+  param($DnsServer)
+  return [bool](($DnsServer) -and ($DnsServer.ServerAddresses))
+}
+
 function Invoke-Capability29MainPhase03 {
   param([hashtable]$RunState)
   $RunState.interfaces = $RunState.netCfg | ForEach-Object {
@@ -300,7 +296,7 @@ function Invoke-Capability29MainPhase03 {
     $gw4 = if ($_.IPv4DefaultGateway) { $_.IPv4DefaultGateway.NextHop } else { $null }
     $gw6 = if ($_.IPv6DefaultGateway) { $_.IPv6DefaultGateway.NextHop } else { $null }
 
-    $dns = if ((Test-AllConditions -Conditions @({ $_.DNSServer }, { $_.DNSServer.ServerAddresses }))) { ($_.DNSServer.ServerAddresses -join ', ') } else { $null }
+    $dns = if (Test-NetConfigHasDnsServers -DnsServer $_.DNSServer) { ($_.DNSServer.ServerAddresses -join ', ') } else { $null }
 
     $profileName = if ($_.NetProfile) { $_.NetProfile.Name } else { $null }
 

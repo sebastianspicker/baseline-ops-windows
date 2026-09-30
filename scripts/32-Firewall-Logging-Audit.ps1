@@ -102,20 +102,6 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Initialize-Capability32Runtime {
   param($EntryBoundParameters)
   $RunState = @{
@@ -239,7 +225,7 @@ function Resolve-DesiredSettings {
 
   # Defaults: Microsoft recommends >= 20480 KB, max is 32767 KB.
   $windowsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
-  if ((Test-AllConditions -Conditions @({ [string]::IsNullOrWhiteSpace($windowsRoot) }, { [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT }))) { $windowsRoot = 'C:\Windows' }
+  if (([string]::IsNullOrWhiteSpace($windowsRoot)) -and ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT)) { $windowsRoot = 'C:\Windows' }
   if ([string]::IsNullOrWhiteSpace($windowsRoot)) { throw 'Trusted Windows directory is unavailable.' }
   $defaultLogFileName = "{0}\System32\LogFiles\Firewall\pfirewall.log" -f $windowsRoot.TrimEnd('\')
   $RunState.enableDropped = $true
@@ -285,7 +271,7 @@ function Apply-FirewallLoggingBooleanOverrides {
 }
 function Apply-FirewallLoggingPathAndSizeOverrides {
   param([hashtable]$RunState)
-  if ((Test-AllConditions -Conditions @({ $RunState.BoundParams.ContainsKey('LogFileName') }, { -not [string]::IsNullOrWhiteSpace($RunState.BoundParams['LogFileName']) }))) {
+  if (($RunState.BoundParams.ContainsKey('LogFileName')) -and (-not [string]::IsNullOrWhiteSpace($RunState.BoundParams['LogFileName']))) {
     $RunState.logFileName = [string]$RunState.BoundParams['LogFileName']
     $RunState.source = 'Params'
   }
@@ -299,7 +285,7 @@ function Apply-FirewallLoggingPathAndSizeOverrides {
 }
 function Repair-FirewallLoggingDesiredSettings {
   param([hashtable]$RunState)
-  if ((Test-AnyCondition -Conditions @({ $RunState.logMaxSizeKB -lt 1 }, { $RunState.logMaxSizeKB -gt 32767 }))) {
+  if (($RunState.logMaxSizeKB -lt 1) -or ($RunState.logMaxSizeKB -gt 32767)) {
     Add-Finding -FindingList $script:Findings -Code 'FW-InvalidDesiredLogMaxSize' -Severity 'Medium' -Message ("Desired LogMaxSizeKB '" + $RunState.logMaxSizeKB + "' is outside 1..32767; using default 20480.") -TimeUtc
     $RunState.logMaxSizeKB = 20480
     if ($RunState.source -eq 'Params') { $RunState.source = 'Params(DefaultFallback)' } else { $RunState.source = 'JSON/Defaults' }

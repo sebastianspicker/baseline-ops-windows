@@ -181,7 +181,8 @@ supply the trusted signer identity or authenticated hashes. See
 | `scripts/_lib/` | Internal runner bootstrap |
 | `lib/` | Shared PowerShell modules |
 | `lib/platform/` | Private Windows and native-process implementation |
-| `tools/Launcher-*` | Windows Forms launcher and its separate worker process |
+| `tools/` | Shipped launcher and release-package verification tools |
+| `dev/` | Development-only gate, quality, demo, and scaffolding tools; not shipped |
 | `tests/` | Development tests for behavior, compatibility, and security checks |
 | `examples/` | Profiles and capability inputs to review before use |
 | `rust/` | Unreleased v3 implementation with its own builds and releases |
@@ -201,15 +202,16 @@ Install-Module Pester -RequiredVersion 5.8.0 -Scope CurrentUser -SkipPublisherCh
 Run the complete PowerShell 7 local gate from the repository root:
 
 ```bash
-bash ./scripts/ci-local.sh
+bash ./dev/ci-local.sh
 ```
 
-The wrapper requires PowerShell 7.6.3 and runs code-quality checks, the secret
+The wrapper requires the PowerShell version pinned in
+`dev/quality/tool-versions.psd1` (7.6.3) and runs code-quality checks, the secret
 scan, documentation checks, static verification, and Pester. Set `PWSH_BIN` to an
 absolute 7.6.3 executable when `pwsh` is not on `PATH`:
 
 ```bash
-PWSH_BIN='/absolute/path/to/pwsh' bash ./scripts/ci-local.sh
+PWSH_BIN='/absolute/path/to/pwsh' bash ./dev/ci-local.sh
 ```
 
 Windows PowerShell 5.1, LocalSystem, protected installations, extracted

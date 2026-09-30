@@ -445,7 +445,7 @@ try {
 
 function Invoke-Capability21MainPhase07Step02Stage02 {
   param([hashtable]$RunState)
-if ((Test-AllConditions -Conditions @({ $RunState.Run.Effective.AutoRollbackMinutes -gt 0 }, { -not $RunState.Run.Actions.ConfirmDeclined }))) {
+if (($RunState.Run.Effective.AutoRollbackMinutes -gt 0) -and (-not $RunState.Run.Actions.ConfirmDeclined)) {
       # Capture and embed immutable state only when automatic rollback is requested.
       if ($script:__EntryCmdlet.ShouldProcess($rollbackTaskName, "Capture and validate embedded firewall rollback snapshot")) {
         $RunState.rollbackSnapshotJson = Get-CanonicalFirewallRollbackSnapshot -CaptureAdapters:$RunState.Run.Effective.DisableAdapters -ManagedRules $ManagedRules -RunState $RunState
@@ -473,11 +473,15 @@ if ((Test-AllConditions -Conditions @({ $RunState.Run.Effective.AutoRollbackMinu
     }
 }
 
+function Test-KillSwitchBreakGlassRequested {
+  param($RemoteAddress)
+  return [bool](($RemoteAddress) -and ($RemoteAddress.Count -gt 0))
+}
 function Add-KillSwitchFirewallRules {
   param([hashtable]$RunState)
     if ($script:__EntryCmdlet.ShouldProcess("Windows Defender Firewall Rules", "Create kill switch rules")) {
       $inRuleCreated = $true
-      if ((Test-AllConditions -Conditions @({ $RunState.Run.Effective.BreakGlassRemoteAddress }, { $RunState.Run.Effective.BreakGlassRemoteAddress.Count -gt 0 }))) {
+      if (Test-KillSwitchBreakGlassRequested -RemoteAddress $RunState.Run.Effective.BreakGlassRemoteAddress) {
         $breakGlassRule = New-KillSwitchFirewallRuleData -Name $RuleBgName `
           -DisplayName "$($RunState.Run.Effective.RulePrefix) BreakGlass Inbound Allow" -Direction Inbound -Action Allow `
           -RemoteAddress $RunState.Run.Effective.BreakGlassRemoteAddress -Protocol TCP `
@@ -499,14 +503,14 @@ function Add-KillSwitchFirewallRules {
       $outRuleCreated = Invoke-NewOrReplaceRule -Data $outboundRule -RunState $RunState -DecisionContext $script:__EntryCmdlet
       if (-not $outRuleCreated) { throw 'Outbound block firewall rule creation or verification failed.' }
       [void]$RunState.createdManagedRules.Add(($ManagedRules | Where-Object { $_.Name -eq $RuleOutName })[0])
-      $RunState.Run.Actions.RulesCreated = [bool]((Test-AllConditions -Conditions @({ $inRuleCreated }, { $outRuleCreated })))
+      $RunState.Run.Actions.RulesCreated = [bool](($inRuleCreated) -and ($outRuleCreated))
     } else {
       $RunState.Run.Actions.ConfirmDeclined = $true
     }
 }
 function Enable-KillSwitchFirewallProfiles {
   param([hashtable]$RunState)
-    if ((Test-AllConditions -Conditions @({ -not $RunState.Run.Actions.ConfirmDeclined }, { $script:__EntryCmdlet.ShouldProcess("Windows Firewall Profiles", "Enable firewall + set DefaultInboundAction=Block, DefaultOutboundAction=Block") }))) {
+    if ((-not $RunState.Run.Actions.ConfirmDeclined) -and ($script:__EntryCmdlet.ShouldProcess("Windows Firewall Profiles", "Enable firewall + set DefaultInboundAction=Block, DefaultOutboundAction=Block"))) {
       Set-NetFirewallProfile -All -Enabled True -DefaultInboundAction Block -DefaultOutboundAction Block
       $RunState.Run.Actions.FirewallProfileSet = $true
       $RunState.firewallActivationCommitted = $true
@@ -545,10 +549,14 @@ function Invoke-Capability21MainPhase07Step02Stage03 {
     . Disable-KillSwitchNetworkAdapters -RunState $RunState
     }
 }
+function Test-KillSwitchPartialCleanupAllowed {
+  param($ActivationCommitted, $RollbackTaskCancelled)
+  return [bool]((-not $ActivationCommitted) -and ($RollbackTaskCancelled))
+}
 function Undo-PartialKillSwitchActivation {
   param([hashtable]$RunState)
     $rollbackTaskCancelled = $true
-    if ((Test-AllConditions -Conditions @({ -not $RunState.firewallActivationCommitted }, { $RunState.Run.Actions.RollbackScheduled }))) {
+    if ((-not $RunState.firewallActivationCommitted) -and ($RunState.Run.Actions.RollbackScheduled)) {
       try {
         Unregister-ScheduledTask -TaskName $rollbackTaskName -Confirm:$false -ErrorAction Stop
         $RunState.Run.Actions.RollbackScheduled = $false
@@ -558,7 +566,7 @@ function Undo-PartialKillSwitchActivation {
         Add-RunError "Failed activation rollback-task cancellation failed: $($_.Exception.Message)" -RunState $RunState
       }
     }
-    if ((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ -not $RunState.firewallActivationCommitted }, { $rollbackTaskCancelled })) }, { $RunState.createdManagedRules.Count -gt 0 }))) {
+    if ((Test-KillSwitchPartialCleanupAllowed -ActivationCommitted $RunState.firewallActivationCommitted -RollbackTaskCancelled $rollbackTaskCancelled) -and ($RunState.createdManagedRules.Count -gt 0)) {
       try { Remove-ExactManagedFirewallRules -Rules @($RunState.createdManagedRules.ToArray()) -RunState $RunState }
       catch { Add-RunError "Partial activation cleanup failed: $($_.Exception.Message)" -RunState $RunState }
     }

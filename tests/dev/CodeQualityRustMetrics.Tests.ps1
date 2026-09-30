@@ -7,7 +7,7 @@
 
 BeforeAll {
   $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-  Import-Module (Join-Path $repoRoot 'tools/quality/QualityScans.psm1') -Force
+  Import-Module (Join-Path $repoRoot 'dev/quality/QualityScans.psm1') -Force
   $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('baseline-rust-metrics-' + [guid]::NewGuid())
   [void](New-Item -ItemType Directory -Path $fixtureRoot)
 }

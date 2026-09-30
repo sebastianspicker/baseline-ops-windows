@@ -57,17 +57,17 @@ After changing a showcased profile, regenerate the snapshot from the repository
 root and verify it:
 
 ```bash
-node tools/demo-profiles.mjs
-node tools/demo-profiles.mjs --check
+node dev/demo-profiles.mjs
+node dev/demo-profiles.mjs --check
 ```
 
 Browser checks and screenshot capture require Node.js 20 or newer and the
-Playwright development package in `tools/demo`. Playwright is not shipped with
+Playwright development package in `dev/demo`. Playwright is not shipped with
 the demo or either Windows application:
 
 ```bash
-npm ci --prefix tools/demo
-cd tools/demo
+npm ci --prefix dev/demo
+cd dev/demo
 npx playwright install chromium
 npm test
 npm run screenshots

@@ -7,7 +7,7 @@
 
 BeforeAll {
   $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-  Import-Module (Join-Path $repoRoot 'tools/quality/CloneBaseline.psm1') -Force
+  Import-Module (Join-Path $repoRoot 'dev/quality/CloneBaseline.psm1') -Force
   function New-CloneReport($fragment, $start) {
     $file1 = [pscustomobject]@{ Name='scripts/a.ps1'; Start=$start; End=($start + 4) }
     $file2 = [pscustomobject]@{ Name='scripts/b.ps1'; Start=10; End=14 }

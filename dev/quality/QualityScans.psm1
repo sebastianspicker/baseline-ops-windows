@@ -8,6 +8,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$script:RustLimits = (Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'limits.psd1')).Rust
+
 function Get-QualitySourceFiles {
   [CmdletBinding()]
   param(
@@ -21,14 +23,13 @@ function Get-QualitySourceFiles {
         ForEach-Object FullName | Sort-Object -Unique)
   }
   $files = @()
-  foreach ($directory in @('scripts', 'lib', 'tools', 'tests')) {
+  foreach ($directory in @('scripts', 'lib', 'tools', 'dev', 'tests')) {
     $path = Join-Path $RootPath $directory
     if (-not (Test-Path -LiteralPath $path -PathType Container)) { continue }
     $files += Get-ChildItem -LiteralPath $path -Recurse -File |
       Where-Object {
         $_.Extension -in @('.ps1', '.psm1') -and
-        $_.FullName -notmatch '[/\\]rust[/\\]' -and
-        $_.FullName -notmatch '[/\\]tests[/\\]RustV3Oracle[^/\\]*\.ps1$'
+        $_.FullName -notmatch '[/\\]rust[/\\]'
       } |
       ForEach-Object FullName
   }
@@ -44,8 +45,6 @@ function Get-RustOraclePowerShellFiles {
     $files += Get-ChildItem -LiteralPath $oraclePath -File -Recurse |
       Where-Object { $_.Extension -in @('.ps1', '.psm1') } | ForEach-Object FullName
   }
-  $files += Get-ChildItem -LiteralPath (Join-Path $RootPath 'tests') -File -Filter 'RustV3Oracle*.ps1' |
-    ForEach-Object FullName
   return @($files | Sort-Object -Unique)
 }
 
@@ -105,16 +104,17 @@ function Read-LizardFunctionFindings {
 
   $headers = @('Nloc', 'Ccn', 'Tokens', 'Parameters', 'Length', 'LongName', 'Path', 'Name', 'Signature', 'Start', 'End')
   $rows = @(Get-Content -LiteralPath $CsvPath | ConvertFrom-Csv -Header $headers)
+  $limits = $script:RustLimits
   $findings = @()
   foreach ($row in $rows) {
-    if ([int]$row.Nloc -gt 49) {
-      $findings += New-RustMetricFinding function_nloc $row.Path $row.Name ([int]$row.Start) ([int]$row.Nloc) 49
+    if ([int]$row.Nloc -gt $limits.FunctionNloc) {
+      $findings += New-RustMetricFinding function_nloc $row.Path $row.Name ([int]$row.Start) ([int]$row.Nloc) $limits.FunctionNloc
     }
-    if ([int]$row.Ccn -gt 7) {
-      $findings += New-RustMetricFinding function_ccn $row.Path $row.Name ([int]$row.Start) ([int]$row.Ccn) 7
+    if ([int]$row.Ccn -gt $limits.FunctionCcn) {
+      $findings += New-RustMetricFinding function_ccn $row.Path $row.Name ([int]$row.Start) ([int]$row.Ccn) $limits.FunctionCcn
     }
-    if ([int]$row.Parameters -gt 8) {
-      $findings += New-RustMetricFinding function_parameters $row.Path $row.Name ([int]$row.Start) ([int]$row.Parameters) 8
+    if ([int]$row.Parameters -gt $limits.FunctionParameters) {
+      $findings += New-RustMetricFinding function_parameters $row.Path $row.Name ([int]$row.Start) ([int]$row.Parameters) $limits.FunctionParameters
     }
   }
   return @($findings)
@@ -129,7 +129,8 @@ function Read-LizardFileFindings {
   $findings = @()
   foreach ($item in @($fileMeasure.item)) {
     $nloc = [int]$item.value[1]
-    if ($nloc -gt 499) { $findings += New-RustMetricFinding file_nloc $item.name '<file>' 1 $nloc 499 }
+    $limit = $script:RustLimits.FileNloc
+    if ($nloc -gt $limit) { $findings += New-RustMetricFinding file_nloc $item.name '<file>' 1 $nloc $limit }
   }
   return @($findings)
 }
@@ -172,12 +173,7 @@ function Get-JscpdScanRoots {
   )
 
   if ($ReleaseLine -eq 'PowerShell') { return ,([string]$RootPath) }
-  $roots = @((Join-Path $RootPath 'rust'))
-  $roots += @(
-    Get-ChildItem -LiteralPath (Join-Path $RootPath 'tests') -File -Filter 'RustV3Oracle*.ps1' |
-      ForEach-Object FullName
-  )
-  return @($roots)
+  return ,([string](Join-Path $RootPath 'rust'))
 }
 
 function Invoke-JscpdScan {
@@ -188,7 +184,7 @@ function Invoke-JscpdScan {
     [ValidateSet('PowerShell', 'Rust')][string]$ReleaseLine
   )
 
-  $qualityRoot = Join-Path $RootPath 'tools/quality'
+  $qualityRoot = Join-Path $RootPath 'dev/quality'
   $slug = $ReleaseLine.ToLowerInvariant()
   $config = Join-Path $qualityRoot ".jscpd-$slug.json"
   $output = Join-Path $RootPath ".cache/quality/reports/jscpd-$slug"

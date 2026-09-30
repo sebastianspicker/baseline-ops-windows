@@ -315,7 +315,7 @@ function Apply-ArgsOverlay {
     [AllowNull()][object[]]$ArgsList
   )
 
-  if ((Test-AnyCondition -Conditions @({ $null -eq $ArgsList }, { $ArgsList.Count -eq 0 }))) { return $Config }
+  if (($null -eq $ArgsList) -or ($ArgsList.Count -eq 0)) { return $Config }
 
   Set-LsaLegacyModeAndTarget -Config $Config -ArgsList $ArgsList
   Set-LsaLegacySwitches -Config $Config -ArgsList $ArgsList

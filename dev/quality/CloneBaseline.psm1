@@ -30,7 +30,7 @@ function Get-DetectorRecord {
     Mode = 'mild'
     MinTokens = 50
     MinLines = 5
-    ScanRoot = if ($ReleaseLine -eq 'PowerShell') { '.' } else { 'rust + tests/RustV3Oracle*.ps1' }
+    ScanRoot = if ($ReleaseLine -eq 'PowerShell') { '.' } else { 'rust' }
     Languages = $languages
   }
 }
@@ -39,11 +39,7 @@ function ConvertTo-Occurrence {
   param([object]$File, [ValidateSet('PowerShell', 'Rust')][string]$ReleaseLine)
 
   $path = ([string]$File.Name).Replace([char]92, [char]47).TrimStart([char]47)
-  if (
-    $ReleaseLine -eq 'Rust' -and
-    -not $path.StartsWith('rust/') -and
-    -not $path.StartsWith('tests/RustV3Oracle')
-  ) {
+  if ($ReleaseLine -eq 'Rust' -and -not $path.StartsWith('rust/')) {
     $path = "rust/$path"
   }
   return [ordered]@{ Path = $path; StartLine = [int]$File.Start; EndLine = [int]$File.End }
@@ -118,10 +114,8 @@ function Test-OccurrenceScope {
 
   $path = [string]$Occurrence.Path
   if ($path.Contains('..') -or [System.IO.Path]::IsPathRooted($path)) { return $false }
-  if ($ReleaseLine -eq 'Rust') {
-    return $path.StartsWith('rust/') -or $path.StartsWith('tests/RustV3Oracle')
-  }
-  return @('scripts/', 'lib/', 'tools/', 'tests/') | Where-Object { $path.StartsWith($_) } | Select-Object -First 1
+  if ($ReleaseLine -eq 'Rust') { return $path.StartsWith('rust/') }
+  return @('scripts/', 'lib/', 'tools/', 'dev/', 'tests/') | Where-Object { $path.StartsWith($_) } | Select-Object -First 1
 }
 
 function Assert-BaselineIdentity {
@@ -214,12 +208,39 @@ function Compare-CloneBaseline {
   return @($findings | Sort-Object Kind, Fingerprint)
 }
 
+function Get-ContentRationaleKey {
+  param([object]$Entry)
+
+  # Content plus the exact files involved: a moved clone keeps its reviewed
+  # rationale, but the same content pairing different files needs a new review.
+  $paths = @($Entry.Occurrences | ForEach-Object { [string]$_.Path } | Sort-Object)
+  return '{0}|{1}' -f $Entry.NormalizedContentHash, ($paths -join '|')
+}
+
+function Get-CarriedRationale {
+  param([object]$Entry, [hashtable]$ByFingerprint, [hashtable]$ByContent)
+
+  if ($ByFingerprint.ContainsKey($Entry.Fingerprint)) { return $ByFingerprint[$Entry.Fingerprint] }
+  # A clone whose lines moved within the same files keeps its reviewed
+  # rationale when the normalized content is unchanged; the strict fingerprint
+  # still reports the move until the baseline is regenerated.
+  $contentKey = Get-ContentRationaleKey $Entry
+  if ($ByContent.ContainsKey($contentKey)) { return $ByContent[$contentKey] }
+  return 'REVIEW REQUIRED'
+}
+
 function Update-CloneBaseline {
   param([string]$Path, [object[]]$Current, [object]$Existing)
 
-  $known = @{}; if ($Existing) { foreach ($entry in @($Existing.Entries)) { $known[$entry.Fingerprint] = $entry.Rationale } }
+  $byFingerprint = @{}; $byContent = @{}
+  if ($Existing) {
+    foreach ($entry in @($Existing.Entries)) {
+      $byFingerprint[$entry.Fingerprint] = $entry.Rationale
+      $byContent[(Get-ContentRationaleKey $entry)] = $entry.Rationale
+    }
+  }
   foreach ($entry in $Current) {
-    $entry.Rationale = if ($known.ContainsKey($entry.Fingerprint)) { $known[$entry.Fingerprint] } else { 'REVIEW REQUIRED' }
+    $entry.Rationale = Get-CarriedRationale -Entry $entry -ByFingerprint $byFingerprint -ByContent $byContent
   }
   $document = [ordered]@{ SchemaVersion = 1; Entries = @($Current | Sort-Object Fingerprint) }
   $document | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Path -Encoding UTF8

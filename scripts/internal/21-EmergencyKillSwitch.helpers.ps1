@@ -7,28 +7,17 @@ Validates the fail-closed configuration, serializes remediation, and captures a
 canonical rollback snapshot before changing managed firewall state. The entry
 script creates its run context and imports shared modules before dot-sourcing.
 #>
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
+function Test-JsonSignedInteger {
+  param($Value)
+  return ($Value -is [sbyte]) -or ($Value -is [int16]) -or ($Value -is [int32]) -or ($Value -is [int64])
 }
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
+function Test-JsonUnsignedInteger {
+  param($Value)
+  return ($Value -is [byte]) -or ($Value -is [uint16]) -or ($Value -is [uint32]) -or ($Value -is [uint64])
 }
 function Test-JsonInteger {
   param($Value)
-  return (
-    (Test-AnyCondition -Conditions @({ $Value -is [byte] }, { $Value -is [sbyte] })) -or
-    $Value -is [int16] -or $Value -is [uint16] -or
-    $Value -is [int32] -or $Value -is [uint32] -or
-    $Value -is [int64] -or $Value -is [uint64]
-  )
+  return (Test-JsonSignedInteger -Value $Value) -or (Test-JsonUnsignedInteger -Value $Value)
 }
 # Applies a closed schema and bounded values before configuration can influence
 # isolation, break-glass access, or rollback scheduling.
@@ -83,16 +72,28 @@ if ($null -ne $RunState.breakGlassPortProperty -and ((-not (Test-JsonInteger $Ru
 
 function Assert-KillSwitchConfigSection08Stage01 {
   param([hashtable]$RunState)
-if ((Test-AnyCondition -Conditions @({ $RunState.addressesProperty.Value -is [string] }, { $RunState.addressesProperty.Value -isnot [System.Collections.IEnumerable] }))) { throw "Kill-switch configuration field 'BreakGlassRemoteAddress' must be an array of IP addresses or CIDR ranges." }
+if (($RunState.addressesProperty.Value -is [string]) -or ($RunState.addressesProperty.Value -isnot [System.Collections.IEnumerable])) { throw "Kill-switch configuration field 'BreakGlassRemoteAddress' must be an array of IP addresses or CIDR ranges." }
     $addresses = @($RunState.addressesProperty.Value); if ($addresses.Count -gt 64) { throw "Kill-switch configuration field 'BreakGlassRemoteAddress' supports at most 64 entries." }
+}
+
+function Test-BreakGlassAddressEntryInvalid {
+  param($Address)
+  return [bool]((($Address -isnot [string]) -or ([string]::IsNullOrWhiteSpace($Address))) -or ($Address.Length -gt 128))
+}
+
+function Test-BreakGlassPrefixLengthInvalid {
+  param([string]$PrefixText, [System.Net.IPAddress]$Address)
+  $prefixLength = 0
+  $maximumPrefix = if ($Address.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) { 32 } else { 128 }
+  return [bool](((-not [int]::TryParse($PrefixText,[ref]$prefixLength)) -or ($prefixLength -lt 0)) -or ($prefixLength -gt $maximumPrefix))
 }
 
 function Assert-KillSwitchConfigSection08Stage02 {
 foreach ($address in $addresses) {
-      if ((Test-AnyCondition -Conditions @({ (Test-AnyCondition -Conditions @({ $address -isnot [string] }, { [string]::IsNullOrWhiteSpace($address) })) }, { $address.Length -gt 128 }))) { throw 'Each BreakGlassRemoteAddress entry must be a non-empty string of at most 128 characters.' }
+      if (Test-BreakGlassAddressEntryInvalid -Address $address) { throw 'Each BreakGlassRemoteAddress entry must be a non-empty string of at most 128 characters.' }
       $parts = $address.Split('/'); $parsedAddress = $null
-      if ((Test-AnyCondition -Conditions @({ $parts.Count -gt 2 }, { -not [System.Net.IPAddress]::TryParse($parts[0],[ref]$parsedAddress) }))) { throw "BreakGlassRemoteAddress entry '$address' is not an IP address or CIDR range." }
-      if ($parts.Count -eq 2) { $prefixLength = 0; $maximumPrefix = if ($parsedAddress.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) { 32 } else { 128 }; if ((Test-AnyCondition -Conditions @({ (Test-AnyCondition -Conditions @({ -not [int]::TryParse($parts[1],[ref]$prefixLength) }, { $prefixLength -lt 0 })) }, { $prefixLength -gt $maximumPrefix }))) { throw "BreakGlassRemoteAddress entry '$address' has an invalid prefix length." } }
+      if (($parts.Count -gt 2) -or (-not [System.Net.IPAddress]::TryParse($parts[0],[ref]$parsedAddress))) { throw "BreakGlassRemoteAddress entry '$address' is not an IP address or CIDR range." }
+      if ($parts.Count -eq 2) { if (Test-BreakGlassPrefixLengthInvalid -PrefixText $parts[1] -Address $parsedAddress) { throw "BreakGlassRemoteAddress entry '$address' has an invalid prefix length." } }
     }
 }
 
@@ -353,7 +354,7 @@ if ($RunState.profiles.Count -ne $RunState.requiredNames.Count) { throw 'Firewal
 
 function Assert-CanonicalFirewallSnapshotSection03Stage01 {
   param([hashtable]$RunState)
-if ((Test-AnyCondition -Conditions @({ $null -eq $firewallProfile }, { @($firewallProfile.PSObject.Properties.Name).Count -ne $RunState.requiredFields.Count })) -or @($firewallProfile.PSObject.Properties.Name | Where-Object { $RunState.requiredFields -notcontains $_ }).Count -ne 0) { throw "Firewall rollback profile contains missing or unexpected fields (received: $(@($firewallProfile.PSObject.Properties.Name) -join ','))." }; $name = [string]$firewallProfile.Name; if ($RunState.requiredNames -notcontains $name) { throw "Firewall rollback snapshot contains unknown profile '$name'." }; if ($RunState.seen.ContainsKey($name)) { throw "Firewall rollback snapshot contains duplicate profile '$name'." }; $RunState.seen[$name] = $true; $null = ConvertTo-StrictFirewallBoolean -Value $firewallProfile.Enabled -FieldName "$name.Enabled"
+if ((($null -eq $firewallProfile) -or (@($firewallProfile.PSObject.Properties.Name).Count -ne $RunState.requiredFields.Count)) -or @($firewallProfile.PSObject.Properties.Name | Where-Object { $RunState.requiredFields -notcontains $_ }).Count -ne 0) { throw "Firewall rollback profile contains missing or unexpected fields (received: $(@($firewallProfile.PSObject.Properties.Name) -join ','))." }; $name = [string]$firewallProfile.Name; if ($RunState.requiredNames -notcontains $name) { throw "Firewall rollback snapshot contains unknown profile '$name'." }; if ($RunState.seen.ContainsKey($name)) { throw "Firewall rollback snapshot contains duplicate profile '$name'." }; $RunState.seen[$name] = $true; $null = ConvertTo-StrictFirewallBoolean -Value $firewallProfile.Enabled -FieldName "$name.Enabled"
 }
 
 function Assert-CanonicalFirewallSnapshotSection03Stage02 {

@@ -9,20 +9,6 @@ rule drift, and launches remediation through a locked execution closure. The
 entry script establishes modules and strict mode before loading these helpers.
 #>
 
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Get-StatusColor {
   param([string]$Status)
   switch ($Status) {
@@ -145,9 +131,14 @@ function Assert-SysmonSensorStateSchemaSection04 {
 if (($RunState.State.WindowHours -isnot [int] -and $RunState.State.WindowHours -isnot [long]) -or [int64]$RunState.State.WindowHours -lt 1 -or [int64]$RunState.State.WindowHours -gt 168) { throw 'Sysmon sensor state WindowHours is invalid.' }
 }
 
+function Test-SysmonNumericValue {
+  param($Value)
+  return [bool](($Value -is [double]) -or ($Value -is [decimal]) -or ($Value -is [int]) -or ($Value -is [long]))
+}
+
 function Assert-SysmonSensorStateSchemaSection05 {
   param([hashtable]$RunState)
-if (((Test-AllConditions -Conditions @({ (Test-AllConditions -Conditions @({ $RunState.State.Alpha -isnot [double] }, { $RunState.State.Alpha -isnot [decimal] })) }, { $RunState.State.Alpha -isnot [int] })) -and $RunState.State.Alpha -isnot [long]) -or [double]::IsNaN([double]$RunState.State.Alpha) -or [double]::IsInfinity([double]$RunState.State.Alpha) -or [double]$RunState.State.Alpha -lt 0.01 -or [double]$RunState.State.Alpha -gt 1.0) { throw 'Sysmon sensor state Alpha is invalid.' }
+if ((-not (Test-SysmonNumericValue -Value $RunState.State.Alpha)) -or [double]::IsNaN([double]$RunState.State.Alpha) -or [double]::IsInfinity([double]$RunState.State.Alpha) -or [double]$RunState.State.Alpha -lt 0.01 -or [double]$RunState.State.Alpha -gt 1.0) { throw 'Sysmon sensor state Alpha is invalid.' }
 }
 
 function Assert-SysmonSensorStateSchemaSection06 {
@@ -267,9 +258,9 @@ function Test-CatalogInteger {
 }
 function Test-CatalogNumber {
   param([Parameter(Mandatory)]$Value,[Parameter(Mandatory)][string]$Name,[double]$Minimum,[double]$Maximum)
-  if ((Test-AllConditions -Conditions @({ $Value -isnot [long] }, { $Value -isnot [int] })) -and $Value -isnot [double] -and $Value -isnot [decimal]) { throw "$Name must be numeric." }
+  if (-not (Test-SysmonNumericValue -Value $Value)) { throw "$Name must be numeric." }
   $number = [double]$Value
-  if ((Test-AnyCondition -Conditions @({ [double]::IsNaN($number) }, { [double]::IsInfinity($number) })) -or $number -lt $Minimum -or $number -gt $Maximum) { throw "$Name must be between $Minimum and $Maximum." }
+  if ((([double]::IsNaN($number)) -or ([double]::IsInfinity($number))) -or $number -lt $Minimum -or $number -gt $Maximum) { throw "$Name must be between $Minimum and $Maximum." }
   return $number
 }
 function ConvertTo-ValidatedCatalogStage01 {
@@ -282,18 +273,28 @@ if ($rule -isnot [pscustomobject]) { throw 'Each catalog rule must be a JSON obj
     $RunState.seenRuleIds[$ruleId] = $true
 }
 
+function Test-CatalogRuleNameInvalid {
+  param($Rule)
+  return [bool]($Rule.PSObject.Properties.Name -contains 'Name' -and ((($Rule.Name -isnot [string]) -or ([string]::IsNullOrWhiteSpace($Rule.Name))) -or $Rule.Name.Length -gt 128))
+}
+
 function ConvertTo-ValidatedCatalogStage02 {
-if ($rule.PSObject.Properties.Name -contains 'Name' -and ((Test-AnyCondition -Conditions @({ $rule.Name -isnot [string] }, { [string]::IsNullOrWhiteSpace($rule.Name) })) -or $rule.Name.Length -gt 128)) { throw 'Catalog rule Name must be a non-empty string no longer than 128 characters.' }
+if (Test-CatalogRuleNameInvalid -Rule $rule) { throw 'Catalog rule Name must be a non-empty string no longer than 128 characters.' }
     foreach ($booleanName in @('Critical','Disabled')) {
-      if ((Test-AllConditions -Conditions @({ $rule.PSObject.Properties.Name -contains $booleanName }, { $rule.$booleanName -isnot [bool] }))) { throw "Catalog rule $booleanName must be boolean." }
+      if (($rule.PSObject.Properties.Name -contains $booleanName) -and ($rule.$booleanName -isnot [bool])) { throw "Catalog rule $booleanName must be boolean." }
     }
 }
 
+function Test-CatalogRuleValuePresent {
+  param($Rule, [string]$Name)
+  return [bool](($Rule.PSObject.Properties.Name -contains $Name) -and ($null -ne $Rule.$Name))
+}
+
 function ConvertTo-ValidatedCatalogStage03 {
-if ((Test-AllConditions -Conditions @({ $rule.PSObject.Properties.Name -contains 'MinPerWindow' }, { $null -ne $rule.MinPerWindow }))) { [void](Test-CatalogInteger -Value $rule.MinPerWindow -Name 'Catalog rule MinPerWindow' -Minimum 0 -Maximum 1000000) }
+if (Test-CatalogRuleValuePresent -Rule $rule -Name 'MinPerWindow') { [void](Test-CatalogInteger -Value $rule.MinPerWindow -Name 'Catalog rule MinPerWindow' -Minimum 0 -Maximum 1000000) }
     if ($rule.PSObject.Properties.Name -contains 'MessageRegex') {
       if ($null -ne $rule.MessageRegex) {
-        if ((Test-AnyCondition -Conditions @({ $rule.MessageRegex -isnot [string] }, { $rule.MessageRegex.Length -gt 512 }))) { throw 'Catalog rule MessageRegex must be null or a string no longer than 512 characters.' }
+        if (($rule.MessageRegex -isnot [string]) -or ($rule.MessageRegex.Length -gt 512)) { throw 'Catalog rule MessageRegex must be null or a string no longer than 512 characters.' }
         try { [void][regex]::new($rule.MessageRegex, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant, [TimeSpan]::FromSeconds(1)) } catch { throw "Catalog rule MessageRegex is invalid: $($_.Exception.Message)" }
       }
     }
@@ -305,7 +306,7 @@ function Assert-SysmonCatalogShape {
   Test-CatalogPropertySet -Object $Catalog -Allowed @('WindowHours','Alpha','RatioFloor','RatioUpper','MinBaselineToCompare','Rules') -Context 'Catalog'
   if ($Catalog.PSObject.Properties.Name -notcontains 'Rules') { throw 'Catalog must contain Rules.' }
   if ($Catalog.Rules -isnot [System.Array]) { throw 'Catalog.Rules must be an array.' }
-  if ((Test-AnyCondition -Conditions @({ $Catalog.Rules.Count -lt 1 }, { $Catalog.Rules.Count -gt 128 }))) { throw 'Catalog.Rules must contain between 1 and 128 rules.' }
+  if (($Catalog.Rules.Count -lt 1) -or ($Catalog.Rules.Count -gt 128)) { throw 'Catalog.Rules must contain between 1 and 128 rules.' }
 }
 function Assert-SysmonCatalogSetting {
   param($Catalog, [string]$Property)

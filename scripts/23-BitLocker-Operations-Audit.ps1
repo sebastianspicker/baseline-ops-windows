@@ -184,20 +184,6 @@ if (-not $isWindowsHost) {
 
 # Ensure-Cmdlet imported from lib/External.psm1
 
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Normalize-MountPoint {
   param(
     [Parameter(Mandatory)]
@@ -552,15 +538,20 @@ function Invoke-Capability23MainPhase09 {
     Add-Finding -FindingList $RunState.findings -Code 'BLKR-ManageBdeProtectionCheckIssue' -Severity 'Medium' -Message ("manage-bde protection check issue: " + $RunState.manageBdeProtectionCheckError)
   }
 }
+function Test-BitLockerProtectionMismatch {
+  param($PowerShellProtected, $ManageBdeProtected)
+  return [bool](($null -ne $PowerShellProtected) -and ($PowerShellProtected -ne $ManageBdeProtected))
+}
+
 function Invoke-Capability23MainPhase10 {
   param([hashtable]$RunState)
-  if ((Test-AllConditions -Conditions @({ $cfg.UseManageBdeProtectionExitCode }, { ($null -ne $RunState.manageBdeIsProtected) })) -and $RunState.vol) {
+  if ((($cfg.UseManageBdeProtectionExitCode) -and ($null -ne $RunState.manageBdeIsProtected)) -and $RunState.vol) {
     $psProtected =
       if ($RunState.vol.ProtectionStatus -eq 'On') { $true }
       elseif ($RunState.vol.ProtectionStatus -eq 'Off') { $false }
       else { $null }
 
-    if ((Test-AllConditions -Conditions @({ ($null -ne $psProtected) }, { ($psProtected -ne $RunState.manageBdeIsProtected) }))) {
+    if (Test-BitLockerProtectionMismatch -PowerShellProtected $psProtected -ManageBdeProtected $RunState.manageBdeIsProtected) {
       Add-Finding -FindingList $RunState.findings -Code 'BLKR-ProtectionStateMismatch' -Severity 'Medium' -Message "Protection state mismatch between Get-BitLockerVolume and manage-bde exit code."
     }
   }

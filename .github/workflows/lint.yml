@@ -47,8 +47,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/ci-local.sh
-          shellcheck scripts/ci-local.sh
+          bash -n dev/ci-local.sh
+          shellcheck dev/ci-local.sh
 
       - name: YAML and Actions metadata
         shell: bash

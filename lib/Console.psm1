@@ -467,7 +467,6 @@ $script:ConsoleExportedFunctions = @(
   'Get-SeverityPrefix'
   'Write-HostConsoleLine'
   'Write-DecorativeRule'
-  'Write-FindingLine'
   'Write-ConsoleSummary'
   'Get-FindingStats'
 )

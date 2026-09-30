@@ -4,23 +4,15 @@
 Pester coverage for data-only Rust v3 oracle fixtures.
 
 .DESCRIPTION
-Checks every structural binding and the bounded executable DoH, Windows Update,
-Security Options, and PowerShell Logging policy corpus.
+Executes the bounded DoH, Windows Update, Security Options, and PowerShell
+Logging policy corpus through the actual v2 policy functions. Structural
+manifest, fixture, and source-closure bindings are verified only by
+`cargo run -p xtask -- verify` in the Rust workspace.
 #>
 
 Describe 'Rust v3 legacy oracle manifests' {
   BeforeAll {
     . (Join-Path $PSScriptRoot 'RustV3Oracle.Adapter.ps1')
-  }
-
-  It 'binds all 52 manifests and structural fixtures to live v2 source closures' {
-    $result = Test-RustV3OracleDocuments
-    $result.Errors | Should -BeNullOrEmpty
-    $result.IsValid | Should -BeTrue
-    $result.Manifests.Count | Should -Be 52
-    $result.Fixtures.Count | Should -Be 52
-    @($result.Manifests | Where-Object { $_.source_files.Count -gt 1 }).Count | Should -BeGreaterThan 0
-    @($result.Fixtures | Where-Object { $_.proof_scope -ne 'structure_only' }).Count | Should -Be 0
   }
 
   It 'executes shared policy cases through the actual v2 policy functions' {

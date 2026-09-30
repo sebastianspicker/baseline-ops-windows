@@ -26,15 +26,18 @@ function Invoke-KillSwitchTestRuleCreation {
       RemoteAddress = @(); Protocol = 'Any'; LocalPort = $null; Description = ''
     }
     $approve = [pscustomobject]@{}
-    $approve | Add-Member -MemberType ScriptMethod -Name ShouldProcess -Value { param($Target, $Action) $true }
+    $approve | Add-Member -MemberType ScriptMethod -Name ShouldProcess -Value { $true }
     return Invoke-NewOrReplaceRule -Data $data -RunState @{ Findings = $script:Findings; Run = $script:Run } -DecisionContext $approve
   }
 
-function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenVerificationReturnsNoRule {
-    $created = Invoke-KillSwitchTestRuleCreation
-
-    $created | Should -BeFalse
+function Assert-KillSwitchExactCleanupAttempted {
+    # Creation must fail closed and remove only the exact just-created rule.
+    Invoke-KillSwitchTestRuleCreation | Should -BeFalse
     Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly -Scope It -ParameterFilter { $Name -eq 'KILLSWITCH-0123456789abcdef0123456789abcdef-IN-BLOCK' }
+  }
+
+function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenVerificationReturnsNoRule {
+    Assert-KillSwitchExactCleanupAttempted
     @($script:Findings.ToArray() | Where-Object Code -eq 'Firewall-RuleCreateFailed') | Should -HaveCount 1
     @($script:Findings.ToArray() | Where-Object Code -eq 'Firewall-RuleCleanupFailed') | Should -HaveCount 0
   }
@@ -42,30 +45,21 @@ function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenVerificationReturnsNoR
 function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenVerificationSettingsMismatch {
     $script:KillSwitchRuleVerificationResult = [pscustomobject]@{ Name = $script:ExactCreatedRuleName; Enabled = 'True'; Direction = 'Outbound'; Action = 'Block' }
 
-    $created = Invoke-KillSwitchTestRuleCreation
-
-    $created | Should -BeFalse
-    Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly -Scope It -ParameterFilter { $Name -eq 'KILLSWITCH-0123456789abcdef0123456789abcdef-IN-BLOCK' }
+    Assert-KillSwitchExactCleanupAttempted
     @($script:Run.Errors | Where-Object { $_ -match 'did not match requested settings' }) | Should -HaveCount 1
   }
 
 function Test-KillSwitchRemovesTheExactJustCreatedRuleWhenTheVerificationQueryFails {
     $script:KillSwitchRuleVerificationMode = 'QueryError'
 
-    $created = Invoke-KillSwitchTestRuleCreation
-
-    $created | Should -BeFalse
-    Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly -Scope It -ParameterFilter { $Name -eq 'KILLSWITCH-0123456789abcdef0123456789abcdef-IN-BLOCK' }
+    Assert-KillSwitchExactCleanupAttempted
     @($script:Run.Errors | Where-Object { $_ -match 'post-create verification query failed: simulated post-create query failure' }) | Should -HaveCount 1
   }
 
 function Test-KillSwitchSurfacesAnExactCleanupFailureWithoutAttemptingABroaderRemoval {
     Mock Remove-NetFirewallRule { throw 'simulated exact cleanup failure' }
 
-    $created = Invoke-KillSwitchTestRuleCreation
-
-    $created | Should -BeFalse
-    Should -Invoke Remove-NetFirewallRule -Times 1 -Exactly -Scope It -ParameterFilter { $Name -eq 'KILLSWITCH-0123456789abcdef0123456789abcdef-IN-BLOCK' }
+    Assert-KillSwitchExactCleanupAttempted
     @($script:Run.Errors | Where-Object { $_ -match "Exact cleanup of just-created firewall rule '.+' failed.*simulated exact cleanup failure" }) | Should -HaveCount 1
     @($script:Findings.ToArray() | Where-Object Code -eq 'Firewall-RuleCleanupFailed') | Should -HaveCount 1
   }

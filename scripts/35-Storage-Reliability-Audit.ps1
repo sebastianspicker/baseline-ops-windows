@@ -111,20 +111,6 @@ if (-not $isWindowsHost) {
 
 # region Helpers
 
-function Test-AllConditions {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (-not (. $condition)) { return $false }
-  }
-  return $true
-}
-function Test-AnyCondition {
-  param([scriptblock[]]$Conditions)
-  foreach ($condition in $Conditions) {
-    if (. $condition) { return $true }
-  }
-  return $false
-}
 function Test-CmdletAvailable {
   param([Parameter(Mandatory)][string]$Name)
   return [bool](Get-Command -Name $Name -ErrorAction SilentlyContinue)
@@ -167,7 +153,7 @@ function Load-Config {
   $pathDisplay = $Path
   if ([string]::IsNullOrWhiteSpace($pathDisplay)) { $pathDisplay = "<empty>" }
 
-  if ((Test-AnyCondition -Conditions @({ [string]::IsNullOrWhiteSpace($Path) }, { -not (Test-Path -Path $Path -PathType Leaf) }))) {
+  if (([string]::IsNullOrWhiteSpace($Path)) -or (-not (Test-Path -Path $Path -PathType Leaf))) {
     Add-Finding -FindingList $Findings -Code 'CFG-NotFound' -Severity 'Info' -Message ("Config JSON not found; using defaults. Path='{0}'." -f $pathDisplay) -TypeName 'StorageAudit.Finding'
     return $cfg
   }
@@ -340,22 +326,22 @@ if ($RunState.wearWarn -lt 1) { $RunState.wearWarn = 20 }
           }
         }
 
-        if ((Test-AllConditions -Conditions @({ $null -ne $r.UncorrectableErrors }, { $r.UncorrectableErrors -ge $RunState.thrUnc }))) {
+        if (($null -ne $r.UncorrectableErrors) -and ($r.UncorrectableErrors -ge $RunState.thrUnc)) {
           Add-Finding -FindingList $Findings -Code 'STO-UncorrectableErrors' -Severity 'High' -Message ("UncorrectableErrors={0} (>= {1})." -f $r.UncorrectableErrors, $RunState.thrUnc) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $RunState.diskKey }
         }
 }
 
 function Invoke-Capability35MainPhase04Step02Stage04 {
   param([hashtable]$RunState)
-if ((Test-AllConditions -Conditions @({ $null -ne $r.ReadErrorsTotal }, { $r.ReadErrorsTotal -ge $RunState.thrRead }))) {
+if (($null -ne $r.ReadErrorsTotal) -and ($r.ReadErrorsTotal -ge $RunState.thrRead)) {
           Add-Finding -FindingList $Findings -Code 'STO-ReadErrors' -Severity 'Medium' -Message ("ReadErrorsTotal={0} (>= {1})." -f $r.ReadErrorsTotal, $RunState.thrRead) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $RunState.diskKey }
         }
 
-        if ((Test-AllConditions -Conditions @({ $null -ne $r.WriteErrorsTotal }, { $r.WriteErrorsTotal -ge $RunState.thrWrite }))) {
+        if (($null -ne $r.WriteErrorsTotal) -and ($r.WriteErrorsTotal -ge $RunState.thrWrite)) {
           Add-Finding -FindingList $Findings -Code 'STO-WriteErrors' -Severity 'Medium' -Message ("WriteErrorsTotal={0} (>= {1})." -f $r.WriteErrorsTotal, $RunState.thrWrite) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $RunState.diskKey }
         }
 
-        if ((Test-AllConditions -Conditions @({ $null -ne $r.Wear }, { $r.Wear -le $RunState.wearWarn }))) {
+        if (($null -ne $r.Wear) -and ($r.Wear -le $RunState.wearWarn)) {
           Add-Finding -FindingList $Findings -Code 'STO-WearWarn' -Severity 'Medium' -Message ("Wear={0} (<= {1}; provider-dependent semantics)." -f $r.Wear, $RunState.wearWarn) -TypeName 'StorageAudit.Finding' -Extra @{ DiskKey = $RunState.diskKey }
         }
 }
