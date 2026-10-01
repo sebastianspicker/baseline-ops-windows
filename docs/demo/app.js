@@ -33,36 +33,110 @@ const sample = {
   },
   Metadata: { Demo: true },
 };
+const parameterNotes = {
+  Json: "Writes v2 results as JSON.",
+  Console: "Prints a readable summary to the console.",
+  Csv: "Writes the CSV projection of v2 results.",
+  None: "Returns v2 result objects to the pipeline.",
+};
 let profiles = [];
 let activeStep = "profiles";
+let copyReset;
 const announce = (message) => {
   byId("announcement").textContent = message;
 };
 const selectedProfile = () =>
   profiles.find((profile) => profile.ProfileName === byId("profile").value);
+const element = (tag, className, text) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+const definitions = (target, rows) => {
+  byId(target).replaceChildren(
+    ...rows.map(([term, detail, className]) => {
+      const row = element("div", className);
+      row.append(element("dt", "", term), element("dd", "", detail));
+      return row;
+    }),
+  );
+};
 
 function renderCommand() {
   const profile = selectedProfile();
   if (!profile) return;
-  byId("command-profile").textContent = profile.ProfileName;
+  const format = byId("output").value;
+  const whatIf = byId("whatif").checked;
+  byId("command-profile").textContent = `${profile.ProfileName}.json`;
   byId("command-text").textContent = [
     "pwsh -NoProfile -File .\\scripts\\00-Run-Profile.ps1 `",
     `  -ProfilePath .\\examples\\profiles\\${profile.ProfileName}.json \``,
-    `  -RootPath . -Mode Audit -OutputFormat ${byId("output").value}` +
-      (byId("whatif").checked ? " -WhatIf" : ""),
+    `  -RootPath . -Mode Audit -OutputFormat ${format}` +
+      (whatIf ? " -WhatIf" : ""),
   ].join("\n");
+  definitions("command-key", [
+    ["-ProfilePath", "The profile you reviewed in step 1."],
+    ["-RootPath .", "The toolkit root that contains the scripts folder."],
+    [
+      "-Mode Audit",
+      "Reads state. Remediation needs -Mode Remediate and confirmation.",
+    ],
+    [`-OutputFormat ${format}`, parameterNotes[format]],
+    ...(whatIf
+      ? [["-WhatIf", "Previews orchestration. No capability runs; exit 2."]]
+      : []),
+  ]);
+}
+
+function renderStep(step, index, total) {
+  const item = element("li");
+  const match = /^(\d{2})-(.+?)(\.ps1)?$/.exec(step.Script);
+  const number = element("span", "cap-number", match ? match[1] : "··");
+  number.setAttribute("aria-hidden", "true");
+  const file = element("span", "cap-file");
+  if (match) {
+    file.append(
+      element("span", "cap-prefix", `${match[1]}-`),
+      match[2],
+      element("span", "cap-ext", match[3] || ""),
+    );
+  } else file.textContent = step.Script;
+  const notes = [`Step ${index + 1} of ${total}`];
+  notes.push(
+    step.ContinueOnError ? "continues on error" : "stops the run on error",
+  );
+  notes.push(
+    step.Args.length
+      ? `${step.Args.length} argument${step.Args.length === 1 ? "" : "s"}`
+      : "no arguments",
+  );
+  if (step.DependsOn?.length) notes.push(`after ${step.DependsOn.join(", ")}`);
+  const body = element("span", "cap-body");
+  body.append(file, element("span", "cap-notes", notes.join(" · ")));
+  item.append(number, body);
+  return item;
 }
 
 function renderProfile() {
   const profile = selectedProfile();
+  const integrity = profile.Integrity || {};
+  const hashes = Object.keys(integrity.ExpectedHashes || {}).length;
+  const withArgs = profile.Steps.filter((step) => step.Args.length).length;
   byId("profile-description").textContent = descriptions[profile.ProfileName];
+  definitions("profile-meta", [
+    ["Mode", profile.Defaults?.Mode || "Audit"],
+    ["Steps with arguments", withArgs ? String(withArgs) : "None"],
+    ["Signature required", integrity.RequireSigned ? "Yes" : "No"],
+    ["Pinned hashes", hashes ? String(hashes) : "None"],
+  ]);
+  byId("profile-meta").hidden = false;
+  byId("integrity-notice").hidden = Boolean(integrity.RequireSigned || hashes);
   byId("step-count").textContent = `${profile.Steps.length} steps`;
   byId("script-list").replaceChildren(
-    ...profile.Steps.map((step) => {
-      const item = document.createElement("li");
-      item.textContent = step.Script;
-      return item;
-    }),
+    ...profile.Steps.map((step, index) =>
+      renderStep(step, index, profile.Steps.length),
+    ),
   );
   byId("profile-json").textContent = JSON.stringify(profile, null, 2);
   renderCommand();
@@ -78,7 +152,7 @@ function showStep(step, focus = false) {
   }
   byId("next-step").textContent = {
     profiles: "Prepare an audit →",
-    command: "Explore a sample result →",
+    command: "Read a sample result →",
     result: "Back to profiles →",
   }[step];
   announce("");
@@ -90,6 +164,17 @@ function showStep(step, focus = false) {
   }
 }
 
+function renderSummary() {
+  const [number, ...name] = sample.ScriptName.replace(/\.ps1$/, "").split("-");
+  definitions("result-summary", [
+    ["Capability", `${number} · ${name.join(" ")}`, "wide"],
+    ["Computer", sample.ComputerName],
+    ["Mode", sample.Mode],
+    ["Recorded", sample.TimestampUtc.replace("T", " ").replace("Z", " UTC")],
+    ["Findings", `${sample.Findings.length} to review`],
+  ]);
+}
+
 function renderFindings() {
   const matches = sample.Findings.filter(
     (finding) =>
@@ -97,21 +182,22 @@ function renderFindings() {
       finding.Severity === byId("severity").value,
   );
   const nodes = matches.map((finding) => {
-    const article = document.createElement("article");
-    const severity = document.createElement("span");
-    severity.textContent = finding.Severity;
-    const content = document.createElement("div");
-    const title = document.createElement("h3");
-    title.textContent = finding.Code;
-    const message = document.createElement("p");
-    message.textContent = finding.Message;
-    content.append(title, message);
-    article.append(severity, content);
+    const article = element("article");
+    article.dataset.severity = finding.Severity;
+    const content = element("div");
+    content.append(
+      element("h3", "", finding.Code),
+      element("p", "", finding.Message),
+    );
+    article.append(element("span", "severity", finding.Severity), content);
     return article;
   });
   if (!nodes.length) {
-    const empty = document.createElement("p");
-    empty.textContent = "No sample findings at this severity.";
+    const empty = element("p", "empty");
+    empty.append(
+      "No sample findings at this severity.",
+      element("small", "", "Choose “All severities” to see both."),
+    );
     nodes.push(empty);
   }
   byId("findings").replaceChildren(...nodes);
@@ -136,6 +222,12 @@ byId("copy-command").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(byId("command-text").textContent);
     announce("Command copied. Review it before running on Windows.");
+    const button = byId("copy-command");
+    button.textContent = "Copied";
+    clearTimeout(copyReset);
+    copyReset = setTimeout(() => {
+      button.textContent = "Copy command";
+    }, 2000);
   } catch {
     announce(
       "Clipboard access is unavailable. Select and copy the command above.",
@@ -155,6 +247,7 @@ byId("download-result").addEventListener("click", () => {
   announce("Sample JSON downloaded. It contains fictional endpoint data.");
 });
 byId("result-json").textContent = JSON.stringify(sample, null, 2);
+renderSummary();
 renderFindings();
 
 async function loadProfiles() {
@@ -184,6 +277,15 @@ async function loadProfiles() {
     renderProfile();
   } catch {
     byId("profile").replaceChildren(new Option("Profiles unavailable"));
+    byId("profile-description").textContent =
+      "The example profiles could not be loaded.";
+    byId("command-profile").textContent = "no profile";
+    const empty = element(
+      "li",
+      "empty-row",
+      "The execution order appears once the profiles load.",
+    );
+    byId("script-list").replaceChildren(empty);
     byId("load-error").hidden = false;
     byId("command-text").textContent =
       "Command unavailable until the example profiles load.";
