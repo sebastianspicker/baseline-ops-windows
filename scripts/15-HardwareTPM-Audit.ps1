@@ -101,7 +101,7 @@
   - If the Source cannot be created/used (for example due to permissions), the script falls back to writing the event message to the console.
 
   JSON proof file:
-  - The proof file path is taken from the catalog (Proof.OutFile). If missing/unusable, a built-in default path is used.
+  - Catalog Proof.OutFile is ignored; the built-in proof path is used.
   - The directory is created automatically if needed.
 
   Platform variability:

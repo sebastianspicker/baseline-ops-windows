@@ -239,6 +239,33 @@ function Get-SafeFileName {
 
 <#
 .SYNOPSIS
+  Resolves an output destination without granting configuration data path authority.
+.DESCRIPTION
+  Keeps an explicit operator-supplied path authoritative, otherwise returns the
+  fixed built-in default. A differing path from configuration or catalog data is
+  ignored with a warning because those inputs are untrusted.
+#>
+function Resolve-OperatorControlledOutputPath {
+  [CmdletBinding()]
+  param(
+    [AllowNull()][string]$ExplicitPath,
+    [AllowNull()][string]$DefaultPath,
+    [AllowNull()]$ConfiguredPath,
+    [Parameter(Mandatory)][string]$SettingName,
+    [ValidateSet('config', 'catalog')][string]$InputKind = 'config'
+  )
+
+  $configuredText = if ($null -eq $ConfiguredPath) { $null } else { [string]$ConfiguredPath }
+  if (-not [string]::IsNullOrWhiteSpace($configuredText) -and $configuredText -ne $DefaultPath) {
+    Write-Warning ("Ignoring {0} {1}; provide the output location explicitly or use the built-in destination." -f $InputKind, $SettingName)
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) { return [string]$ExplicitPath }
+  if (-not [string]::IsNullOrWhiteSpace($DefaultPath)) { return [string]$DefaultPath }
+  return $null
+}
+
+<#
+.SYNOPSIS
   Resolves the repository root used by a standalone tool.
 .DESCRIPTION
   Preserves an explicit root while deriving the parent of the executing tool
@@ -268,4 +295,5 @@ Export-ModuleMember -Function `
   Sanitize-Path, `
   Has-Property, `
   Get-SafeFileName, `
+  Resolve-OperatorControlledOutputPath, `
   Resolve-ToolRepositoryRoot

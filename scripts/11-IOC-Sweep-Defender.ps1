@@ -13,7 +13,8 @@
 .PARAMETER CustomScanPaths
   Defender custom scan paths used when ScanType is None.
 .PARAMETER CollectEvidence
-  Copy matched files and export matched registry keys into the evidence directory.
+  Copy matched files and export matched registry keys into the built-in evidence directory.
+  Catalog EvidenceDir and Proof.OutFile values are ignored.
 .PARAMETER Strict
   Treat a no-finding run as noteworthy for compliance/audit signaling.
 .PARAMETER PassThru

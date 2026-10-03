@@ -39,6 +39,12 @@ function New-OfficeBrowserTestModule {
     function Ensure-EventSource {
       $true
     }
+    function Resolve-OperatorControlledOutputPath {
+      param($ExplicitPath, $DefaultPath, $ConfiguredPath, $SettingName, $InputKind)
+      $null = $ConfiguredPath, $SettingName, $InputKind
+      if ($ExplicitPath) { return $ExplicitPath }
+      return $DefaultPath
+    }
     function Save-Json {
       param($InputObject, $Path)
       $script:Saved = $InputObject

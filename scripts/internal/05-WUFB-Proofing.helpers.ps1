@@ -226,16 +226,8 @@ function Get-SafeProofPath {
   param([string]$Candidate)
 
   $fallback = Join-Path (Get-WufbTrustedDataRoot) 'WUfB-Proofing\proof.json'
-  if ([string]::IsNullOrWhiteSpace($Candidate)) { return $fallback }
-
-  try {
-    $full = [System.IO.Path]::GetFullPath($Candidate)
-    $parent = Split-Path -Parent $full
-    if ([string]::IsNullOrWhiteSpace($parent)) { return $fallback }
-    return $full
-  } catch {
-    return $fallback
-  }
+  return Resolve-OperatorControlledOutputPath -DefaultPath $fallback -ConfiguredPath $Candidate `
+    -SettingName 'Proof.OutFile' -InputKind catalog
 }
 
 function Get-FirstErrorNote {

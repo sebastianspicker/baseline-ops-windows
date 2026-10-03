@@ -24,7 +24,7 @@ Run validate/test only; skip apply.
 Auto-accept source/package agreements when running WinGet.
 
 .PARAMETER LogPath
-Optional log file path for command output.
+Optional explicit log file path for command output. JSON LogPath is ignored.
 
 .PARAMETER DisableInteractivity
 Run WinGet in non-interactive mode.
@@ -397,7 +397,9 @@ function Get-Capability25EffectiveBool {
 function Initialize-Capability25EffectiveSettings {
   param([hashtable]$RunState)
   $RunState.ConfigPathEffective = Get-Capability25EffectiveString -Name 'ConfigPath' -ParameterValue $ConfigPath -RunState $RunState
-  $RunState.LogPathEffective = Get-Capability25EffectiveString -Name 'LogPath' -ParameterValue $LogPath -RunState $RunState
+  $configuredLogPath = To-StringOrNull (Get-EffectiveSetting -Name 'LogPath' -Json $jsonSettings -DefaultValue $RunState.defaultSettings.LogPath)
+  $RunState.LogPathEffective = Resolve-OperatorControlledOutputPath -ExplicitPath $LogPath `
+    -DefaultPath $RunState.defaultSettings.LogPath -ConfiguredPath $configuredLogPath -SettingName 'LogPath'
   $RunState.AcceptAgreementsEffective = Get-Capability25EffectiveBool -Name 'AcceptAgreements' -ParameterValue ([bool]$AcceptAgreements) -RunState $RunState
   $RunState.DisableInteractivityEffective = Get-Capability25EffectiveBool -Name 'DisableInteractivity' -ParameterValue ([bool]$DisableInteractivity) -RunState $RunState
   $RunState.FailFastEffective = Get-Capability25EffectiveBool -Name 'FailFast' -ParameterValue ([bool]$FailFast) -RunState $RunState

@@ -78,15 +78,18 @@ function Initialize-ScheduledTaskHygiene {
   if (-not (Ensure-EventSource -Source $RunState.Inputs.EventSource)) {
     Write-Warning 'EventSource could not be registered. EventLog tracing will be unavailable.'
   }
-  $RunState.Catalog.QuarantineDir = Coalesce-String `
-    (Get-PropValue $RunState.Catalog 'QuarantineDir' $null) $RunState.Inputs.DefaultQuarantineDir
+  $RunState.Catalog.QuarantineDir = Resolve-OperatorControlledOutputPath `
+    -DefaultPath $RunState.Inputs.DefaultQuarantineDir `
+    -ConfiguredPath (Get-PropValue $RunState.Catalog 'QuarantineDir' $null) `
+    -SettingName 'QuarantineDir' -InputKind catalog
   $proof = Get-PropValue $RunState.Catalog 'Proof' $null
   if ($null -eq $proof) {
     $RunState.Catalog | Add-Member -NotePropertyName Proof `
       -NotePropertyValue ([pscustomobject]([ordered]@{ OutFile = $RunState.Inputs.DefaultProofOutFile })) -Force
     $proof = $RunState.Catalog.Proof
   }
-  $proof.OutFile = Coalesce-String (Get-PropValue $proof 'OutFile' $null) $RunState.Inputs.DefaultProofOutFile
+  $proof.OutFile = Resolve-OperatorControlledOutputPath -DefaultPath $RunState.Inputs.DefaultProofOutFile `
+    -ConfiguredPath (Get-PropValue $proof 'OutFile' $null) -SettingName 'Proof.OutFile' -InputKind catalog
   $RunState.ProofSettings = $proof
   Read-ScheduledTaskInventory -RunState $RunState
 }

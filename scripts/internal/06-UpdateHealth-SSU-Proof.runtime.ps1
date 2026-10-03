@@ -289,6 +289,7 @@ function Get-ServicingStackPolicy {
 
 function Get-UpdateHealthProofPath {
   param($Catalog, [string]$DefaultPath)
-  if ($Catalog -and $Catalog.PSObject.Properties['Proof'] -and $Catalog.Proof -and $Catalog.Proof.OutFile) { return [string]$Catalog.Proof.OutFile }
-  return $DefaultPath
+  $configuredPath = if ($Catalog -and $Catalog.PSObject.Properties['Proof'] -and $Catalog.Proof) { $Catalog.Proof.OutFile } else { $null }
+  return Resolve-OperatorControlledOutputPath -DefaultPath $DefaultPath -ConfiguredPath $configuredPath `
+    -SettingName 'Proof.OutFile' -InputKind catalog
 }

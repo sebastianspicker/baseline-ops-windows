@@ -22,8 +22,8 @@ Supported JSON properties:
 {
   "RequirePlatformSecurityFeatures": 1,
   "LsaCfgFlags": 1,
-  "ExportPath": "[configured path]",
-  "ExportCsvBasePath": "[configured path]",
+  "ExportPath": null,
+  "ExportCsvBasePath": null,
   "ShowSummary": true
 }
 
@@ -34,10 +34,10 @@ Supported JSON properties:
 0 = Disabled, 1 = Enabled with UEFI lock, 2 = Enabled without lock.
 
 .PARAMETER ExportPath
-Optional JSON export path.
+Optional explicit JSON export path. Configuration cannot select this destination.
 
 .PARAMETER ExportCsvBasePath
-Optional CSV export directory (summary.csv and findings.csv).
+Optional explicit CSV export directory. Configuration cannot select this destination.
 
 .PARAMETER ShowSummary
 Write a readable console summary at the end (default: $true).
@@ -169,11 +169,13 @@ if ($null -ne $RunState.Config.RequirePlatformSecurityFeatures) {
 function Apply-ConfigOverridesSection02 {
   param([hashtable]$RunState)
 if ($null -ne $RunState.Config.ExportPath -and -not [string]::IsNullOrWhiteSpace([string]$RunState.Config.ExportPath)) {
-    $RunState.Effective.ExportPath = [string]$RunState.Config.ExportPath
+    $RunState.Effective.ExportPath = Resolve-OperatorControlledOutputPath -ExplicitPath $RunState.Effective.ExportPath `
+      -ConfiguredPath $RunState.Config.ExportPath -SettingName 'ExportPath'
   }
 
   if ($null -ne $RunState.Config.ExportCsvBasePath -and -not [string]::IsNullOrWhiteSpace([string]$RunState.Config.ExportCsvBasePath)) {
-    $RunState.Effective.ExportCsvBasePath = [string]$RunState.Config.ExportCsvBasePath
+    $RunState.Effective.ExportCsvBasePath = Resolve-OperatorControlledOutputPath -ExplicitPath $RunState.Effective.ExportCsvBasePath `
+      -ConfiguredPath $RunState.Config.ExportCsvBasePath -SettingName 'ExportCsvBasePath'
   }
 }
 

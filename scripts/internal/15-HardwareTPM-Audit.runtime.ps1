@@ -54,13 +54,9 @@ function Read-HardwareAuditCatalog {
   param($RunState)
   $RunState.cat = Load-Catalog -CatalogPath $RunState.CatalogPath -ConfigPath $RunState.ConfigPath -DefaultOutFile $RunState.DefaultOutFile
 
-  $RunState.outFile = $RunState.DefaultOutFile
-  if ($RunState.cat -and $RunState.cat.Proof -and $RunState.cat.Proof.OutFile) {
-    $RunState.outFile = [string]$RunState.cat.Proof.OutFile
-  }
-  if (-not $RunState.outFile) {
-    $RunState.outFile = $RunState.DefaultOutFile
-  }
+  $configuredOutFile = if ($RunState.cat -and $RunState.cat.Proof) { $RunState.cat.Proof.OutFile } else { $null }
+  $RunState.outFile = Resolve-OperatorControlledOutputPath -DefaultPath $RunState.DefaultOutFile `
+    -ConfiguredPath $configuredOutFile -SettingName 'Proof.OutFile' -InputKind catalog
 
 
 }

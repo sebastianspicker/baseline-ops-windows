@@ -29,6 +29,8 @@ Default: the current system drive.
 .PARAMETER ExportPath
 Optional path to export the result as a CSV file.
 If omitted, the script does not export unless export is enabled via the JSON configuration.
+JSON can enable export, but its legacy ExportPathDefault value is ignored; the
+built-in destination is used unless this parameter is supplied explicitly.
 
 Notes:
 - The script creates the parent directory if it does not exist.
@@ -46,7 +48,7 @@ Optional path to a JSON configuration file supplied with $ConfigPath.
 The JSON can override defaults such as:
 - Whether the console summary is printed
 - Whether the console uses color
-- Whether CSV export is enabled and the default export path
+- Whether CSV export is enabled (the output path remains CLI-controlled)
 - Whether manage-bde text is included by default and maximum text length
 - Whether to include key protector IDs and protector count
 - Whether to run the manage-bde protection exit-code check
@@ -236,9 +238,8 @@ function Import-JsonConfigOrDefault {
     $parsed = $raw | ConvertFrom-Json
 
     Set-BitLockerBooleanConfigDefaults -Defaults $cfg -Parsed $parsed
-    if (Test-BitLockerExportPath -Value $parsed.ExportPathDefault) {
-      $cfg.ExportPathDefault = [string]$parsed.ExportPathDefault
-    }
+    $cfg.ExportPathDefault = Resolve-OperatorControlledOutputPath -DefaultPath $cfg.ExportPathDefault `
+      -ConfiguredPath $parsed.ExportPathDefault -SettingName 'ExportPathDefault'
 
     Set-BitLockerManageBdeLimit -Defaults $cfg -Parsed $parsed
 

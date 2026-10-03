@@ -139,9 +139,11 @@ function Initialize-IocRunCatalog {
   $script:IocRun.Catalog = $loaded.Catalog; Initialize-IocRegexRules -Catalog $script:IocRun.Catalog
   $script:IocRun.Proof.Catalog.Source = $loaded.Source; $script:IocRun.Proof.Catalog.Errors = @($loaded.Errors)
   $proofObject = Get-ObjPropValue $script:IocRun.Catalog 'Proof'
-  if ($proofObject) { $script:IocRun.OutFile = Get-ObjPropValue $proofObject 'OutFile' }
-  $script:IocRun.OutFile = [string](Get-OrDefault $script:IocRun.OutFile $script:DefaultProofOutFile)
-  $script:IocRun.EvidenceDir = [string](Get-OrDefault (Get-ObjPropValue $script:IocRun.Catalog 'EvidenceDir') $script:DefaultEvidenceDir)
+  $configuredProofPath = if ($proofObject) { Get-ObjPropValue $proofObject 'OutFile' } else { $null }
+  $script:IocRun.OutFile = Resolve-OperatorControlledOutputPath -DefaultPath $script:DefaultProofOutFile `
+    -ConfiguredPath $configuredProofPath -SettingName 'Proof.OutFile' -InputKind catalog
+  $script:IocRun.EvidenceDir = Resolve-OperatorControlledOutputPath -DefaultPath $script:DefaultEvidenceDir `
+    -ConfiguredPath (Get-ObjPropValue $script:IocRun.Catalog 'EvidenceDir') -SettingName 'EvidenceDir' -InputKind catalog
   if ($CollectEvidence) { [void](Ensure-Directory $script:IocRun.EvidenceDir) }
   [void](Ensure-Directory (Split-Path -Parent $script:IocRun.OutFile))
 }

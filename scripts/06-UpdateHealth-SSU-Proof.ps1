@@ -15,7 +15,7 @@ The script produces:
 - A best-effort entry in the Windows Application Event Log (falls back to a text log file if Event Log write fails).
 The pipeline output remains clean: the script emits exactly one structured object at the end, suitable for piping to Export-Csv, ConvertTo-Json, or Where-Object.
 .PARAMETER CatalogPath
-Optional path to a JSON catalog file that defines policy thresholds and proof output settings (for example minimum UHT/SSU versions, allowed service start modes, task folder, and proof output file path).
+Optional path to a JSON catalog file that defines policy thresholds (for example minimum UHT/SSU versions, allowed service start modes, and task folder). The legacy Proof.OutFile field is ignored.
 If CatalogPath is not specified or cannot be loaded, the script uses a built-in default catalog.
 .PARAMETER Strict
 Controls how the final status is calculated:

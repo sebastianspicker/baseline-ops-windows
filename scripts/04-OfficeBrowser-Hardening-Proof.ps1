@@ -31,7 +31,8 @@
   When not running elevated, write operations for system-wide locations may fail; audit mode still works.
 
 .PARAMETER CatalogPath
-  Path to the catalog JSON file that defines the desired baseline (Office/Edge/Firefox settings and optional proof output path).
+  Path to the catalog JSON file that defines the desired Office, Edge, and Firefox baseline.
+  The legacy Proof.OutFile field is ignored.
   If the file is missing or invalid, embedded defaults are used.
 
 .PARAMETER ConfigPath
@@ -83,7 +84,7 @@
 .NOTES
   Proof file location:
   - Default: $env:TEMP\OfficeBrowser-Hardening-Proof.json
-  - Can be overridden via the catalog field: Proof.OutFile
+  - Catalog Proof.OutFile is ignored; the built-in proof path is used.
 
   Exit codes:
   - 0 = OK, 2 = WARN, 1 = FAIL.

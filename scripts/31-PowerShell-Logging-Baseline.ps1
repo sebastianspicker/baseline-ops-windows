@@ -22,7 +22,8 @@ If missing/unreadable/invalid, defaults are used.
 Also read HKCU policy keys for informational purposes (HKLM still wins).
 
 .PARAMETER TranscriptOutputDirectory
-Transcript output directory (overrides JSON/defaults when explicitly provided).
+Explicit transcript output directory. JSON TranscriptOutputDirectory is ignored;
+the built-in ProgramData destination is used when this parameter is omitted.
 
 .PARAMETER EnableTranscription
 Enable transcription policy (accepts: $true/$false, true/false, 1/0).
@@ -421,13 +422,10 @@ function Invoke-Capability31MainPhase02 {
 }
 function Invoke-Capability31MainPhase03 {
   param([hashtable]$RunState)
-  $RunState.targetTranscriptDir = if ($script:__EntryBoundParameters.ContainsKey('TranscriptOutputDirectory') -and -not [string]::IsNullOrWhiteSpace($TranscriptOutputDirectory)) {
-    $TranscriptOutputDirectory
-  } elseif (-not [string]::IsNullOrWhiteSpace([string]$RunState.config.TranscriptOutputDirectory)) {
-    [string]$RunState.config.TranscriptOutputDirectory
-  } else {
-    $defaultTranscriptDirectory
-  }
+  $explicitTranscriptDirectory = if ($script:__EntryBoundParameters.ContainsKey('TranscriptOutputDirectory')) { $TranscriptOutputDirectory } else { $null }
+  $RunState.targetTranscriptDir = Resolve-OperatorControlledOutputPath -ExplicitPath $explicitTranscriptDirectory `
+    -DefaultPath $defaultTranscriptDirectory -ConfiguredPath $RunState.config.TranscriptOutputDirectory `
+    -SettingName 'TranscriptOutputDirectory'
 
   $RunState.targetEnableTranscription = Resolve-Bool -ParameterValue $EnableTranscription -ParameterWasBound $script:__EntryBoundParameters.ContainsKey('EnableTranscription') -ConfigValue $RunState.config.EnableTranscription -DefaultValue $true -NameForFinding 'EnableTranscription' -Findings $RunState.Findings
   $RunState.targetEnableInvocationHeader = Resolve-Bool -ParameterValue $EnableInvocationHeader -ParameterWasBound $script:__EntryBoundParameters.ContainsKey('EnableInvocationHeader') -ConfigValue $RunState.config.EnableInvocationHeader -DefaultValue $true -NameForFinding 'EnableInvocationHeader' -Findings $RunState.Findings

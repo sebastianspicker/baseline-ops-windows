@@ -552,13 +552,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "b457199892606f5bef55cbfa25d9e95234b73ce794ad44f911cb94f11b1ecea4",
-      "Fingerprint": "271af29cb003468d784e726128b577a099724f8d57481e7f29afc8c7531965ed",
+      "Fingerprint": "68717113335677a15c89458fa52a41ac01caf3273e1e90eef800b3f0cc021f9b",
       "Rationale": "Retain: 24-Cert-AutoEnrollment-Health.ps1, 27-Defender-Health-Audit.ps1 constructs a public terminal result or unsupported-host exit. Each occurrence owns its script name, summary fields, result token, output write, and exit ordering; retain the visible contract locally. Prior rationale remains valid: This is a trust or result boundary; extraction risks changing the visible validation and side-effect ordering of a public capability. Rechecked remapped occurrences: scripts/24-Cert-AutoEnrollment-Health.ps1:438-444, scripts/27-Defender-Health-Audit.ps1:315-321.",
       "Occurrences": [
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 424,
-          "EndLine": 430
+          "StartLine": 425,
+          "EndLine": 431
         },
         {
           "Path": "scripts/27-Defender-Health-Audit.ps1",
@@ -846,13 +846,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "baa73fae1f5a912750a513bead34135db6c7ad490a83f6b2c0d2590eb6af1538",
-      "Fingerprint": "7d6fe2ebf81d2af933d2892b03bac9a97abb7f8b4cc04469c1d45e80611800a4",
+      "Fingerprint": "d9ab0ea3ac4493501e59b8d100456d36ff6e1d435c7ab62a734dbf3b79eadfc4",
       "Rationale": "Retain: public IOC and WEF parameter blocks grant different scan and collection authority.",
       "Occurrences": [
         {
           "Path": "scripts/11-IOC-Sweep-Defender.ps1",
-          "StartLine": 55,
-          "EndLine": 61
+          "StartLine": 56,
+          "EndLine": 62
         },
         {
           "Path": "scripts/45-WEF-Client-Forwarding-Readiness-Audit.ps1",
@@ -1052,13 +1052,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "9b8d99ed346dbf6ae453775b87327ac5c386b0cf19abbf5c0a2c915acf3f3037",
-      "Fingerprint": "0091a43b9fde5e124a7f792b827cd4cee21a6809f39551c52e2e0822bda71506",
+      "Fingerprint": "08787d5d744ee890ac42ac626a9e8afc9d6a0e3fe9651dc4452e1105f76467b4",
       "Rationale": "Retain: Office and credential capabilities import different policy and platform services.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 148,
-          "EndLine": 153
+          "StartLine": 149,
+          "EndLine": 154
         },
         {
           "Path": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
@@ -1145,7 +1145,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "84406d759ba3629cff07008eb4bdbe163e377b5ca1da153ac79453dc9f089a89",
-      "Fingerprint": "c53e6b895a7f8bba3fbb1e8c456909ec057af64353b25e96033f1cea44832bb0",
+      "Fingerprint": "2b7947f607a56f36100ac7b45e30ec94ea609d2d6aaa16dd6074c23222a84478",
       "Rationale": "Retain: 02-LAPS-Hygiene.ps1, 23-BitLocker-Operations-Audit.ps1 is public entry-point binding/bootstrap text. Each numbered script must retain its documented parameter surface, module sequence, V2 context, and capability identity. Rechecked remapped occurrences: scripts/02-LAPS-Hygiene.ps1:101-115, scripts/23-BitLocker-Operations-Audit.ps1:139-156.",
       "Occurrences": [
         {
@@ -1155,8 +1155,8 @@
         },
         {
           "Path": "scripts/23-BitLocker-Operations-Audit.ps1",
-          "StartLine": 139,
-          "EndLine": 156
+          "StartLine": 141,
+          "EndLine": 158
         }
       ],
       "Multiplicity": 2
@@ -1263,13 +1263,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "8898b17d7875324d2586cbd455e440d82dbfb6356ab204ff315314468a4557da",
-      "Fingerprint": "b649dd65efb7464536d07eeb05eb8659f7bb588e3301c41c2fb6a0bb971500a2",
+      "Fingerprint": "ad8759047c3440be91500818bb328f85f8a1c2d786e4a0ff7ef244304f5b5a1a",
       "Rationale": "Retain: the matching V2 context prefix precedes different public unsupported-host and service initialization behavior.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 176,
-          "EndLine": 185
+          "StartLine": 177,
+          "EndLine": 186
         },
         {
           "Path": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
@@ -1779,18 +1779,18 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "96284568cc8e6037d2332757a1977a74e3638011c8de7c9404aa2789ffae9c37",
-      "Fingerprint": "9cafd0da69d592eadf12d606c6608302c5c551cd1387cded384aa9c9826a31b0",
+      "Fingerprint": "f82a29cff4f3be44d6909873ed5192a086c55ed89778ca70d78b9cb7c69fdf5e",
       "Rationale": "Retain: 39-CredentialGuard-VBS-AuditRemediate.ps1, 40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 is public entry-point binding/bootstrap text. Each numbered script must retain its documented parameter surface, module sequence, V2 context, and capability identity. Prior rationale remains valid: This is public-script contract/bootstrap text. Keeping it adjacent to each entry point preserves self-contained parameter and audit evidence. Rechecked remapped occurrences: scripts/39-CredentialGuard-VBS-AuditRemediate.ps1:431-438, scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1:485-492.",
       "Occurrences": [
         {
           "Path": "scripts/39-CredentialGuard-VBS-AuditRemediate.ps1",
-          "StartLine": 417,
-          "EndLine": 424
+          "StartLine": 419,
+          "EndLine": 426
         },
         {
           "Path": "scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
-          "StartLine": 485,
-          "EndLine": 492
+          "StartLine": 487,
+          "EndLine": 494
         }
       ],
       "Multiplicity": 2
@@ -2001,13 +2001,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "bfc2f5fb3b9eb1178425284e1b2016d11bdacfce756c05c772ac0a61cb5e833a",
-      "Fingerprint": "fa129a7390b585c379e097399bad169cad7df232e7e577f9b8664377591697a5",
+      "Fingerprint": "338fddcfef87ed8158801016080b6831e449a346d8dfd7ba087c1dd8af6af8e9",
       "Rationale": "Retain: V2 context setup precedes different policy capability behavior and remediation semantics.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 164,
-          "EndLine": 176
+          "StartLine": 165,
+          "EndLine": 177
         },
         {
           "Path": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
@@ -2192,13 +2192,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "e69d8421a1a430634f546fe30c0826bdc09d40fb851e358edbec182a931aad66",
-      "Fingerprint": "fca18abe740aa0f6e6f930723a85e1624f9f31739c8951d3576b684f9dbdc67e",
+      "Fingerprint": "61a35bf198f6e11291215a8afc9f3d8a0fd397a370626fcb806ca52f6fe5bf4f",
       "Rationale": "Retain: 31-PowerShell-Logging-Baseline.ps1, 40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 is public entry-point binding/bootstrap text. Each numbered script must retain its documented parameter surface, module sequence, V2 context, and capability identity. Rechecked remapped occurrences: scripts/31-PowerShell-Logging-Baseline.ps1:144-151, scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1:114-121.",
       "Occurrences": [
         {
           "Path": "scripts/31-PowerShell-Logging-Baseline.ps1",
-          "StartLine": 130,
-          "EndLine": 137
+          "StartLine": 131,
+          "EndLine": 138
         },
         {
           "Path": "scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
@@ -2259,7 +2259,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "e84a0fc48e3b753becab3d46d7279b0c487e78ee583adc4ef78a3f455625bfbf",
-      "Fingerprint": "50c93b28606464b4cf8d74304cd0f73f6b0558b894eb8e658e06706276871dda",
+      "Fingerprint": "52f7148d93e39ec92529688a0e48ce401b1d5df42a16d4e990df1c018fcfcf3f",
       "Rationale": "Retain: final V2 publication must stay adjacent to each script’s result, script identity, metadata, and exit contract.",
       "Occurrences": [
         {
@@ -2269,8 +2269,8 @@
         },
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 596,
-          "EndLine": 599
+          "StartLine": 597,
+          "EndLine": 600
         }
       ],
       "Multiplicity": 2
@@ -2352,13 +2352,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "e975fa77524f1a8a906b50866c027da4ad692f8603b55141949e34fd4991f9f9",
-      "Fingerprint": "512f50c003259c4a64204139ed9d5c178eb263e6999d8c019456820b91ddf1c9",
+      "Fingerprint": "e432283218abfd089dc710fd049707418a969947477963fd5a3435fbfa236401",
       "Rationale": "Retain: public help/parameter blocks are separate operator contracts despite shared standard options.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 128,
-          "EndLine": 148
+          "StartLine": 129,
+          "EndLine": 149
         },
         {
           "Path": "scripts/07-ScheduledTasks-Hygiene.ps1",
@@ -2460,7 +2460,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "ead65958a482eda15b746c13230572c8668271aeeedd8d54d661caaaa5c57562",
-      "Fingerprint": "d13f6bff5e43843969e1086b9018f5333943345315bea859912dabf342a931da",
+      "Fingerprint": "fd4201732590285188478582bacf3af0e1958e6f93612ac4640fb2a5b03df18a",
       "Rationale": "Retain: remapped content at scripts/21-EmergencyKillSwitch.ps1:161-167, scripts/31-PowerShell-Logging-Baseline.ps1:146-152, scripts/35-Storage-Reliability-Audit.ps1:85-90 handles a capability-specific configuration or catalog shape, including local defaults and validation behavior.",
       "Occurrences": [
         {
@@ -2470,8 +2470,8 @@
         },
         {
           "Path": "scripts/31-PowerShell-Logging-Baseline.ps1",
-          "StartLine": 132,
-          "EndLine": 138
+          "StartLine": 133,
+          "EndLine": 139
         },
         {
           "Path": "scripts/35-Storage-Reliability-Audit.ps1",
@@ -2589,13 +2589,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "ec659affced7a677a00483577c1f4f0780c64e448d0f17b24b74499a77dd5034",
-      "Fingerprint": "0fe2d25550db29656425bcaebcf289894ce340bea556533fbf35ffd49dce5fd1",
+      "Fingerprint": "93c8590c2cd96e0f25d8d7773245d62457109034e392fc1a191e5cc6489ee345",
       "Rationale": "Retain: public Office and artifact-grabber parameters grant different policy and collection authority.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 134,
-          "EndLine": 148
+          "StartLine": 135,
+          "EndLine": 149
         },
         {
           "Path": "scripts/12-Suspicious-Artifact-Grabber.ps1",
@@ -2713,7 +2713,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "f08afc442acdb6c0a9b9721a17a03cdde048a2b4cd9a7a885be87016d826bb1c",
-      "Fingerprint": "fff810d43007308b636749a5fa51e045049e42ce75e689cb65eed6c528d00ed9",
+      "Fingerprint": "76d4aa537aa1cac46aadd1f32c60d8573f1d11afbbd88f07b71e46cb24b1a454",
       "Rationale": "Retain: SMB and BitLocker bootstrap imports are capability-specific dependency closures.",
       "Occurrences": [
         {
@@ -2723,8 +2723,8 @@
         },
         {
           "Path": "scripts/23-BitLocker-Operations-Audit.ps1",
-          "StartLine": 154,
-          "EndLine": 161
+          "StartLine": 156,
+          "EndLine": 163
         }
       ],
       "Multiplicity": 2
@@ -2785,13 +2785,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "f5d8884f3ebb0137bdf5a15ed7c600f76312532634acd912cc7f6f6610fdef34",
-      "Fingerprint": "22617a91f8d838c1e3fe2f0114fb36853548cb65101300066ab3ccdc724d4756",
+      "Fingerprint": "794c887918df0c87bc16e9248f57993a515ef3ec9aad99fb0b5f58264758cce0",
       "Rationale": "Retain: IOC and SoftwareAudit unsupported-host summaries preserve different capability identity and state handling.",
       "Occurrences": [
         {
           "Path": "scripts/11-IOC-Sweep-Defender.ps1",
-          "StartLine": 64,
-          "EndLine": 77
+          "StartLine": 65,
+          "EndLine": 78
         },
         {
           "Path": "scripts/19-Software-Audit.ps1",
@@ -2816,13 +2816,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "f635ba8357355bf21e416f19dd8b28a8385034f8e25b8fc621f8ccebba01ad79",
-      "Fingerprint": "2aa14ffaf6282ffd211cec74f33553a16ae90339b31db46cfae800581cf65583",
+      "Fingerprint": "7392877bf82539e0caf141ff2f902116db767cf93c4abb6909b990e5c5aa0ff7",
       "Rationale": "Retain: certificate and network unsupported-host results have different result storage and surrounding runtime behavior.",
       "Occurrences": [
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 136,
-          "EndLine": 142
+          "StartLine": 137,
+          "EndLine": 143
         },
         {
           "Path": "scripts/29-Network-Config-Audit.ps1",
@@ -2909,7 +2909,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "fb00ffba0bf3b889c463111f5e3ca0b44495603dfbb564f5a0cc6d0ffb126a30",
-      "Fingerprint": "771cb1b289d72b393d2d067f1b59609d4fd08c3d5d242a03de5c38039b06f5c1",
+      "Fingerprint": "13fa3f1d495e86ef3d06b36dbebdebbeb9f9baa29884395401b0c633f05fed52",
       "Rationale": "Retain: remapped content at scripts/09-SupportBundle.ps1:52-75, scripts/31-PowerShell-Logging-Baseline.ps1:49-73, scripts/32-Firewall-Logging-Audit.ps1:42-66, scripts/44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1:13-37 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
@@ -2919,8 +2919,8 @@
         },
         {
           "Path": "scripts/31-PowerShell-Logging-Baseline.ps1",
-          "StartLine": 49,
-          "EndLine": 73
+          "StartLine": 50,
+          "EndLine": 74
         },
         {
           "Path": "scripts/32-Firewall-Logging-Audit.ps1",
@@ -3491,7 +3491,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "cb94ca4d08c5f88440f44c90ccd9faa6afc7170734ef860b2be156331b94d31d",
-      "Fingerprint": "bb587c0fe500498ecc47ceff8b8c33ac630aeab76282b52c45537f92345df084",
+      "Fingerprint": "02110fcf0eeeda817d74cabc37b9c79993e625ac02ece0a88e421d529b725bf1",
       "Rationale": "Retain: hardware and browser fixture doubles intentionally model different observation and persistence behavior.",
       "Occurrences": [
         {
@@ -3501,8 +3501,8 @@
         },
         {
           "Path": "tests/scripts/OfficeBrowserProof.Fixture.ps1",
-          "StartLine": 41,
-          "EndLine": 51
+          "StartLine": 47,
+          "EndLine": 57
         }
       ],
       "Multiplicity": 2
@@ -3646,7 +3646,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "ccffa145713c5817cf40b0efe7b4f5d928e4d169d84c1199dfdad3a56fdf4fc0",
-      "Fingerprint": "7f1b4aad0421cdd8834093f36b75dbc2dbcf872e42f892f3b17ebb4844412e4e",
+      "Fingerprint": "d832338621bdf8cc19d9e31a1f4cf7069f27c44cf0681cec347b896ab970cd00",
       "Rationale": "Retain: public entrypoint prelude (v2 common parameter block, Bootstrap dot-source, lib imports) that each numbered script must declare itself per the V2Contract tests; the regions became adjacent when the metric-evasion Test-AllConditions/Test-AnyCondition definitions between them were removed. Each script keeps its own parameter surface, module set, and V2 identity.",
       "Occurrences": [
         {
@@ -3661,8 +3661,8 @@
         },
         {
           "Path": "scripts/31-PowerShell-Logging-Baseline.ps1",
-          "StartLine": 112,
-          "EndLine": 123
+          "StartLine": 113,
+          "EndLine": 124
         },
         {
           "Path": "scripts/32-Firewall-Logging-Audit.ps1",
@@ -4002,7 +4002,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "dbae504b5a5a8b55b9681de1121a8c27d5c78477dea5b4fa9830e5fea2a281d9",
-      "Fingerprint": "248406d615d21e0dd50fa7df912f80e0292f86c36765be7569f564f32b430da0",
+      "Fingerprint": "cbedd3641df966501369e60b8f455e1c3a1dcd2677f26c57b3aa9de998998b2b",
       "Rationale": "Retain: shared library imports are only a prefix; the remaining capability helper/runtime dependencies differ.",
       "Occurrences": [
         {
@@ -4012,8 +4012,8 @@
         },
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 109,
-          "EndLine": 116
+          "StartLine": 110,
+          "EndLine": 117
         },
         {
           "Path": "scripts/27-Defender-Health-Audit.ps1",
@@ -4069,7 +4069,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "7fa3be066ef8947f525e56dee20bf1a0030b57a747e262999d302e944d847ece",
-      "Fingerprint": "7279ebee4cbb04aa8925d9c6b8dbdd07467d54c55e1bf7a5c0cadfe5a57c5381",
+      "Fingerprint": "825543b96bc7533d33e94869c42bacd269fe3a3c9ebece2108268dec0078f331",
       "Rationale": "Retain: remapped content at scripts/03-LocalAdmins-Guardrail.ps1:64-79, scripts/04-OfficeBrowser-Hardening-Proof.ps1:44-59 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
@@ -4079,8 +4079,8 @@
         },
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 44,
-          "EndLine": 59
+          "StartLine": 45,
+          "EndLine": 60
         }
       ],
       "Multiplicity": 2
@@ -4136,7 +4136,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "7b737b2297fdb80b71f8ac377fae863a91283ea336ea3beaa6c262cf7211d878",
-      "Fingerprint": "057a4dffe208cf0523a25f83fc15530a61ef29be9afa845f28e174349a3886c2",
+      "Fingerprint": "6a32996505f53e9bcb3128bb68584ad178f83d5260d9a3f0228b59e8aa42edcf",
       "Rationale": "Retain: remapped content at scripts/12-Suspicious-Artifact-Grabber.ps1:58-83, scripts/23-BitLocker-Operations-Audit.ps1:54-84 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
@@ -4146,8 +4146,8 @@
         },
         {
           "Path": "scripts/23-BitLocker-Operations-Audit.ps1",
-          "StartLine": 54,
-          "EndLine": 84
+          "StartLine": 56,
+          "EndLine": 86
         }
       ],
       "Multiplicity": 2
@@ -4167,13 +4167,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "25f7bf5328d7ab1c325ba50eed3f6807389c9d14ef382a486a6c8c2a438966db",
-      "Fingerprint": "75679502d785cb67faa6f89d09887df16fba259823bf1e40fd935aa72734b44b",
+      "Fingerprint": "51f17c5273cc40b53806b8c4d949a01f35f87120573950607f1e4749ec9e69b0",
       "Rationale": "Retain: public help and entrypoint parameter blocks are independently documented contracts.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 128,
-          "EndLine": 147
+          "StartLine": 129,
+          "EndLine": 148
         },
         {
           "Path": "scripts/06-UpdateHealth-SSU-Proof.ps1",
@@ -4229,7 +4229,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "28ed8ba7843d7d9783231c776a9191751c6197ef5fb1734d72aa7a10765ada07",
-      "Fingerprint": "fa9a55db0eb80c34aac80f8d394c9d009b44b2a3c9102dd19ac771a74aa65f26",
+      "Fingerprint": "fa596b205663b3084ee0f47e98f3d56140cf71f05c807a02a7b6be6e62445863",
       "Rationale": "Retain: remapped content at scripts/02-LAPS-Hygiene.ps1:103-109, scripts/03-LocalAdmins-Guardrail.ps1:147-153, scripts/10-SupportBundle-Parser.ps1:147-153, scripts/24-Cert-AutoEnrollment-Health.ps1:90-97 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
@@ -4249,8 +4249,8 @@
         },
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 90,
-          "EndLine": 97
+          "StartLine": 91,
+          "EndLine": 98
         }
       ],
       "Multiplicity": 4
@@ -4270,7 +4270,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "2acaa9f0506418b96a9823e81fe2d910b38e5b47abcc103960528e92d53a9789",
-      "Fingerprint": "d47f23a32d2eb8a6b47e91726fe9fb9a3aa2a8ee5b69a9163ce2e6ad2b8d8b08",
+      "Fingerprint": "6bc49873f3ad192ef31298db8fbbe674601ee18b77eb9c992d73ad9bb10311f1",
       "Rationale": "Retain: 02-LAPS-Hygiene.ps1, 04-OfficeBrowser-Hardening-Proof.ps1 is public entry-point binding/bootstrap text. Each numbered script must retain its documented parameter surface, module sequence, V2 context, and capability identity. Rechecked remapped occurrences: scripts/02-LAPS-Hygiene.ps1:101-108, scripts/04-OfficeBrowser-Hardening-Proof.ps1:135-143.",
       "Occurrences": [
         {
@@ -4280,8 +4280,8 @@
         },
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 135,
-          "EndLine": 143
+          "StartLine": 136,
+          "EndLine": 144
         }
       ],
       "Multiplicity": 2
@@ -4466,13 +4466,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "32fd7e51ef99006f9540751dbbbd3a80ab61d39296e02f4e56d8fcd596b0d1cc",
-      "Fingerprint": "9bc68c39efe1a8c3955af68ec9b2a6d60044c3ac477b13d72457868b8955f625",
+      "Fingerprint": "264c6fd2c4f925bcab055081f5184f1e4d86d970adb706f008013c8fe7f624dc",
       "Rationale": "Retain: terminal-token rules must remain beside each public result because findings collection and strict-mode interpretation are capability-specific.",
       "Occurrences": [
         {
           "Path": "scripts/23-BitLocker-Operations-Audit.ps1",
-          "StartLine": 656,
-          "EndLine": 661
+          "StartLine": 657,
+          "EndLine": 662
         },
         {
           "Path": "scripts/41-NTLM-Audit-Client.ps1",
@@ -4869,7 +4869,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "3c69b7ef93c01a938d0618850fa4416daac50bca13bbae319af87e5452506e4a",
-      "Fingerprint": "d5b71c96cc2cb4c3669577b99fc3790942a44b52c495268fe0ae3f6c70c67208",
+      "Fingerprint": "0a5d58efa77a213b3be6aede24b2026de493996fde8e53ef65739007ec4ecd97",
       "Rationale": "Retain: remapped content at scripts/15-HardwareTPM-Audit.ps1:58-80, scripts/24-Cert-AutoEnrollment-Health.ps1:37-58 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
@@ -4879,8 +4879,8 @@
         },
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 37,
-          "EndLine": 58
+          "StartLine": 38,
+          "EndLine": 59
         }
       ],
       "Multiplicity": 2
@@ -4967,13 +4967,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "400824eb98b5b07e20e2854fae80df033ec583cb7c0c839600b89375c03e2c89",
-      "Fingerprint": "f9b0cafb4a806090a0e2d321fd58a68b1623a0c42020eefad4da5517c843a6c2",
+      "Fingerprint": "f0bf15a051325fbe7e02b1580f94e90012bf51b18bbb35c8aaba6afbb0d38717",
       "Rationale": "Retain: 24-Cert-AutoEnrollment-Health.ps1, 42-Client-SecurityBaseline-Report-IntuneRef.ps1 is public entry-point binding/bootstrap text. Each numbered script must retain its documented parameter surface, module sequence, V2 context, and capability identity. Rechecked remapped occurrences: scripts/24-Cert-AutoEnrollment-Health.ps1:91-99, scripts/42-Client-SecurityBaseline-Report-IntuneRef.ps1:65-73.",
       "Occurrences": [
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 91,
-          "EndLine": 99
+          "StartLine": 92,
+          "EndLine": 100
         },
         {
           "Path": "scripts/42-Client-SecurityBaseline-Report-IntuneRef.ps1",
@@ -5060,13 +5060,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "2358bb1998890681603d89f9d7814a70b09c3b127fc09877fa3513f1b567a128",
-      "Fingerprint": "f7a5273ce899de11cc1251318cea9c47764b65d27d736596f305d20904751f11",
+      "Fingerprint": "0e097aadad9fae1de9e96b41a21f976e07bbc0d5fb42f3a05b3315dacb2792c7",
       "Rationale": "Retain: remapped content at scripts/04-OfficeBrowser-Hardening-Proof.ps1:48-68, scripts/13-LSASS-CG-HVCI-VBS.ps1:51-71 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 48,
-          "EndLine": 68
+          "StartLine": 49,
+          "EndLine": 69
         },
         {
           "Path": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
@@ -5411,7 +5411,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "03e8e8bd596b7d549a4df4d35eb00a05d221b29e2c0145accc19e3e83919b9ef",
-      "Fingerprint": "60db383be342abfcc50b3adf82fe69aa9a9dd7003aebf30aa557624f9cb4e011",
+      "Fingerprint": "dd3ec71ecc8e294cfe889758385dd71625f2efbb836b4321d09f527ca5b2348a",
       "Rationale": "Retain: the bootstrap/import sequence is capability-local because the module set establishes its own command and trust surface.",
       "Occurrences": [
         {
@@ -5421,8 +5421,8 @@
         },
         {
           "Path": "scripts/11-IOC-Sweep-Defender.ps1",
-          "StartLine": 76,
-          "EndLine": 81
+          "StartLine": 77,
+          "EndLine": 82
         }
       ],
       "Multiplicity": 2
@@ -5535,7 +5535,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "07900063a9e08b490bef4799e71b3d804bac485d03da8d525af752de64dde817",
-      "Fingerprint": "6548429054f88e39dbfe022476a24349acde2cb96704ff6d7c396cd07edcc1ed",
+      "Fingerprint": "2e6ead59ce37846efe6d825397f1f3dbfe49000aa3cac0bc1aa521015864c432",
       "Rationale": "Retain: these branches pair capability-specific runtime initialization with the public unsupported-host result path.",
       "Occurrences": [
         {
@@ -5545,8 +5545,8 @@
         },
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 126,
-          "EndLine": 136
+          "StartLine": 127,
+          "EndLine": 137
         },
         {
           "Path": "scripts/29-Network-Config-Audit.ps1",
@@ -5797,7 +5797,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "0e11553452fc81dce151f232dba7a3e59f4560ffdfac0a621eb3ba5ba81e1787",
-      "Fingerprint": "7c03abdf6ac2e295f744d5d769cd9cc84ea24f65c83d56d24b1eea066388f512",
+      "Fingerprint": "b87476e42fce0043666d8a3df9b8c13b7d9ed5300e6d2f84cfb4f065c3deb0fd",
       "Rationale": "Retain: public ShouldProcess signatures carry distinct catalog, scan, and remediation authority.",
       "Occurrences": [
         {
@@ -5807,8 +5807,8 @@
         },
         {
           "Path": "scripts/11-IOC-Sweep-Defender.ps1",
-          "StartLine": 56,
-          "EndLine": 63
+          "StartLine": 57,
+          "EndLine": 64
         }
       ],
       "Multiplicity": 2
@@ -6138,7 +6138,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "436d016344d6d7727cac54f7229f9f1dfe7e4f6b2b8f820d58eb123a8403f282",
-      "Fingerprint": "42340c7e1cf4cc5609e2a8f8696b65a352d2a275f2474ba94f885b8ab46d9cf1",
+      "Fingerprint": "4b2249b8e8df6408baac27c3e91ef90355bd5a2b302fd71d02e8016505231de1",
       "Rationale": "Retain: these test fixtures intentionally expose separate controlled endpoint observations and mutation doubles.",
       "Occurrences": [
         {
@@ -6148,8 +6148,8 @@
         },
         {
           "Path": "tests/scripts/OfficeBrowserProof.Fixture.ps1",
-          "StartLine": 107,
-          "EndLine": 112
+          "StartLine": 113,
+          "EndLine": 118
         }
       ],
       "Multiplicity": 2
@@ -6484,7 +6484,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "6a3a76dbbca66816b0e618d0992fc8e551d9ffe2d0e9f6fa7d9274d9f97d3520",
-      "Fingerprint": "40fe4d31fdf2857cca8ca82353df0cdcab6f4d7c78878859eae2fdb2e183e2cd",
+      "Fingerprint": "cc6d15c9e84cdbb471901ef6bb218704fbf9610ae237e7ae017f06a42585dc2c",
       "Rationale": "Retain: test fixtures deliberately define local command doubles and controlled observations for separate test oracles.",
       "Occurrences": [
         {
@@ -6494,8 +6494,8 @@
         },
         {
           "Path": "tests/scripts/OfficeBrowserProof.Fixture.ps1",
-          "StartLine": 64,
-          "EndLine": 73
+          "StartLine": 70,
+          "EndLine": 79
         }
       ],
       "Multiplicity": 2
@@ -6515,13 +6515,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "6b8d8cb611cc165024fd8a819132c077f49e54efcd6edf13186b37c0c4c4fe03",
-      "Fingerprint": "aa9bd29ccee2ac60d3b16e37eb44d62507e15c5caa38c8bb330dcbd924bdb7fb",
+      "Fingerprint": "43e17269bad496d04c649c9d5d781d60a589f0e5a6aa28e653a9ccbefb191e47",
       "Rationale": "Retain: remapped content at scripts/04-OfficeBrowser-Hardening-Proof.ps1:48-65, scripts/18-Firewall-Baseline.ps1:50-61 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 48,
-          "EndLine": 65
+          "StartLine": 49,
+          "EndLine": 66
         },
         {
           "Path": "scripts/18-Firewall-Baseline.ps1",
@@ -6608,13 +6608,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "6c38059948bad0cbab86b11f3e2cb4ed945af39c2e2fdea876d55450ac3d248e",
-      "Fingerprint": "2a441000e3aa39a26021eb922386bba7e915da8f7ffdccf8b56fe0e37cf0598f",
+      "Fingerprint": "41cc74339b03d70176b8927f50e12b9251575308679589a4748e457ecbba1d28",
       "Rationale": "Retain: unsupported-host handling carries different capability summaries and output state ownership.",
       "Occurrences": [
         {
           "Path": "scripts/31-PowerShell-Logging-Baseline.ps1",
-          "StartLine": 356,
-          "EndLine": 362
+          "StartLine": 357,
+          "EndLine": 363
         },
         {
           "Path": "scripts/44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1",
@@ -6639,18 +6639,18 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "6f44c5a6920a70dd18a7f1f19cc0da2a5ae5852c7bb53e57cf8c3e5d1131f19f",
-      "Fingerprint": "c1c4179ea7870b148e5d6c89889de0b7e6244750169da1dec0ce6849b260b333",
+      "Fingerprint": "8fa0f36e328df040e8e1df08fa62e6440ef28541e2c0d15c356e59ce6da1d806",
       "Rationale": "Retain: credential-guard and LSA terminal tokens have different remediation failure precedence.",
       "Occurrences": [
         {
           "Path": "scripts/39-CredentialGuard-VBS-AuditRemediate.ps1",
-          "StartLine": 586,
-          "EndLine": 591
+          "StartLine": 588,
+          "EndLine": 593
         },
         {
           "Path": "scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
-          "StartLine": 667,
-          "EndLine": 672
+          "StartLine": 669,
+          "EndLine": 674
         }
       ],
       "Multiplicity": 2
@@ -6742,7 +6742,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "737e709e49fe6124974f71c723b31b69b8175b7017b7e12a89687a275fe9ab56",
-      "Fingerprint": "6fa8ca01fa844e86754564c7acb0bc0b24148f5819c29485aa952efa64d1cb00",
+      "Fingerprint": "a599938358b721040cb2dc55ab68b2e10c9a9d18b8dabfbc47e0bd6eb8145b98",
       "Rationale": "Retain: remapped content at scripts/17-Sysmon-Rule-Drift-Sensor.ps1:226-231, scripts/31-PowerShell-Logging-Baseline.ps1:152-157, scripts/43-AppControlForBusiness-Audit.ps1:128-134 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
@@ -6752,8 +6752,8 @@
         },
         {
           "Path": "scripts/31-PowerShell-Logging-Baseline.ps1",
-          "StartLine": 138,
-          "EndLine": 143
+          "StartLine": 139,
+          "EndLine": 144
         },
         {
           "Path": "scripts/43-AppControlForBusiness-Audit.ps1",
@@ -6907,13 +6907,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "782657773edd3bfc8b51d1bfc1bf8ad24a9d794715b2d57b52ba8da8d816370f",
-      "Fingerprint": "264c5a6caada9103d76da6e607bde9ea4ec2322ddf6dcc651368b129ba19ba38",
+      "Fingerprint": "846a8936800cf370cf71fe393277ef3100c1d425e399fb918b3fa2133a60d93b",
       "Rationale": "Retain: similar console presentation is driven by different result schemas and output wording.",
       "Occurrences": [
         {
           "Path": "scripts/39-CredentialGuard-VBS-AuditRemediate.ps1",
-          "StartLine": 290,
-          "EndLine": 295
+          "StartLine": 292,
+          "EndLine": 297
         },
         {
           "Path": "scripts/internal/40-AddedLSAProtection-RunAsPPL-AuditRemediate.helpers.ps1",
@@ -7015,13 +7015,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "796dee3585f91524969a90128f83333d7749a686157cdabe15c0bfa50b77b8da",
-      "Fingerprint": "7ace878cc39043b48aac78d682708b75590d10e44e5f6d5cdb27544489eb4c59",
+      "Fingerprint": "030ff5935dcad12bf648e0b965de2f1c8fcdadabd00d8688877cf3dedabf030f",
       "Rationale": "Retain: 04-OfficeBrowser-Hardening-Proof.ps1, 19-Software-Audit.ps1 is public entry-point binding/bootstrap text. Each numbered script must retain its documented parameter surface, module sequence, V2 context, and capability identity. Rechecked remapped occurrences: scripts/04-OfficeBrowser-Hardening-Proof.ps1:134-145, scripts/19-Software-Audit.ps1:122-133.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 134,
-          "EndLine": 145
+          "StartLine": 135,
+          "EndLine": 146
         },
         {
           "Path": "scripts/19-Software-Audit.ps1",
@@ -7211,18 +7211,18 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "465cc516ad59be33299efc9e94377cc95405865f77194510fa787dead79f08c3",
-      "Fingerprint": "07ce5287c6414dbf8400cf3cafb2d9019c0532f61eae9d9ef2c8603bb5e9a16b",
+      "Fingerprint": "6e165dcbb5f8f7b7892b5035602aebde5265d24e62ce18a35bb9de6d8afa36f2",
       "Rationale": "Retain: 24-Cert-AutoEnrollment-Health.ps1 has two branches within one public capability. They intentionally preserve separate validation/remediation stage ordering and independently auditable error/result handling. Prior rationale remains valid: The duplicate is two branches of one public capability; keeping each trust-stage local preserves ordering and an auditable remediation path. Rechecked remapped occurrences: scripts/24-Cert-AutoEnrollment-Health.ps1:165-171, scripts/24-Cert-AutoEnrollment-Health.ps1:203-209.",
       "Occurrences": [
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 151,
-          "EndLine": 157
+          "StartLine": 152,
+          "EndLine": 158
         },
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 189,
-          "EndLine": 195
+          "StartLine": 190,
+          "EndLine": 196
         }
       ],
       "Multiplicity": 2
@@ -7273,13 +7273,13 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "471a2d30d10659e259d13d98adcfeb1d601bd0eae0240400ec0e9acee599e431",
-      "Fingerprint": "b3b250c26c76b49950b61f970782588c4d7f0512ead0a4eec04c3edeca2d238b",
+      "Fingerprint": "8970c834ab866ca9d7027713e47295450ce435ba7a5e860ded80fd4fd603a05a",
       "Rationale": "Retain: remapped content at scripts/04-OfficeBrowser-Hardening-Proof.ps1:48-66, scripts/06-UpdateHealth-SSU-Proof.ps1:33-45, scripts/07-ScheduledTasks-Hygiene.ps1:45-57 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
       "Occurrences": [
         {
           "Path": "scripts/04-OfficeBrowser-Hardening-Proof.ps1",
-          "StartLine": 48,
-          "EndLine": 66
+          "StartLine": 49,
+          "EndLine": 67
         },
         {
           "Path": "scripts/06-UpdateHealth-SSU-Proof.ps1",
@@ -7402,7 +7402,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "4cc166c15a41bce0f7f5c5eb31a968c258399f9726542e8c4ae3e917c07db655",
-      "Fingerprint": "f8f22ea9e4c36f99ef17f8c7414e58e8c18aed3476fbb74cc08b51dd9179c444",
+      "Fingerprint": "5eb97b7477b380b09f828178bdca6e90d48e2d0ea167bc5281ecd6215162a697",
       "Rationale": "Retain: runtime initialization selects different modules and state required by Defender health versus logging policy.",
       "Occurrences": [
         {
@@ -7412,8 +7412,8 @@
         },
         {
           "Path": "scripts/31-PowerShell-Logging-Baseline.ps1",
-          "StartLine": 123,
-          "EndLine": 131
+          "StartLine": 124,
+          "EndLine": 132
         }
       ],
       "Multiplicity": 2
@@ -7779,7 +7779,7 @@
       },
       "Language": "PowerShell",
       "NormalizedContentHash": "5709c433da6750f57f9c0393ee6aef1e5f97d8028e4f8c692b485fe402a7cf70",
-      "Fingerprint": "9739d67fc24a5799df1c68daeb795f2351d0e78b7cfb1ebbd24d06aa5dc961f1",
+      "Fingerprint": "b5d9502497efca66701728166fc3f3e59a5ba3e34a98f9e5fa736083ffc157bb",
       "Rationale": "Retain: the visible overlap is bootstrap/context plumbing; each script has a distinct internal helper and runtime closure.",
       "Occurrences": [
         {
@@ -7789,8 +7789,8 @@
         },
         {
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
-          "StartLine": 116,
-          "EndLine": 126
+          "StartLine": 117,
+          "EndLine": 127
         },
         {
           "Path": "scripts/25-WinGet-Config-Baseline-Runner.ps1",

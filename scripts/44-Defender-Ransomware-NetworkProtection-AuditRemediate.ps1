@@ -60,7 +60,7 @@ Disable datagram processing on Windows Server when applying prerequisites.
 Optional JSON config path for overrides.
 
 .PARAMETER ExportPath
-Optional CSV export path.
+Optional explicit CSV export path. JSON ExportPath is ignored.
 
 .EXAMPLE
   .\44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1
@@ -392,9 +392,9 @@ function Invoke-Capability44MainPhase02 {
     if (-not $script:__EntryBoundParameters.ContainsKey('DisableDatagramProcessingOnWinServer')) {
       $RunState.DisableDatagramProcessingOnWinServer = Get-SafeBool -Value $RunState.config.DisableDatagramProcessingOnWinServer -Default $RunState.defaults.DisableDatagramProcessingOnWinServer
     }
-    if (-not $script:__EntryBoundParameters.ContainsKey('ExportPath')) {
-      $RunState.ExportPath = Normalize-OptionalPath -Path ([string]$RunState.config.ExportPath)
-    }
+    $configuredExportPath = Normalize-OptionalPath -Path ([string]$RunState.config.ExportPath)
+    $RunState.ExportPath = Resolve-OperatorControlledOutputPath -ExplicitPath $RunState.ExportPath `
+      -ConfiguredPath $configuredExportPath -SettingName 'ExportPath'
   }
 }
 function Invoke-Capability44MainPhase03 {

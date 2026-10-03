@@ -233,7 +233,7 @@
           }
         ]
       },
-      "source_closure_sha256": "4c4dd38faaa2faacbdec0ee1a586ccf60c412820bdad527a70daf028fc8eb71b"
+      "source_closure_sha256": "371349f1a4711747c0a9834c4f62d4e768de88a6be32c4f300ba16ae4234abed"
     },
     {
       "id": "windows-update-default-compliant",
@@ -303,7 +303,7 @@
         "v2_action": "None",
         "normalized_mutations": []
       },
-      "source_closure_sha256": "4c4dd38faaa2faacbdec0ee1a586ccf60c412820bdad527a70daf028fc8eb71b"
+      "source_closure_sha256": "371349f1a4711747c0a9834c4f62d4e768de88a6be32c4f300ba16ae4234abed"
     },
     {
       "id": "windows-update-target-release-enable",
@@ -405,7 +405,7 @@
           }
         ]
       },
-      "source_closure_sha256": "4c4dd38faaa2faacbdec0ee1a586ccf60c412820bdad527a70daf028fc8eb71b"
+      "source_closure_sha256": "371349f1a4711747c0a9834c4f62d4e768de88a6be32c4f300ba16ae4234abed"
     },
     {
       "id": "windows-update-target-release-disable",
@@ -509,7 +509,7 @@
           }
         ]
       },
-      "source_closure_sha256": "4c4dd38faaa2faacbdec0ee1a586ccf60c412820bdad527a70daf028fc8eb71b"
+      "source_closure_sha256": "371349f1a4711747c0a9834c4f62d4e768de88a6be32c4f300ba16ae4234abed"
     },
     {
       "id": "windows-update-remediation-denied",
@@ -644,7 +644,7 @@
         ],
         "intentional_safe_parity_difference": "Rust Plan never writes; v2 remediation is run with WhatIf and must report every drift as Skipped."
       },
-      "source_closure_sha256": "4c4dd38faaa2faacbdec0ee1a586ccf60c412820bdad527a70daf028fc8eb71b"
+      "source_closure_sha256": "371349f1a4711747c0a9834c4f62d4e768de88a6be32c4f300ba16ae4234abed"
     },
     {
       "id": "windows-update-malformed-deferral",
@@ -746,7 +746,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 defaults a malformed feature deferral to 30; Rust rejects the malformed typed input."
       },
-      "source_closure_sha256": "4c4dd38faaa2faacbdec0ee1a586ccf60c412820bdad527a70daf028fc8eb71b"
+      "source_closure_sha256": "371349f1a4711747c0a9834c4f62d4e768de88a6be32c4f300ba16ae4234abed"
     },
     {
       "id": "windows-update-wsus-rejected",
@@ -871,7 +871,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 permits operator-supplied WSUS URLs; Rust rejects WSUS until bounded server identities and service evidence exist."
       },
-      "source_closure_sha256": "4c4dd38faaa2faacbdec0ee1a586ccf60c412820bdad527a70daf028fc8eb71b"
+      "source_closure_sha256": "371349f1a4711747c0a9834c4f62d4e768de88a6be32c4f300ba16ae4234abed"
     },
     {
       "id": "security-options-default-compliant",
@@ -1345,7 +1345,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 emits a general Protected Event Logging advisory whenever Script Block Logging is targeted in Audit mode; the Rust semantic planner represents only concrete policy drift."
       },
-      "source_closure_sha256": "c273c9e7ce1d544d68fd99b4675c885c02fefaba023d1382857d4ab21831b5ad"
+      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
     },
     {
       "id": "powershell-logging-default-drifted",
@@ -1437,7 +1437,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 audit reports disabled enablement switches but does not evaluate transcript-directory or ModuleNames drift; Rust proposes those additional fixed, rollback-bound changes."
       },
-      "source_closure_sha256": "c273c9e7ce1d544d68fd99b4675c885c02fefaba023d1382857d4ab21831b5ad"
+      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
     },
     {
       "id": "powershell-logging-default-missing",
@@ -1529,7 +1529,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 treats missing enablement values as off and omits checks for a missing disabled invocation flag, transcript directory, and ModuleNames; Rust retains every missing fixed field and proposes a complete guarded policy baseline."
       },
-      "source_closure_sha256": "c273c9e7ce1d544d68fd99b4675c885c02fefaba023d1382857d4ab21831b5ad"
+      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
     },
     {
       "id": "powershell-logging-access-denied",
@@ -1553,7 +1553,7 @@
         "v2_normalized_module_names": [],
         "intentional_safe_parity_difference": "PowerShell v2 propagates an access-denied registry read from its snapshot function; Rust rejects the unrepresentable typed snapshot before planning, so neither implementation derives a mutation from unreadable prestate."
       },
-      "source_closure_sha256": "c273c9e7ce1d544d68fd99b4675c885c02fefaba023d1382857d4ab21831b5ad"
+      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
     },
     {
       "id": "powershell-logging-malformed-module-names",
@@ -1615,7 +1615,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 normalizes an empty ModuleNames input to the wildcard default; Rust rejects empty module names rather than silently broadening logging scope."
       },
-      "source_closure_sha256": "c273c9e7ce1d544d68fd99b4675c885c02fefaba023d1382857d4ab21831b5ad"
+      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
     }
   ]
 }

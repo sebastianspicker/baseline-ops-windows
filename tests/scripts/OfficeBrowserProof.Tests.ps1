@@ -37,7 +37,7 @@ Describe 'Office and browser policy proof' {
     $run.Proof.Items[0].Policy | Should -Be VBAWarnings
     $run.Proof.Items[-1].Product | Should -Be Firefox
     $run.Proof.Items[-1].Message | Should -Be 'Skipped (Enable=false)'
-    $run.Path | Should -Be '/controlled/proof.json'
+    Split-Path -Leaf $run.Path | Should -Be 'OfficeBrowser-Hardening-Proof.json'
     $run.Events[0].Id | Should -Be 4950
     $run.Ok | Should -BeFalse
   }

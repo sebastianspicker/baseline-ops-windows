@@ -27,8 +27,8 @@
   - DenyCommandLineRegex: Array of regex patterns considered suspicious in command lines.
   - AllowPublisherOrgRegex: Array of regex patterns matched against certificate subject to allow trusted publishers.
   - PurgeUnapproved: Boolean; when true, risky tasks are quarantined (export XML + disable) but only in Remediate mode.
-  - QuarantineDir: Directory used to store exported task XML during quarantine.
-  - Proof.OutFile: Path to the evidence JSON file.
+  - QuarantineDir: Legacy field ignored; the built-in quarantine directory is used.
+  - Proof.OutFile: Legacy field ignored; the built-in proof path is used.
 .PARAMETER Strict
   Controls compliance interpretation.
   When set, any drift (missing critical tasks, disabled critical tasks, quarantine errors, or other detected issues) is treated as a failure state.

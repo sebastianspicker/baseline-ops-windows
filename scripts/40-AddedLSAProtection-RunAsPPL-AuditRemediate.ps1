@@ -30,7 +30,7 @@ Example JSON:
   "VerifyLookbackHours": 24,
   "CollectCodeIntegrity": false,
   "CILookbackHours": 24,
-  "ExportPath": "[configured path]",
+  "ExportPath": null,
   "Quiet": false
 }
 
@@ -452,6 +452,8 @@ Require-Admin
 $configPath = if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath } else { Get-TokenValue -ArgsList $LegacyArgs -Token 'Config' }
 $cfgResult = Read-ConfigWithDefaults -Path $configPath -Defaults (Get-DefaultConfig) -AsHashtable -OnWarning { param($m) Write-Warn $m }
 $RunState.config = $cfgResult.Config
+$RunState.config['ExportPath'] = Resolve-OperatorControlledOutputPath -DefaultPath $null `
+  -ConfiguredPath $RunState.config['ExportPath'] -SettingName 'ExportPath'
 $RunState.config = Apply-ArgsOverlay -Config $RunState.config -ArgsList $LegacyArgs
 $RunState.config['Mode'] = if ($Mode -eq 'Remediate') { 'Remediate' } else { 'Audit' }
 if ($EntryBoundParameters.ContainsKey('Quiet')) { $RunState.config['Quiet'] = [bool]$Quiet }

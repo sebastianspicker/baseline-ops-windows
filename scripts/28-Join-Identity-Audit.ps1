@@ -11,7 +11,7 @@ Console: prints a human-readable summary using Write-UiLine only (not the pipeli
 Optional. If provided (or loaded from JSON), deviations are reported as findings.
 
 .PARAMETER ExportPath
-Optional. If provided (or loaded from JSON), exports the Summary to CSV.
+Optional explicit destination for exporting the Summary to CSV. JSON ExportPath is ignored.
 
 .PARAMETER ConfigPath
 Optional JSON configuration file path supplied with $ConfigPath.
@@ -161,7 +161,8 @@ function Invoke-Capability28MainPhase01 {
     if ($cfgExpectedDomain) { $effective.ExpectedDomain = $cfgExpectedDomain }
 
     $cfgExportPath = Get-StringOrNull $config.ExportPath
-    if ($cfgExportPath) { $effective.ExportPath = $cfgExportPath }
+    $effective.ExportPath = Resolve-OperatorControlledOutputPath -DefaultPath $null `
+      -ConfiguredPath $cfgExportPath -SettingName 'ExportPath'
   }
 
   # Parameters win

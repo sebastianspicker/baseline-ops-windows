@@ -28,9 +28,8 @@ function Initialize-OfficeBrowserProofRun {
 
   $RunState.cat = $RunState.catalogInfo.Catalog
   $proofOverride = Get-TextOrNull $RunState.cat.Proof.OutFile
-  if ($proofOverride) {
-    $RunState.proofPath = $proofOverride
-  }
+  $RunState.proofPath = Resolve-OperatorControlledOutputPath -DefaultPath $RunState.DefaultProofPath `
+    -ConfiguredPath $proofOverride -SettingName 'Proof.OutFile' -InputKind catalog
 
   $RunState.allItems = New-Object System.Collections.Generic.List[object]
 

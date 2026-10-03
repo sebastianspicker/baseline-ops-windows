@@ -17,6 +17,7 @@ How far back to query event logs.
 
 .PARAMETER ExportPath
 Optional base file path for CSV export (suffixes _summary/_events/_expiring are appended).
+This destination must be supplied explicitly; JSON ExportPath is ignored.
 
 .PARAMETER ConfigPath
 Optional JSON config path supplied with $ConfigPath. If missing or invalid, built-in defaults are used.
@@ -409,9 +410,9 @@ function Invoke-Capability24MainPhase01 {
   if (-not $script:__EntryBoundParameters.ContainsKey('IncludeExpired')) {
     $RunState.IncludeExpired = Get-ConfigValueBool -ConfigObject $configObj -Name 'IncludeExpired' -DefaultValue $defaults.IncludeExpired
   }
-  if (-not $script:__EntryBoundParameters.ContainsKey('ExportPath')) {
-    $RunState.ExportPath = Get-ConfigValueString -ConfigObject $configObj -Name 'ExportPath' -DefaultValue $defaults.ExportPath
-  }
+  $configuredExportPath = Get-ConfigValueString -ConfigObject $configObj -Name 'ExportPath' -DefaultValue $defaults.ExportPath
+  $RunState.ExportPath = Resolve-OperatorControlledOutputPath -ExplicitPath $RunState.ExportPath `
+    -DefaultPath $defaults.ExportPath -ConfiguredPath $configuredExportPath -SettingName 'ExportPath'
 
   $RunState.logName = Get-ConfigValueString -ConfigObject $configObj -Name 'LogName' -DefaultValue $defaults.LogName
 

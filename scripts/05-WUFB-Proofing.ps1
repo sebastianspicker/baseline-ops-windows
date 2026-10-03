@@ -15,7 +15,7 @@
 
   The script always:
   - Collects evidence (selected registry values and basic OS information).
-  - Writes a proof JSON file (path configurable in the catalog; safe defaults are used if missing/invalid).
+  - Writes a proof JSON file to the built-in trusted destination; catalog Proof.OutFile is ignored.
   - Prints a colored console summary (intended for humans).
 
   Pipeline behavior:
