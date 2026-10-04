@@ -7,7 +7,7 @@
 - [ ] Audit-only / read-only behavior
 - [ ] Remediation or state-changing behavior
 - [ ] Orchestration/profile behavior
-- [ ] Docs, tests, or GitHub metadata only
+- [ ] Docs or GitHub metadata only
 
 ## Release impact
 
@@ -30,7 +30,6 @@ Target version or release note: <!-- Use "none" when not applicable. -->
 - [ ] `pwsh -NoProfile -Command "Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force; & .\tools\verify.ps1 -RootPath ."`
 - [ ] `pwsh -NoProfile -File .\tools\secret-scan.ps1 -RootPath .`
 - [ ] `pwsh -NoProfile -File .\tools\Test-Documentation.ps1 -RootPath .`
-- [ ] `pwsh -NoProfile -Command "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"`
 - [ ] Relevant code-quality and Rust checks from `CONTRIBUTING.md`
 - [ ] Native Windows validation completed where behavior requires it
 

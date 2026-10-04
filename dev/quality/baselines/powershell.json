@@ -201,62 +201,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "aaf85f0962d0c540fbbe37785ed0a5e6c390b99d06fbe4ebde8e54c225b24d01",
-      "Fingerprint": "4ab4955b57f9b474b2ba6750c54f755fe7fef5bc12bff8e467b08ed75cccc6d1",
-      "Rationale": "Retain: Validation.BoundedInput.Tests.ps1, Validation.GitRef.Tests.ps1, Validation.Paths.Tests.ps1, Validation.ScriptName.Tests.ps1, Validation.Tests.ps1, Validation.Trust.Tests.ps1, Validation.Url.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/lib/Validation.BoundedInput.Tests.ps1:1-14, tests/lib/Validation.GitRef.Tests.ps1:1-14, tests/lib/Validation.Paths.Tests.ps1:1-14, tests/lib/Validation.ScriptName.Tests.ps1:1-14, tests/lib/Validation.Tests.ps1:1-14, tests/lib/Validation.Trust.Tests.ps1:1-14, tests/lib/Validation.Url.Tests.ps1:1-14.",
-      "Occurrences": [
-        {
-          "Path": "tests/lib/Validation.BoundedInput.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        },
-        {
-          "Path": "tests/lib/Validation.GitRef.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        },
-        {
-          "Path": "tests/lib/Validation.Paths.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        },
-        {
-          "Path": "tests/lib/Validation.ScriptName.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        },
-        {
-          "Path": "tests/lib/Validation.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        },
-        {
-          "Path": "tests/lib/Validation.Trust.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        },
-        {
-          "Path": "tests/lib/Validation.Url.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        }
-      ],
-      "Multiplicity": 7
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "ab2ca99f4fc7207663638121aea323fb6589f150ea362af304af3d4bbb81d0d0",
       "Fingerprint": "ca2bffa8deed87593c3c8f7c42fb4d63fbbb82d90f2378a8a4d52ad918f18b27",
       "Rationale": "Retain: duplicate internal help text documents different browser-policy helper files and is not executable duplication.",
@@ -520,37 +464,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "b0dc0cc5904362464e3c44786106e2f0c25e2cfe0ac64508e8de1b2e06705213",
-      "Fingerprint": "2604dc21b200f26a8e49e2352bab6548eb2e11451c1f0e4ffc38cd03beb21747",
-      "Rationale": "Retain: EmergencyKillSwitch.Cleanup.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:102-120, tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:154-172.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 102,
-          "EndLine": 120
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 154,
-          "EndLine": 172
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "b457199892606f5bef55cbfa25d9e95234b73ce794ad44f911cb94f11b1ecea4",
       "Fingerprint": "68717113335677a15c89458fa52a41ac01caf3273e1e90eef800b3f0cc021f9b",
       "Rationale": "Retain: 24-Cert-AutoEnrollment-Health.ps1, 27-Defender-Health-Audit.ps1 constructs a public terminal result or unsupported-host exit. Each occurrence owns its script name, summary fields, result token, output write, and exit ordering; retain the visible contract locally. Prior rationale remains valid: This is a trust or result boundary; extraction risks changing the visible validation and side-effect ordering of a public capability. Rechecked remapped occurrences: scripts/24-Cert-AutoEnrollment-Health.ps1:438-444, scripts/27-Defender-Health-Audit.ps1:315-321.",
@@ -564,37 +477,6 @@
           "Path": "scripts/27-Defender-Health-Audit.ps1",
           "StartLine": 301,
           "EndLine": 307
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "b4e8d1f8d703f3e9afa5b12b0cc9da7a4c019cfcad77294b80e560624fd99fb3",
-      "Fingerprint": "90efa9f9a3f95f3b06de5afd9a07d05607bd5ca313d5e711077af386cd6a6060",
-      "Rationale": "Retain: V2Contract.Cases.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/V2Contract.Cases.ps1:314-321, tests/scripts/V2Contract.Cases.ps1:359-366.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 385,
-          "EndLine": 392
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 430,
-          "EndLine": 437
         }
       ],
       "Multiplicity": 2
@@ -907,47 +789,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "bea0f6d62109c53f2da4dca48ff5ea610f3588a3947444df0a4022ad151bd680",
-      "Fingerprint": "be920ca5ac42406f7abea9a2d8e55bd76b7e951020c7ef848fefaa53ec2db73a",
-      "Rationale": "Retain: V2Contract.Cases.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/V2Contract.Cases.ps1:43-49, tests/scripts/V2Contract.Cases.ps1:53-59, tests/scripts/V2Contract.Cases.ps1:66-73, tests/scripts/V2Contract.Cases.ps1:88-94.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 43,
-          "EndLine": 49
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 53,
-          "EndLine": 59
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 66,
-          "EndLine": 73
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 88,
-          "EndLine": 94
-        }
-      ],
-      "Multiplicity": 4
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "a32b36d307f19ca834849d1fd82f143db3b9ca0312a9c1cee6dc6145acc474c5",
       "Fingerprint": "3876ca63ed6251b4dae258d3e8a6a09a0a83870d48307f895b0c35219b5933cc",
       "Rationale": "Retain: public entrypoint prelude (v2 common parameter block, Bootstrap dot-source, lib imports) that each numbered script must declare itself per the V2Contract tests; the regions became adjacent when the metric-evasion Test-AllConditions/Test-AnyCondition definitions between them were removed. Each script keeps its own parameter surface, module set, and V2 identity.",
@@ -1064,37 +905,6 @@
           "Path": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
           "StartLine": 144,
           "EndLine": 149
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "80c666e5a44e3485a777cf3f0084caa56d3800a074d61dbabd819badb05a0166",
-      "Fingerprint": "9482a33e1afe809f6b70325cd9382e2f728d2c0b3a8a709336108f025e1e1b97",
-      "Rationale": "Retain: V2Contract.Cases.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/V2Contract.Cases.ps1:45-50, tests/scripts/V2Contract.Cases.ps1:90-95.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 45,
-          "EndLine": 50
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 90,
-          "EndLine": 95
         }
       ],
       "Multiplicity": 2
@@ -1742,42 +1552,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "95da756461c4c23bba5055d6f44ab228bd26c28109587addb968754c1be222ea",
-      "Fingerprint": "4f9618f592d91e8cac4536dfc3cb922f1b3444f2803f9505ac76eaf50d1a3add",
-      "Rationale": "Retain: EmergencyKillSwitch.Rollback.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:178-184, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:359-365, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:392-398.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 178,
-          "EndLine": 184
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 359,
-          "EndLine": 365
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 392,
-          "EndLine": 398
-        }
-      ],
-      "Multiplicity": 3
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "96284568cc8e6037d2332757a1977a74e3638011c8de7c9404aa2789ffae9c37",
       "Fingerprint": "f82a29cff4f3be44d6909873ed5192a086c55ed89778ca70d78b9cb7c69fdf5e",
       "Rationale": "Retain: 39-CredentialGuard-VBS-AuditRemediate.ps1, 40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1 is public entry-point binding/bootstrap text. Each numbered script must retain its documented parameter surface, module sequence, V2 context, and capability identity. Prior rationale remains valid: This is public-script contract/bootstrap text. Keeping it adjacent to each entry point preserves self-contained parameter and audit evidence. Rechecked remapped occurrences: scripts/39-CredentialGuard-VBS-AuditRemediate.ps1:431-438, scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1:485-492.",
@@ -1853,37 +1627,6 @@
           "Path": "scripts/33-AdvancedAuditPolicy-Audit.ps1",
           "StartLine": 66,
           "EndLine": 86
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "99bfa9efc30a68381eed1e68da9f72cba24b24c3dfe1109a4305c2f483ed030f",
-      "Fingerprint": "9de2584255c29c48a37b31c39cda34ce54fc1d263f34dd8d65b3f11c1a1260d6",
-      "Rationale": "Retain: EmergencyKillSwitch.Rollback.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:180-185, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:377-382.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 180,
-          "EndLine": 185
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 377,
-          "EndLine": 382
         }
       ],
       "Multiplicity": 2
@@ -2320,37 +2063,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "e919c46cc75a375e52db629a79e5e94e57c59b24beb9b97ca4d78204ab22d54f",
-      "Fingerprint": "cbd9800c577a0ec6cb39744bbe7cfc396862bc9990befcbf7ba9af902815f27f",
-      "Rationale": "Retain: 21-EmergencyKillSwitch.helpers.ps1, Validation.Cases.ps1 establishes or verifies an admin-owned filesystem boundary. Even where ACL construction is textually similar, each caller has a distinct root, post-create validation, and load ordering; retain the security proof at that boundary. Rechecked remapped occurrences: scripts/internal/21-EmergencyKillSwitch.helpers.ps1:173-179, tests/lib/Validation.Cases.ps1:221-227.",
-      "Occurrences": [
-        {
-          "Path": "scripts/internal/21-EmergencyKillSwitch.helpers.ps1",
-          "StartLine": 174,
-          "EndLine": 180
-        },
-        {
-          "Path": "tests/lib/Validation.Cases.ps1",
-          "StartLine": 215,
-          "EndLine": 221
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "e975fa77524f1a8a906b50866c027da4ad692f8603b55141949e34fd4991f9f9",
       "Fingerprint": "e432283218abfd089dc710fd049707418a969947477963fd5a3435fbfa236401",
       "Rationale": "Retain: public help/parameter blocks are separate operator contracts despite shared standard options.",
@@ -2372,47 +2084,6 @@
         }
       ],
       "Multiplicity": 3
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "ea559054c60e244ecd3ec68554b21052ff276bc3edc9689a823f2f523a09a4b8",
-      "Fingerprint": "49b10785463a4729633fc708aec875aa38744307f1994e413ea0f5e0be8e6c9b",
-      "Rationale": "Retain: SysmonConfigUpdater.Policy.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:63-71, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:102-110, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:114-122, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:135-143.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 63,
-          "EndLine": 71
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 102,
-          "EndLine": 110
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 114,
-          "EndLine": 122
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 135,
-          "EndLine": 143
-        }
-      ],
-      "Multiplicity": 4
     },
     {
       "SchemaVersion": 1,
@@ -2480,37 +2151,6 @@
         }
       ],
       "Multiplicity": 3
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "eb692dee528c847a1eb1dee90ced8e2a8e8ca8a11015f038b57b703b42b109b0",
-      "Fingerprint": "c0b3a549bf6482abb08a15db77e248a942e330095103f0b0fdc9b73fcbf599de",
-      "Rationale": "Retain: EmergencyKillSwitch.Cleanup.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:132-154, tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:184-206.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 132,
-          "EndLine": 154
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 184,
-          "EndLine": 206
-        }
-      ],
-      "Multiplicity": 2
     },
     {
       "SchemaVersion": 1,
@@ -2663,37 +2303,6 @@
           "Path": "scripts/internal/17-Sysmon-Rule-Drift-Sensor.helpers.ps1",
           "StartLine": 36,
           "EndLine": 45
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "edae50aba6faec77af6c6bdfff91c60b5bd75306c30da3812db54ccf055ee7e3",
-      "Fingerprint": "91da2a946ff449074fddd72dc0f9a1955bd8006dd1a2da8d21cd865e13cb84d7",
-      "Rationale": "Retain: EmergencyKillSwitch.Cleanup.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:103-119, tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:208-224.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 103,
-          "EndLine": 119
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 208,
-          "EndLine": 224
         }
       ],
       "Multiplicity": 2
@@ -2980,68 +2589,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "e1a026cd88cf7e06a04a808b1a20e5aa83990e86d6858452a2a54667c21e98ae",
-      "Fingerprint": "3e41473628bedd198023f0d739559c97314efadfcddec35e277aadc56881b710",
-      "Rationale": "Retain: EmergencyKillSwitch.Cleanup.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:135-152, tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:241-258.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 135,
-          "EndLine": 152
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 241,
-          "EndLine": 258
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "dea89f2dacac173e38c9cde53092a875163bece9c8f383c8a6af9030fcb4c32e",
-      "Fingerprint": "8b658b93557e3bfbb2bb85cf0a356189e3815cee821c6759a01ac1f311274164",
-      "Rationale": "Retain: EmergencyKillSwitch.Cleanup.Tests.ps1, EmergencyKillSwitch.Rollback.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:64-69, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:48-53.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 64,
-          "EndLine": 69
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 48,
-          "EndLine": 53
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "de4a4b54e22870cb986444fa647c97a1633b41c890ef414bd175cf88b7bcac0d",
       "Fingerprint": "a5b123015023f1d9f32de57ddab8a1e2118efcc1338f2bc9046b30b993a5de74",
       "Rationale": "Retain: remapped content at scripts/09-SupportBundle.ps1:48-63, scripts/17-Sysmon-Rule-Drift-Sensor.ps1:93-102, scripts/20-MissingPatch-Notification.ps1:52-67 is public entrypoint bootstrap or binding; preserve each script’s parameter surface, module sequence, V2 identity, and audit evidence.",
@@ -3184,68 +2731,6 @@
           "Path": "scripts/37-Remote-Surface-Audit.ps1",
           "StartLine": 71,
           "EndLine": 78
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "c71237a68940bdc9aaebd95a4876f4869ef18c951551574f62f146d92fc2a740",
-      "Fingerprint": "ed72a2fb4ffed3caa3dfd4ee848dbfcaca59b07728e2694b088bd424477701b7",
-      "Rationale": "Retain: SysmonConfigUpdater.Policy.Tests.ps1, SysmonConfigUpdater.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:253-258, tests/scripts/SysmonConfigUpdater.Tests.ps1:111-126.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 253,
-          "EndLine": 258
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Tests.ps1",
-          "StartLine": 111,
-          "EndLine": 126
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "c7e4155003d39c3e9b2733f06e366b9f306d1c518605b84fe8eb182158715b7c",
-      "Fingerprint": "9b9bda20dcc88c51e76ea45f2aed4a6d5c7e9c4de79af72eb0065ebe6fdf7a71",
-      "Rationale": "Retain: SysmonConfigUpdater.Policy.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:61-71, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:124-134.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 61,
-          "EndLine": 71
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 124,
-          "EndLine": 134
         }
       ],
       "Multiplicity": 2
@@ -3490,37 +2975,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "cb94ca4d08c5f88440f44c90ccd9faa6afc7170734ef860b2be156331b94d31d",
-      "Fingerprint": "02110fcf0eeeda817d74cabc37b9c79993e625ac02ece0a88e421d529b725bf1",
-      "Rationale": "Retain: hardware and browser fixture doubles intentionally model different observation and persistence behavior.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/HardwareProof.Fixture.ps1",
-          "StartLine": 26,
-          "EndLine": 36
-        },
-        {
-          "Path": "tests/scripts/OfficeBrowserProof.Fixture.ps1",
-          "StartLine": 47,
-          "EndLine": 57
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "cba8671f4bf929268699002ce18d853b718c6ab1ba143fa4d81f0bafd6d9936c",
       "Fingerprint": "8aa8a7da04029aac642d7bd03bb1d3bddc57389ab6d7fef0c152952d443e3726",
       "Rationale": "Retain: secure-directory creation is embedded in separate helper trust policies; do not extract native filesystem authority from these fragments.",
@@ -3565,37 +3019,6 @@
           "Path": "scripts/internal/15-HardwareTPM-Audit.catalog.ps1",
           "StartLine": 116,
           "EndLine": 127
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "cbd0aa78f4f147036fca594344ccb8d9c2578465aa7815b97baf79f2834bbb5b",
-      "Fingerprint": "b46125917a3f3cf8b11ecc4212fecf43f6cc404cb5e45960f06d08973337a7d9",
-      "Rationale": "Retain: EmergencyKillSwitch.Rollback.Tests.ps1, EmergencyKillSwitch.Verification.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:57-62, tests/scripts/EmergencyKillSwitch.Verification.Tests.ps1:74-79.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 57,
-          "EndLine": 62
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Verification.Tests.ps1",
-          "StartLine": 79,
-          "EndLine": 84
         }
       ],
       "Multiplicity": 2
@@ -3761,37 +3184,6 @@
           "Path": "scripts/22-SMB-Encryption-Enforcer.ps1",
           "StartLine": 78,
           "EndLine": 105
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "d7246eda977ec76442ee57800f60fe6933dcce6d3b77387c3ed4e196ebb19fe4",
-      "Fingerprint": "4bb311a54f40d01fe7ea005aa6cdb1626ab68b9f3df9f11d1470271b8fddbfde",
-      "Rationale": "Retain: each Pester file keeps its own fixture loading and scenario setup to preserve independent policy test oracles.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/FirefoxPolicyProof.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 11
-        },
-        {
-          "Path": "tests/scripts/OfficeBrowserProof.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 11
         }
       ],
       "Multiplicity": 2
@@ -4331,37 +3723,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "2f6a9701b475e83a143357fdd23b3c0f18ea4b51f1e91f83e6123ed381cdac9c",
-      "Fingerprint": "f19deee7a244d1454b026c5781e1cc0701639c0088dd05e61719b82796772b16",
-      "Rationale": "Retain: DefenderAllowlist.Fixture.ps1, LapsHygiene.Fixture.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/DefenderAllowlist.Fixture.ps1:16-60, tests/scripts/LapsHygiene.Fixture.ps1:16-60.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/DefenderAllowlist.Fixture.ps1",
-          "StartLine": 16,
-          "EndLine": 60
-        },
-        {
-          "Path": "tests/scripts/LapsHygiene.Fixture.ps1",
-          "StartLine": 16,
-          "EndLine": 60
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "318e93b55fe7455ab378ac32b3f7884d7d09e6b6d68f881eccb2ee52a72bbabf",
       "Fingerprint": "dbf71239b5983f7ca37bb1d8da35f0f9c658d6778db3841bac57319c763e6e84",
       "Rationale": "Retain: public capability parameters and their defaults are independently versioned operator contracts.",
@@ -4744,37 +4105,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "39b541cb9272b45ae84d98714934ca09f55dccbbaa0350ca99021ad203764a13",
-      "Fingerprint": "e20a33f7ccf79301842b561b244b6b8a00ed0a430fa4d1b578c5c0cc3bc0a41e",
-      "Rationale": "Retain: EmergencyKillSwitch.Rollback.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:178-183, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:308-313.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 178,
-          "EndLine": 183
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 308,
-          "EndLine": 313
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "3a59799b638181cba9751e8e5872d919ae425627c217f270cb843cab5d5cef36",
       "Fingerprint": "55291fe896d44522f287dd57a14085b3adb35110efa7c4c45ceca40cd4c875c4",
       "Rationale": "Retain: the WUFB and UpdateHealth fragments belong to separate lifecycle and cleanup paths with different state ownership.",
@@ -4881,37 +4211,6 @@
           "Path": "scripts/24-Cert-AutoEnrollment-Health.ps1",
           "StartLine": 38,
           "EndLine": 59
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "3c7b1db8999495f280e2a52995dfdc8c81ac18ac9b7c47cb4d8e75d9727afed8",
-      "Fingerprint": "8e26ab79718c2b73202691d11992a59d0620fb73e1d135a3aa6675e7b53d8747",
-      "Rationale": "Retain: SysmonConfigUpdater.Policy.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:73-80, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:91-98.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 73,
-          "EndLine": 80
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 91,
-          "EndLine": 98
         }
       ],
       "Multiplicity": 2
@@ -5379,37 +4678,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "03b0459d922bfccb502e7601bcb965421dc73b55f5fdc205a0772a31715027f7",
-      "Fingerprint": "a3f26acb3f06ee9c75ed50f8bfadbbbaee6e35b1e921c9269f49a6fdd1d9a373",
-      "Rationale": "Retain: V2Contract.Cases.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/V2Contract.Cases.ps1:30-35, tests/scripts/V2Contract.Cases.ps1:44-49.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 30,
-          "EndLine": 35
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 44,
-          "EndLine": 49
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "03e8e8bd596b7d549a4df4d35eb00a05d221b29e2c0145accc19e3e83919b9ef",
       "Fingerprint": "dd3ec71ecc8e294cfe889758385dd71625f2efbb836b4321d09f527ca5b2348a",
       "Rationale": "Retain: the bootstrap/import sequence is capability-local because the module set establishes its own command and trust surface.",
@@ -5485,37 +4753,6 @@
           "Path": "scripts/17-Sysmon-Rule-Drift-Sensor.ps1",
           "StartLine": 184,
           "EndLine": 189
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "071d699a02636088c27a5f1a389dcf9880a212f8d5c4ff46c2f2115531fb303a",
-      "Fingerprint": "4d6d42b4a2889e288fa72e386fa6528a7f8d1d895db88e9858271a18eb71e2c5",
-      "Rationale": "Retain: SupportBundleParser.Results.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/SupportBundleParser.Results.Tests.ps1:92-99, tests/scripts/SupportBundleParser.Results.Tests.ps1:153-160.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SupportBundleParser.Results.Tests.ps1",
-          "StartLine": 92,
-          "EndLine": 99
-        },
-        {
-          "Path": "tests/scripts/SupportBundleParser.Results.Tests.ps1",
-          "StartLine": 153,
-          "EndLine": 160
         }
       ],
       "Multiplicity": 2
@@ -5951,37 +5188,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "17aa2b0d77511671241c4c3151890a9c97dd06738c910664ff9993538690988b",
-      "Fingerprint": "e44d34ed122ec99d9c86e0852faa85ca038d3083f26a6a20cf7e68d9d3b29ea3",
-      "Rationale": "Retain: EmergencyKillSwitch.Cleanup.Tests.ps1, EmergencyKillSwitch.Rollback.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:169-174, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:95-100.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 169,
-          "EndLine": 174
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 95,
-          "EndLine": 100
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "1a6dd165fc1669385a60708e45cf4006c85a8f06b70ce92dd656af6a12331e3f",
       "Fingerprint": "66b2ea222f40f8c95e7c8b78e2943da233166cc8bca9251708144e73b78991a4",
       "Rationale": "Retain: environment enable and restore are paired lifecycle operations with deliberately different mutation and cleanup semantics.",
@@ -6026,37 +5232,6 @@
           "Path": "scripts/internal/00-Copy-Local.staging.ps1",
           "StartLine": 48,
           "EndLine": 53
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "1f274b708ee94668ba2b62ed2fcb3bcb536625417b0ec7fde3c6c88ebbafde1a",
-      "Fingerprint": "f7760140389cf34193937f6cd7733e6ee27dc05ed4b3bac538c5fb8d3f946141",
-      "Rationale": "Retain: SysmonConfigUpdater.Policy.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:147-154, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:209-216.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 147,
-          "EndLine": 154
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 209,
-          "EndLine": 216
         }
       ],
       "Multiplicity": 2
@@ -6137,37 +5312,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "436d016344d6d7727cac54f7229f9f1dfe7e4f6b2b8f820d58eb123a8403f282",
-      "Fingerprint": "4b2249b8e8df6408baac27c3e91ef90355bd5a2b302fd71d02e8016505231de1",
-      "Rationale": "Retain: these test fixtures intentionally expose separate controlled endpoint observations and mutation doubles.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/CredentialProtection.Fixture.ps1",
-          "StartLine": 103,
-          "EndLine": 108
-        },
-        {
-          "Path": "tests/scripts/OfficeBrowserProof.Fixture.ps1",
-          "StartLine": 113,
-          "EndLine": 118
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "440342471a87fe0c6bc36604ae32b33b5bd6d6463c949852e735475a6b3f5514",
       "Fingerprint": "fe2ffbd6972eebfedac6283cbfdd48f66b63da5a12ccf423fea659e6944df241",
       "Rationale": "Retain: the import/V2-context overlap is only a capability bootstrap prefix; SMB, firewall logging, and Defender have different runtime closures.",
@@ -6189,37 +5333,6 @@
         }
       ],
       "Multiplicity": 3
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "63faac968ff9d93c3a5976bc2ef9c0854e83f24a6ae06c0e2c9b514f83c96720",
-      "Fingerprint": "2b0118d7dcf590eac772ab3cd250e518ddc371848dee71222bd1956f608775f4",
-      "Rationale": "Retain: the two Pester files intentionally set up different v2 contract oracles and case matrices.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/V2Contract.Exit.Tests.ps1",
-          "StartLine": 12,
-          "EndLine": 24
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Runtime.Tests.ps1",
-          "StartLine": 27,
-          "EndLine": 41
-        }
-      ],
-      "Multiplicity": 2
     },
     {
       "SchemaVersion": 1,
@@ -6279,37 +5392,6 @@
           "Path": "scripts/internal/04-OfficeBrowser-Hardening-Proof.helpers.ps1",
           "StartLine": 14,
           "EndLine": 25
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "664cffc05977d849aef1566995ea980d29d924d022633a87db3fae9dfc84cb73",
-      "Fingerprint": "264e5d2008304f05fc797609af3fb56678256b261d7aa9830e5d5e19d67fca98",
-      "Rationale": "Retain: EmergencyKillSwitch.Rollback.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:323-328, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:356-361.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 323,
-          "EndLine": 328
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 356,
-          "EndLine": 361
         }
       ],
       "Multiplicity": 2
@@ -6465,37 +5547,6 @@
           "Path": "scripts/internal/00-Run-Profile.runtime.ps1",
           "StartLine": 117,
           "EndLine": 138
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "6a3a76dbbca66816b0e618d0992fc8e551d9ffe2d0e9f6fa7d9274d9f97d3520",
-      "Fingerprint": "cc6d15c9e84cdbb471901ef6bb218704fbf9610ae237e7ae017f06a42585dc2c",
-      "Rationale": "Retain: test fixtures deliberately define local command doubles and controlled observations for separate test oracles.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/ArtifactCollection.Fixture.ps1",
-          "StartLine": 131,
-          "EndLine": 140
-        },
-        {
-          "Path": "tests/scripts/OfficeBrowserProof.Fixture.ps1",
-          "StartLine": 70,
-          "EndLine": 79
         }
       ],
       "Multiplicity": 2
@@ -6808,73 +5859,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "74b9f893682069af6afb00baa19b4f4281572410f86b5b1e45fbdd3097c0ad8e",
-      "Fingerprint": "468492601887cad3d856be9fb05b8f3dd45c7702a7c6d66a46e18dc494898ac6",
-      "Rationale": "Retain: RemoteAccessGuardrails.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Prior rationale remains valid: Distinct behavioral cases remain explicit in the Pester file; a shared helper would obscure the asserted failure path and weaken test clarity. Rechecked remapped occurrences: tests/scripts/RemoteAccessGuardrails.Tests.ps1:29-35, tests/scripts/RemoteAccessGuardrails.Tests.ps1:49-52.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/RemoteAccessGuardrails.Tests.ps1",
-          "StartLine": 29,
-          "EndLine": 35
-        },
-        {
-          "Path": "tests/scripts/RemoteAccessGuardrails.Tests.ps1",
-          "StartLine": 49,
-          "EndLine": 52
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "7524d2a079521951a16b272d0f54320e56a8bb390de71df80bcf4fcc1b2db1a7",
-      "Fingerprint": "33d7d33add1142e205f0009cc93b0f4ebf6be24da56cc8dcc6fb6e2be3a5541e",
-      "Rationale": "Retain: Serialization.Files.Tests.ps1, Serialization.Output.Tests.ps1, Serialization.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/lib/Serialization.Files.Tests.ps1:1-14, tests/lib/Serialization.Output.Tests.ps1:1-14, tests/lib/Serialization.Tests.ps1:1-14.",
-      "Occurrences": [
-        {
-          "Path": "tests/lib/Serialization.Files.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        },
-        {
-          "Path": "tests/lib/Serialization.Output.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        },
-        {
-          "Path": "tests/lib/Serialization.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 14
-        }
-      ],
-      "Multiplicity": 3
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "780748bb9daa6fa4f0859344fef586f892dd8cc9fb2e98f9b9b9d8128b750700",
       "Fingerprint": "c5aa73376bd1dbd093eaa28b443c1467d46470ef9dfe88fdb0d1a300cb042f97",
       "Rationale": "Retain: ScheduledTasks and WinGet use capability-specific V2 context helpers and remediation derivation.",
@@ -6919,37 +5903,6 @@
           "Path": "scripts/internal/40-AddedLSAProtection-RunAsPPL-AuditRemediate.helpers.ps1",
           "StartLine": 70,
           "EndLine": 75
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "78707811fd809001b585c014bb1c017fb1a28d454d6de0fcdf54d7684b60c444",
-      "Fingerprint": "ef6aeb62341ff9b567d8fd22b50df718a6a7ad8035e2ba7c1d42901a9d0f6d7d",
-      "Rationale": "Retain: EmergencyKillSwitch.Cleanup.Tests.ps1, EmergencyKillSwitch.Rollback.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:116-122, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:94-99.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 116,
-          "EndLine": 122
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 94,
-          "EndLine": 99
         }
       ],
       "Multiplicity": 2
@@ -7071,37 +6024,6 @@
         }
       ],
       "Multiplicity": 4
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "63d078a60fec69ddd76bfc11bda0fe15a527f30ed94bdc79fdaad0e37de7d49d",
-      "Fingerprint": "e6397bface0185ce7be0e65af0cb5db58664ad619291f206b53b2e596ced09c1",
-      "Rationale": "Retain: SysmonConfigUpdater.Policy.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Prior rationale remains valid: Distinct behavioral cases remain explicit in the Pester file; a shared helper would obscure the asserted failure path and weaken test clarity. Rechecked remapped occurrences: tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:61-68, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:156-165.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 61,
-          "EndLine": 68
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 156,
-          "EndLine": 165
-        }
-      ],
-      "Multiplicity": 2
     },
     {
       "SchemaVersion": 1,
@@ -7293,68 +6215,6 @@
         }
       ],
       "Multiplicity": 3
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "4788e74eb0efb26abda24212704a81cbd1fc8c34d8403792c0839c5df2abf05c",
-      "Fingerprint": "19cca37898d3ac7e1838974de6e9be9923feefd5d71e2390d8ce91c734c2b36f",
-      "Rationale": "Retain: V2Contract.Cases.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/V2Contract.Cases.ps1:314-329, tests/scripts/V2Contract.Cases.ps1:333-348.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 385,
-          "EndLine": 400
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 404,
-          "EndLine": 419
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "48684f2ae2ec1dad92ee8c55a28ad657f7592a204d50844540e6a8ca0894362a",
-      "Fingerprint": "1f29256ab57ef1b5f8387aeb8393884f518ccd8bf1b58b3b491adfd9548be979",
-      "Rationale": "Retain: SysmonConfigUpdater.Policy.Tests.ps1, SysmonConfigUpdater.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:41-47, tests/scripts/SysmonConfigUpdater.Tests.ps1:23-29.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 41,
-          "EndLine": 47
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Tests.ps1",
-          "StartLine": 23,
-          "EndLine": 29
-        }
-      ],
-      "Multiplicity": 2
     },
     {
       "SchemaVersion": 1,
@@ -7623,37 +6483,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "43e8b5c72ce8cd7f533bafba80033abc6699f018d21e600f43be2c751bd7e7bc",
-      "Fingerprint": "ba141523b362fce7cdd063cdb61993a3ddc4b48ebce8dc4ba9a3cf05881e85a7",
-      "Rationale": "Retain: SysmonConfigUpdater.Policy.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:145-154, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:167-176.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 145,
-          "EndLine": 154
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 167,
-          "EndLine": 176
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "51df7af0d28b81db841c1b020311df4b75c44b81498d47cb638ae1d73f22ed37",
       "Fingerprint": "e78fa500b03ca274833a036d36c96aa4a5f07b18b21ba8557ba2591619e22d08",
       "Rationale": "Retain: Copy-Local and LAPS public entrypoints expose different install and remediation authority.",
@@ -7729,37 +6558,6 @@
           "Path": "scripts/internal/00-Copy-Local.destination.ps1",
           "StartLine": 144,
           "EndLine": 151
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "56aaf0c19c4d75c7b8a6c544e09925e8636cb9cf2b9014e171ce08f23d546adf",
-      "Fingerprint": "26a9898b89eab686d9cb6659ecfddf7bd8908239020d4aa564557b4bf1613042",
-      "Rationale": "Retain: EmergencyKillSwitch.Validation.Tests.ps1, V2Contract.Cases.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Validation.Tests.ps1:38-43, tests/scripts/V2Contract.Cases.ps1:229-234.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Validation.Tests.ps1",
-          "StartLine": 38,
-          "EndLine": 43
-        },
-        {
-          "Path": "tests/scripts/V2Contract.Cases.ps1",
-          "StartLine": 300,
-          "EndLine": 305
         }
       ],
       "Multiplicity": 2
@@ -7941,67 +6739,6 @@
         ]
       },
       "Language": "PowerShell",
-      "NormalizedContentHash": "5882e7c51b12ec0af30a1411dceb1ee36baf700dbf1a5ef80da547e251d05c47",
-      "Fingerprint": "9380206c0987f5c4bdc2eb62306692a4312b84459e70a0d7f2738e4cc2901f72",
-      "Rationale": "Retain: EmergencyKillSwitch.Cleanup.Tests.ps1, EmergencyKillSwitch.Rollback.Tests.ps1, EmergencyKillSwitch.Tests.ps1, EmergencyKillSwitch.Verification.Tests.ps1, SysmonConfigUpdater.Policy.Tests.ps1, SysmonConfigUpdater.Tests.ps1, SysmonConfigUpdater.Trust.Tests.ps1, SysmonConfigUpdater.Unsupported.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1:1-20, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:1-20, tests/scripts/EmergencyKillSwitch.Tests.ps1:1-20, tests/scripts/EmergencyKillSwitch.Verification.Tests.ps1:1-20, tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1:1-20, tests/scripts/SysmonConfigUpdater.Tests.ps1:1-20, tests/scripts/SysmonConfigUpdater.Trust.Tests.ps1:1-20, tests/scripts/SysmonConfigUpdater.Unsupported.Tests.ps1:1-20.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Cleanup.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 20
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 20
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 20
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Verification.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 20
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Policy.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 20
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 20
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Trust.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 20
-        },
-        {
-          "Path": "tests/scripts/SysmonConfigUpdater.Unsupported.Tests.ps1",
-          "StartLine": 1,
-          "EndLine": 20
-        }
-      ],
-      "Multiplicity": 8
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
       "NormalizedContentHash": "5b07b3e8f21690e36c3a1d5f2bd55c7b58809df634d677ac39794f3939a82c52",
       "Fingerprint": "98036599f9ce9c054030f146c5dceb0dbc9b86032bd86407326593a1d4a4a101",
       "Rationale": "Retain: Report-Aggregate and SMB each initialize a V2 context with a different result model and execution role.",
@@ -8046,37 +6783,6 @@
           "Path": "scripts/36-Backup-Readiness-Audit.ps1",
           "StartLine": 79,
           "EndLine": 86
-        }
-      ],
-      "Multiplicity": 2
-    },
-    {
-      "SchemaVersion": 1,
-      "Detector": {
-        "Name": "jscpd",
-        "Version": "5.1.2",
-        "Mode": "mild",
-        "MinTokens": 50,
-        "MinLines": 5,
-        "ScanRoot": ".",
-        "Languages": [
-          "powershell"
-        ]
-      },
-      "Language": "PowerShell",
-      "NormalizedContentHash": "5b33ee5abeef0699781120333787d20d2a616d0e10ad73417b95c8d1a7687ae8",
-      "Fingerprint": "f53a060e37c39b37ba407cab5f4a9cd7a54db12a66c5dfce16985fdf359a5cd3",
-      "Rationale": "Retain: EmergencyKillSwitch.Rollback.Tests.ps1 repeats fixture setup or assertions for separate named test cases. Retain the oracle locally so each test states the exact condition, invocation, and expected public result it proves. Rechecked remapped occurrences: tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:178-185, tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1:272-279.",
-      "Occurrences": [
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 178,
-          "EndLine": 185
-        },
-        {
-          "Path": "tests/scripts/EmergencyKillSwitch.Rollback.Tests.ps1",
-          "StartLine": 272,
-          "EndLine": 279
         }
       ],
       "Multiplicity": 2

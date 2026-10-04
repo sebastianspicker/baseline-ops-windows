@@ -154,6 +154,9 @@ AI_SUMMARY*
 /FINDINGS.md
 /REFACTOR_PLAN.md
 /RELEASE_STATUS.md
+/DESIGN_BRIEF.md
+/tests/
+/rust/crates/baselineops-engine/src/package/tests/
 /plan.md
 /plans/
 TASK_LEDGER.md

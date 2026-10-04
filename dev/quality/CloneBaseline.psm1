@@ -115,7 +115,7 @@ function Test-OccurrenceScope {
   $path = [string]$Occurrence.Path
   if ($path.Contains('..') -or [System.IO.Path]::IsPathRooted($path)) { return $false }
   if ($ReleaseLine -eq 'Rust') { return $path.StartsWith('rust/') }
-  return @('scripts/', 'lib/', 'tools/', 'dev/', 'tests/') | Where-Object { $path.StartsWith($_) } | Select-Object -First 1
+  return @('scripts/', 'lib/', 'tools/', 'dev/') | Where-Object { $path.StartsWith($_) } | Select-Object -First 1
 }
 
 function Assert-BaselineIdentity {

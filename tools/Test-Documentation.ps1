@@ -344,7 +344,7 @@ function Test-DocumentationSource {
   [CmdletBinding()]
   param([Parameter(Mandatory)]$Source, [bool]$IsScopedRun, [Parameter(Mandatory)]$State)
 
-  $isMaintainedPowerShell = $Source.Extension -in @('.ps1', '.psm1') -and $Source.RelativePath -match '^(lib|scripts|tools|tests)/'
+  $isMaintainedPowerShell = $Source.Extension -in @('.ps1', '.psm1') -and $Source.RelativePath -match '^(lib|scripts|tools)/'
   if ($Source.Extension -in @('.ps1', '.psm1') -and ($IsScopedRun -or $isMaintainedPowerShell)) {
     Test-DocumentationPowerShellHelp -CandidatePath $Source.CandidatePath -RelativePath $Source.RelativePath -State $State; return
   }

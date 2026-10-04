@@ -4,8 +4,7 @@
   "scope": "Legacy numbered endpoint scripts 01 through 52 only. The 00 orchestration helpers are intentionally out of scope.",
   "oracle": [
     "rust/oracles/v2-capability-manifests.json",
-    "rust/oracles/v2-neutral-fixtures.json",
-    "tests/oracle/RustV3Oracle.Adapter.ps1"
+    "rust/oracles/v2-neutral-fixtures.json"
   ],
   "summary": {
     "legacy_capabilities_expected": 52,

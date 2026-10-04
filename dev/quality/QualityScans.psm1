@@ -23,7 +23,7 @@ function Get-QualitySourceFiles {
         ForEach-Object FullName | Sort-Object -Unique)
   }
   $files = @()
-  foreach ($directory in @('scripts', 'lib', 'tools', 'dev', 'tests')) {
+  foreach ($directory in @('scripts', 'lib', 'tools', 'dev')) {
     $path = Join-Path $RootPath $directory
     if (-not (Test-Path -LiteralPath $path -PathType Container)) { continue }
     $files += Get-ChildItem -LiteralPath $path -Recurse -File |

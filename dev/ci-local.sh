@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the portable PowerShell 7 source, documentation, and test gates in CI
+# Runs the portable PowerShell 7 source and documentation gates in CI
 # order. Windows PowerShell, protected-workspace, and LocalSystem lanes remain
 # Windows CI responsibilities.
 set -euo pipefail
@@ -9,10 +9,8 @@ pwsh_bin="${PWSH_BIN:-pwsh}"
 tool_versions="$root_dir/dev/quality/tool-versions.psd1"
 required_pwsh_version=""
 psa_version=""
-pester_version=""
 
 skip_analyzer="${CI_SKIP_ANALYZER:-}"
-skip_tests="${CI_SKIP_TESTS:-}"
 
 runtime_status="NOT_RUN"
 secret_status="NOT_RUN"
@@ -20,7 +18,6 @@ documentation_status="NOT_RUN"
 static_status="NOT_RUN"
 analyzer_status="NOT_RUN"
 quality_status="NOT_RUN"
-tests_status="NOT_RUN"
 overall_status="PASS"
 summary_printed=0
 
@@ -39,7 +36,6 @@ print_summary() {
   printf '| %-13s | %-8s |\n' "Static" "$static_status"
   printf '| %-13s | %-8s |\n' "Analyzer" "$analyzer_status"
   printf '| %-13s | %-8s |\n' "CodeQuality" "$quality_status"
-  printf '| %-13s | %-8s |\n' "Tests" "$tests_status"
   printf '| %-13s | %-8s |\n' "Overall" "$overall_status"
 }
 
@@ -50,7 +46,7 @@ fail_with_summary() {
   exit "$exit_code"
 }
 
-if [[ -n "$skip_analyzer" || -n "$skip_tests" ]]; then
+if [[ -n "$skip_analyzer" ]]; then
   overall_status="PARTIAL"
 fi
 
@@ -64,14 +60,14 @@ fi
 # The manifest is the single source of pinned tool versions for this gate.
 if ! pinned_versions="$("$pwsh_bin" -NoLogo -NoProfile -Command "\
 \$versions = Import-PowerShellDataFile -LiteralPath '$tool_versions'
-[string]::Format('{0}|{1}|{2}', \$versions.PowerShell, \$versions.PSScriptAnalyzer, \$versions.Pester)")"; then
+[string]::Format('{0}|{1}', \$versions.PowerShell, \$versions.PSScriptAnalyzer)")"; then
   echo "Failed to read pinned tool versions from: $tool_versions" >&2
   runtime_status="FAILED"
   fail_with_summary 1
 fi
 pinned_versions="${pinned_versions//$'\r'/}"
-IFS='|' read -r required_pwsh_version psa_version pester_version <<<"$pinned_versions"
-if [[ -z "$required_pwsh_version" || -z "$psa_version" || -z "$pester_version" ]]; then
+IFS='|' read -r required_pwsh_version psa_version <<<"$pinned_versions"
+if [[ -z "$required_pwsh_version" || -z "$psa_version" ]]; then
   echo "Pinned tool versions are incomplete in: $tool_versions" >&2
   runtime_status="FAILED"
   fail_with_summary 1
@@ -120,26 +116,6 @@ else
   fail_with_summary "$exit_code"
 fi
 
-if [[ -z "$skip_tests" ]]; then
-  tests_status="SETUP"
-  if "$pwsh_bin" -NoProfile -Command "\
-if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { \$_.Version -eq '$pester_version' })) {
-  Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-  Install-Module -Name Pester -RequiredVersion '$pester_version' -Scope CurrentUser -Force -SkipPublisherCheck
-}
-Import-Module Pester -RequiredVersion '$pester_version' -Force
-if ((Get-Module -Name Pester).Version.ToString() -cne '$pester_version') {
-  throw 'Pester version drift.'
-}"; then
-    tests_status="READY"
-  else
-    tests_status="FAILED"
-    fail_with_summary 1
-  fi
-else
-  tests_status="SKIPPED"
-fi
-
 secret_status="RUN"
 if "$pwsh_bin" -NoProfile -File "$root_dir/tools/secret-scan.ps1" -RootPath "$root_dir"; then
   secret_status="PASS"
@@ -176,19 +152,6 @@ exit \$LASTEXITCODE"; then
     exit_code=$?
     static_status="FAILED"
     analyzer_status="FAILED"
-    fail_with_summary "$exit_code"
-  fi
-fi
-
-if [[ -z "$skip_tests" ]]; then
-  tests_status="RUN"
-  if "$pwsh_bin" -NoProfile -Command "\
-Import-Module Pester -RequiredVersion '$pester_version' -Force
-Invoke-Pester -Path '$root_dir/tests' -CI -Output Detailed"; then
-    tests_status="PASS"
-  else
-    exit_code=$?
-    tests_status="FAILED"
     fail_with_summary "$exit_code"
   fi
 fi

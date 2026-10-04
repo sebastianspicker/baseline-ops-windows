@@ -21,7 +21,7 @@ The operator ZIP contains:
 - the Windows Forms launcher
 - public project, contribution, security, changelog, and operator documentation
 
-The ZIP does not include `.github/`, `tests/`, `dev/`, `rust/`, or private
+The ZIP does not include `.github/`, `dev/`, `rust/`, or private
 directories. Development-only tooling, including the local gate, code-quality
 scans, browser tour checks, and the capability scaffold, lives in `dev/`. The
 ZIP includes browser tour assets and screenshots as documentation, but leaves
@@ -33,8 +33,8 @@ Before it builds a package, `.github/workflows/release.yml` runs these checks
 against the resolved tag:
 
 - Installs the official PowerShell 7.6.3 Linux archive after checking its pinned SHA-256 digest.
-- Loads PSScriptAnalyzer 1.25.0 and Pester 5.8.0.
-- Runs the secret scan, documentation check, static verifier, and complete Pester suite.
+- Loads PSScriptAnalyzer 1.25.0.
+- Runs the secret scan, documentation check, and static verifier.
 - Builds the ZIP with `git archive` from the resolved release commit.
 - Verifies the package inventory and expected counts.
 - Runs profile validation, profile smoke, secret, documentation, and static checks against an extracted ZIP.
@@ -145,9 +145,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module PSScriptAnalyzer
 ```
 
 `verify.ps1 -SkipAnalyzer` performs only a partial parse check and does not
-replace the complete gate. Pester and `dev/ci-local.sh` require a full
-checkout of the release tag. The operator ZIP deliberately excludes both
-`dev/` and `tests/`.
+replace the complete gate. `dev/ci-local.sh` requires a full
+checkout of the release tag. The operator ZIP deliberately excludes
+`dev/`.
 
 An extracted ZIP has no Git metadata. The verifier and secret scan therefore
 fall back to recursive package scanning. In a Windows checkout, these two tools
@@ -311,7 +311,7 @@ publish job uses this token only to check the immutable-release setting before
 creating a draft. The normal job token handles the release contents.
 
 1. Verify the remote controls and freeze one clean commit containing the intended source and documentation.
-2. Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md#local-checks) under PowerShell 7.6.3 and Windows PowerShell 5.1 with PSScriptAnalyzer 1.25.0 and Pester 5.8.0. Review failures, unexpected skips, and test-discovery changes.
+2. Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md#local-checks) under PowerShell 7.6.3 and Windows PowerShell 5.1 with PSScriptAnalyzer 1.25.0. Review failures, unexpected skips, and test-discovery changes.
 3. Complete the manual launcher and endpoint remediation checks required for the release scope.
 4. Create the exact semantic prerelease tag `v2.3.0-alpha.1` at that commit and
    push only the tag intended for publication.

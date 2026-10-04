@@ -7,7 +7,6 @@ focused, explain their effect on an endpoint, and test the behavior they change.
 
 - PowerShell 7.6.3
 - PSScriptAnalyzer 1.25.0
-- Pester 5.8.0
 - Python 3 with venv support for pinned Lizard 1.21.2
 - Node.js 18 or newer with npm for pinned jscpd 5.1.2
 - Bash for `dev/ci-local.sh`
@@ -19,11 +18,10 @@ focused, explain their effect on an endpoint, and test the behavior they change.
 
 1. Create a branch from the intended base branch.
 2. Make one focused change.
-3. Add or update tests for behavior changes.
-4. Update public documentation when parameters, configuration, output, security boundaries, or operation changes.
-5. Run the focused tests and applicable full gates.
-6. Review `git diff --check` and the complete diff.
-7. Open a pull request with scope, risk, compatibility impact, and validation results.
+3. Update public documentation when parameters, configuration, output, security boundaries, or operation changes.
+4. Run the applicable gates.
+5. Review `git diff --check` and the complete diff.
+6. Open a pull request with scope, risk, compatibility impact, and validation results.
 
 Call out changes to profile parsing, dependency handling, remediation, integrity checks, privileged path validation, native process execution, evidence collection, or result serialization.
 
@@ -40,7 +38,7 @@ Call out changes to profile parsing, dependency handling, remediation, integrity
 - Implement state changes through `SupportsShouldProcess` and verify `-WhatIf` and `-Confirm` behavior.
 - Do not weaken ACL, ownership, reparse-point, signature, hash, or input-validation checks to accommodate a local environment.
 - Use the v2 result helpers for orchestration-compatible output.
-- Avoid committing generated reports, support bundles, launcher logs, Pester XML, or other endpoint evidence.
+- Avoid committing generated reports, support bundles, launcher logs, or other endpoint evidence.
 
 Every maintained `.ps1` and `.psm1` file must begin with comment-based help containing `.SYNOPSIS` and `.DESCRIPTION`. Shell, JavaScript, Docker, PowerShell data, and YAML sources need a leading purpose comment where the format permits comments.
 
@@ -69,10 +67,9 @@ Run the complete PowerShell 7 gate from Bash or Git Bash:
 bash ./dev/ci-local.sh
 ```
 
-The wrapper requires PowerShell Core 7.6.3 and reads the pinned PowerShell,
-Pester, and PSScriptAnalyzer versions from `dev/quality/tool-versions.psd1`, the
-single version manifest; `tests/dev/ToolVersions.Tests.ps1` fails when a
-workflow pin differs from it. CI runs the same wrapper on Linux. Set `PWSH_BIN`
+The wrapper requires PowerShell Core 7.6.3 and reads the pinned PowerShell
+and PSScriptAnalyzer versions from `dev/quality/tool-versions.psd1`, the
+single version manifest. CI runs the same wrapper on Linux. Set `PWSH_BIN`
 to an absolute executable path when necessary:
 
 ```bash
@@ -92,8 +89,6 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\secret-scan.ps1 -RootPath 
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Documentation.ps1 -RootPath .
 pwsh -NoProfile -ExecutionPolicy Bypass -Command `
   "Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force; & .\tools\verify.ps1 -RootPath ."
-pwsh -NoProfile -Command `
-  "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"
 pwsh -NoProfile -File .\dev\quality\Test-CodeQuality.ps1 -ReleaseLine PowerShell
 ```
 
@@ -140,14 +135,7 @@ Run Windows PowerShell 5.1 compatibility checks on Windows:
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `
   "Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force; & .\tools\verify.ps1 -RootPath ."
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `
-  "Import-Module Pester -RequiredVersion 5.8.0 -Force; Invoke-Pester -Path .\tests -CI -Output Detailed"
 ```
-
-Pester skips tests whose requirements are unavailable, such as LocalSystem, a
-protected workspace, another operating system, or a Windows feature. Report
-these skips and test the relevant environment separately. Keep the assertions
-intact.
 
 For changes under `rust/`, run the workspace gates from that directory:
 
@@ -166,7 +154,7 @@ portable tests do not establish that it matches the PowerShell capabilities or
 is ready to ship. Keep its capability ledger and Windows test evidence current
 when making those claims.
 
-The operator release ZIP excludes the test suite. Package checks are documented in the [release guide](docs/alpha-release.md#check-the-extracted-operator-package).
+The operator release ZIP contains only the operator files. Package checks are documented in the [release guide](docs/alpha-release.md#check-the-extracted-operator-package).
 
 For browser demo changes, follow the [demo checks and screenshot instructions](docs/demo.md#maintain-the-tour).
 

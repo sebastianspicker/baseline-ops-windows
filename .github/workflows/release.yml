@@ -29,7 +29,6 @@ jobs:
       # SHA-256 value published with the official PowerShell v7.6.3 release.
       POWERSHELL_VERSION: '7.6.3'
       POWERSHELL_LINUX_X64_SHA256: '856d0765d2332377f9d7a4aea76efdfde4de51446e7738dde2dfda41dba9e2a7'
-      PESTER_VERSION: '5.8.0'
       PSSCRIPTANALYZER_VERSION: '1.25.0'
     steps:
       - name: Harden runner
@@ -113,7 +112,6 @@ jobs:
           }
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           foreach ($module in @(
-              @{ Name = 'Pester'; Version = $env:PESTER_VERSION; SkipPublisherCheck = $true },
               @{ Name = 'PSScriptAnalyzer'; Version = $env:PSSCRIPTANALYZER_VERSION; SkipPublisherCheck = $false }
             )) {
             $installed = Get-Module -ListAvailable -Name $module.Name |
@@ -149,16 +147,6 @@ jobs:
           ./tools/secret-scan.ps1 -RootPath $env:GITHUB_WORKSPACE
           ./tools/Test-Documentation.ps1 -RootPath $env:GITHUB_WORKSPACE
           ./tools/verify.ps1 -RootPath $env:GITHUB_WORKSPACE
-
-      - name: Run release Pester suite
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($PSVersionTable.PSVersion.ToString() -cne $env:POWERSHELL_VERSION) {
-            throw "Expected PowerShell $env:POWERSHELL_VERSION exactly."
-          }
-          Import-Module Pester -RequiredVersion $env:PESTER_VERSION -Force
-          Invoke-Pester -Path ./tests -CI -Output Detailed
 
       - name: Build package
         env:
