@@ -57,7 +57,10 @@ function New-DefenderAllowlistTestModule {
           Message = $Msg
           Level = $Level
         })
-    }function Get-MpPreference {
+    }
+    function Get-MpPreference {
+      [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Test fixture intentionally shadows the cmdlet.')]
+      param([Parameter(ValueFromRemainingArguments = $true)]$RemainingArguments)
       return $script:Fixture.Preference
     }
     function Get-Config {
@@ -72,6 +75,7 @@ function New-DefenderAllowlistTestModule {
     function Write-AuditJson {
     }
     function Add-MpPreference {
+      [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Test fixture intentionally shadows the cmdlet.')]
       param($ExclusionPath, $ExclusionProcess, $ExclusionExtension, $AttackSurfaceReductionOnlyExclusions, $ControlledFolderAccessAllowedApplications, $ControlledFolderAccessProtectedFolders)
       $script:Calls.Add(@{Operation = 'Add'
           Values = $PSBoundParameters
@@ -81,6 +85,7 @@ function New-DefenderAllowlistTestModule {
       }
     }
     function Remove-MpPreference {
+      [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Test fixture intentionally shadows the cmdlet.')]
       param($ExclusionPath, $ExclusionProcess, $ExclusionExtension, $AttackSurfaceReductionOnlyExclusions, $ControlledFolderAccessAllowedApplications, $ControlledFolderAccessProtectedFolders)
       $script:Calls.Add(@{Operation = 'Remove'
           Values = $PSBoundParameters

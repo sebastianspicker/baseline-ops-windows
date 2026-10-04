@@ -87,12 +87,16 @@ function New-HardwareTestModule {
       return [pscustomobject]@{$MethodName = $script:Fixture.MethodValue }
     }
     function Confirm-SecureBootUEFI {
+      [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Test fixture intentionally shadows the cmdlet.')]
+      param([Parameter(ValueFromRemainingArguments = $true)]$RemainingArguments)
       if ($script:Fixture.FailRead) {
         throw 'controlled boot failure'
       }
       return $script:Fixture.SecureBoot
     }
     function Get-BitLockerVolume {
+      [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Test fixture intentionally shadows the cmdlet.')]
+      param([Parameter(ValueFromRemainingArguments = $true)]$RemainingArguments)
       if ($script:Fixture.FailRead) {
         throw 'controlled BitLocker failure'
       }

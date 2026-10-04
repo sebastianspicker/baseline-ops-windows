@@ -49,6 +49,7 @@ function New-GuardrailTestModule {
       return $script:Members
     }
     function Remove-LocalGroupMember {
+      [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Test fixture intentionally shadows the cmdlet.')]
       param($Group, $Member)
       $null = $Group
       $script:Removed.Add($Member)
