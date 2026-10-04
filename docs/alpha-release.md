@@ -86,9 +86,9 @@ if ($SourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
   throw 'SourceCommit must be a 40-character Git commit identifier.'
 }
 $ExpectedSha256 = [string](& gh attestation verify $Asset `
-  --repo sebastianspicker/baseline-ops `
+  --repo sebastianspicker/baseline-ops-windows `
   --bundle "$Asset.intoto.jsonl" `
-  --signer-workflow github.com/sebastianspicker/baseline-ops/.github/workflows/release.yml `
+  --signer-workflow github.com/sebastianspicker/baseline-ops-windows/.github/workflows/release.yml `
   --source-ref refs/tags/v2.3.0-alpha.1 `
   --source-digest $SourceCommit `
   --deny-self-hosted-runners `

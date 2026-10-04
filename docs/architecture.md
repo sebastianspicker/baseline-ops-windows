@@ -221,8 +221,8 @@ that expire, and apply uses authenticated local IPC plus a second approval bound
 to the digest. Apply refuses changes while required package, UAC, journal, capability,
 or Windows verification is incomplete.
 
-See the [Rust architecture](https://github.com/sebastianspicker/baseline-ops/blob/main/rust/docs/architecture.md),
-[verification contract](https://github.com/sebastianspicker/baseline-ops/blob/main/rust/docs/verification.md), and
+See the [Rust architecture](https://github.com/sebastianspicker/baseline-ops-windows/blob/main/rust/docs/architecture.md),
+[verification contract](https://github.com/sebastianspicker/baseline-ops-windows/blob/main/rust/docs/verification.md), and
 [parity status](rust-v3.md) for the v3-specific model.
 
 ## Build and release boundaries

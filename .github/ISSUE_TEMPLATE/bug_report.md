@@ -8,7 +8,7 @@ labels: bug
 
 Do not include secrets, private hostnames, user names, account identifiers, full
 support bundles, or exploit details in public issues. Report security issues
-by following the private process in the [security policy](https://github.com/sebastianspicker/baseline-ops/security/policy).
+by following the private process in the [security policy](https://github.com/sebastianspicker/baseline-ops-windows/security/policy).
 
 ## Affected area
 

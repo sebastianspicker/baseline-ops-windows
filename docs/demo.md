@@ -1,6 +1,6 @@
 # Browser demo and screenshot tour
 
-Open the [live demo](https://sebastianspicker.github.io/baseline-ops/) to inspect
+Open the [live demo](https://sebastianspicker.github.io/baseline-ops-windows/) to inspect
 a profile, prepare an Audit command, and read a sample result. It runs from static HTML, CSS, and JavaScript files. It has no
 backend, telemetry, external fonts, or connection to an endpoint.
 
@@ -28,7 +28,7 @@ JSON, or download the sample. None of these actions runs an endpoint operation.
 
 ## Publish on GitHub Pages
 
-Run the [Pages workflow](https://github.com/sebastianspicker/baseline-ops/blob/main/.github/workflows/pages.yml)
+Run the [Pages workflow](https://github.com/sebastianspicker/baseline-ops-windows/blob/main/.github/workflows/pages.yml)
 manually to publish the files in `docs/demo`. It does not upload the rest of the
 repository, endpoint evidence, or local analysis output. The site needs no
 build step or runtime dependency.
@@ -39,7 +39,7 @@ After merging the reviewed files:
    publishing source.
 2. In **Actions**, open **GitHub Pages demo** and run it on the default branch.
 3. Open the deployment URL reported by the workflow. For the upstream repository,
-   the expected project URL is `https://sebastianspicker.github.io/baseline-ops/`.
+   the expected project URL is `https://sebastianspicker.github.io/baseline-ops-windows/`.
 4. Add the deployed URL to the repository's About website field and README.
 
 The workflow checks that profile copies match the examples before uploading.

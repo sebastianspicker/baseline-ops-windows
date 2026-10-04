@@ -37,12 +37,12 @@ $SourceCommit = '<verified 40-character release commit>'
 
 .EXAMPLE
 $SourceCommit = '<verified 40-character release commit>'
-.\00-Copy-Local.ps1 -RepoUrl https://github.com/sebastianspicker/baseline-ops.git -RepoRef $SourceCommit
+.\00-Copy-Local.ps1 -RepoUrl https://github.com/sebastianspicker/baseline-ops-windows.git -RepoRef $SourceCommit
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [string]$RepoUrl = 'https://github.com/sebastianspicker/baseline-ops.git',
+  [string]$RepoUrl = 'https://github.com/sebastianspicker/baseline-ops-windows.git',
   [string]$DestinationRoot = 'C:\install\mdm\ps1',
   [string]$RepoPath,
   [string]$RepoRef,

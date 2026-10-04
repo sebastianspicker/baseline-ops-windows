@@ -11,13 +11,13 @@ No particular MDM service, domain, or organization is required; individual
 checks depend on the Windows features they inspect.
 
 The supported application is PowerShell v2, distributed as a set of files.
-An unreleased [Rust v3 implementation](https://github.com/sebastianspicker/baseline-ops/blob/main/rust/README.md)
+An unreleased [Rust v3 implementation](https://github.com/sebastianspicker/baseline-ops-windows/blob/main/rust/README.md)
 is also in development. Each has its own tests and releases; neither requires
 or calls the other at runtime.
 
 [Get started](#get-started) · [Script catalog](scripts/README.md) ·
 [Screenshot tour](#screenshot-tour) · [Documentation](docs/README.md) ·
-[Live demo](https://sebastianspicker.github.io/baseline-ops/)
+[Live demo](https://sebastianspicker.github.io/baseline-ops-windows/)
 
 ## Capabilities
 
@@ -47,7 +47,7 @@ an elevated launcher.
 
 Development uses PowerShell 7.6.3, PSScriptAnalyzer 1.25.0, Pester 5.8.0, and
 Bash. Rust v3 uses the toolchain pinned in
-[`rust/rust-toolchain.toml`](https://github.com/sebastianspicker/baseline-ops/blob/main/rust/rust-toolchain.toml), currently Rust 1.96.0.
+[`rust/rust-toolchain.toml`](https://github.com/sebastianspicker/baseline-ops-windows/blob/main/rust/rust-toolchain.toml), currently Rust 1.96.0.
 
 ## Get started
 
@@ -58,7 +58,7 @@ are unsigned; review the guide before running them as administrator.
 For development or standard-user inspection, clone the repository:
 
 ```powershell
-git clone https://github.com/sebastianspicker/baseline-ops.git baselineops-windows
+git clone https://github.com/sebastianspicker/baseline-ops-windows.git baselineops-windows
 Set-Location -LiteralPath .\baselineops-windows
 ```
 
@@ -87,7 +87,7 @@ not a trusted elevated execution root. Follow the
 
 ## Screenshot tour
 
-Explore the [interactive browser demo](https://sebastianspicker.github.io/baseline-ops/) without a Windows device.
+Explore the [interactive browser demo](https://sebastianspicker.github.io/baseline-ops-windows/) without a Windows device.
 The screenshots below show that browser tour, using repository example
 profiles and fictional results. It does not run PowerShell or reproduce the
 native Windows Forms launcher.
