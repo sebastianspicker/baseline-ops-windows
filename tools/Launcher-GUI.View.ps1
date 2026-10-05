@@ -15,7 +15,7 @@ $script:form.StartPosition = 'CenterScreen'
 $script:form.Size = New-Object System.Drawing.Size(1080, 760)
 $script:form.MinimumSize = New-Object System.Drawing.Size(900, 600)
 $script:form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Font
-$script:form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+$script:form.Font = New-Object System.Drawing.Font('Tahoma', 9)
 $script:form.BackColor = [System.Drawing.SystemColors]::Control
 $script:form.AccessibleName = 'BaselineOps for Windows operator console'
 
@@ -253,8 +253,6 @@ $script:txtOutput = New-Object System.Windows.Forms.TextBox
 $script:txtOutput.Dock = 'Fill'; $script:txtOutput.Multiline = $true; $script:txtOutput.ReadOnly = $true
 $script:txtOutput.ScrollBars = 'Both'; $script:txtOutput.WordWrap = $false
 $script:txtOutput.Font = New-Object System.Drawing.Font('Consolas', 9)
-$script:txtOutput.BackColor = [System.Drawing.SystemColors]::Window
-$script:txtOutput.ForeColor = [System.Drawing.SystemColors]::WindowText
 $script:txtOutput.AccessibleName = 'Execution results'
 $script:txtOutput.AccessibleDescription = 'Live bounded view of launcher and runner output.'
 $script:resultsLayout.Controls.Add($script:resultsActions, 0, 0)
@@ -266,6 +264,73 @@ $script:statusLabel.Text = 'Ready'; $script:statusLabel.Spring = $true; $script:
 [void]$script:statusStrip.Items.Add($script:statusLabel)
 $script:rootLayout.Controls.Add($script:statusStrip, 0, 2)
 $script:form.AcceptButton = $script:btnRun
+}
+
+function Get-LauncherClassicPalette {
+  # The browser tour's light Windows 98 tokens; system colours under high contrast.
+  $colors = [System.Drawing.SystemColors]
+  if ([System.Windows.Forms.SystemInformation]::HighContrast) {
+    return @{ Face = $colors::Control; Field = $colors::Window; TitleA = $colors::ActiveCaption; TitleB = $colors::GradientActiveCaption; TitleInk = $colors::ActiveCaptionText; CodeBack = $colors::Window; CodeInk = $colors::WindowText; Select = $colors::Highlight; SelectInk = $colors::HighlightText }
+  }
+  $tokens = @{ Face = '#D4D0C8'; Field = '#FDFDFD'; TitleA = '#000080'; TitleB = '#0F72B8'; TitleInk = '#FDFDFD'; CodeBack = '#012456'; CodeInk = '#EEEDF0'; Select = '#000080'; SelectInk = '#FDFDFD' }
+  $palette = @{}
+  foreach ($name in $tokens.Keys) { $palette[$name] = [System.Drawing.ColorTranslator]::FromHtml($tokens[$name]) }
+  return $palette
+}
+
+function Show-LauncherTitleBar {
+  param($Surface, $PaintEvent)
+  $bounds = $Surface.ClientRectangle
+  if ($bounds.Width -le 0 -or $bounds.Height -le 0) { return }
+  $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($bounds, $script:Palette.TitleA, $script:Palette.TitleB, [System.Drawing.Drawing2D.LinearGradientMode]::Horizontal)
+  try {
+    # Solid navy for the first 40 percent, then the blend, as in the tour's title bars.
+    $blend = New-Object System.Drawing.Drawing2D.Blend(3)
+    $blend.Factors = [single[]]@(0, 0, 1)
+    $blend.Positions = [single[]]@(0, 0.4, 1)
+    $brush.Blend = $blend
+    $PaintEvent.Graphics.FillRectangle($brush, $bounds)
+  } finally { $brush.Dispose() }
+}
+
+function Set-LauncherGridTheme {
+  param($Grid, $Palette)
+  $Grid.BackgroundColor = $Palette.Field
+  $Grid.BorderStyle = 'Fixed3D'
+  $Grid.EnableHeadersVisualStyles = $false
+  $Grid.ColumnHeadersDefaultCellStyle.BackColor = $Palette.Face
+  $Grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = $Palette.Face
+  $Grid.DefaultCellStyle.BackColor = $Palette.Field
+  $Grid.DefaultCellStyle.SelectionBackColor = $Palette.Select
+  $Grid.DefaultCellStyle.SelectionForeColor = $Palette.SelectInk
+}
+
+function Set-LauncherClassicTheme {
+  $script:Palette = Get-LauncherClassicPalette
+  $script:form.BackColor = $script:Palette.Face
+  foreach ($grid in @($script:gridScripts, $script:gridProfileSteps)) { Set-LauncherGridTheme -Grid $grid -Palette $script:Palette }
+  # The default action carries the bold label of a dialog's default button.
+  $script:btnRun.Font = New-Object System.Drawing.Font($script:form.Font, [System.Drawing.FontStyle]::Bold)
+
+  # Results sit in a raised window frame under a navy title bar, on console blue.
+  $script:split.Panel2.Padding = New-Object System.Windows.Forms.Padding(3)
+  $script:split.Panel2.Add_Paint({ param($surface, $paintEvent) [System.Windows.Forms.ControlPaint]::DrawBorder3D($paintEvent.Graphics, $surface.ClientRectangle, [System.Windows.Forms.Border3DStyle]::Raised) })
+  $script:split.Panel2.Add_Resize({ $this.Invalidate() })
+  $script:resultsActions.Padding = New-Object System.Windows.Forms.Padding(2)
+  $script:resultsActions.Add_Paint({ param($surface, $paintEvent) Show-LauncherTitleBar -Surface $surface -PaintEvent $paintEvent })
+  $script:resultsActions.Add_Resize({ $this.Invalidate() })
+  $script:lblOutput.Anchor = 'Left'
+  $script:lblOutput.BackColor = [System.Drawing.Color]::Transparent
+  $script:lblOutput.ForeColor = $script:Palette.TitleInk
+  $script:lblOutput.Font = $script:btnRun.Font
+  $script:txtOutput.BackColor = $script:Palette.CodeBack
+  $script:txtOutput.ForeColor = $script:Palette.CodeInk
+
+  # A Windows 98 status bar: one sunken panel and a sizing grip.
+  $script:statusStrip.RenderMode = 'System'
+  $script:statusStrip.BackColor = $script:Palette.Face
+  $script:statusLabel.BorderSides = 'All'
+  $script:statusLabel.BorderStyle = 'SunkenOuter'
 }
 
 function Remove-LauncherVisibleLineExcess {
@@ -442,6 +507,7 @@ $script:form.Add_Load({ Get-ScriptCatalogView; Write-LauncherState -State Ready 
   New-LauncherProfileTab
   New-LauncherExecutionControls
   New-LauncherResultsPane
+  Set-LauncherClassicTheme
   Start-LauncherOutputTimer
   Register-LauncherInputEvents
   Register-LauncherValidationEvents

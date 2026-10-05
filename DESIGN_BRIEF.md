@@ -149,7 +149,7 @@ None of the obvious neighbours present themselves as a reviewed
 
 ## Design direction
 
-### Direction A: Run sheet (chosen)
+### Direction A: Run sheet (superseded)
 
 **Concept.** The page is a reviewed operations procedure: the printed run
 sheet a careful administrator attaches to a change ticket. It has a title
@@ -250,3 +250,34 @@ recognition of the console look, and the drama of the ledger. On machines
 without Bahnschrift or DIN, the display face falls back to the system sans.
 The design must therefore hold up through scale, figures, and rules alone,
 not through the typeface.
+
+## Revision: technical document with Windows 98 controls
+
+Review of the run-sheet build found that it still read as a generic landing
+page: slogan headlines, a stat grid, uppercase micro-labels, tinted callouts,
+and a cream-and-green palette. The tour was redesigned with the user's
+approval, which also retired the brand green.
+
+**Concept.** The page is a technical document, as security tools present
+themselves: one 46rem column, plain headings, a real command up front, and
+a "Boundaries" section that states what the toolkit will and will not do,
+quoted from `README.md`, `docs/architecture.md` and `SECURITY.md`. Only the
+interactive walkthrough is styled as an application: a Windows 98 dialog.
+
+**Typography.** Segoe UI for prose, Cascadia Mono for anything you could
+paste into a console, and Tahoma for window chrome only (title bars, tabs,
+buttons, field labels). No display face and no uppercase labels.
+
+**Colour.** Cool neutral greys. Navy (`#000080`) for links and selection,
+as in Windows 98. Commands and JSON sit on the PowerShell console blue
+(`#012456`) in both schemes. Amber and red appear only in results. The
+dark scheme keeps the same chrome with dark bevels.
+
+**Windows 98 elements.** Bevelled buttons with an inner dotted focus
+rectangle, sunken fields with a raised drop-down button, property-sheet
+tabs, and navy-to-blue gradient title bars on the dialog and on command
+windows. There are no fake window buttons, no teal desktop, and no pixel
+fonts. Corners are square everywhere.
+
+**Motion.** None beyond the browser's smooth scroll to the walkthrough,
+which is disabled under `prefers-reduced-motion`.

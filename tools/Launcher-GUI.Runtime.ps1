@@ -22,6 +22,9 @@ Add-Type -AssemblyName System.Drawing
 Import-Module (Join-Path $PSScriptRoot 'Launcher.Core.psm1') -Force
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
+# Classic client-area rendering gives the Windows 98 bevels, tabs and fields
+# the browser tour uses; the operating system still themes the title bar.
+[System.Windows.Forms.Application]::VisualStyleState = [System.Windows.Forms.VisualStyles.VisualStyleState]::NonClientAreaEnabled
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $script:DefaultRoot = if (Test-Path -LiteralPath (Join-Path $repoRoot 'scripts') -PathType Container) { $repoRoot } else { 'C:\install\mdm\ps1' }

@@ -89,10 +89,10 @@ function renderCommand() {
   ]);
 }
 
-function renderStep(step, index, total) {
+function renderStep(step) {
   const item = element("li");
   const match = /^(\d{2})-(.+?)(\.ps1)?$/.exec(step.Script);
-  const number = element("span", "cap-number", match ? match[1] : "··");
+  const number = element("span", "cap-number", match ? match[1] : "--");
   number.setAttribute("aria-hidden", "true");
   const file = element("span", "cap-file");
   if (match) {
@@ -102,18 +102,15 @@ function renderStep(step, index, total) {
       element("span", "cap-ext", match[3] || ""),
     );
   } else file.textContent = step.Script;
-  const notes = [`Step ${index + 1} of ${total}`];
-  notes.push(
+  const notes = [
     step.ContinueOnError ? "continues on error" : "stops the run on error",
-  );
-  notes.push(
     step.Args.length
       ? `${step.Args.length} argument${step.Args.length === 1 ? "" : "s"}`
       : "no arguments",
-  );
+  ];
   if (step.DependsOn?.length) notes.push(`after ${step.DependsOn.join(", ")}`);
   const body = element("span", "cap-body");
-  body.append(file, element("span", "cap-notes", notes.join(" · ")));
+  body.append(file, element("span", "cap-notes", notes.join(", ")));
   item.append(number, body);
   return item;
 }
@@ -134,9 +131,7 @@ function renderProfile() {
   byId("integrity-notice").hidden = Boolean(integrity.RequireSigned || hashes);
   byId("step-count").textContent = `${profile.Steps.length} steps`;
   byId("script-list").replaceChildren(
-    ...profile.Steps.map((step, index) =>
-      renderStep(step, index, profile.Steps.length),
-    ),
+    ...profile.Steps.map((step) => renderStep(step)),
   );
   byId("profile-json").textContent = JSON.stringify(profile, null, 2);
   renderCommand();
@@ -165,9 +160,8 @@ function showStep(step, focus = false) {
 }
 
 function renderSummary() {
-  const [number, ...name] = sample.ScriptName.replace(/\.ps1$/, "").split("-");
   definitions("result-summary", [
-    ["Capability", `${number} · ${name.join(" ")}`, "wide"],
+    ["Capability", sample.ScriptName],
     ["Computer", sample.ComputerName],
     ["Mode", sample.Mode],
     ["Recorded", sample.TimestampUtc.replace("T", " ").replace("Z", " UTC")],
@@ -186,7 +180,7 @@ function renderFindings() {
     article.dataset.severity = finding.Severity;
     const content = element("div");
     content.append(
-      element("h3", "", finding.Code),
+      element("h4", "", finding.Code),
       element("p", "", finding.Message),
     );
     article.append(element("span", "severity", finding.Severity), content);
