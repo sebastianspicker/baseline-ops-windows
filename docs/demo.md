@@ -28,16 +28,19 @@ JSON, or download the sample. None of these actions runs an endpoint operation.
 
 ## Publish on GitHub Pages
 
-Run the [Pages workflow](https://github.com/sebastianspicker/baseline-ops-windows/blob/main/.github/workflows/pages.yml)
-manually to publish the files in `docs/demo`. It does not upload the rest of the
+The [Pages workflow](https://github.com/sebastianspicker/baseline-ops-windows/blob/main/.github/workflows/pages.yml)
+publishes the files in `docs/demo`. It runs on every push to `main` that changes
+`docs/demo/`, `examples/profiles/`, `dev/demo-profiles.mjs`, or the workflow
+itself, and can also be run manually. It does not upload the rest of the
 repository, endpoint evidence, or local analysis output. The site needs no
 build step or runtime dependency.
 
-After merging the reviewed files:
+To set it up:
 
 1. In the repository's **Settings → Pages**, choose **GitHub Actions** as the
    publishing source.
-2. In **Actions**, open **GitHub Pages demo** and run it on the default branch.
+2. Push a tour change to `main`, or in **Actions** open **GitHub Pages demo**
+   and run it on the default branch.
 3. Open the deployment URL reported by the workflow. For the upstream repository,
    the expected project URL is `https://sebastianspicker.github.io/baseline-ops-windows/`.
 4. Add the deployed URL to the repository's About website field and README.

@@ -1,8 +1,17 @@
-# Publishes only the static browser tour when a maintainer explicitly dispatches it.
+# Publishes only the static browser tour when its files change on the default
+# branch, or when a maintainer dispatches it.
 name: GitHub Pages demo
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/demo/**'
+      - 'examples/profiles/**'
+      - 'dev/demo-profiles.mjs'
+      - '.github/workflows/pages.yml'
 
 permissions: {}
 
