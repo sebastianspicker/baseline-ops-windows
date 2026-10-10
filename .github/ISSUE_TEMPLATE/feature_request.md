@@ -25,7 +25,7 @@ Have you tried an existing script, profile, or workaround?
 
 ## Validation idea
 
-How could we check that this works? Suggest a Pester test, CI check, or
+How could we check that this works? Suggest a CI check, or
 Windows lab scenario if you have one in mind.
 
 ## Additional context

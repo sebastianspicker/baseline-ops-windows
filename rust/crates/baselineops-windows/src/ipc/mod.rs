@@ -109,18 +109,24 @@ mod tests {
 
     #[test]
     fn envelope_and_replay_bounds_are_enforced() {
+        let first = message().nonce;
+        let second = format!("{first}{first}");
         let mut invalid = message();
-        invalid.nonce = "not hex".into();
+        invalid.nonce = format!("{first}-");
         assert!(invalid.validate().is_err());
         let now = Instant::now();
         let mut cache = ReplayNonceCache::new(Duration::from_secs(1), 1).expect("cache");
-        cache.accept("a1", now).expect("first use");
+        cache.accept(&first, now).expect("first use");
         assert!(matches!(
-            cache.accept("a1", now),
+            cache.accept(&first, now),
             Err(PlatformError::ReplayDetected)
         ));
-        cache.accept("b2", now).expect("capacity evicts old value");
-        cache.accept("a1", now).expect("evicted nonce is accepted");
+        cache
+            .accept(&second, now)
+            .expect("capacity evicts old value");
+        cache
+            .accept(&first, now)
+            .expect("evicted nonce is accepted");
     }
 
     #[test]

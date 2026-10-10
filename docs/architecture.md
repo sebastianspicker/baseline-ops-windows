@@ -100,9 +100,6 @@ code. This keeps each endpoint policy visible and auditable.
   predicate function with explicit parameters; don't add condition wrapper
   helpers or scope-sharing `StageNN`/`PhaseNN` fragments to satisfy the
   complexity limits. Existing fragments predate this rule.
-- Tests mirror the source tree: `tests/lib`, `tests/scripts`, `tests/tools`,
-  and `tests/dev`. `tests/oracle` runs the shared v2/v3 behavioral oracle cases
-  against the v2 policy functions.
 
 ### Principal PowerShell flow
 
@@ -234,11 +231,7 @@ and evidence gates. Each workflow qualifies only its own release line.
 
 `tools/verify.ps1` checks the reviewed public surface and parses and analyzes
 every PowerShell file it discovers under the root, in the repository and in an
-extracted package alike. Pester covers results, serialization, runners, profile
-validation and scheduling, the launcher worker boundary, trust boundaries,
-selected capability behavior, and static scans that reject unbound named
-parameters, never-assigned variables, and bare native executable calls in
-`scripts/`. Rust has separate Cargo and `xtask` gates.
+extracted package alike. Rust has separate Cargo and `xtask` gates.
 
 The Rust oracle binds each v3 capability to the digest of its v2 source
 closure: the numbered script plus every `scripts/internal/<stem>.*.ps1` file.

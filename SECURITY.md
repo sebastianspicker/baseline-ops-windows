@@ -78,7 +78,7 @@ Treat these files as sensitive endpoint data:
 - Support bundles and collected evidence
 - Script-specific exports and proof files
 - Saved launcher output and temporary launcher logs
-- Pester XML, which can include host name, user name, and working directory
+- Test-result XML, which can include host name, user name, and working directory
 
 Keep them outside the repository, restrict access, redact before sharing, and delete them according to the applicable retention policy. Launcher crash residue can remain under `%TEMP%\baselineops-windows-launcher`.
 

@@ -45,7 +45,7 @@ The launcher additionally requires Windows Forms and either Windows PowerShell
 5.1 with .NET Framework 4.8 or PowerShell 7.6.3. Remediation selection requires
 an elevated launcher.
 
-Development uses PowerShell 7.6.3, PSScriptAnalyzer 1.25.0, Pester 5.8.0, and
+Development uses PowerShell 7.6.3, PSScriptAnalyzer 1.25.0, and
 Bash. Rust v3 uses the toolchain pinned in
 [`rust/rust-toolchain.toml`](https://github.com/sebastianspicker/baseline-ops-windows/blob/main/rust/rust-toolchain.toml), currently Rust 1.96.0.
 
@@ -183,7 +183,6 @@ supply the trusted signer identity or authenticated hashes. See
 | `lib/platform/` | Private Windows and native-process implementation |
 | `tools/` | Shipped launcher and release-package verification tools |
 | `dev/` | Development-only gate, quality, demo, and scaffolding tools; not shipped |
-| `tests/` | Development tests for behavior, compatibility, and security checks |
 | `examples/` | Profiles and capability inputs to review before use |
 | `rust/` | Unreleased v3 implementation with its own builds and releases |
 
@@ -196,7 +195,6 @@ Install the pinned PowerShell development modules when absent:
 
 ```powershell
 Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser
-Install-Module Pester -RequiredVersion 5.8.0 -Scope CurrentUser -SkipPublisherCheck
 ```
 
 Run the complete PowerShell 7 local gate from the repository root:
@@ -207,7 +205,7 @@ bash ./dev/ci-local.sh
 
 The wrapper requires the PowerShell version pinned in
 `dev/quality/tool-versions.psd1` (7.6.3) and runs code-quality checks, the secret
-scan, documentation checks, static verification, and Pester. Set `PWSH_BIN` to an
+scan, documentation checks, static verification. Set `PWSH_BIN` to an
 absolute 7.6.3 executable when `pwsh` is not on `PATH`:
 
 ```bash
