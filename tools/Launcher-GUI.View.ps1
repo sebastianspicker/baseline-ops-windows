@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Builds and displays the launcher window.
 
@@ -252,6 +252,8 @@ foreach ($control in @($script:lblOutput, $script:btnClear, $script:btnSave)) { 
 $script:txtOutput = New-Object System.Windows.Forms.TextBox
 $script:txtOutput.Dock = 'Fill'; $script:txtOutput.Multiline = $true; $script:txtOutput.ReadOnly = $true
 $script:txtOutput.ScrollBars = 'Both'; $script:txtOutput.WordWrap = $false
+# The 32767-character default would stop AppendText long before the 10000-line view bound.
+$script:txtOutput.MaxLength = [int]::MaxValue
 $script:txtOutput.Font = New-Object System.Drawing.Font('Consolas', 9)
 $script:txtOutput.AccessibleName = 'Execution results'
 $script:txtOutput.AccessibleDescription = 'Live bounded view of launcher and runner output.'

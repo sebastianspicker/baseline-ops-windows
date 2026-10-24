@@ -15,9 +15,13 @@ function Initialize-CopyLocalDeployment {
   # destination ACL. This is repeated under the destination lock below.
   if (Test-Path -LiteralPath $RunState.DestinationRoot) {
     [void](Resolve-CopyLocalDestinationBoundary -DestinationRoot $RunState.DestinationRoot)
+    Assert-CopyLocalReplaceableDestination -DestinationRoot $RunState.DestinationRoot
   }
   $RunState.stagingRoot = Initialize-CopyLocalStagingRoot
   $RunState.destinationLock = Enter-CopyLocalDestinationLock -DestinationRoot $RunState.DestinationRoot -StagingRoot $RunState.stagingRoot
+  # RepoPath is claimed for cleanup only under the lock, and is validated before
+  # the destination is created or its ACL changes.
+  Resolve-CopyLocalClonePath -RunState $RunState
   if (-not (Test-Path -LiteralPath $RunState.DestinationRoot)) {
     Initialize-CopyLocalDestinationRoot -DestinationRoot $RunState.DestinationRoot `
       -CreatedPaths $RunState.destinationCreatedPaths -Confirm:$false
@@ -28,9 +32,27 @@ function Initialize-CopyLocalDeployment {
 
 }
 
+# Replaces existing scripts/ and lib/ only in a destination that already holds a
+# BaselineOps kit, so a mistyped DestinationRoot cannot lose unrelated folders.
+# Every release ships scripts/00-Run-Local.ps1.
+function Assert-CopyLocalReplaceableDestination {
+  param([Parameter(Mandatory)][string]$DestinationRoot)
+  $existing = @(@('scripts', 'lib') | Where-Object { Test-Path -LiteralPath (Join-Path $DestinationRoot $_) })
+  if ($existing.Count -eq 0) {
+    return
+  }
+  $marker = Join-Path (Join-Path $DestinationRoot 'scripts') '00-Run-Local.ps1'
+  if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+    throw ("DestinationRoot already contains {0} but no BaselineOps kit (scripts\00-Run-Local.ps1); refusing to replace it." -f ($existing -join ' and '))
+  }
+
+}
+
 function Copy-CopyLocalDeploymentStage {
   param($RunState)
-  $RunState.deployStage = Join-Path $RunState.stagingRoot ('.deploy-{0}' -f [guid]::NewGuid().ToString('N'))
+  # Stage inside the protected destination so each swap is a same-volume rename;
+  # a cross-volume Move-Item would copy and delete and could fail halfway.
+  $RunState.deployStage = Join-Path $RunState.destinationResolved ('.deploy-{0}' -f [guid]::NewGuid().ToString('N'))
   [void][System.IO.Directory]::CreateDirectory($RunState.deployStage)
   Copy-Item -LiteralPath $RunState.sourceScripts -Destination $RunState.deployStage -Recurse -Force
   Copy-Item -LiteralPath $RunState.sourceLib -Destination $RunState.deployStage -Recurse -Force
@@ -46,6 +68,7 @@ function Assert-CopyLocalCommitBoundary {
     throw 'DestinationRoot or one of its ancestors became a reparse point before deployment.'
   }
   Assert-CopyLocalDestinationAclTrust -Path $RunState.destinationResolved -RequireProtected
+  Assert-CopyLocalReplaceableDestination -DestinationRoot $RunState.destinationResolved
   foreach ($name in @('scripts', 'lib')) {
     $deploymentTarget = Join-Path $RunState.destinationResolved $name
     if (-not (Test-Path -LiteralPath $deploymentTarget)) {

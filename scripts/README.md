@@ -16,10 +16,10 @@ are implementation details; do not invoke them directly.
 | `00-Run-Profile.ps1` | Validates and executes profile steps in dependency order. |
 | `00-Validate-Profile.ps1` | Validates profile structure, script references, dependencies, and integrity fields. |
 
-Runners use `C:\install\mdm\ps1` as the default deployment root. If that path
-does not exist and `-RootPath` was omitted, a source-tree run falls back to the
-repository root. Always pass `-RootPath` explicitly in automation so the target
-does not depend on the host filesystem.
+When `-RootPath` is omitted, the runners use the root that contains them (the
+repository checkout or the extracted installation). `00-Copy-Local.ps1` has no
+default destination: pass `-DestinationRoot` explicitly. Pass `-RootPath`
+explicitly in automation as well, so the target is always stated.
 
 `00-Run-Batch.ps1` accepts these categories:
 

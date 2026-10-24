@@ -27,7 +27,7 @@ Import-Module (Join-Path $PSScriptRoot 'Launcher.Core.psm1') -Force
 [System.Windows.Forms.Application]::VisualStyleState = [System.Windows.Forms.VisualStyles.VisualStyleState]::NonClientAreaEnabled
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$script:DefaultRoot = if (Test-Path -LiteralPath (Join-Path $repoRoot 'scripts') -PathType Container) { $repoRoot } else { 'C:\install\mdm\ps1' }
+$script:DefaultRoot = if (Test-Path -LiteralPath (Join-Path $repoRoot 'scripts') -PathType Container) { $repoRoot } else { '' }
 $script:IsElevated = $false
 try {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()

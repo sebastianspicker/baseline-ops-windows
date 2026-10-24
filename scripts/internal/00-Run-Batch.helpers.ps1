@@ -53,10 +53,12 @@ function Invoke-BatchProfileRunner {
     if ($isElevatedWindows) { Set-BatchAdminSystemAcl -Path $profilePath; Assert-RunBatchTrustedWindowsAcl -Path $profilePath }
     $lockStream = New-Object System.IO.FileStream($profilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
     $invocationParameters = New-BatchProfileInvocationParameters -ProfilePath $profilePath
-    & $runProfilePath @invocationParameters
-    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Error = $null }
+    # Keep the profile runner's pipeline output (its -PassThru result) apart
+    # from the execution record so it cannot turn the record into an array.
+    $profileOutput = @(& $runProfilePath @invocationParameters)
+    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Error = $null; Output = $profileOutput }
   } catch {
-    return [pscustomobject]@{ ExitCode = $null; Error = $_.Exception.Message }
+    return [pscustomobject]@{ ExitCode = $null; Error = $_.Exception.Message; Output = @() }
   } finally {
     Clear-BatchProfileWorkspace -LockStream $lockStream -Directory $directory
   }
@@ -90,6 +92,7 @@ function Invoke-RunBatch {
     Write-BatchTerminalResult -Result FAIL -Code 'Batch-ProfileInvocationFailed' -Message $execution.Error -SelectedScripts $selected
     exit (Get-V2ExitCode -Result 'FAIL')
   }
+  $execution.Output
   if ($null -ne $execution.ExitCode) { exit [int]$execution.ExitCode }
   exit (Get-V2ExitCode -Result 'OK')
 }

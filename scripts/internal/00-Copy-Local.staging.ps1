@@ -32,6 +32,11 @@ function Assert-CopyLocalStagingAclRules {
   if (-not $Acl.AreAccessRulesProtected) {
     throw 'Trusted staging root ACL inheritance could not be disabled.'
   }
+  # A pre-created directory keeps its creator as owner, and an owner can rewrite the DACL.
+  $ownerSid = [string]$Acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if (@('S-1-5-18', 'S-1-5-32-544') -notcontains $ownerSid) {
+    throw "Trusted staging root owner '$ownerSid' is not Administrators or SYSTEM."
+  }
   $rules = @($Acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
   $allowedSids = @('S-1-5-18', 'S-1-5-32-544')
   $unexpectedRule = @($rules | Where-Object {
@@ -54,6 +59,7 @@ function Set-CopyLocalStagingAcl {
     throw 'Trusted staging root ACL configuration was declined.'
   }
   $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+  $acl.SetOwner((New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')))
   $acl.SetAccessRuleProtection($true, $false)
   $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
   [System.Security.AccessControl.InheritanceFlags]::ObjectInherit

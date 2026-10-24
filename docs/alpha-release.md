@@ -297,6 +297,7 @@ terminal result.
 - Endpoint remediation, rollback, feature availability, and failure behavior must be tested on representative disposable devices.
 - Stopping a launcher worker terminates its process tree but does not undo completed changes.
 - Logs, reports, support bundles, and saved launcher output can contain endpoint details.
+- The Windows-specific fixes in this candidate (support bundle system reports, advanced audit policy remediation, deployment sync to another volume and its staging ownership, and launcher text, output view and encoding) were verified by code review and simulated tests. Confirm them on a representative disposable device before relying on them.
 
 ## Maintainer release checklist
 

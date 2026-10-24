@@ -17,7 +17,7 @@ param(
   [ValidateSet('Audit','Remediate')]
   [string]$Mode = 'Audit',
 
-  [string]$RootPath = 'C:\install\mdm\ps1',
+  [string]$RootPath,
 
   [switch]$ContinueOnError,
 
@@ -41,13 +41,10 @@ param(
 function Resolve-RunBatchRootPath {
   [CmdletBinding()]
   [OutputType([string])]
-  param([Parameter(Mandatory)][string]$Candidate, [Parameter(Mandatory)][bool]$WasExplicit)
+  param([AllowEmptyString()][string]$Candidate, [Parameter(Mandatory)][bool]$WasExplicit)
 
-  $hasDeployment = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT -and (Test-Path -LiteralPath (Join-Path $Candidate 'scripts') -PathType Container)
-  if ($WasExplicit -or $Candidate -ne 'C:\install\mdm\ps1' -or $hasDeployment) { return $Candidate }
-  $repositoryRoot = Split-Path -Parent $PSScriptRoot
-  if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'scripts') -PathType Container) { return $repositoryRoot }
-  return $Candidate
+  if ($WasExplicit -and -not [string]::IsNullOrWhiteSpace($Candidate)) { return $Candidate }
+  return Split-Path -Parent $PSScriptRoot
 }
 
 $RootPath = Resolve-RunBatchRootPath -Candidate $RootPath -WasExplicit $PSBoundParameters.ContainsKey('RootPath')

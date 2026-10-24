@@ -1,11 +1,10 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-Run a script from C:\install\mdm\ps1\scripts on the local machine.
+Run a script from the toolkit's scripts directory on the local machine.
 
 .DESCRIPTION
-Looks up the script file in C:\install\mdm\ps1\scripts (or an override)
-and executes it. Optional -ScriptArgs are passed through to the script.
+Looks up the script file in <RootPath>\scripts and executes it. Optional -ScriptArgs are passed through to the script.
 
 Supports optional integrity verification via signature check or hash comparison.
 
@@ -19,7 +18,8 @@ Script number only (for example: 18). Matches "18-*.ps1".
 Optional arguments to pass to the target script.
 
 .PARAMETER RootPath
-Override root path (default: C:\install\mdm\ps1).
+Toolkit root that contains scripts\ and lib\. Defaults to the repository
+or installation root that contains this runner.
 
 .PARAMETER RequireSigned
 If set, verifies the script has a valid Authenticode signature before execution.
@@ -65,9 +65,9 @@ param(
 
   [string[]]$ScriptArgs,
 
-  # Default deployment path. Override with -RootPath to use a different location
-  # (for example, -RootPath $KitRoot or a value supplied by the deployment pipeline).
-  [string]$RootPath = 'C:\install\mdm\ps1',
+  # Defaults to the root that contains this runner. Override with -RootPath to
+  # use a different location (for example, a value supplied by the deployment pipeline).
+  [string]$RootPath,
 
   [switch]$RequireSigned,
 
@@ -175,18 +175,10 @@ function Resolve-RunLocalRootPath {
     [bool]$Explicit,
     [string]$ScriptRoot
   )
-  $deploymentPresent = $false
-  if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-    $deploymentPresent = Test-Path -LiteralPath (Join-Path $RequestedRoot 'scripts') -PathType Container
-  }
-  if ($Explicit -or $RequestedRoot -ne 'C:\install\mdm\ps1' -or $deploymentPresent) {
+  if ($Explicit -and -not [string]::IsNullOrWhiteSpace($RequestedRoot)) {
     return $RequestedRoot
   }
-  $repoRoot = Split-Path -Parent $ScriptRoot
-  if (Test-Path -LiteralPath (Join-Path $repoRoot 'scripts') -PathType Container) {
-    return $repoRoot
-  }
-  return $RequestedRoot
+  return Split-Path -Parent $ScriptRoot
 }
 
 function New-RunLocalBootstrapContext {

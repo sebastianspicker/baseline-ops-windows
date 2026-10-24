@@ -26,6 +26,12 @@ Target alpha: `v2.3.0-alpha.1`.
 
 ### Changed
 
+- The runners no longer default to `C:\install\mdm\ps1`. Without
+  `-RootPath`, `00-Run-Local`, `00-Run-Profile` and `00-Run-Batch` use the
+  root that contains them, and the launcher no longer falls back to that path.
+  `00-Copy-Local` now requires `-DestinationRoot`. A standard user could
+  create `C:\install` and have a non-elevated run that omitted `-RootPath`
+  execute that tree.
 - Restored the unreleased Rust v3 prototype with its own builds, releases,
   capability ledger, schemas, and native applications. PowerShell remains the
   supported product.
@@ -78,6 +84,68 @@ Target alpha: `v2.3.0-alpha.1`.
 
 ### Fixed
 
+- `-OutputFormat Csv` no longer fails when a result has no findings; it
+  writes an empty CSV file instead.
+- `13-LSASS-CG-HVCI-VBS` reports an unsupported host as WARN unless
+  `-Strict:$true` is passed, like every other capability, so the shipped
+  `full-audit` and `compliance-full` profiles no longer fail there. On
+  Windows the built-in strict runtime policy still applies by default.
+- `27-Defender-Health-Audit` ignores `ExportPath` and `SkipAdminCheck` in its
+  `-SettingsJsonPath` file, with a warning; only the command line can choose
+  the CSV export destination or skip the admin check.
+- `25-WinGet-Config-Baseline-Runner` ignores `Args` in its summary JSON, with
+  a warning, and accepts only value-less WinGet switches in `-ExtraArgs`
+  (`--verbose`, `--verbose-logs`, `--nowarn`, `--ignore-warnings`,
+  `--suppress-initial-details`, `--disable-interactivity`,
+  `--accept-configuration-agreements`, `--no-proxy`). The previous flag
+  blocklist could be bypassed with attached values such as `-oC:\path`.
+- The launcher now also rejects abbreviated launcher-owned parameter names
+  (for example `-OutputP` or `-Mo`) and the `-wi`/`-cf` aliases in advanced
+  arguments; PowerShell would have bound them to the reserved parameters.
+- `00-Copy-Local` refuses to replace an existing `scripts\` or `lib\` folder
+  unless the destination already holds a BaselineOps kit
+  (`scripts\00-Run-Local.ps1`), so a mistyped `-DestinationRoot` cannot
+  remove unrelated folders.
+- `00-Copy-Local` validates the repository URL, the Git executable and
+  `-RepoPath` before it creates the destination or changes its ACL.
+- `00-Copy-Local` resets the owner of its `%ProgramData%` staging folders to
+  Administrators and refuses a staging root with any other owner, so a
+  standard user who pre-creates the folder cannot rewrite its ACL.
+- `00-Copy-Local` stages the incoming `scripts\` and `lib\` inside the
+  destination root, so replacing them is a same-volume rename even when the
+  destination is on another drive than `%ProgramData%`. Previously a failure
+  during the cross-volume move could leave a partial deployment.
+- `00-Report-Aggregate` reports each `-InputPath` entry that does not exist
+  as an `Aggregate-MissingInput` finding, counted with the rejected inputs,
+  so a mistyped path yields WARN (FAIL with `-Strict`) instead of OK over
+  partial data.
+- `33-AdvancedAuditPolicy-Audit` remediation passes the subcategory to
+  `auditpol /set` without literal quote characters, which reached
+  `auditpol` verbatim and made every `/set` fail.
+- The launcher log and results view no longer add a blank line after each
+  block of child output or split a line that arrives in two reads.
+- `tools/Launcher-GUI.Catalog.ps1` and `tools/Launcher-GUI.View.ps1` are
+  saved with a UTF-8 byte order mark, so Windows PowerShell 5.1 shows their
+  `…` and `·` characters correctly instead of garbled text.
+- The launcher results view lifts the 32,767-character text box limit, so
+  long runs keep appending up to the documented 10,000-line view.
+- `09-SupportBundle` can run its `systeminfo`, `ipconfig /all`, `route print`,
+  `netsh winhttp show proxy` and `whoami /all` reports again: the five System32
+  tools are now on the executable allowlist (resolved only from System32).
+- The launcher offers Remediate for every capability that implements it. Mode
+  detection now also reads the capability's private helpers under
+  `scripts\internal\` and recognises the derived-Remediate context and
+  negative mode guards; it previously refused Remediate for about half of the
+  remediation-capable scripts.
+- The launcher's validation-to-launch file locks and ACL checks now cover the
+  kit root and its `scripts`, `lib`, `tools` and `examples` trees instead of
+  every file under the root, so a run from a Git checkout no longer scans and
+  locks `.git`, build output or caches, or fails on a link inside them.
+- `25-WinGet-Config-Baseline-Runner` ignores `ConfigPath` in its summary
+  JSON, with a warning; the WinGet configuration file that `winget configure`
+  applies must be passed with `-ConfigPath`.
+- `00-Run-Batch -PassThru` no longer throws after the batch has run; it
+  returns the profile result and keeps the profile's exit code.
 - Launcher operations passed their parameter table as one positional
   argument, and relayed output polluted the worker exit code; the worker now
   splats parameters and returns the child exit code exactly.

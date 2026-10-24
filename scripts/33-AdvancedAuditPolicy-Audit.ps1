@@ -420,7 +420,8 @@ function Set-DesiredAuditSubcategory {
   $failureArg = if ($flags.Failure) { '/failure:enable' } else { '/failure:disable' }
   $operation = ('auditpol.exe /set /subcategory:"{0}" {1} {2}' -f $subName, $successArg, $failureArg)
   if ($script:__EntryCmdlet.ShouldProcess($subName, $operation)) {
-    $auditArgs = @('/set', "/subcategory:`"$subName`"", $successArg, $failureArg)
+    # Native arguments are exact tokens; quoting a name with spaces is the runner's job.
+    $auditArgs = @('/set', "/subcategory:$subName", $successArg, $failureArg)
     if ((Invoke-Auditpol -Arguments $auditArgs) -ne $true) {
       Add-Finding -FindingList $script:Findings -Code 'AuditPol-SetFailed' -Severity 'High' -Message ("auditpol /set failed for subcategory: {0}" -f $subName)
     }

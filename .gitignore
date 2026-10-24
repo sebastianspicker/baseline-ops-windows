@@ -176,3 +176,5 @@ development-log.md
 implementation-notes.md
 /*-ledger.md
 /*_ledger.md
+# Local alpha audit and tester notes; not part of the public source.
+/ALPHA_*.md

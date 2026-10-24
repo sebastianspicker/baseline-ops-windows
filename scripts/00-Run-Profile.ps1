@@ -16,7 +16,7 @@ param(
   [ValidateSet('Audit','Remediate')]
   [string]$Mode,
 
-  [string]$RootPath = 'C:\install\mdm\ps1',
+  [string]$RootPath,
 
   [ValidateSet('Console','Json','Csv','None')]
   [string]$OutputFormat = 'Console',
@@ -132,18 +132,10 @@ function Resolve-RunProfileRootPath {
     [string]$ScriptRoot
   )
 
-  $deploymentPresent = $false
-  if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
-    $deploymentPresent = Test-Path -LiteralPath (Join-Path $RequestedRoot 'scripts') -PathType Container
-  }
-  if ($Explicit -or $RequestedRoot -ne 'C:\install\mdm\ps1' -or $deploymentPresent) {
+  if ($Explicit -and -not [string]::IsNullOrWhiteSpace($RequestedRoot)) {
     return $RequestedRoot
   }
-  $repositoryRoot = Split-Path -Parent $ScriptRoot
-  if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'scripts') -PathType Container) {
-    return $repositoryRoot
-  }
-  return $RequestedRoot
+  return Split-Path -Parent $ScriptRoot
 }
 
 function New-RunProfileBootstrapContext {

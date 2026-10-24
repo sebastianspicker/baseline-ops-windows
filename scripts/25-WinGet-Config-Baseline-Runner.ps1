@@ -15,7 +15,8 @@ JSON sidecar (optional):
 - If JSON is missing or invalid, internal defaults are used.
 
 .PARAMETER ConfigPath
-Path to a WinGet configuration file (.yaml/.yml/.json).
+Path to a WinGet configuration file (.yaml/.yml/.json). Required; JSON ConfigPath
+is ignored because the file is applied as code.
 
 .PARAMETER TestOnly
 Run validate/test only; skip apply.
@@ -42,7 +43,10 @@ Optional JSON path for summary settings/overrides.
 Suppress console summary output.
 
 .PARAMETER ExtraArgs
-Additional raw arguments passed to WinGet (alias: Args).
+Additional WinGet configure switches (alias: Args). Only value-less switches are
+accepted: --verbose, --verbose-logs, --nowarn, --ignore-warnings,
+--suppress-initial-details, --disable-interactivity,
+--accept-configuration-agreements and --no-proxy. JSON Args is ignored.
 
 
 .PARAMETER Mode
@@ -384,19 +388,25 @@ function Initialize-Capability25JsonSettings {
   }
   if (-not $jsonSettings) { $jsonSettings = @{} }
 }
-function Get-Capability25EffectiveString {
-  param([string]$Name, [AllowNull()]$ParameterValue, [hashtable]$RunState)
-  if ($EntryBoundParameters.ContainsKey($Name)) { return To-StringOrNull $ParameterValue }
-  return To-StringOrNull (Get-EffectiveSetting -Name $Name -Json $jsonSettings -DefaultValue $RunState.defaultSettings[$Name])
-}
 function Get-Capability25EffectiveBool {
   param([string]$Name, [bool]$ParameterValue, [hashtable]$RunState)
   if ($EntryBoundParameters.ContainsKey($Name)) { return $ParameterValue }
   return To-BoolOrDefault (Get-EffectiveSetting -Name $Name -Json $jsonSettings -DefaultValue $RunState.defaultSettings[$Name]) -Default $RunState.defaultSettings[$Name]
 }
+function Get-Capability25ConfigPath {
+  [CmdletBinding()]
+  param()
+  # winget configure applies this file as code, so summary JSON must not choose it.
+  $configuredPath = To-StringOrNull (Get-EffectiveSetting -Name 'ConfigPath' -Json $jsonSettings -DefaultValue $null)
+  if ($EntryBoundParameters.ContainsKey('ConfigPath')) { return To-StringOrNull $ConfigPath }
+  if ($configuredPath) {
+    Write-Warning 'Ignoring config ConfigPath; pass the WinGet configuration file explicitly with -ConfigPath.'
+  }
+  return $null
+}
 function Initialize-Capability25EffectiveSettings {
   param([hashtable]$RunState)
-  $RunState.ConfigPathEffective = Get-Capability25EffectiveString -Name 'ConfigPath' -ParameterValue $ConfigPath -RunState $RunState
+  $RunState.ConfigPathEffective = Get-Capability25ConfigPath
   $configuredLogPath = To-StringOrNull (Get-EffectiveSetting -Name 'LogPath' -Json $jsonSettings -DefaultValue $RunState.defaultSettings.LogPath)
   $RunState.LogPathEffective = Resolve-OperatorControlledOutputPath -ExplicitPath $LogPath `
     -DefaultPath $RunState.defaultSettings.LogPath -ConfiguredPath $configuredLogPath -SettingName 'LogPath'
@@ -417,23 +427,23 @@ function Initialize-Capability25ExtraArgs {
   }
 }
 function Get-Capability25ExtraArgs {
+  [CmdletBinding()]
+  param()
+  # Summary JSON is data and must not grant winget argument authority.
+  if ($jsonSettings.ContainsKey('Args') -and $null -ne $jsonSettings['Args'] -and @($jsonSettings['Args']).Count -gt 0) {
+    Write-Warning 'Ignoring config Args; pass WinGet switches explicitly with -ExtraArgs.'
+  }
   $argsWereBound = $EntryBoundParameters.ContainsKey('Args') -or $EntryBoundParameters.ContainsKey('ExtraArgs')
   if ($argsWereBound -and $ExtraArgs) { return @($ExtraArgs) }
-  if (-not $jsonSettings.ContainsKey('Args')) { return @() }
-  $jsonArgs = $jsonSettings['Args']
-  if ($jsonArgs -is [string]) { return @($jsonArgs) }
-  if ($jsonArgs -is [System.Collections.IEnumerable]) { return @($jsonArgs) }
   return @()
 }
 function Test-WinGetExtraArgs {
   param([AllowEmptyCollection()][object[]]$ExtraArgs)
-  $blockedFlags = @('--override','--custom','--ignore-security-hash','--location','--log','-o','-h','--header','--authentication-account','--authentication-mode')
+  $allowedSwitches = @('--verbose','--verbose-logs','--nowarn','--ignore-warnings','--suppress-initial-details','--disable-interactivity','--accept-configuration-agreements','--no-proxy')
   foreach ($argument in $ExtraArgs) {
     $argString = [string]$argument
-    if ($argString -match '[;&|`$(){}<>]') { return "ExtraArgs contains shell metacharacters: '$argString'. Aborting." }
-    $flagPart = ($argString -split '[= ]', 2)[0]
-    foreach ($blocked in $blockedFlags) {
-      if ($flagPart -ieq $blocked) { return "ExtraArgs contains blocked flag '$argString'. The flag '$blocked' is not allowed for safety reasons." }
+    if ($allowedSwitches -notcontains $argString) {
+      return "ExtraArgs contains '$argString', which is not an allowed WinGet switch. Allowed: $($allowedSwitches -join ', ')."
     }
   }
   return $null
@@ -443,7 +453,7 @@ function Initialize-Capability25RunState {
   $RunState.results = New-Object System.Collections.Generic.List[object]
   $script:WingetExecutablePath = $null
   if (-not $RunState.initializationError -and [string]::IsNullOrWhiteSpace($RunState.ConfigPathEffective)) {
-    $RunState.initializationError = "ConfigPath is missing. Provide a configuration file with -ConfigPath, or set 'ConfigPath' in the summary JSON passed with -SummaryJsonPath."
+    $RunState.initializationError = 'ConfigPath is missing. Provide the WinGet configuration file with -ConfigPath.'
   }
 }
 . Initialize-WinGetBaselineState -RunState $RunState

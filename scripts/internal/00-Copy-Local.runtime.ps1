@@ -34,13 +34,16 @@ function Assert-CopyLocalCommitArgument {
 
 function Assert-CopyLocalDestinationArgument {
   param($RunState)
+  if ([string]::IsNullOrWhiteSpace($RunState.DestinationRoot)) {
+    throw 'DestinationRoot is required; pass the protected installation root explicitly.'
+  }
   $destRootFull = [System.IO.Path]::GetFullPath($RunState.DestinationRoot)
   $destVolumeRoot = [System.IO.Path]::GetPathRoot($destRootFull)
   $separatorChars = @([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
   $destRootNormalized = $destRootFull.TrimEnd($separatorChars)
   $destVolumeNormalized = $destVolumeRoot.TrimEnd($separatorChars)
   if ([string]::IsNullOrWhiteSpace($destVolumeRoot) -or $destRootNormalized -eq $destVolumeNormalized) {
-    throw 'DestinationRoot must be a subdirectory, not a volume root (e.g. use C:\install\mdm\ps1 not C:\).'
+    throw 'DestinationRoot must be a subdirectory, not a volume root (e.g. use D:\BaselineOps not D:\).'
   }
 
 }
@@ -161,10 +164,10 @@ function Clear-CopyLocalRun {
 
 function Invoke-CopyLocalDeployment {
   param($RunState)
-  Initialize-CopyLocalDeployment -RunState $RunState
-  Resolve-CopyLocalClonePath -RunState $RunState
+  # Validate the source before any staging or destination state changes.
   Assert-CopyLocalRepositoryUrl -RunState $RunState
   Open-CopyLocalGitExecutable -RunState $RunState
+  Initialize-CopyLocalDeployment -RunState $RunState
   Initialize-CopyLocalGitEnvironment -RunState $RunState
   Invoke-CopyLocalClone -RunState $RunState
   Resolve-CopyLocalCommit -RunState $RunState

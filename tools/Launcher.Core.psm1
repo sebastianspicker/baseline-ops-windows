@@ -127,17 +127,43 @@ public sealed class LauncherOutputCollector : IDisposable
     private async Task Drain(StreamReader reader, string prefix)
     {
         char[] buffer = new char[4096];
+        // Carry an unterminated line (and a trailing CR) into the next read so a
+        // line or CRLF split across reads stays one line. Lines are still emitted
+        // in frames of at most buffer.Length characters to bound memory.
+        StringBuilder lineBuffer = new StringBuilder();
+        bool previousWasCarriageReturn = false;
         try
         {
             int count;
             while ((count = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
             {
-                string chunk = new string(buffer, 0, count).Replace("\r\n", "\n").Replace('\r', '\n');
-                foreach (string piece in chunk.Split(new char[] { '\n' })) this.AddLine(prefix + piece);
+                for (int index = 0; index < count; index++)
+                {
+                    char character = buffer[index];
+                    bool continuesCrLf = previousWasCarriageReturn && character == '\n';
+                    previousWasCarriageReturn = character == '\r';
+                    if (continuesCrLf) continue;
+                    if (character == '\r' || character == '\n')
+                    {
+                        this.AddLine(prefix + lineBuffer.ToString());
+                        lineBuffer.Clear();
+                        continue;
+                    }
+                    // Emit a full frame only when more text follows, so a line of
+                    // exactly buffer.Length characters is not followed by a blank line.
+                    if (lineBuffer.Length >= buffer.Length)
+                    {
+                        this.AddLine(prefix + lineBuffer.ToString());
+                        lineBuffer.Clear();
+                    }
+                    lineBuffer.Append(character);
+                }
             }
+            if (lineBuffer.Length > 0) this.AddLine(prefix + lineBuffer.ToString());
         }
         catch (Exception exception)
         {
+            if (lineBuffer.Length > 0) this.AddLine(prefix + lineBuffer.ToString());
             this.AddLine("ERROR: output stream drain failed: " + exception.Message);
         }
     }
@@ -341,7 +367,9 @@ public static class LauncherCatalogDiscovery
 
         Regex numbered = new Regex(@"^(?!00-)(\d{2})-(.+)\.ps1$", RegexOptions.IgnoreCase);
         Regex synopsisPattern = new Regex(@"(?is)\.SYNOPSIS\s*(?<value>.*?)(?:\r?\n\s*\.[A-Z]+|#>)");
-        Regex remediationPattern = new Regex(@"(?:\$Mode\s+-i?eq\s*['""]Remediate['""]|['""]Remediate['""]\s+-i?eq\s*\$Mode|\bif\s*\(\s*\$\w*Remediate\b|['""]Remediate['""]\s*\{)", RegexOptions.IgnoreCase);
+        // Mode comparisons in either direction, Remediate guards, and the v2
+        // context flag that derives Remediate from -Mode.
+        Regex remediationPattern = new Regex(@"(?:\$Mode\s+-i?(?:eq|ne)\s*['""]Remediate['""]|['""]Remediate['""]\s+-i?(?:eq|ne)\s*\$Mode|\bif\s*\(\s*\$\w*Remediate\b|['""]Remediate['""]\s*\{|\bDeriveRemediate\s*=\s*\$true\b)", RegexOptions.IgnoreCase);
         Regex unsupportedRemediationPattern = new Regex(@"Remediate mode is not supported", RegexOptions.IgnoreCase);
 
         return Directory.GetFiles(scriptsPath, "*.ps1", SearchOption.TopDirectoryOnly)
@@ -361,6 +389,7 @@ public static class LauncherCatalogDiscovery
                         content = reader.ReadToEnd();
                     }
                 }
+                string closure = content + ReadInternalClosure(scriptsPath, Path.GetFileNameWithoutExtension(item.Path));
                 string task = item.Match.Groups[2].Value.Replace('-', ' ');
                 Match synopsis = synopsisPattern.Match(content);
                 string synopsisText = synopsis.Success ? synopsis.Groups["value"].Value.Trim() : task;
@@ -371,11 +400,33 @@ public static class LauncherCatalogDiscovery
                     Name = Path.GetFileName(item.Path),
                     Task = task,
                     Synopsis = synopsisText,
-                    SupportedModes = remediationPattern.IsMatch(content) && !unsupportedRemediationPattern.IsMatch(content) ? "Audit, Remediate" : "Audit"
+                    SupportedModes = remediationPattern.IsMatch(closure) && !unsupportedRemediationPattern.IsMatch(closure) ? "Audit, Remediate" : "Audit"
                 };
             })
             .Where(item => item != null)
             .ToArray();
+    }
+
+    // Remediation logic usually lives in the capability's private helpers, so the
+    // mode heuristic reads scripts\internal\<stem>.*.ps1 as well. Oversized
+    // helpers are skipped, as for the entry script.
+    private static string ReadInternalClosure(string scriptsPath, string stem)
+    {
+        string internalPath = Path.Combine(scriptsPath, "internal");
+        if (!Directory.Exists(internalPath)) return String.Empty;
+        StringBuilder closure = new StringBuilder();
+        foreach (string helper in Directory.GetFiles(internalPath, stem + ".*.ps1", SearchOption.TopDirectoryOnly).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            using (FileStream stream = new FileStream(helper, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                if (stream.Length > 1048576) continue;
+                using (StreamReader reader = new StreamReader(stream, new UTF8Encoding(false, true), true))
+                {
+                    closure.Append('\n').Append(reader.ReadToEnd());
+                }
+            }
+        }
+        return closure.ToString();
     }
 }
 '@
@@ -392,6 +443,8 @@ $script:ReservedArgumentNames = @(
   'Quiet', 'NoColor', 'RequireSigned', 'ExpectedHash', 'HashAlgorithm', 'Strict',
   'ConfigPath'
 )
+# Common-parameter aliases that bind to the reserved WhatIf and Confirm.
+$script:ReservedArgumentAliases = @('wi', 'cf')
 
 <#
 .SYNOPSIS
@@ -487,6 +540,25 @@ function Get-LauncherArgumentName {
 
 <#
 .SYNOPSIS
+  Tests whether an argument name would bind to a launcher-owned parameter.
+.DESCRIPTION
+  PowerShell binds any unambiguous parameter-name prefix and the WhatIf and
+  Confirm aliases, so a prefix of a reserved name is reserved as well.
+#>
+function Test-LauncherReservedArgumentName {
+  [CmdletBinding()]
+  [OutputType([bool])]
+  param([Parameter(Mandatory)][string]$Name)
+
+  if ($script:ReservedArgumentAliases -icontains $Name) { return $true }
+  foreach ($reserved in $script:ReservedArgumentNames) {
+    if ($reserved.StartsWith($Name, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+<#
+.SYNOPSIS
   Rejects launcher arguments that override controlled options.
 .DESCRIPTION
   Prevents callers from changing security-relevant launcher-owned parameters.
@@ -497,7 +569,7 @@ function Assert-LauncherArgumentsAllowed {
 
   foreach ($token in @($ArgumentTokens)) {
     $name = Get-LauncherArgumentName -Token ([string]$token)
-    if ($null -ne $name -and $script:ReservedArgumentNames -icontains $name) {
+    if ($null -ne $name -and (Test-LauncherReservedArgumentName -Name $name)) {
       throw "Advanced argument '-$name' is controlled by the launcher and cannot be overridden."
     }
   }
@@ -618,9 +690,29 @@ function Assert-LauncherClosureAcl {
   if (-not [string]::IsNullOrWhiteSpace($SelectedExecutionPath)) { Assert-TrustedWindowsPathAcl -Path (Assert-LauncherPathFreeOfReparsePoint -Path $SelectedExecutionPath -RequireFile).FullName -CheckAncestors | Out-Null }
 }
 
+# The closure covers the shipped code and data trees only, so a checkout's .git,
+# rust/target or .cache content is neither enumerated nor locked.
+$script:LauncherClosureTrees = @('scripts', 'lib', 'tools', 'examples')
+
+function Get-LauncherClosureItems {
+  param($Root)
+  $items = New-Object System.Collections.Generic.List[object]
+  $items.Add($Root)
+  # Enumerate the root's entries rather than Test-Path so a dangling link named
+  # like a closure tree is still found and rejected as a reparse point.
+  foreach ($tree in @(Get-ChildItem -LiteralPath $Root.FullName -Force -ErrorAction Stop | Where-Object { $script:LauncherClosureTrees -icontains $_.Name })) {
+    $items.Add($tree)
+    # A reparse-point tree is rejected by the caller; never enumerate through it.
+    if ($tree.PSIsContainer -and ($tree.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+      foreach ($child in @(Get-ChildItem -LiteralPath $tree.FullName -Recurse -Force -ErrorAction Stop)) { $items.Add($child) }
+    }
+  }
+  return $items.ToArray()
+}
+
 function Open-LauncherClosureItems {
   param($Root, $Streams, [switch]$EnforceAcl)
-  foreach ($item in @($Root) + @(Get-ChildItem -LiteralPath $Root.FullName -Recurse -Force -ErrorAction Stop)) {
+  foreach ($item in @(Get-LauncherClosureItems -Root $Root)) {
     if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Launcher closure contains a reparse point: $($item.FullName)" }
     if ($EnforceAcl) { Assert-TrustedWindowsPathAcl -Path $item.FullName | Out-Null }
     if (-not $item.PSIsContainer) { $Streams.Add([System.IO.File]::Open($item.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)) }

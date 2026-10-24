@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Starts asynchronous discovery of numbered operational scripts.
 .DESCRIPTION

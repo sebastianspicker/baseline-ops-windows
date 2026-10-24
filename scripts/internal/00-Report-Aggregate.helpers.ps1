@@ -101,6 +101,21 @@ function Get-ReportAggregateInputFiles {
   return @($files)
 }
 
+function Get-ReportAggregateMissingInputFindings {
+  [CmdletBinding()]
+  [OutputType([object[]])]
+  param([Parameter(Mandatory)][string[]]$InputPath)
+
+  $findings = New-Object System.Collections.ArrayList
+  foreach ($path in $InputPath) {
+    if (Test-Path -LiteralPath $path) { continue }
+    $message = "Input path not found: '$path'."
+    Write-Warning $message
+    [void]$findings.Add([pscustomobject]@{ Code = 'Aggregate-MissingInput'; Severity = 'High'; Message = $message; File = $path })
+  }
+  return @($findings)
+}
+
 function Test-ReportAggregateResult {
   [CmdletBinding()]
   [OutputType([bool])]
@@ -164,16 +179,18 @@ function Invoke-ReportAggregate {
   $directoryNameCache = New-ReportAggregateDirectoryNameCache
   $outputCanonicalPath = Get-ReportAggregateOutputPath -OutputPath $OutputPath -DirectoryNameCache $directoryNameCache
   $files = @(Get-ReportAggregateInputFiles -InputPath $InputPath -OutputCanonicalPath $outputCanonicalPath -DirectoryNameCache $directoryNameCache)
+  # A missing path counts as a rejected input so a typo cannot yield OK over partial data.
+  $missingFindings = @(Get-ReportAggregateMissingInputFindings -InputPath $InputPath)
   if ($files.Count -eq 0) {
     $message = 'No JSON result files found in InputPath.'
     $finding = [pscustomobject]@{ Code = 'Aggregate-NoInputFiles'; Severity = 'High'; Message = $message }
-    $report = Get-V2ResultObject -ScriptName '00-Report-Aggregate.ps1' -Mode $Mode -Result 'FAIL' -Findings @($finding) -Summary ([pscustomobject]@{ Files = 0; RejectedFiles = 0; OK = 0; WARN = 0; FAIL = 0; Error = $message }) -Metadata @{ Items = @() }
+    $report = Get-V2ResultObject -ScriptName '00-Report-Aggregate.ps1' -Mode $Mode -Result 'FAIL' -Findings (@($finding) + $missingFindings) -Summary ([pscustomobject]@{ Files = 0; RejectedFiles = 0; OK = 0; WARN = 0; FAIL = 0; Error = $message }) -Metadata @{ Items = @() }
     Write-ResultObject -ResultObject $report -OutputFormat $OutputFormat -OutputPath $OutputPath
     if ($PassThru) { $report }
     exit (Get-V2ExitCode -Result 'FAIL')
   }
   $parsed = Read-ReportAggregateItems -Files $files
-  $items = @($parsed.Items); $findings = @($parsed.Findings)
+  $items = @($parsed.Items); $findings = @($missingFindings) + @($parsed.Findings)
   $summary = [pscustomobject]@{ Files = $items.Count; RejectedFiles = $findings.Count; OK = @($items | Where-Object { $_.Result -eq 'OK' }).Count; WARN = @($items | Where-Object { $_.Result -eq 'WARN' }).Count; FAIL = @($items | Where-Object { $_.Result -eq 'FAIL' }).Count }
   $token = Get-ReportAggregateToken -Items $items -RejectedFiles $findings.Count -Strict:$Strict
   $report = Get-V2ResultObject -ScriptName '00-Report-Aggregate.ps1' -Mode $Mode -Result $token -Findings $findings -Summary $summary -Metadata @{ Items = $items }

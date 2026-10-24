@@ -22,8 +22,10 @@
 
 .PARAMETER Strict
   Controls pass/fail semantics:
-  - When Strict is True (default), the script is compliant only if VBS is running AND Credential Guard and HVCI are running.
+  - When Strict is True, the script is compliant only if VBS is running AND Credential Guard and HVCI are running.
   - When Strict is False, the script accepts "configured" (registry or runtime configured) even if not currently running.
+  - When Strict is omitted, the configuration's Strict value applies (built-in default: True), and an unsupported
+    (non-Windows) host reports WARN; passing -Strict:$true reports FAIL there, as for every other capability.
 
   Use Strict=True for enforcement/compliance.
   Use Strict=False for staged rollouts where configuration may be present but runtime activation is pending.
@@ -129,7 +131,7 @@
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-  [bool]$Strict = $true,
+  [bool]$Strict = $false,
   [bool]$RequireBlockList = $true,
   [string]$ConfigPath,
   [ValidateSet('Audit', 'Remediate')][string]$Mode = 'Audit',

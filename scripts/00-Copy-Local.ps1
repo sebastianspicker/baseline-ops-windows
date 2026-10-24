@@ -1,7 +1,7 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-Copy an explicitly pinned repository commit into C:\install\mdm\ps1\.
+Copy an explicitly pinned repository commit into a destination root.
 
 .DESCRIPTION
 Creates a fresh, policy-constrained clone and transactionally replaces the
@@ -12,7 +12,8 @@ updated in place.
 Git repository URL to pull from.
 
 .PARAMETER DestinationRoot
-Destination root (default: C:\install\mdm\ps1).
+Required destination root. There is no default; pass the protected
+installation root explicitly.
 
 .PARAMETER RepoPath
 Optional path within the fixed protected staging root. Existing paths are
@@ -29,21 +30,17 @@ resolved only from the standard Program Files Git installation directories.
 
 .EXAMPLE
 $SourceCommit = '<verified 40-character release commit>'
-.\00-Copy-Local.ps1 -RepoRef $SourceCommit
+.\00-Copy-Local.ps1 -RepoRef $SourceCommit -DestinationRoot D:\BaselineOps
 
 .EXAMPLE
 $SourceCommit = '<verified 40-character release commit>'
-.\00-Copy-Local.ps1 -RepoRef $SourceCommit -DestinationRoot D:\mdm\ps1
-
-.EXAMPLE
-$SourceCommit = '<verified 40-character release commit>'
-.\00-Copy-Local.ps1 -RepoUrl https://github.com/sebastianspicker/baseline-ops-windows.git -RepoRef $SourceCommit
+.\00-Copy-Local.ps1 -RepoUrl https://github.com/sebastianspicker/baseline-ops-windows.git -RepoRef $SourceCommit -DestinationRoot D:\BaselineOps
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
   [string]$RepoUrl = 'https://github.com/sebastianspicker/baseline-ops-windows.git',
-  [string]$DestinationRoot = 'C:\install\mdm\ps1',
+  [string]$DestinationRoot,
   [string]$RepoPath,
   [string]$RepoRef,
   [string]$GitPath,

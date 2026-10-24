@@ -101,7 +101,7 @@ function ConvertTo-CsvSafeObject {
 .SYNOPSIS
   Exports objects to a CSV file.
 .PARAMETER InputObject
-  Objects to export.
+  Objects to export. An empty collection writes an empty file.
 .PARAMETER Path
   Output CSV file path. Parent directory is created if needed.
 #>
@@ -109,6 +109,7 @@ function Save-Csv {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)]
+    [AllowEmptyCollection()]
     [object[]]$InputObject,
     [Parameter(Mandatory)]
     [string]$Path

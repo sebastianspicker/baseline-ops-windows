@@ -42,9 +42,9 @@ function Resolve-ApprovedWindowsExecutableName {
   param([Parameter(Mandatory)][string]$Name)
 
   $systemExecutables = @(
-    'auditpol.exe','bcdedit.exe','certutil.exe','cscript.exe','dism.exe','dsregcmd.exe','manage-bde.exe',
-    'netstat.exe','reg.exe','sc.exe','schtasks.exe','taskkill.exe','vssadmin.exe',
-    'wecutil.exe','wevtutil.exe','w32tm.exe'
+    'auditpol.exe','bcdedit.exe','certutil.exe','cscript.exe','dism.exe','dsregcmd.exe','ipconfig.exe','manage-bde.exe',
+    'netsh.exe','netstat.exe','reg.exe','route.exe','sc.exe','schtasks.exe','systeminfo.exe','taskkill.exe','vssadmin.exe',
+    'wecutil.exe','wevtutil.exe','whoami.exe','w32tm.exe'
   )
   if ($systemExecutables -icontains $Name) { return Resolve-TrustedWindowsSystemFile -LeafName $Name }
   if ($Name -ieq 'winget.exe' -or $Name -ieq 'winget') { return Resolve-TrustedWingetPath }

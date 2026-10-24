@@ -10,7 +10,7 @@ Primary data source is Get-MpComputerStatus. [page:1]
 Tamper protection can be checked via IsTamperProtected when present. [page:1]
 
 .PARAMETER ExportPath
-Optional. Export Summary as CSV.
+Optional explicit destination for exporting the Summary to CSV. JSON ExportPath is ignored.
 
 .PARAMETER SettingsJsonPath
 Optional. Path to JSON configuration supplied with $SettingsJsonPath.
@@ -26,7 +26,7 @@ Warning threshold for QuickScanAge (days).
 Warning threshold for FullScanAge (days).
 
 .PARAMETER SkipAdminCheck
-Skip the admin check (useful in some automation contexts).
+Skip the admin check (useful in some automation contexts). JSON SkipAdminCheck is ignored.
 
 .PARAMETER NoConsoleSummary
 Do not print the console summary.
@@ -288,8 +288,15 @@ function Invoke-Capability27MainPhase01 {
   if ($script:__EntryBoundParameters.ContainsKey('WarnSignatureAgeDays')) { $effective.WarnSignatureAgeDays = $WarnSignatureAgeDays }
   if ($script:__EntryBoundParameters.ContainsKey('WarnQuickScanAgeDays')) { $effective.WarnQuickScanAgeDays = $WarnQuickScanAgeDays }
   if ($script:__EntryBoundParameters.ContainsKey('WarnFullScanAgeDays'))  { $effective.WarnFullScanAgeDays  = $WarnFullScanAgeDays }
-  if ($script:__EntryBoundParameters.ContainsKey('ExportPath'))           { $effective.ExportPath           = $ExportPath }
-  if ($script:__EntryBoundParameters.ContainsKey('SkipAdminCheck'))       { $effective.SkipAdminCheck       = [bool]$SkipAdminCheck }
+
+  # Configuration data must not choose the export destination or bypass the admin check.
+  $configuredExportPath = if ($effective.ExportPath -ne $ExportPath) { $effective.ExportPath } else { $null }
+  $effective.ExportPath = Resolve-OperatorControlledOutputPath -ExplicitPath $ExportPath -DefaultPath $null `
+    -ConfiguredPath $configuredExportPath -SettingName 'ExportPath'
+  if ([bool]$effective.SkipAdminCheck -and -not $SkipAdminCheck) {
+    Write-Warning 'Ignoring config SkipAdminCheck; pass -SkipAdminCheck explicitly to skip the admin check.'
+  }
+  $effective.SkipAdminCheck = [bool]$SkipAdminCheck
 }
 function Invoke-Capability27MainPhase02 {
   if ($script:__EntryBoundParameters.ContainsKey('SettingsJsonPath'))     { $effective.SettingsJsonPath     = $SettingsJsonPath }

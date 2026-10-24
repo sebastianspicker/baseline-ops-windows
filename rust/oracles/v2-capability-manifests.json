@@ -362,11 +362,11 @@
       "number": 13,
       "capability_id": "v3.lsass.vbs-hardening",
       "legacy_script": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
-      "source_sha256": "f3c70540729326cb52fc2e2b3687ab44c4bf3697b14b51c4bd2964cdbfb94a19",
+      "source_sha256": "f5959ff15a48fa6f4016188b1e3815c7745d3f9efd95549f06ad0f79489b8e2e",
       "source_files": [
         {
           "path": "scripts/13-LSASS-CG-HVCI-VBS.ps1",
-          "sha256": "f3c70540729326cb52fc2e2b3687ab44c4bf3697b14b51c4bd2964cdbfb94a19"
+          "sha256": "f5959ff15a48fa6f4016188b1e3815c7745d3f9efd95549f06ad0f79489b8e2e"
         },
         {
           "path": "scripts/internal/13-LSASS-CG-HVCI-VBS.helpers.ps1",
@@ -393,7 +393,7 @@
           "sha256": "f98af31d365fd27256ce80b9f278037a517ef7d7079da50c0f99e458c5942746"
         }
       ],
-      "source_closure_sha256": "9f1be6542207f6233b91128ab6e47b619c8aa7c1004fbf5c37509104ee7a43ed",
+      "source_closure_sha256": "9b31211ff0dd06ac238f8f62ee85afe90afd7075d71cf86f2d31be6df53695ff",
       "fixture_id": "v3.lsass.vbs-hardening.neutral",
       "rust_maturity": "code_complete"
     },
@@ -646,18 +646,18 @@
       "number": 25,
       "capability_id": "v3.winget.configuration",
       "legacy_script": "scripts/25-WinGet-Config-Baseline-Runner.ps1",
-      "source_sha256": "3a8aea5e5b0ac2ec4d081f863b85099ef7abf1e1a625968156421dd4be964ce6",
+      "source_sha256": "d3d617cdcfd884412b1629193c2fc7bb30b0427caa3dd91cd49518300545ca5f",
       "source_files": [
         {
           "path": "scripts/25-WinGet-Config-Baseline-Runner.ps1",
-          "sha256": "3a8aea5e5b0ac2ec4d081f863b85099ef7abf1e1a625968156421dd4be964ce6"
+          "sha256": "d3d617cdcfd884412b1629193c2fc7bb30b0427caa3dd91cd49518300545ca5f"
         },
         {
           "path": "scripts/internal/25-WinGet-Config-Baseline-Runner.helpers.ps1",
           "sha256": "ece2a719ea23d15f1977428511f44fdd6530d040f8951c3e8acf70636b4812f1"
         }
       ],
-      "source_closure_sha256": "b9f1f1bc25d3bd86c62e05add60f77834b10d5b787f5f906565971d5960f9fb0",
+      "source_closure_sha256": "32243c8d3c22f7a247eeda1f88ff9d1cb4c1c0b96161793c27aa7fb00d874f7a",
       "fixture_id": "v3.winget.configuration.neutral",
       "rust_maturity": "code_complete"
     },
@@ -684,14 +684,14 @@
       "number": 27,
       "capability_id": "v3.defender.health",
       "legacy_script": "scripts/27-Defender-Health-Audit.ps1",
-      "source_sha256": "a65bf0d5f97af84a038e94c7e81111b66bb82b23f06f77d0eafb5fc66f92e5c1",
+      "source_sha256": "75c83c19f7d1379f12b8353172691d7a07de8cbfb558a757ca2b59e7f9401e5c",
       "source_files": [
         {
           "path": "scripts/27-Defender-Health-Audit.ps1",
-          "sha256": "a65bf0d5f97af84a038e94c7e81111b66bb82b23f06f77d0eafb5fc66f92e5c1"
+          "sha256": "75c83c19f7d1379f12b8353172691d7a07de8cbfb558a757ca2b59e7f9401e5c"
         }
       ],
-      "source_closure_sha256": "20b707484db8db45d37c23d98d8f9a49744ef7cf250732b4a2c118d7dde97849",
+      "source_closure_sha256": "e33706444d6e7ce4ae159efa4ac4457cce6752a049f1cb6dbb3e35e931a9dab7",
       "fixture_id": "v3.defender.health.neutral",
       "rust_maturity": "code_complete"
     },
@@ -774,14 +774,14 @@
       "number": 33,
       "capability_id": "v3.advanced-audit-policy",
       "legacy_script": "scripts/33-AdvancedAuditPolicy-Audit.ps1",
-      "source_sha256": "1b18c4ba7af579dc30bd51a40edb19a7a31ad1e4d3136c8d1fe7aa0c824ee958",
+      "source_sha256": "5c121b2162971721a4e903cb6b00a860df288cbe7f1d113ab82bfb8b4a7c4bc6",
       "source_files": [
         {
           "path": "scripts/33-AdvancedAuditPolicy-Audit.ps1",
-          "sha256": "1b18c4ba7af579dc30bd51a40edb19a7a31ad1e4d3136c8d1fe7aa0c824ee958"
+          "sha256": "5c121b2162971721a4e903cb6b00a860df288cbe7f1d113ab82bfb8b4a7c4bc6"
         }
       ],
-      "source_closure_sha256": "68b654ba65e600538092ec2fcd0e7b02380b3868858a32d5e3334876b4a6f547",
+      "source_closure_sha256": "c1b540e2eea975d29550aac5eda4da9df56ff77d0ce3909bf7a4ba40e6bc7f85",
       "fixture_id": "v3.advanced-audit-policy.neutral",
       "rust_maturity": "code_complete"
     },
