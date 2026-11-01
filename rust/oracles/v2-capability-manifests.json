@@ -6,22 +6,22 @@
       "number": 1,
       "capability_id": "v3.defender.asr-allowlist",
       "legacy_script": "scripts/01-ASR-Defender-Allowlist.ps1",
-      "source_sha256": "eebaf043116587729d9892dbc52397f23fa093050b6228a0d907dbaf227a74d4",
+      "source_sha256": "8e748b1e6b810d32697985d7d3ea8f41ffc9e45f52d54ac9c2317200f6d19b29",
       "source_files": [
         {
           "path": "scripts/01-ASR-Defender-Allowlist.ps1",
-          "sha256": "eebaf043116587729d9892dbc52397f23fa093050b6228a0d907dbaf227a74d4"
+          "sha256": "8e748b1e6b810d32697985d7d3ea8f41ffc9e45f52d54ac9c2317200f6d19b29"
         },
         {
           "path": "scripts/internal/01-ASR-Defender-Allowlist.helpers.ps1",
-          "sha256": "a627ab18699de4b2ce8b851a9f74cea1649edf7171b48d4738b03fb65b4becfe"
+          "sha256": "8f3133e0fa2b20c0a1af7938f756fbb899ad958a2ee5882542d43b92ef78aee9"
         },
         {
           "path": "scripts/internal/01-ASR-Defender-Allowlist.runtime.ps1",
-          "sha256": "6d36131e6b42a8c3e7f590bde59fcb4a8732d9f7a88413868f60bc82f2ec85d1"
+          "sha256": "dabbba7e282b3c6721096214d69961ee768655c62140b4bfdb861295becc46ed"
         }
       ],
-      "source_closure_sha256": "5d92a16683151d4d0c0907a82f4851a991a5bdb245f8ab3bd3e0dde4928daea6",
+      "source_closure_sha256": "03ae32041b2ba5316c947fb3753c8a252c6b3b87baedc0b5257012a52a56c284",
       "fixture_id": "v3.defender.asr-allowlist.neutral",
       "rust_maturity": "code_complete"
     },
@@ -29,11 +29,11 @@
       "number": 2,
       "capability_id": "v3.laps.hygiene",
       "legacy_script": "scripts/02-LAPS-Hygiene.ps1",
-      "source_sha256": "865c50671c2e198bf58ba3aec05e077ad415fbaad9a9e682460a2916548b4bcc",
+      "source_sha256": "459b91ad13233cb0c161d5d6e0ea151cedc109b85f3c5ec40010a78427879099",
       "source_files": [
         {
           "path": "scripts/02-LAPS-Hygiene.ps1",
-          "sha256": "865c50671c2e198bf58ba3aec05e077ad415fbaad9a9e682460a2916548b4bcc"
+          "sha256": "459b91ad13233cb0c161d5d6e0ea151cedc109b85f3c5ec40010a78427879099"
         },
         {
           "path": "scripts/internal/02-LAPS-Hygiene.helpers.ps1",
@@ -49,10 +49,10 @@
         },
         {
           "path": "scripts/internal/02-LAPS-Hygiene.runtime.ps1",
-          "sha256": "2b1e17783049332bdebff86f30e281aaeec70248a3b0cbfe506b12996c49682c"
+          "sha256": "9be2c12bb3f201a4e7efa037996b0a527f3058b187f77e60c4dc49d9de35ce58"
         }
       ],
-      "source_closure_sha256": "735cf1a3ef28ba4ec93aa8cc5d2f6a028e60751640fd474577ac2c4cee9cb562",
+      "source_closure_sha256": "61d7d71a56f27ea995c920c6a9a775b42ccb77c3ddf890429bcb7e429c0f60c8",
       "fixture_id": "v3.laps.hygiene.neutral",
       "rust_maturity": "code_complete"
     },
@@ -60,22 +60,22 @@
       "number": 3,
       "capability_id": "v3.local-admins.guardrail",
       "legacy_script": "scripts/03-LocalAdmins-Guardrail.ps1",
-      "source_sha256": "a8a0c0b748f4fcc0b83ee531e87e6d8f3ac4290712893082d19f40c9edd4496a",
+      "source_sha256": "095586bb0c6658faecb1f47068bbea780dd22d874bd090a8991ea7d8b9e50977",
       "source_files": [
         {
           "path": "scripts/03-LocalAdmins-Guardrail.ps1",
-          "sha256": "a8a0c0b748f4fcc0b83ee531e87e6d8f3ac4290712893082d19f40c9edd4496a"
+          "sha256": "095586bb0c6658faecb1f47068bbea780dd22d874bd090a8991ea7d8b9e50977"
         },
         {
           "path": "scripts/internal/03-LocalAdmins-Guardrail.helpers.ps1",
-          "sha256": "5992d2410200b0b6d0664e0a5bdf30061f0cb4788191329397193b2654797ba2"
+          "sha256": "51db9069ca7acb7fdfb6446b049641b4ab5638be96ce10d6d779f9f5e066c0a8"
         },
         {
           "path": "scripts/internal/03-LocalAdmins-Guardrail.runtime.ps1",
           "sha256": "3faaa97452066da230e838e79bab8ae22605dd44d6df373dac2337178f2159da"
         }
       ],
-      "source_closure_sha256": "a9d0b97f84b63775f5c82a7147bee586ba152587acedc65e3e68d3d91d557abb",
+      "source_closure_sha256": "aeed4079be33e14c6fb7356bd77ce6170e92b03fe0c765ef166ddf376c5e7534",
       "fixture_id": "v3.local-admins.guardrail.neutral",
       "rust_maturity": "code_complete"
     },
@@ -180,7 +180,7 @@
         },
         {
           "path": "scripts/internal/07-ScheduledTasks-Hygiene.actions.ps1",
-          "sha256": "f47c19da67a9b95756ebb9a014b41cb79baac5772c1a7cdff82e472b2ca48f8b"
+          "sha256": "088b8849edc2bd4842c995d69ea02d83dfcb5a3749b7f5cca6533332f372a2f7"
         },
         {
           "path": "scripts/internal/07-ScheduledTasks-Hygiene.catalog.ps1",
@@ -188,7 +188,7 @@
         },
         {
           "path": "scripts/internal/07-ScheduledTasks-Hygiene.helpers.ps1",
-          "sha256": "dbc912a4349e387268fdd3230d7642169ce39d5de743872124226ee1196b0001"
+          "sha256": "f02a41cb0a19fbd438cb1ac1bbb5923f8fd89376aeeb5cfd60919e7c32c3cebe"
         },
         {
           "path": "scripts/internal/07-ScheduledTasks-Hygiene.observations.ps1",
@@ -199,7 +199,7 @@
           "sha256": "9c3edb2406301e98cb0c38c14f9603ddd0c128873f1ed95c8705e0e7231289d0"
         }
       ],
-      "source_closure_sha256": "8b72fb10a19083b3d88e1572ee030a84ba93858b23bd52e357d18e142d4d04e5",
+      "source_closure_sha256": "98d641e1bce625800796b21c694789084f1ed6f7313dc547d43565b0fd939483",
       "fixture_id": "v3.scheduled-tasks.hygiene.neutral",
       "rust_maturity": "code_complete"
     },
@@ -281,14 +281,14 @@
         },
         {
           "path": "scripts/internal/10-SupportBundle-Parser.helpers.ps1",
-          "sha256": "922c4693e5bd57632119df80d80b916dc49d393a8e591ebbc5326e654a3ba601"
+          "sha256": "bae120ae4f93691cd35a9322e624b3dea3d06dc431b941cbdc7653bc9a777ab1"
         },
         {
           "path": "scripts/internal/10-SupportBundle-Parser.runtime.ps1",
-          "sha256": "9f80556f77b644207cc38b8dd8eae9d822d252bf5aa03b867f610d5410adffd2"
+          "sha256": "2dcb3b502daae2fd99b45284a68abcf328916ca9f242154bc78d4bf56011cba5"
         }
       ],
-      "source_closure_sha256": "39c9568ed5926e474a5856c023b7519eb4a1645d5c3d61e24860ffdb0a52a1a8",
+      "source_closure_sha256": "4fde9daa9b263ee90fdee8ac735a4c88c34b0f12515cec044af512fce080a964",
       "fixture_id": "v3.support-bundle.parse.neutral",
       "rust_maturity": "code_complete"
     },
@@ -401,11 +401,11 @@
       "number": 14,
       "capability_id": "v3.remote-access.guardrails",
       "legacy_script": "scripts/14-SecureRemoteAccessGuardrails.ps1",
-      "source_sha256": "2a42ade9bb9c41fdd147072f0d9a273cee1a4e08c61b513fc87a68c79ef66b9b",
+      "source_sha256": "2430e7e542ecc4a4eb7d0bb8a73ec66f0ac05087bb99beb9b074feaad1f1aa84",
       "source_files": [
         {
           "path": "scripts/14-SecureRemoteAccessGuardrails.ps1",
-          "sha256": "2a42ade9bb9c41fdd147072f0d9a273cee1a4e08c61b513fc87a68c79ef66b9b"
+          "sha256": "2430e7e542ecc4a4eb7d0bb8a73ec66f0ac05087bb99beb9b074feaad1f1aa84"
         },
         {
           "path": "scripts/internal/14-SecureRemoteAccessGuardrails.dependencies.ps1",
@@ -416,7 +416,7 @@
           "sha256": "1318d5cfdb3362eda4a8ef332e41c358e0ecbc321d5577c2e4a539bd1a7179a5"
         }
       ],
-      "source_closure_sha256": "caeb0f5e3a288122edc8925b7c733e6841952a21b18491894eb649042c8367a5",
+      "source_closure_sha256": "3a2c835181ff77b44ea32a28e062065a71e6befb312528c3db489bddbf3b0592",
       "fixture_id": "v3.remote-access.guardrails.neutral",
       "rust_maturity": "code_complete"
     },
@@ -471,7 +471,7 @@
         },
         {
           "path": "scripts/internal/16-Sysmon-Config-Updater.helpers.ps1",
-          "sha256": "4fe1f0da4071a14b7a1490ff8690a8fa6d6ba92d677fde9ec8d9be86060dafa9"
+          "sha256": "ae4e948667e3584cf931e2306ef66db169ad7c77c5a5e1df4ef9690e7b11f740"
         },
         {
           "path": "scripts/internal/16-Sysmon-Config-Updater.manifest.ps1",
@@ -483,14 +483,14 @@
         },
         {
           "path": "scripts/internal/16-Sysmon-Config-Updater.runtime.ps1",
-          "sha256": "738de7bff38db874d69e1e3b41abf47d139bc9ca658c6bc3818edb158914e7c3"
+          "sha256": "dfe44560d43871d08a9b33b9d6942b054b2a10d7948fddbaa4bb982445f42a84"
         },
         {
           "path": "scripts/internal/16-Sysmon-Config-Updater.trust.ps1",
-          "sha256": "0126e449e52ca854a13ada717e93e17412e4029a269957db84f8b0330ac372a9"
+          "sha256": "027721533a43c0b5d038fc3c08a4bf0eec8b1f81ed4a29b410f7991516c28858"
         }
       ],
-      "source_closure_sha256": "cafb811b7065940bd78a036377951c5a8d9cd9f551b8c8e1aa07e792b3690c3b",
+      "source_closure_sha256": "e827b826d67f7cf84f2d116bd0c9c5e7281d795f1a34ec8e4408fa48b18124de",
       "fixture_id": "v3.sysmon.config.neutral",
       "rust_maturity": "code_complete"
     },
@@ -506,14 +506,14 @@
         },
         {
           "path": "scripts/internal/17-Sysmon-Rule-Drift-Sensor.helpers.ps1",
-          "sha256": "32c8a2e449439e076e54cd78b424e00ab1da2534ab05143aa9c69b4664de8487"
+          "sha256": "8c8e41f2d4c0633daaa583cc395cc5968da2b3bf08f0f11eff856bec0e0b4ce2"
         },
         {
           "path": "scripts/internal/17-Sysmon-Rule-Drift-Sensor.runtime.ps1",
           "sha256": "9aecfc224beafda2010ad05d8ab2014d47066bbd177a7d4abf6140621d386292"
         }
       ],
-      "source_closure_sha256": "ddc208bb7a3feb19da8b7aab3d3ac86cdd05a27d41939c4ce2b4b164d9fe7fd5",
+      "source_closure_sha256": "d13129986d0c41cea6c30b4c6036094f58f59cd94cb367ea155e443d1dcacfa4",
       "fixture_id": "v3.sysmon.rule-drift.neutral",
       "rust_maturity": "code_complete"
     },
@@ -521,18 +521,18 @@
       "number": 18,
       "capability_id": "v3.firewall.baseline",
       "legacy_script": "scripts/18-Firewall-Baseline.ps1",
-      "source_sha256": "cb588fc86c10f7cb3b3c24f7c7b1292cea4778774cb2301a8ac0f8e5453828b1",
+      "source_sha256": "38589206f6fbc4a08541a71d72195653733a01b5471c7f4342131ae938c68978",
       "source_files": [
         {
           "path": "scripts/18-Firewall-Baseline.ps1",
-          "sha256": "cb588fc86c10f7cb3b3c24f7c7b1292cea4778774cb2301a8ac0f8e5453828b1"
+          "sha256": "38589206f6fbc4a08541a71d72195653733a01b5471c7f4342131ae938c68978"
         },
         {
           "path": "scripts/internal/18-Firewall-Baseline.helpers.ps1",
-          "sha256": "41dbf008e5ee41a29f104108440d94958fbe26682e5da378e8122c92395846d8"
+          "sha256": "97941a0010f86bbdedb29c81e3eac9b8f38919fbaec417afd80fad4f2081d707"
         }
       ],
-      "source_closure_sha256": "f80502fb9829100f83dd01c624acf3a6ac1b33118a5c4ae7652f39b3872a07c0",
+      "source_closure_sha256": "11d710a2766068f3de1cfaf1865579e20287c668dee04b4fbe7390a707638dff",
       "fixture_id": "v3.firewall.baseline.neutral",
       "rust_maturity": "code_complete"
     },
@@ -582,14 +582,14 @@
         },
         {
           "path": "scripts/internal/21-EmergencyKillSwitch.helpers.ps1",
-          "sha256": "2ad75d319ed246ee6d5dccedf2f9aeba249ae0c95901df81f12d19690a3d99e6"
+          "sha256": "30a07a55a27ac60b9b3e17a936ec1ef67345e3cc4bb15e4bf552099e7eeabc3b"
         },
         {
           "path": "scripts/internal/21-EmergencyKillSwitch.runtime.ps1",
           "sha256": "84a450f57f93bcc77c3acf316e10bd479b46ed9fd575231945c6440d8da539e3"
         }
       ],
-      "source_closure_sha256": "f2123edc8f6213b814fa54160e9b2167d80b315cf30e8b1ca05f38189813456a",
+      "source_closure_sha256": "e9c3a9152edb2bd9f0c9178a596969e6fb052a6471e6c03cded2418899a870a1",
       "fixture_id": "v3.network.emergency-isolation.neutral",
       "rust_maturity": "in_development"
     },
@@ -597,18 +597,18 @@
       "number": 22,
       "capability_id": "v3.smb.encryption",
       "legacy_script": "scripts/22-SMB-Encryption-Enforcer.ps1",
-      "source_sha256": "7d4c5ea6bb9aa4e967b2fd6e06aaebd427bb7ffd1dffff6a23e4131180cbeefa",
+      "source_sha256": "c1790432bda5f890c347ecd1665e9a3136e8912c08d60cfd79db7e0c18641439",
       "source_files": [
         {
           "path": "scripts/22-SMB-Encryption-Enforcer.ps1",
-          "sha256": "7d4c5ea6bb9aa4e967b2fd6e06aaebd427bb7ffd1dffff6a23e4131180cbeefa"
+          "sha256": "c1790432bda5f890c347ecd1665e9a3136e8912c08d60cfd79db7e0c18641439"
         },
         {
           "path": "scripts/internal/22-SMB-Encryption-Enforcer.failures.ps1",
           "sha256": "055ad6ae500143d8f0e81a6e0e1ec31ef96fbd5ac27a62b9f3dce414995670b6"
         }
       ],
-      "source_closure_sha256": "5eb723737b6a8345171868d6697352dc9e332379e2afc216576745e5f823ed17",
+      "source_closure_sha256": "c66f1311e819dda921052e0219e11013db5f99d79b910895e6cba7b8b4cfb656",
       "fixture_id": "v3.smb.encryption.neutral",
       "rust_maturity": "code_complete"
     },
@@ -616,14 +616,14 @@
       "number": 23,
       "capability_id": "v3.bitlocker.operations",
       "legacy_script": "scripts/23-BitLocker-Operations-Audit.ps1",
-      "source_sha256": "c6976cced61e56379a4882f47636ca7365832fec225d532e8468bea278cd9393",
+      "source_sha256": "21d2494227dba8fe5674f833e36d5d9b6d826de9c6b172def5e28b11b8b53cb0",
       "source_files": [
         {
           "path": "scripts/23-BitLocker-Operations-Audit.ps1",
-          "sha256": "c6976cced61e56379a4882f47636ca7365832fec225d532e8468bea278cd9393"
+          "sha256": "21d2494227dba8fe5674f833e36d5d9b6d826de9c6b172def5e28b11b8b53cb0"
         }
       ],
-      "source_closure_sha256": "c55ad382f97f20299152b84e226835789fa473da8c334bfd1861926f94b26431",
+      "source_closure_sha256": "0dcd69ae5dfaee2132b11e2854aa7643055e593330396db9b97480cc4dc58275",
       "fixture_id": "v3.bitlocker.operations.neutral",
       "rust_maturity": "code_complete"
     },
@@ -729,14 +729,14 @@
       "number": 30,
       "capability_id": "v3.service-process.inventory",
       "legacy_script": "scripts/30-Service-Process-Audit.ps1",
-      "source_sha256": "5e179f07f25e4d0f4375768f0d82d7641a2c0cc2260ea9c236064825dbdd240b",
+      "source_sha256": "1a8e4fe31c7f21b617d74fddc51c17c6fea64fe08fdffb2db1466e6e217d16d2",
       "source_files": [
         {
           "path": "scripts/30-Service-Process-Audit.ps1",
-          "sha256": "5e179f07f25e4d0f4375768f0d82d7641a2c0cc2260ea9c236064825dbdd240b"
+          "sha256": "1a8e4fe31c7f21b617d74fddc51c17c6fea64fe08fdffb2db1466e6e217d16d2"
         }
       ],
-      "source_closure_sha256": "39e57bdcf26516d410eb37c3a006e89c8121229f25aff80d9a49a450731a34e2",
+      "source_closure_sha256": "f1d5b954a9b978846002729b2ad6655463e416378f32d02ab20e848b241272a6",
       "fixture_id": "v3.service-process.inventory.neutral",
       "rust_maturity": "code_complete"
     },
@@ -744,14 +744,14 @@
       "number": 31,
       "capability_id": "v3.powershell.logging",
       "legacy_script": "scripts/31-PowerShell-Logging-Baseline.ps1",
-      "source_sha256": "1e3dc89d04750adf8e95aa1382dcbfa44430baec4c6a06075e80f76122ae7a7d",
+      "source_sha256": "3ded8c18cad1750de1a9e0b28c7a6584f7a8a6dea578477db38e9175214fb327",
       "source_files": [
         {
           "path": "scripts/31-PowerShell-Logging-Baseline.ps1",
-          "sha256": "1e3dc89d04750adf8e95aa1382dcbfa44430baec4c6a06075e80f76122ae7a7d"
+          "sha256": "3ded8c18cad1750de1a9e0b28c7a6584f7a8a6dea578477db38e9175214fb327"
         }
       ],
-      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620",
+      "source_closure_sha256": "4a9e15fff9450747cd3a90936ba63bc48cddd54572def38b547a7ee5fca72f06",
       "fixture_id": "v3.powershell.logging.neutral",
       "rust_maturity": "code_complete"
     },
@@ -864,14 +864,14 @@
       "number": 39,
       "capability_id": "v3.credential-guard.vbs",
       "legacy_script": "scripts/39-CredentialGuard-VBS-AuditRemediate.ps1",
-      "source_sha256": "68c54239e9b51cfc3241981c169c74cc69423503ef2a63a9d55c2ba885d6efda",
+      "source_sha256": "128d7ab02275f627d99dc2a48289d81bf28592d094cf6f6af14805d38e7573a8",
       "source_files": [
         {
           "path": "scripts/39-CredentialGuard-VBS-AuditRemediate.ps1",
-          "sha256": "68c54239e9b51cfc3241981c169c74cc69423503ef2a63a9d55c2ba885d6efda"
+          "sha256": "128d7ab02275f627d99dc2a48289d81bf28592d094cf6f6af14805d38e7573a8"
         }
       ],
-      "source_closure_sha256": "4b9b5e208070e0f1315cca092b74152a61adfb2a51b9c4d60ab6e51086503c9e",
+      "source_closure_sha256": "20dd1066b5f341e5131c233ba7c5fb8a29eb4cefccd37f9f14dd5473d3f08572",
       "fixture_id": "v3.credential-guard.vbs.neutral",
       "rust_maturity": "code_complete"
     },
@@ -879,18 +879,18 @@
       "number": 40,
       "capability_id": "v3.lsa.protection",
       "legacy_script": "scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
-      "source_sha256": "c90b7faf94cb100a81d2cdf764f310fc5e6d75a66de4aa56411468e1297831dd",
+      "source_sha256": "5712d646c0dd509151392e2c67f8b748517d91402f60d2cad9490af43dabd75d",
       "source_files": [
         {
           "path": "scripts/40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1",
-          "sha256": "c90b7faf94cb100a81d2cdf764f310fc5e6d75a66de4aa56411468e1297831dd"
+          "sha256": "5712d646c0dd509151392e2c67f8b748517d91402f60d2cad9490af43dabd75d"
         },
         {
           "path": "scripts/internal/40-AddedLSAProtection-RunAsPPL-AuditRemediate.helpers.ps1",
-          "sha256": "6e223749e1a1c7ba097851fa6f6210b8f7b74594d2630ffb2bb9f449c82dc0c4"
+          "sha256": "d7c9e168e634538ac0853933a6788c22065c02c192e655906a8687200260abe0"
         }
       ],
-      "source_closure_sha256": "f33c0efe672be5f8eea97bccfffe5165cd794448cde7287434e6ccc458e4f948",
+      "source_closure_sha256": "27fbf2b19e560c7611c903bbb685ef9ba1128f011a4a9555fd9ba9672c36e86b",
       "fixture_id": "v3.lsa.protection.neutral",
       "rust_maturity": "code_complete"
     },
@@ -898,14 +898,14 @@
       "number": 41,
       "capability_id": "v3.ntlm.client",
       "legacy_script": "scripts/41-NTLM-Audit-Client.ps1",
-      "source_sha256": "4843397ced3871c3529e763b97525ee2029a8421743f9ba80a4c514725a4f6af",
+      "source_sha256": "06c855a7eb7c9e1e663f89da6427899708647a27a78772fac7b92c705b59de41",
       "source_files": [
         {
           "path": "scripts/41-NTLM-Audit-Client.ps1",
-          "sha256": "4843397ced3871c3529e763b97525ee2029a8421743f9ba80a4c514725a4f6af"
+          "sha256": "06c855a7eb7c9e1e663f89da6427899708647a27a78772fac7b92c705b59de41"
         }
       ],
-      "source_closure_sha256": "519c1204c44b7e0c7cf52cbfa8a0a9b22503f0d7363165701bd781c7ca6826ba",
+      "source_closure_sha256": "3522d1dbc8c6bc4aa94d3ac69642de9b82cc2afcac12d355eb59b2eb2b1b8bf2",
       "fixture_id": "v3.ntlm.client.neutral",
       "rust_maturity": "code_complete"
     },
@@ -951,14 +951,14 @@
       "number": 44,
       "capability_id": "v3.defender.ransomware-network-protection",
       "legacy_script": "scripts/44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1",
-      "source_sha256": "e5c49a901add868a89b38ea793dc3e3a062e23d80e0bdfd2a91cb08e5805d033",
+      "source_sha256": "ce16fe8d6bf42cea9819351ab99461ac7c74497e3e54a97f88945bfe86c9b9bb",
       "source_files": [
         {
           "path": "scripts/44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1",
-          "sha256": "e5c49a901add868a89b38ea793dc3e3a062e23d80e0bdfd2a91cb08e5805d033"
+          "sha256": "ce16fe8d6bf42cea9819351ab99461ac7c74497e3e54a97f88945bfe86c9b9bb"
         }
       ],
-      "source_closure_sha256": "78e2864351e9b21d236b54a439cd4e85d70ddc82a3d84e3f2514c5396c387642",
+      "source_closure_sha256": "af86e8837861bae42681fecd27b90c61af2a18bb530ccce7fb6df939bc8d3efc",
       "fixture_id": "v3.defender.ransomware-network-protection.neutral",
       "rust_maturity": "code_complete"
     },

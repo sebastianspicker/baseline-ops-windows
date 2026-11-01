@@ -3846,18 +3846,18 @@
       },
       "Language": "Rust",
       "NormalizedContentHash": "81d0bfa182f7de2bf2b591cdbf775398bc3311c9312d5f222d44511904f4ae38",
-      "Fingerprint": "5354195e0a1296d84cc2977b4384b6ba78bc26cf5a140bb4c442c86862ba3557",
+      "Fingerprint": "5106041b7ed650afcfc6336930c2c2026b1751a24d88ece7757ed6a109d39cf2",
       "Rationale": "The two hash paths have distinct preconditions despite matching metadata checks: one follows no-follow retained-file validation and the other supports its own bounded pipeline. Combining risks reopening a TOCTOU path.",
       "Occurrences": [
         {
           "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
-          "StartLine": 220,
-          "EndLine": 227
+          "StartLine": 209,
+          "EndLine": 216
         },
         {
           "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
-          "StartLine": 354,
-          "EndLine": 361
+          "StartLine": 343,
+          "EndLine": 350
         }
       ],
       "Multiplicity": 2
@@ -4344,18 +4344,18 @@
       },
       "Language": "Rust",
       "NormalizedContentHash": "4518cd1ad44c0a0c2887052d2df518886b5655f0771377606fe0ac479a65ece6",
-      "Fingerprint": "115d47dc36ac65ebc88db2b73bcbd142c1d8c45976f635062a91927d91656d0d",
+      "Fingerprint": "15d1e7e06d048d1fbe4f17b78d500aa655e89ed27ef87277b7524eb033be2776",
       "Rationale": "The similarly named open_regular_file implementations are cfg-specific: Windows retains a no-reparse handle and validates final identity while the portable path cannot. One body would weaken or obscure this trust distinction.",
       "Occurrences": [
         {
           "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
-          "StartLine": 195,
-          "EndLine": 212
+          "StartLine": 184,
+          "EndLine": 201
         },
         {
           "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
-          "StartLine": 275,
-          "EndLine": 292
+          "StartLine": 264,
+          "EndLine": 281
         }
       ],
       "Multiplicity": 2

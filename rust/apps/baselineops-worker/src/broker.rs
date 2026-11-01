@@ -32,7 +32,7 @@ pub(super) fn run_windows(
     let prepared = prepare_proposal(&request, trust, signer, &pipe_name, &request_message)?;
     let approval = exchange_proposal(&mut client, &mut replays, &pipe_name, &prepared.message)?;
     let deadline = Instant::now() + Duration::from_mins(2);
-    let result = execute_session(
+    let (result, delivery_deadline) = execute_session(
         &mut client,
         prepared.authority,
         &request,
@@ -47,7 +47,7 @@ pub(super) fn run_windows(
         &prepared.message,
         approval.nonce,
         result,
-        deadline,
+        delivery_deadline,
     )?;
     Ok(exit_code)
 }

@@ -25,14 +25,6 @@ function Get-PropValue {
   return $Default
 }
 
-function Coalesce-String {
-  param([object]$Value,[string]$Default)
-  $s = $null
-  try { $s = [string]$Value } catch { $s = $null }
-  if ([string]::IsNullOrWhiteSpace($s)) { return $Default }
-  return $s
-}
-
 function Normalize-TaskPath {
   param([string]$TaskPath)
   if ([string]::IsNullOrWhiteSpace($TaskPath)) { return "\" }

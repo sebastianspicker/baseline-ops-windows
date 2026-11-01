@@ -157,6 +157,7 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
@@ -228,15 +229,11 @@ function Import-JsonConfigOrDefault {
   $cfg = Get-DefaultConfig
   if ([string]::IsNullOrWhiteSpace($Path)) { return $cfg }
 
+  $read = Read-JsonFileWithStatus -Path $Path
+  if (-not $read.Meta.Loaded) { return $cfg }
+  $parsed = $read.Data
+
   try {
-    if (-not (Test-Path -LiteralPath $Path)) { return $cfg }
-
-    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $cfg }
-
-    # ConvertFrom-Json should be guarded via try/catch for invalid JSON.
-    $parsed = $raw | ConvertFrom-Json
-
     Set-BitLockerBooleanConfigDefaults -Defaults $cfg -Parsed $parsed
     $cfg.ExportPathDefault = Resolve-OperatorControlledOutputPath -DefaultPath $cfg.ExportPathDefault `
       -ConfiguredPath $parsed.ExportPathDefault -SettingName 'ExportPathDefault'
@@ -247,11 +244,6 @@ function Import-JsonConfigOrDefault {
   } catch {
     return $cfg
   }
-}
-function Test-BitLockerExportPath {
-  param([AllowNull()]$Value)
-  if ($null -eq $Value) { return $false }
-  return (-not [string]::IsNullOrWhiteSpace([string]$Value))
 }
 function Set-BitLockerManageBdeLimit {
   param($Defaults, $Parsed)

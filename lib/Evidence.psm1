@@ -87,7 +87,7 @@ function Get-EvidenceFileItem {
 
 <#
 .SYNOPSIS
-  Enforces evidence size limits and updates a permitted running total.
+  Enforces evidence size limits against the running total without changing it.
 #>
 function Test-EvidenceSizeLimits {
   [CmdletBinding()]
@@ -95,14 +95,13 @@ function Test-EvidenceSizeLimits {
     [Parameter(Mandatory)][int64]$SizeBytes,
     [int]$MaxFileSizeMB,
     [int]$MaxTotalMB,
-    [ref]$RunningTotalBytes
+    # Untyped: a [ref] parameter cannot bind $null, which callers without a quota total pass.
+    [AllowNull()][object]$RunningTotalBytes
   )
 
   if ($MaxFileSizeMB -gt 0 -and $SizeBytes -gt ([int64]$MaxFileSizeMB * 1MB)) { return 'file-too-large' }
   if (-not $RunningTotalBytes -or $MaxTotalMB -le 0) { return $null }
-  $newTotal = $RunningTotalBytes.Value + $SizeBytes
-  if ($newTotal -gt ([int64]$MaxTotalMB * 1MB)) { return 'quota-exceeded' }
-  $RunningTotalBytes.Value = $newTotal
+  if (($RunningTotalBytes.Value + $SizeBytes) -gt ([int64]$MaxTotalMB * 1MB)) { return 'quota-exceeded' }
   return $null
 }
 
@@ -124,7 +123,25 @@ function New-EvidenceDestination {
   if (-not [string]::IsNullOrWhiteSpace($destinationDirectory) -and -not (Test-Path -LiteralPath $destinationDirectory)) {
     New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
   }
-  return $destinationPath
+  return Get-FreeEvidencePath -Path $destinationPath
+}
+
+<#
+.SYNOPSIS
+  Returns the path, or the path with _2, _3, ... before the extension, that does not exist yet.
+#>
+function Get-FreeEvidencePath {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Path)
+
+  $candidate = $Path
+  $directory = Split-Path -Parent $Path
+  $stem = [System.IO.Path]::GetFileNameWithoutExtension($Path)
+  $extension = [System.IO.Path]::GetExtension($Path)
+  for ($index = 2; Test-Path -LiteralPath $candidate; $index++) {
+    $candidate = Join-Path $directory ('{0}_{1}{2}' -f $stem, $index, $extension)
+  }
+  return $candidate
 }
 
 <#
@@ -163,6 +180,7 @@ function Copy-ToEvidence {
     if ($sizeError) { return $false, $sizeError }
     $destPath = New-EvidenceDestination -SourcePath $SourcePath -EvidenceBaseDir $EvidenceBaseDir
     Copy-Item -LiteralPath $SourcePath -Destination $destPath -Force -ErrorAction Stop
+    if ($RunningTotalBytes -and $MaxTotalMB -gt 0) { $RunningTotalBytes.Value += [int64]$item.Length }
     return $true, $destPath
   } catch {
     return $false, $_.Exception.Message

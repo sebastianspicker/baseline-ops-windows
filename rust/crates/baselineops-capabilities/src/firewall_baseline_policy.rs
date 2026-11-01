@@ -123,17 +123,6 @@ pub struct FirewallBaselineObservation {
     pub local_policy_modify_state: FirewallPolicyModifyState,
 }
 
-impl FirewallBaselineObservation {
-    /// Returns whether all profile evidence is complete and local policy is writable.
-    #[must_use]
-    pub fn is_complete_and_locally_writable(&self) -> bool {
-        self.local_policy_modify_state == FirewallPolicyModifyState::LocalPolicyWritable
-            && fixed_profiles()
-                .iter()
-                .all(|profile| self.profiles.get(*profile).is_complete())
-    }
-}
-
 /// One fixed profile field that differs from the requested state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]

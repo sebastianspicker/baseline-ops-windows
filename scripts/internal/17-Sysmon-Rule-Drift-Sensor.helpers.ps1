@@ -33,16 +33,6 @@ function Get-RuleStatusColor {
 # -----------------------------
 # Utility: File IO (safe)
 # -----------------------------
-function ConvertTo-TrustedStateSidValue {
-  param([Parameter(Mandatory)]$IdentityReference)
-  try {
-    if ($IdentityReference -is [Security.Principal.SecurityIdentifier]) { return $IdentityReference.Value }
-    if ($IdentityReference -is [string]) {
-      $IdentityReference = New-Object Security.Principal.NTAccount($IdentityReference)
-    }
-    return $IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-  } catch { throw "State ACL contains an identity that cannot be resolved to a SID: $IdentityReference" }
-}
 # Rejects sensor state writable by untrusted identities so baseline values
 # cannot be manipulated to hide event-rate drift.
 function Assert-TrustedStateAcl {

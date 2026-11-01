@@ -26,6 +26,7 @@ Export-ModuleMember -Function @(
   'Ensure-Cmdlet',
   'Ensure-Exe',
   'Invoke-NativeCommand',
+  'Get-GitWorkingTreeFiles',
   'Invoke-Auditpol',
   'Invoke-Wevtutil',
   'Invoke-RegExe',

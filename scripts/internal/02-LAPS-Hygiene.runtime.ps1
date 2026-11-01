@@ -248,21 +248,29 @@ function Set-LapsPasswordRotationRequirement {
 function Invoke-LapsRotation {
   param($RunState)
   if ($RunState.result.NeedsRotate -and $RunState.Remediate -and $RunState.isWin) {
-    $tmp = @(Try-RotateWindowsLAPS -DoIt)
-    $RunState.result.Rotated = ($tmp.Count -ge 1) -and ([bool]$tmp[0])
-    $RunState.result.RotationMethod = if ($tmp.Count -ge 2) {
-      [string]$tmp[1]
-    }
-    else {
-      ''
-    }
-    if (-not $RunState.result.Rotated) {
-      $RunState.result.RotationError = $RunState.result.RotationMethod
-      Invoke-LapsFailureDiagnostics -RunState $RunState
-    }
-    else {
-      Update-LapsPostRotationState -RunState $RunState
-    }
+    Start-LapsRotation -RunState $RunState
+  }
+}
+function Start-LapsRotation {
+  param($RunState)
+  if (-not $script:__EntryCmdlet.ShouldProcess($env:COMPUTERNAME, 'Rotate LAPS password')) {
+    $RunState.result.RotationMethod = 'WhatIf'
+    return
+  }
+  $tmp = @(Try-RotateWindowsLAPS -DoIt)
+  $RunState.result.Rotated = ($tmp.Count -ge 1) -and ([bool]$tmp[0])
+  $RunState.result.RotationMethod = if ($tmp.Count -ge 2) {
+    [string]$tmp[1]
+  }
+  else {
+    ''
+  }
+  if (-not $RunState.result.Rotated) {
+    $RunState.result.RotationError = $RunState.result.RotationMethod
+    Invoke-LapsFailureDiagnostics -RunState $RunState
+  }
+  else {
+    Update-LapsPostRotationState -RunState $RunState
   }
 }
 function Invoke-LapsFailureDiagnostics {

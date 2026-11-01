@@ -351,7 +351,7 @@ impl ContainedProcess {
             if unsafe { GetExitCodeProcess(self.process.raw(), &raw mut exit_code) } == 0 {
                 return Err(last_error("GetExitCodeProcess"));
             }
-            return Ok(Some(i32::try_from(exit_code).unwrap_or(-1)));
+            return Ok(Some(i32::from_ne_bytes(exit_code.to_ne_bytes())));
         }
         if wait == WAIT_TIMEOUT {
             return Ok(None);

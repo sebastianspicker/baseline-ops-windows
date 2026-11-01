@@ -133,3 +133,75 @@ function To-StringOrNull {
   if ([string]::IsNullOrWhiteSpace($s)) { return $null }
   return $s
 }
+
+
+function Test-LsaRunAsPplCompliant {
+  param([AllowNull()][object]$Value, [int]$Target, [string]$DisableMethod)
+  if ($Target -eq 0) { return ($Value -eq 0 -or ($null -eq $Value -and $DisableMethod -ieq 'DeleteValue')) }
+  return ($Value -eq $Target)
+}
+
+function New-LsaAuditFinding {
+  param([string]$Code, [string]$Severity, [string]$Message)
+  return [pscustomobject]@{ Code = $Code; Severity = $Severity; Message = $Message }
+}
+
+function Get-LsaNonZeroTargetPplFinding {
+  param([AllowNull()][object]$Value, [int]$Target)
+  if ($null -eq $Value) { return (New-LsaAuditFinding 'LSA-PPL-Missing' 'High' 'RunAsPPL is not set (effectively disabled).') }
+  if ($Value -eq 0) { return (New-LsaAuditFinding 'LSA-PPL-Off' 'High' 'RunAsPPL is 0 (Added LSA protection disabled).') }
+  return (New-LsaAuditFinding 'LSA-PPL-TargetDrift' 'Medium' ("RunAsPPL is {0}; target is {1}." -f $Value, $Target))
+}
+
+function Get-LsaRunAsPplFinding {
+  param([AllowNull()][object]$Value, [int]$Target, [string]$DisableMethod)
+  if ($null -ne $Value -and $Value -notin @(0,1,2)) { return (New-LsaAuditFinding 'LSA-PPL-Invalid' 'Medium' ("RunAsPPL has unexpected value: {0}" -f $Value)) }
+  if (Test-LsaRunAsPplCompliant -Value $Value -Target $Target -DisableMethod $DisableMethod) { return $null }
+  if ($Target -ne 0) { return (Get-LsaNonZeroTargetPplFinding -Value $Value -Target $Target) }
+  return (New-LsaAuditFinding 'LSA-PPL-TargetDrift' 'Medium' ("RunAsPPL is {0}; target is {1}." -f (Format-Nullable $Value), $Target))
+}
+
+function Get-LsaPplAuditFindings {
+  param([Parameter(Mandatory)]$Current, [int]$Target, [string]$DisableMethod, [bool]$ManageBoot)
+  $items = [System.Collections.Generic.List[object]]::new()
+  $ppl = Get-LsaRunAsPplFinding -Value $Current.RunAsPPL -Target $Target -DisableMethod $DisableMethod
+  if ($ppl) { $items.Add($ppl) }
+  if ($ManageBoot -and $Current.RunAsPPLBoot -ne $Target) {
+    $items.Add((New-LsaAuditFinding 'LSA-PPLBoot-TargetDrift' 'Medium' ("RunAsPPLBoot is {0}; target is {1}." -f (Format-Nullable $Current.RunAsPPLBoot), $Target)))
+  }
+  return $items.ToArray()
+}
+
+function Test-LsaFindingResolved {
+  param([string]$Code, [bool]$PplOk, [bool]$BootOk)
+  if ($Code -eq 'LSA-PPLBoot-TargetDrift') { return $BootOk }
+  return ($Code -like 'LSA-PPL-*' -and $PplOk)
+}
+
+# Remediate only: a drift finding whose value now matches the target (and was not blocked by a failed write) is resolved.
+function Set-LsaResolvedFindings {
+  param([Parameter(Mandatory)]$FindingList, [Parameter(Mandatory)]$After, [int]$Target, [string]$DisableMethod, [bool]$ManageBoot, [bool]$WriteFailed)
+  if ($WriteFailed) { return }
+  $pplOk = Test-LsaRunAsPplCompliant -Value $After.RunAsPPL -Target $Target -DisableMethod $DisableMethod
+  $bootOk = $ManageBoot -and $After.RunAsPPLBoot -eq $Target
+  foreach ($finding in @($FindingList)) {
+    if (Test-LsaFindingResolved -Code ([string]$finding.Code) -PplOk $pplOk -BootOk $bootOk) {
+      $finding | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force
+    }
+  }
+}
+
+
+function Add-LsaConfigFindings {
+  param([Parameter(Mandatory)]$FindingList, [string]$Mode, [string]$ConfigPath, [Parameter(Mandatory)]$Meta)
+  $blocked = $Mode -eq 'Remediate' -and -not [string]::IsNullOrWhiteSpace($ConfigPath) -and -not $Meta.Loaded
+  if ($blocked) {
+    [void](Add-Finding -FindingList $FindingList -Code 'LSA-ConfigRequiredForRemediate' -Severity 'High' `
+      -Message 'Remediate was requested with a ConfigPath that could not be loaded; no registry value was changed.')
+  }
+  if ($Meta.Error) {
+    [void](Add-Finding -FindingList $FindingList -Code 'LSA-ConfigLoadFailed' -Severity 'Medium' `
+      -Message ("Config JSON could not be loaded; using parameters/defaults. Error: {0}" -f $Meta.Error))
+  }
+  return $blocked
+}

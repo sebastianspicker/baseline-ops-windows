@@ -54,14 +54,7 @@ function Get-ObjProp {
 function Try-ReadJsonFile {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) { return $null }
-  try {
-    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-    $raw | ConvertFrom-Json
-  } catch {
-    $null
-  }
+  return (Read-JsonFileWithStatus -Path $Path).Data
 }
 
 function Get-ResultItem {

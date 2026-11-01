@@ -5,13 +5,6 @@ Runs SupportBundle parser phases.
 .DESCRIPTION
 Resolves parser inputs, projects producer errors, evaluates proof evidence, and renders the terminal summary through explicit state.
 #>
-function Get-ConsoleColor {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][ValidateSet('Header','Key','Value','Ok','Warn','Error','Muted')][string]$Role)
-  if ($script:NoColor) { return $null }
-  return @{ Header='Cyan'; Key='Gray'; Value='White'; Ok='Green'; Warn='Yellow'; Error='Red'; Muted='DarkGray' }[$Role]
-}
-
 function ConvertTo-SafeDisplayPath {
   [CmdletBinding()]
   param(

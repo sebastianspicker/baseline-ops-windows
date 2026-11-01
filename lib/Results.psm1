@@ -161,4 +161,38 @@ function Add-Finding {
   }
 }
 
-Export-ModuleMember -Function Get-FindingsList,Add-Finding
+<#
+.SYNOPSIS
+  Computes a v2 result token from the findings that are still open.
+.DESCRIPTION
+  Shared rule for audit-and-remediate capabilities. Info findings and findings
+  marked Resolved = $true (corrected by this run) never raise the token. A
+  failure such as a failed write always returns FAIL; otherwise any open
+  finding returns WARN, or FAIL with -Strict.
+.PARAMETER Findings
+  Findings of the run.
+.PARAMETER Strict
+  Treat open findings as failures.
+.PARAMETER Failed
+  The run failed (for example a write failed or remediation was blocked).
+#>
+function Get-OpenFindingResultToken {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param(
+    [AllowNull()][AllowEmptyCollection()][object[]]$Findings,
+    [switch]$Strict,
+    [switch]$Failed
+  )
+
+  if ($Failed) { return 'FAIL' }
+  $open = @(@($Findings) | Where-Object {
+      $null -ne $_ -and [string]$_.Severity -ne 'Info' -and
+      -not ($_.PSObject.Properties['Resolved'] -and $_.Resolved)
+    })
+  if ($open.Count -eq 0) { return 'OK' }
+  if ($Strict) { return 'FAIL' }
+  return 'WARN'
+}
+
+Export-ModuleMember -Function Get-FindingsList,Add-Finding,Get-OpenFindingResultToken

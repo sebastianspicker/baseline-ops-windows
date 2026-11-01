@@ -398,9 +398,20 @@ fn ensure_safe_parent(root: &Path, relative: &Path) -> Result<(), EvidenceError>
 
 fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), EvidenceError> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    discard_partial_file(path, written)
+}
+
+/// Removes a file this store just created when writing it failed, so a retry of the same
+/// locator is not blocked by an orphan that the manifest never lists.
+fn discard_partial_file(path: &Path, written: io::Result<()>) -> Result<(), EvidenceError> {
+    let Err(error) = written else {
+        return Ok(());
+    };
+    // Best effort: the write error is what the caller needs; a leftover file only blocks a retry.
+    let _ = fs::remove_file(path);
+    Err(EvidenceError::Io(error))
 }
 fn artifact_from(request: EvidenceWrite<'_>, bytes: &[u8], size_bytes: u64) -> ArtifactV3 {
     ArtifactV3 {

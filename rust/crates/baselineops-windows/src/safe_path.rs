@@ -29,7 +29,6 @@ pub struct BoundedFileHash {
 #[derive(Clone, Debug)]
 pub struct PathPolicy {
     root: PathBuf,
-    allow_unc: bool,
     reject_reparse_points: bool,
 }
 
@@ -49,16 +48,8 @@ impl PathPolicy {
         }
         Ok(Self {
             root,
-            allow_unc: false,
             reject_reparse_points: true,
         })
-    }
-
-    /// Permit UNC paths. Disabled by default and never used for protected installs.
-    #[must_use]
-    pub fn with_unc(mut self, allow_unc: bool) -> Self {
-        self.allow_unc = allow_unc;
-        self
     }
 
     /// Return the canonical policy root.
@@ -75,7 +66,6 @@ impl PathPolicy {
     pub fn existing_file(&self, candidate: impl AsRef<Path>) -> Result<PathBuf, PlatformError> {
         resolve::existing(
             &self.root,
-            self.allow_unc,
             self.reject_reparse_points,
             candidate.as_ref(),
             resolve::PathKind::File,
@@ -94,7 +84,6 @@ impl PathPolicy {
     ) -> Result<PathBuf, PlatformError> {
         resolve::existing(
             &self.root,
-            self.allow_unc,
             self.reject_reparse_points,
             candidate.as_ref(),
             resolve::PathKind::Directory,
@@ -108,7 +97,7 @@ impl PathPolicy {
     /// Returns an error when the path or its parent violates containment, reparse,
     /// UNC, or file-name policy.
     pub fn output_file(&self, candidate: impl AsRef<Path>) -> Result<PathBuf, PlatformError> {
-        resolve::output(&self.root, self.allow_unc, candidate.as_ref())
+        resolve::output(&self.root, candidate.as_ref())
     }
 }
 

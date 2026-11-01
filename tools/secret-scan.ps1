@@ -74,66 +74,11 @@ function Test-ExcludedPath {
   return $false
 }
 
-<#
-.SYNOPSIS
-Runs a Git discovery command with bounded output and duration.
-.DESCRIPTION
-Prevents repository metadata enumeration from blocking or exhausting the scan.
-#>
-function Invoke-BoundedGitCommand {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string[]]$Arguments)
-
-  return Invoke-NativeCommand -Command 'git' -Arguments $Arguments -CaptureOutput -Quiet `
-    -TimeoutSeconds 30 -MaxOutputBytes 1048576
-}
-
-<#
-.SYNOPSIS
-Converts one Git-reported path to a validated absolute scan path.
-.DESCRIPTION
-Rejects rooted, control-character, and escaping paths before any file is read.
-#>
-function ConvertTo-RootedGitFilePath {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)][string]$RelativePath,
-    [Parameter(Mandatory)][string]$Root
-  )
-
-  if ([string]::IsNullOrWhiteSpace($RelativePath) -or
-      [System.IO.Path]::IsPathRooted($RelativePath) -or
-      $RelativePath -match '[\x00-\x1F\x7F]') {
-    throw 'git returned an unsafe repository-relative path.'
-  }
-
-  $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar))
-  $candidateFull = [System.IO.Path]::GetFullPath((Join-Path $rootFull $RelativePath))
-  if (-not (Test-PathUnderRoot -Path $candidateFull -Root $rootFull)) {
-    throw 'git returned a path outside the requested scan root.'
-  }
-
-  return $candidateFull
-}
-
-function Test-GitResultComplete {
-  <# .SYNOPSIS Tests bounded Git completion. .DESCRIPTION Rejects incomplete Git discovery responses. #>
-  param($Result)
-  return $Result -and $Result.Success -and -not $Result.TimedOut -and -not $Result.OutputTruncated -and -not $Result.StderrTruncated
-}
-
 function Get-SecretScanFiles {
   <# .SYNOPSIS Discovers candidate scan files. .DESCRIPTION Uses bounded Git discovery before a recursive fallback. #>
   param([Parameter(Mandatory)][string]$Path)
-  if (Test-CommandExists -Name 'git') {
-    $rootCheck = Invoke-BoundedGitCommand -Arguments @('-C', $Path, 'rev-parse', '--is-inside-work-tree')
-    if ((Test-GitResultComplete $rootCheck) -and $rootCheck.Stdout.Trim() -eq 'true') {
-      $listed = Invoke-BoundedGitCommand -Arguments @('-C', $Path, 'ls-files', '-z', '--cached', '--others', '--exclude-standard')
-      if (Test-GitResultComplete $listed) {
-        return @($listed.Stdout.Split([char]0) | Where-Object { $_ -ne '' } | ForEach-Object { ConvertTo-RootedGitFilePath -RelativePath $_ -Root $Path })
-      }
-    }
-  }
+  $gitFiles = Get-GitWorkingTreeFiles -Path $Path
+  if ($null -ne $gitFiles) { return $gitFiles }
   Write-Warning 'git tracked-file list unavailable; falling back to recursive file scan.'
   $global:LASTEXITCODE = 0
   return @(Get-ChildItem -Path $Path -File -Recurse | ForEach-Object { $_.FullName })

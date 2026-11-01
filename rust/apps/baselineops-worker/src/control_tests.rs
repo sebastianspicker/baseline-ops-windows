@@ -224,3 +224,72 @@ fn expired_terminal_send_never_calls_transport() {
     );
     assert!(transport.sent.is_empty());
 }
+
+fn expired_outcome() -> Result<WorkerResultV3> {
+    Err(DeadlineExceeded.into())
+}
+
+fn queue_finished(transport: &mut Transport) {
+    let result = transport.result.take().unwrap();
+    transport
+        .result_sender
+        .take()
+        .unwrap()
+        .send(Ok(result))
+        .unwrap();
+}
+
+#[test]
+fn deadline_failure_recovers_a_finished_result_with_bounded_delivery_time() {
+    let (mut transport, _, results) = fixture();
+    queue_finished(&mut transport);
+    let deadline = Instant::now();
+    let (result, delivery) = recover_finished(expired_outcome(), &results, deadline).unwrap();
+    assert_eq!(result.final_status, ResultStatus::Unsupported);
+    assert!(delivery > deadline + Duration::from_secs(9));
+}
+
+#[test]
+fn deadline_failure_without_a_finished_result_stays_an_error() {
+    let (_transport, _, results) = fixture();
+    assert!(recover_finished(expired_outcome(), &results, Instant::now()).is_err());
+}
+
+#[test]
+fn non_deadline_failure_never_recovers_a_finished_result() {
+    let (mut transport, _, results) = fixture();
+    queue_finished(&mut transport);
+    let outcome = Err(anyhow::anyhow!("transport poisoned"));
+    assert!(recover_finished(outcome, &results, Instant::now()).is_err());
+}
+
+#[test]
+fn deadline_while_flushing_progress_keeps_the_finished_result() {
+    let (mut transport, approval, results) = fixture();
+    let binding = ApprovalControl::new(&approval, Instant::now()).unwrap();
+    queue_finished(&mut transport);
+    let (sender, progress) = mpsc::sync_channel(4);
+    sender
+        .send(NativeActionProgress {
+            action_id: baselineops_domain::ActionId::new(),
+            phase: NativeActionPhase::Finished,
+        })
+        .unwrap();
+    let expired = Instant::now();
+    let finished = take_finished(&mut transport, &binding, &results, &progress, expired).unwrap();
+    assert_eq!(
+        finished.map(|result| result.final_status),
+        Some(ResultStatus::Unsupported)
+    );
+    assert!(transport.sent.is_empty());
+}
+
+#[test]
+fn successful_outcome_also_gets_bounded_delivery_time() {
+    let (mut transport, _, results) = fixture();
+    let result = transport.result.take().unwrap();
+    let deadline = Instant::now();
+    let (_, delivery) = recover_finished(Ok(result), &results, deadline).unwrap();
+    assert!(delivery > deadline + Duration::from_secs(9));
+    assert!(delivery <= Instant::now() + RESULT_DELIVERY);
+}

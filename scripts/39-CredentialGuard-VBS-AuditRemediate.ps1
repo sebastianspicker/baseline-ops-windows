@@ -147,45 +147,57 @@ if (-not $RunState.isWindowsHost) {
 # Ensure-Key removed; Ensure-RegistryKey available from lib/Registry.psm1
 
 
+# A partial config is a [pscustomobject] without the missing keys; reading them directly throws under StrictMode.
+function Get-Capability39ConfigValue {
+  param($Config, [string]$Name)
+  if (Has-Property -Object $Config -Name $Name) { return $Config.$Name }
+  return $null
+}
+
 function Apply-ConfigOverridesSection01 {
   param([hashtable]$RunState)
-if ($null -ne $RunState.Config.RequirePlatformSecurityFeatures) {
-    if ($RunState.Config.RequirePlatformSecurityFeatures -in 1, 3) {
-      $RunState.Effective.RequirePlatformSecurityFeatures = [int]$RunState.Config.RequirePlatformSecurityFeatures
+  $platform = Get-Capability39ConfigValue -Config $RunState.Config -Name 'RequirePlatformSecurityFeatures'
+  if ($null -ne $platform) {
+    if ($platform -in 1, 3) {
+      $RunState.Effective.RequirePlatformSecurityFeatures = [int]$platform
     } else {
-      $RunState.Warnings.Add("Config: RequirePlatformSecurityFeatures invalid ($($RunState.Config.RequirePlatformSecurityFeatures)); keeping defaults/parameters.") | Out-Null
+      $RunState.Warnings.Add("Config: RequirePlatformSecurityFeatures invalid ($platform); keeping defaults/parameters.") | Out-Null
     }
   }
 
-  if ($null -ne $RunState.Config.LsaCfgFlags) {
-    if ($RunState.Config.LsaCfgFlags -in 0, 1, 2) {
-      $RunState.Effective.LsaCfgFlags = [int]$RunState.Config.LsaCfgFlags
+  $lsaFlags = Get-Capability39ConfigValue -Config $RunState.Config -Name 'LsaCfgFlags'
+  if ($null -ne $lsaFlags) {
+    if ($lsaFlags -in 0, 1, 2) {
+      $RunState.Effective.LsaCfgFlags = [int]$lsaFlags
     } else {
-      $RunState.Warnings.Add("Config: LsaCfgFlags invalid ($($RunState.Config.LsaCfgFlags)); keeping defaults/parameters.") | Out-Null
+      $RunState.Warnings.Add("Config: LsaCfgFlags invalid ($lsaFlags); keeping defaults/parameters.") | Out-Null
     }
   }
 }
 
 function Apply-ConfigOverridesSection02 {
   param([hashtable]$RunState)
-if ($null -ne $RunState.Config.ExportPath -and -not [string]::IsNullOrWhiteSpace([string]$RunState.Config.ExportPath)) {
+  $exportPath = Get-Capability39ConfigValue -Config $RunState.Config -Name 'ExportPath'
+  if ($null -ne $exportPath -and -not [string]::IsNullOrWhiteSpace([string]$exportPath)) {
     $RunState.Effective.ExportPath = Resolve-OperatorControlledOutputPath -ExplicitPath $RunState.Effective.ExportPath `
-      -ConfiguredPath $RunState.Config.ExportPath -SettingName 'ExportPath'
+      -ConfiguredPath $exportPath -SettingName 'ExportPath'
   }
 
-  if ($null -ne $RunState.Config.ExportCsvBasePath -and -not [string]::IsNullOrWhiteSpace([string]$RunState.Config.ExportCsvBasePath)) {
+  $csvBase = Get-Capability39ConfigValue -Config $RunState.Config -Name 'ExportCsvBasePath'
+  if ($null -ne $csvBase -and -not [string]::IsNullOrWhiteSpace([string]$csvBase)) {
     $RunState.Effective.ExportCsvBasePath = Resolve-OperatorControlledOutputPath -ExplicitPath $RunState.Effective.ExportCsvBasePath `
-      -ConfiguredPath $RunState.Config.ExportCsvBasePath -SettingName 'ExportCsvBasePath'
+      -ConfiguredPath $csvBase -SettingName 'ExportCsvBasePath'
   }
 }
 
 function Apply-ConfigOverridesSection03 {
   param([hashtable]$RunState)
-if ($null -ne $RunState.Config.ShowSummary) {
+  $showSummary = Get-Capability39ConfigValue -Config $RunState.Config -Name 'ShowSummary'
+  if ($null -ne $showSummary) {
     try {
-      $RunState.Effective.ShowSummary = [bool]$RunState.Config.ShowSummary
+      $RunState.Effective.ShowSummary = [bool]$showSummary
     } catch {
-      $RunState.Warnings.Add("Config: ShowSummary invalid ($($RunState.Config.ShowSummary)); keeping defaults/parameters.") | Out-Null
+      $RunState.Warnings.Add("Config: ShowSummary invalid ($showSummary); keeping defaults/parameters.") | Out-Null
     }
   }
 }
@@ -485,6 +497,24 @@ function Invoke-Capability39MainPhase01 {
 . Invoke-Capability39MainPhase01Step03 -RunState $RunState
   }
 }
+function Test-Capability39FindingResolved {
+  param([string]$Code, $After, [hashtable]$Effective)
+  if ($Code -like 'CG-VBS-*') { return ($After.EnableVirtualizationBasedSecurity -eq 1) }
+  if ($Code -like 'CG-PlatformSecurityFeatures-*') { return ($After.RequirePlatformSecurityFeatures -eq $Effective.RequirePlatformSecurityFeatures) }
+  # CG-UEFI-Lock-Note stays open: the registry value can match while the UEFI lock still holds at boot.
+  if ($Code -like 'CG-LsaCfgFlags-*') { return ($After.LsaCfgFlags -eq $Effective.LsaCfgFlags) }
+  return $false
+}
+# Remediate only: a drift finding whose after-state matches the target (with the after-state compliant and no failed write) is resolved.
+function Set-Capability39ResolvedFindings {
+  param($FindingList, $After, [hashtable]$Effective, [bool]$Compliant, [bool]$WriteFailed)
+  if ($WriteFailed -or -not $Compliant) { return }
+  foreach ($finding in @($FindingList)) {
+    if (Test-Capability39FindingResolved -Code ([string]$finding.Code) -After $After -Effective $Effective) {
+      $finding | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force
+    }
+  }
+}
 function Invoke-Capability39MainPhase02 {
   param([hashtable]$RunState)
   $after = [pscustomobject]@{
@@ -497,6 +527,7 @@ function Invoke-Capability39MainPhase02 {
   $RunState.compliant = ($after.EnableVirtualizationBasedSecurity -eq 1) -and
                ($after.RequirePlatformSecurityFeatures -in 1, 3) -and
                ($after.LsaCfgFlags -in 1, 2)
+  if ($Mode -eq 'Remediate') { Set-Capability39ResolvedFindings -FindingList $Findings -After $after -Effective $RunState.effective -Compliant ([bool]$RunState.compliant) -WriteFailed ([bool]$RunState.registryWriteFailed) }
 
   # -----------------------------
   # Build result (structured pipeline output only)
@@ -587,8 +618,7 @@ function Invoke-Capability39Main {
 # V2 output contract
 function Get-Capability39ResultToken {
   param([hashtable]$RunState)
-  $resultToken = if ($RunState.registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  return (Get-OpenFindingResultToken -Findings @($Findings) -Strict:([bool]$Strict) -Failed:([bool]$RunState.registryWriteFailed))
 }
 $resultToken = Get-Capability39ResultToken -RunState $RunState
 $v2Result = Get-V2ResultObject -ScriptName '39-CredentialGuard-VBS-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $RunState.result.Summary -Metadata @{ Current = $RunState.result.Current; After = $RunState.result.After; Config = $RunState.result.Config }

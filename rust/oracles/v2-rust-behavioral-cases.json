@@ -1345,7 +1345,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 emits a general Protected Event Logging advisory whenever Script Block Logging is targeted in Audit mode; the Rust semantic planner represents only concrete policy drift."
       },
-      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
+      "source_closure_sha256": "4a9e15fff9450747cd3a90936ba63bc48cddd54572def38b547a7ee5fca72f06"
     },
     {
       "id": "powershell-logging-default-drifted",
@@ -1437,7 +1437,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 audit reports disabled enablement switches but does not evaluate transcript-directory or ModuleNames drift; Rust proposes those additional fixed, rollback-bound changes."
       },
-      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
+      "source_closure_sha256": "4a9e15fff9450747cd3a90936ba63bc48cddd54572def38b547a7ee5fca72f06"
     },
     {
       "id": "powershell-logging-default-missing",
@@ -1529,7 +1529,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 treats missing enablement values as off and omits checks for a missing disabled invocation flag, transcript directory, and ModuleNames; Rust retains every missing fixed field and proposes a complete guarded policy baseline."
       },
-      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
+      "source_closure_sha256": "4a9e15fff9450747cd3a90936ba63bc48cddd54572def38b547a7ee5fca72f06"
     },
     {
       "id": "powershell-logging-access-denied",
@@ -1553,7 +1553,7 @@
         "v2_normalized_module_names": [],
         "intentional_safe_parity_difference": "PowerShell v2 propagates an access-denied registry read from its snapshot function; Rust rejects the unrepresentable typed snapshot before planning, so neither implementation derives a mutation from unreadable prestate."
       },
-      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
+      "source_closure_sha256": "4a9e15fff9450747cd3a90936ba63bc48cddd54572def38b547a7ee5fca72f06"
     },
     {
       "id": "powershell-logging-malformed-module-names",
@@ -1615,7 +1615,7 @@
         ],
         "intentional_safe_parity_difference": "PowerShell v2 normalizes an empty ModuleNames input to the wildcard default; Rust rejects empty module names rather than silently broadening logging scope."
       },
-      "source_closure_sha256": "4090a09f2ae35b1900d47f76860e1d82dfaaeca17714db6cd637b55bc1859620"
+      "source_closure_sha256": "4a9e15fff9450747cd3a90936ba63bc48cddd54572def38b547a7ee5fca72f06"
     }
   ]
 }

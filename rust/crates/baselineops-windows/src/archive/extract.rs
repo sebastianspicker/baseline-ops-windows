@@ -217,15 +217,30 @@ fn validate_windows_component(component: &str) -> Result<(), PlatformError> {
             "archive member has a Windows-ambiguous suffix".into(),
         ));
     }
+    // Windows ignores trailing spaces before the extension, so "CON .txt" is the CON device.
     let stem = component
         .split('.')
         .next()
         .unwrap_or_default()
+        .trim_end_matches(' ')
         .to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+    let reserved = matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "CONIN$"
+            | "CONOUT$"
+            | "COM\u{b9}"
+            | "COM\u{b2}"
+            | "COM\u{b3}"
+            | "LPT\u{b9}"
+            | "LPT\u{b2}"
+            | "LPT\u{b3}"
+    ) || (stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && matches!(stem.as_bytes()[3], b'1'..=b'9'));
     if reserved {
         return Err(PlatformError::ArchiveRejected(
             "archive member uses a reserved Windows device name".into(),

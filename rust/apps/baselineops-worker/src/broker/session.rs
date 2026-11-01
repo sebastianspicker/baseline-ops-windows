@@ -16,11 +16,11 @@ pub(super) fn execute_session(
     trust: &TrustedInstallation,
     signer: &trust::ReleaseSignerIdentity,
     deadline: Instant,
-) -> Result<WorkerResultV3> {
+) -> Result<(WorkerResultV3, Instant)> {
     let cancellation = CancellationToken::default();
     let (result_tx, result_rx) = mpsc::channel();
     let (progress_tx, progress_rx) = mpsc::sync_channel(4);
-    std::thread::scope(|scope| {
+    let outcome = std::thread::scope(|scope| {
         let token = &cancellation;
         scope.spawn(move || {
             let result = apply_result(
@@ -42,7 +42,8 @@ pub(super) fn execute_session(
             &progress_rx,
             deadline,
         )
-    })
+    });
+    control::recover_finished(outcome, &result_rx, deadline)
 }
 
 pub(super) fn send_result(

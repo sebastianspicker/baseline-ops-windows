@@ -111,6 +111,7 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
 
@@ -182,7 +183,7 @@ function Convert-NpStateToToken {
 
 function Get-SafeBool {
   param(
-    [Parameter(Mandatory)]$Value,
+    [Parameter(Mandatory)][AllowNull()]$Value,
     [Parameter(Mandatory)][bool]$Default
   )
   if ($null -eq $Value) { return $Default }
@@ -196,7 +197,7 @@ function Get-SafeBool {
 
 function Get-SafeToken {
   param(
-    [Parameter(Mandatory)]$Value,
+    [Parameter(Mandatory)][AllowNull()]$Value,
     [Parameter(Mandatory)][string[]]$Allowed,
     [Parameter(Mandatory)][string]$Default
   )
@@ -215,21 +216,20 @@ function Load-ConfigFromJson {
   $sanitized = Sanitize-Path -Path $Path -MustExist
   if (-not $sanitized) { return @{ Config = $null; FindingList = $FindingList } }
 
-  try {
-    if (-not $sanitized) { return @{ Config = $null; FindingList = $FindingList } }
-
-    $raw = Get-BoundedUtf8FileContent -Path $sanitized -MaximumBytes 1048576
-    if ([string]::IsNullOrWhiteSpace($raw)) { return @{ Config = $null; FindingList = $FindingList } }
-
-    $cfg = ($raw | ConvertFrom-Json)
-    return @{ Config = $cfg; FindingList = $FindingList }
-  }
-  catch {
+  $read = Read-JsonFileWithStatus -Path $sanitized
+  if ($read.Meta.Status -in 'Unreadable', 'Invalid') {
     $FindingList = Add-Finding -FindingList $FindingList -Code 'CFG-JSON-LoadFailed' -Severity 'Low' -Message (
-      "JSON config could not be loaded; using safe defaults/CLI. Path='{0}'. Error='{1}'" -f '[configured path]', $_.Exception.Message
+      "JSON config could not be loaded; using safe defaults/CLI. Path='{0}'. Error='{1}'" -f '[configured path]', $read.Meta.Error
     ) -PassThru
-    return @{ Config = $null; FindingList = $FindingList }
   }
+  return @{ Config = $read.Data; FindingList = $FindingList }
+}
+
+# A partial config is a [pscustomobject] without the missing keys; reading them directly throws under StrictMode.
+function Get-Capability44ConfigValue {
+  param($Config, [string]$Name)
+  if (Has-Property -Object $Config -Name $Name) { return $Config.$Name }
+  return $null
 }
 
 
@@ -381,18 +381,18 @@ function Invoke-Capability44MainPhase02 {
   param([hashtable]$RunState)
   if ($RunState.config) {
     if (-not $script:__EntryBoundParameters.ContainsKey('EnableControlledFolderAccess')) {
-      $RunState.EnableControlledFolderAccess = Get-SafeToken -Value $RunState.config.EnableControlledFolderAccess -Allowed $RunState.allowedCfa -Default $RunState.defaults.EnableControlledFolderAccess
+      $RunState.EnableControlledFolderAccess = Get-SafeToken -Value (Get-Capability44ConfigValue -Config $RunState.config -Name 'EnableControlledFolderAccess') -Allowed $RunState.allowedCfa -Default $RunState.defaults.EnableControlledFolderAccess
     }
     if (-not $script:__EntryBoundParameters.ContainsKey('EnableNetworkProtection')) {
-      $RunState.EnableNetworkProtection = Get-SafeToken -Value $RunState.config.EnableNetworkProtection -Allowed $RunState.allowedNp -Default $RunState.defaults.EnableNetworkProtection
+      $RunState.EnableNetworkProtection = Get-SafeToken -Value (Get-Capability44ConfigValue -Config $RunState.config -Name 'EnableNetworkProtection') -Allowed $RunState.allowedNp -Default $RunState.defaults.EnableNetworkProtection
     }
     if (-not $script:__EntryBoundParameters.ContainsKey('ApplyNetworkProtectionServerPrereqs')) {
-      $RunState.ApplyNetworkProtectionServerPrereqs = Get-SafeBool -Value $RunState.config.ApplyNetworkProtectionServerPrereqs -Default $RunState.defaults.ApplyNetworkProtectionServerPrereqs
+      $RunState.ApplyNetworkProtectionServerPrereqs = Get-SafeBool -Value (Get-Capability44ConfigValue -Config $RunState.config -Name 'ApplyNetworkProtectionServerPrereqs') -Default $RunState.defaults.ApplyNetworkProtectionServerPrereqs
     }
     if (-not $script:__EntryBoundParameters.ContainsKey('DisableDatagramProcessingOnWinServer')) {
-      $RunState.DisableDatagramProcessingOnWinServer = Get-SafeBool -Value $RunState.config.DisableDatagramProcessingOnWinServer -Default $RunState.defaults.DisableDatagramProcessingOnWinServer
+      $RunState.DisableDatagramProcessingOnWinServer = Get-SafeBool -Value (Get-Capability44ConfigValue -Config $RunState.config -Name 'DisableDatagramProcessingOnWinServer') -Default $RunState.defaults.DisableDatagramProcessingOnWinServer
     }
-    $configuredExportPath = Normalize-OptionalPath -Path ([string]$RunState.config.ExportPath)
+    $configuredExportPath = Normalize-OptionalPath -Path ([string](Get-Capability44ConfigValue -Config $RunState.config -Name 'ExportPath'))
     $RunState.ExportPath = Resolve-OperatorControlledOutputPath -ExplicitPath $RunState.ExportPath `
       -ConfiguredPath $configuredExportPath -SettingName 'ExportPath'
   }
@@ -478,6 +478,26 @@ function Invoke-Capability44MainPhase06 {
     }
   }
 }
+function Test-Capability44FindingResolved {
+  param([string]$Code, $After, [hashtable]$RunState)
+  switch ($Code) {
+    'DEF-CFA-NotDesired' { return ($After.ControlledFolderAccess -eq $RunState.EnableControlledFolderAccess) }
+    'DEF-NP-NotDesired' { return ($After.NetworkProtection -eq $RunState.EnableNetworkProtection) }
+    'DEF-NP-ServerPrereq-Missing' { return ($After.AllowNPOnWinServer -eq $true) }
+    'DEF-NP-DownLevelPrereq-Missing' { return ($After.AllowNPDownLevel -eq $true) }
+    'DEF-NP-DatagramProcessing-NotRecommended' { return ($After.AllowDatagramOnServer -eq $false) }
+    default { return $false }
+  }
+}
+# Remediate only: a drift finding whose after-state matches the target is resolved.
+function Set-Capability44ResolvedFindings {
+  param($FindingList, $After, [hashtable]$RunState)
+  foreach ($finding in @($FindingList)) {
+    if (Test-Capability44FindingResolved -Code ([string]$finding.Code) -After $After -RunState $RunState) {
+      $finding | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force
+    }
+  }
+}
 function Invoke-Capability44MainPhase07 {
   param([hashtable]$RunState)
   $prefAfter = Get-MpPreference
@@ -491,6 +511,7 @@ function Invoke-Capability44MainPhase07 {
     AllowNPDownLevel       = $prefAfter.AllowNetworkProtectionDownLevel
     AllowDatagramOnServer  = $prefAfter.AllowDatagramProcessingOnWinServer
   }
+  if ($Mode -eq 'Remediate') { Set-Capability44ResolvedFindings -FindingList $RunState.findingList -After $RunState.after -RunState $RunState }
 
   # -----------------------------
   # Summary + export
@@ -549,8 +570,7 @@ function Invoke-Capability44Main {
 # V2 output contract
 function Get-Capability44ResultToken {
   param([hashtable]$RunState)
-  $resultToken = if ($Strict -and $RunState.findingList.Count -gt 0) { 'FAIL' } elseif ($RunState.findingList.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  return (Get-OpenFindingResultToken -Findings @($RunState.findingList) -Strict:([bool]$Strict))
 }
 $resultToken = Get-Capability44ResultToken -RunState $RunState
 $v2Result = Get-V2ResultObject -ScriptName '44-Defender-Ransomware-NetworkProtection-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $RunState.findingList) -Summary $RunState.summary -Metadata @{ Before = $RunState.before; After = $RunState.after }

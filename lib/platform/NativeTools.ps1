@@ -113,3 +113,70 @@ function Invoke-WinrmCommand {
     if ($null -ne $scriptLock) { $scriptLock.Dispose() }
   }
 }
+
+<#
+.SYNOPSIS
+  Tests that a bounded native result finished without failure or truncation.
+.DESCRIPTION
+  Prevents a partial Git response from becoming a file inventory.
+#>
+function Test-GitResultComplete {
+  [CmdletBinding()]
+  param($Result)
+
+  return [bool]($Result -and $Result.Success -and -not $Result.TimedOut -and
+    -not $Result.OutputTruncated -and -not $Result.StderrTruncated)
+}
+
+<#
+.SYNOPSIS
+  Converts one Git-reported path to a validated absolute file path.
+.DESCRIPTION
+  Throws for rooted, control-character, and escaping paths; returns $null when the path is not an existing file.
+#>
+function ConvertTo-GitWorkingTreeFilePath {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$RelativePath,
+    [Parameter(Mandatory)][string]$RootPath
+  )
+
+  if ([string]::IsNullOrWhiteSpace($RelativePath) -or
+      [System.IO.Path]::IsPathRooted($RelativePath) -or
+      $RelativePath -match '[\x00-\x1F\x7F]') {
+    throw 'git returned an unsafe repository-relative path.'
+  }
+  $candidate = [System.IO.Path]::GetFullPath((Join-Path $RootPath $RelativePath))
+  if (-not (Validation\Test-PathUnderRoot -Path $candidate -Root $RootPath)) {
+    throw 'git returned a path outside the requested root.'
+  }
+  if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Lists tracked and non-ignored files of a Git work tree as validated absolute paths.
+.DESCRIPTION
+  Returns $null when the path is not a work tree or Git fails, times out, or truncates its output.
+#>
+function Get-GitWorkingTreeFiles {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$Path)
+
+  if (-not (Test-CommandExists -Name 'git')) { return $null }
+  $separators = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+  $root = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path).TrimEnd($separators)
+  $rootResult = Invoke-NativeCommand -Command 'git' -Arguments @('-C', $root, 'rev-parse', '--is-inside-work-tree') `
+    -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 1048576
+  if (-not (Test-GitResultComplete -Result $rootResult) -or $rootResult.Stdout.Trim() -ne 'true') { return $null }
+  $filesResult = Invoke-NativeCommand -Command 'git' `
+    -Arguments @('-C', $root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard') `
+    -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 1048576
+  if (-not (Test-GitResultComplete -Result $filesResult)) { return $null }
+  $files = foreach ($relative in $filesResult.Stdout.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)) {
+    ConvertTo-GitWorkingTreeFilePath -RelativePath $relative -RootPath $root
+  }
+  # Case-sensitive: on a case-sensitive file system Key.json and key.json are two files to scan.
+  return @($files | Where-Object { $null -ne $_ } | Sort-Object -Unique -CaseSensitive)
+}

@@ -10,16 +10,11 @@ function Try-ReadJsonFile {
   [CmdletBinding()]
   param([Parameter(Mandatory)] [string]$Path)
 
-  try {
-    if ($Path -and (Test-Path -LiteralPath $Path)) {
-      return (Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576 | ConvertFrom-Json)
-    }
+  $read = Read-JsonFileWithStatus -Path $Path
+  if ($read.Meta.Status -in 'Unreadable', 'Invalid') {
+    Write-Verbose ("JSON read failed for '{0}': {1}" -f $Path, $read.Meta.Error)
   }
-  catch {
-    Write-Verbose ("JSON read failed for '{0}': {1}" -f $Path, $_.Exception.Message)
-  }
-
-  return $null
+  return $read.Data
 }
 
 function Get-Config {

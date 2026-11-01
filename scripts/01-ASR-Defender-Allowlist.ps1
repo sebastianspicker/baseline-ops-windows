@@ -41,11 +41,15 @@
 .PARAMETER StrictJson
   If specified, the script fails if the allowlist JSON cannot be loaded or parsed.
   If omitted, the script falls back to the selected -BaselineMode.
+  In Remediate mode the fallback is refused unless -BaselineMode is passed explicitly (see -BaselineMode).
 
 .PARAMETER BaselineMode
   Determines the fallback behavior when the allowlist JSON is missing, empty, or invalid (and -StrictJson is not set):
   - Current : Desired state is set to the current local configuration (no drift, no changes).
-  - Minimum : Desired state is set to a minimal baseline intended to avoid broad exclusions by default.
+  - Minimum : Desired state keeps the current Defender path/process/extension exclusions and is empty for ASR-only exclusions,
+              CFA allowed applications and CFA protected folders. In Remediate mode this REMOVES the current ASR-only exclusions,
+              CFA allowed applications and CFA protected folders.
+  Remediate mode needs the allowlist JSON to load, or an explicitly passed -BaselineMode; otherwise the run stops with FAIL before any change.
 
   The baseline mode used is shown in the console summary and included in the structured output.
 
@@ -187,7 +191,7 @@ if ($env:OS -ne 'Windows_NT') {
 
 function Get-AllowlistTerminalToken {
   param($Summary)
-$resultToken = if ($Summary.Result -eq 'FAILED') { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
+$resultToken = if ($Summary.Result -in @('FAILED','REMEDIATION_ERRORS')) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
 if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
   return $resultToken
 }
@@ -196,7 +200,7 @@ if ($Strict -and $resultToken -eq 'WARN') { $resultToken = 'FAIL' }
 
 # ----------------------------- Main ------------------------------------------------
 $script:Findings = Get-FindingsList
-$runState = New-AllowlistRunState -Inputs @{ ConfigPath = $ConfigPath; ExceptionsPath = $ExceptionsPath; AuditPath = $AuditPath; StrictJson = $StrictJson; BaselineMode = $BaselineMode; Remediate = $Remediate }
+$runState = New-AllowlistRunState -Inputs @{ ConfigPath = $ConfigPath; ExceptionsPath = $ExceptionsPath; AuditPath = $AuditPath; StrictJson = $StrictJson; BaselineMode = $BaselineMode; BaselineExplicit = $PSBoundParameters.ContainsKey('BaselineMode'); Remediate = $Remediate }
 Initialize-AllowlistEventSource
 
 if ($env:OS -ne 'Windows_NT') {

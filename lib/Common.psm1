@@ -137,7 +137,7 @@ function Ensure-Directory {
   }
   try {
     if (-not (Test-Path -LiteralPath $Path)) {
-      [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($Path))
+      [void][System.IO.Directory]::CreateDirectory((Validation\Resolve-FileSystemProviderPath -Path $Path))
     }
     return $true
   } catch {
@@ -174,7 +174,7 @@ function Resolve-ExistingSanitizedPath {
   param([Parameter(Mandatory)][string]$Path)
 
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
-  $resolved = [System.IO.Path]::GetFullPath($Path)
+  $resolved = Validation\Resolve-FileSystemProviderPath -Path $Path
   if (Validation\Test-PathTraversal -Path $resolved) { return $null }
   return $resolved
 }
@@ -201,7 +201,7 @@ function Sanitize-Path {
     if ($MustExist) { return (Resolve-ExistingSanitizedPath -Path $expanded) }
 
     # Normalize and resolve full path; GetFullPath can throw on invalid chars
-    return [System.IO.Path]::GetFullPath($expanded)
+    return (Validation\Resolve-FileSystemProviderPath -Path $expanded)
   } catch {
     Write-Verbose ("Path sanitization failed for '{0}': {1}" -f $Path,$_.Exception.Message)
     return $null
@@ -223,6 +223,25 @@ function Has-Property {
     return $Object.Contains($Name)
   }
   return $Object.PSObject.Properties.Name -contains $Name
+}
+
+<#
+.SYNOPSIS
+  Resolves an ACL identity (SID, account name or NTAccount) to its SID string.
+.DESCRIPTION
+  Shared by the Sysmon updater and drift sensor state ACL checks. Throws when the identity cannot be translated to a SID.
+.PARAMETER IdentityReference
+  A SecurityIdentifier, NTAccount or account-name string.
+#>
+function ConvertTo-TrustedStateSidValue {
+  param([Parameter(Mandatory)]$IdentityReference)
+  try {
+    if ($IdentityReference -is [Security.Principal.SecurityIdentifier]) { return $IdentityReference.Value }
+    if ($IdentityReference -is [string]) {
+      $IdentityReference = New-Object Security.Principal.NTAccount($IdentityReference)
+    }
+    return $IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+  } catch { throw "State ACL contains an identity that cannot be resolved to a SID: $IdentityReference" }
 }
 
 <#
@@ -294,6 +313,7 @@ Export-ModuleMember -Function `
   Ensure-DirectoryForFile, `
   Sanitize-Path, `
   Has-Property, `
+  ConvertTo-TrustedStateSidValue, `
   Get-SafeFileName, `
   Resolve-OperatorControlledOutputPath, `
   Resolve-ToolRepositoryRoot

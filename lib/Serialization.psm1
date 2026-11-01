@@ -62,6 +62,8 @@ function Save-Json {
   if (Validation\Test-PathTraversal -Path $Path) {
     throw 'Save-Json: Path must not contain path traversal segments ("..").'
   }
+  # Resolve once (after the traversal check, which resolution would erase) so the check and the write see the same file.
+  $Path = Validation\Resolve-FileSystemProviderPath -Path $Path
   if (-not (Validation\Initialize-SafeOutputFilePath -Path $Path)) {
     throw 'Save-Json: Path must reference a local file without traversal, UNC/device, or reparse-point components.'
   }
@@ -118,6 +120,7 @@ function Save-Csv {
   if (Validation\Test-PathTraversal -Path $Path) {
     throw 'Save-Csv: Path must not contain path traversal segments ("..").'
   }
+  $Path = Validation\Resolve-FileSystemProviderPath -Path $Path
   if (-not (Validation\Initialize-SafeOutputFilePath -Path $Path)) {
     throw 'Save-Csv: Path must reference a local file without traversal, UNC/device, or reparse-point components.'
   }

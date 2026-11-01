@@ -151,7 +151,21 @@ mod tests {
 
     #[test]
     fn rejects_traversal_and_reserved_names() {
-        for name in ["../escape", "CON.txt", "data:stream"] {
+        for name in [
+            "../escape",
+            "CON.txt",
+            "data:stream",
+            "conin$",
+            "CONOUT$.log",
+            "com\u{b9}",
+            "COM\u{b2}.txt",
+            "COM\u{b3}",
+            "lpt\u{b9}.dat",
+            "LPT\u{b2}",
+            "LPT\u{b3}.txt",
+            "CON .txt",
+            "nul  .log",
+        ] {
             let bytes = archive_with(name, b"x");
             let root = tempfile::tempdir().expect("root");
             assert!(

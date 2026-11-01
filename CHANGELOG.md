@@ -89,8 +89,70 @@ Target alpha: `v2.3.0-alpha.1`.
   eight unused `Registry.psm1` setters and getters, `Invoke-ScriptWithTiming`,
   `ConvertTo-V2Json`, `Test-SafeUrl`, and several unused console helpers and
   aliases) and stopped exporting functions used only inside their module.
+- `14-SecureRemoteAccessGuardrails`: the built-in default catalog no longer
+  enforces "Remote Desktop Users" membership (it used the placeholder
+  `DOMAIN\RDP-Admins` with exact membership). Membership is enforced only from
+  a catalog with a non-empty `AllowedGroups`, and members are never removed in
+  a run where an allowed member could not be added.
+- `22-SMB-Encryption-Enforcer`: a `-JsonPath` file can no longer switch the
+  script to Remediate; JSON `Mode` values `Remediate`, `ServerGlobal` and
+  `ShareOnly` are ignored with a warning (the last two still set the scope).
+  JSON `Force` is ignored with a warning; only `-Force` on the command line
+  skips confirmation prompts.
+- `01-ASR-Defender-Allowlist`: Remediate stops with FAIL before any change
+  when the allowlist JSON did not load and `-BaselineMode` was not passed, and
+  when the session is not elevated. The help now states that `Minimum`
+  removes ASR-only exclusions and Controlled Folder Access entries.
+- `40-AddedLSAProtection-RunAsPPL-AuditRemediate`: Remediate stops with FAIL
+  before any registry write when a supplied `-ConfigPath` cannot be loaded,
+  instead of applying the default `RunAsPPL=1` (UEFI lock). The audit now
+  compares RunAsPPL, and RunAsPPLBoot when managed, with the target.
+- Scripts 31, 39, 40 and 44 compute their result from the state after a
+  successful remediation: corrected findings are marked `Resolved` and Info
+  findings no longer turn OK into WARN.
+- `lib/Console.psm1` no longer exports the unused `Get-ConsoleColor`.
+  `lib/External.psm1` exports `Get-GitWorkingTreeFiles`, now shared by
+  `tools/verify.ps1` and `tools/secret-scan.ps1`.
+- Rust v3: removed the unused engine orchestrator traits and the unused UNC
+  opt-in of `PathPolicy` (UNC paths are always rejected). The worker delivers
+  an apply result that finished just after its session deadline, with at most
+  10 extra seconds for the final send; other control failures still discard it.
 
 ### Fixed
+
+- Relative paths are resolved once against the PowerShell location for
+  result files (`Save-Json`, `Save-Csv`), configuration and evidence paths
+  (`Sanitize-Path`, `Sanitize-ConfigPath`, `Ensure-Directory`) and the report
+  aggregator. After `Set-Location`, the path check and the write previously
+  used different folders, and a correct relative `-ConfigPath` silently fell
+  back to defaults. Paths of other providers (`Env:`, `HKLM:`) are rejected.
+- `Test-PathTraversal` no longer rejects paths with two one-letter folders in
+  a row (for example `C:\Reports\a\b\out.json`).
+- `01-ASR-Defender-Allowlist` returns FAIL with an `ASR-RemediationErrors`
+  finding when Defender changes fail, instead of OK.
+- `16-Sysmon-Config-Updater` keeps the stored runtime-config hash unless a
+  verified apply replaced it, so a drifted config is no longer adopted as the
+  new baseline after one audit, and `-WhatIf` runs write no state.
+- `02-LAPS-Hygiene` asks `ShouldProcess` before rotating the LAPS password;
+  `-WhatIf` no longer rotates or reports a rotation.
+- `07-ScheduledTasks-Hygiene` reports "Exported"/"Disabled" only for actions
+  that ran and no longer disables a task whose XML backup failed; a failed
+  backup is reported as drift.
+- `tools/secret-scan.ps1` and `tools/verify.ps1` no longer drop file names
+  that differ only in case from their scan lists.
+- Scripts 39 and 44 accept a configuration file that sets only some keys.
+- `Copy-ToEvidence` no longer fails when called without a quota total (as
+  `11-IOC-Sweep-Defender` does), keeps both files when two sources flatten to
+  the same name, and counts quota only for successful copies.
+- `14-SecureRemoteAccessGuardrails` no longer reports removing firewall rules
+  that did not exist and records the built-in RDP rules it disables;
+  `40-AddedLSAProtection-RunAsPPL-AuditRemediate` reports a failed RunAsPPL
+  delete as a write failure; `31-PowerShell-Logging-Baseline` no longer warns
+  about provider properties while clearing module names.
+- Rust v3: Windows exit codes such as `0xC0000005` are no longer collapsed to
+  `-1`, archive extraction also rejects `CONIN$`, `CONOUT$`, superscript
+  `COM`/`LPT` device names and device names followed by spaces (`CON .txt`),
+  and a failed evidence write removes its partial file.
 
 - `-OutputFormat Csv` no longer fails when a result has no findings; it
   writes an empty CSV file instead.

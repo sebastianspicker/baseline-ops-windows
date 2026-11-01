@@ -21,7 +21,7 @@ function New-SysmonUpdaterState {
     PolicyBlocked=$false; FatalError=$null; ExplicitExeHint=(-not [string]::IsNullOrWhiteSpace($Options.SysmonExePath))
     Summary=$summary; IsAdmin=$false; PreviewOnly=$false; Manifest=$null; MinEngineVersion=$null; AllowHashes=@()
     ConfigFile=$null; ConfigPath=$null; ConfigSnapshot=$null; ConfigHash=$null; ConfigValid=$false
-    Exe=$null; ServiceName=$null; Engine=$null; PersistedState=$null; LastAppliedHash=$null; CurrentDumpSha256=$null
+    Exe=$null; ServiceName=$null; Engine=$null; PersistedState=$null; LastAppliedHash=$null; ConfigAppliedThisRun=$false; CurrentDumpSha256=$null
   }
 }
 
@@ -282,6 +282,7 @@ function Get-SysmonNativeFailureReason($NativeResult) {
 
 function Complete-SysmonConfigApply($State) {
   $State.NeedUpdate = $false
+  $State.ConfigAppliedThisRun = $true
   $State.LastAppliedHash = $State.ConfigHash
   $State.Summary.LastAppliedSha256 = $State.LastAppliedHash
 }
@@ -295,6 +296,15 @@ function Refresh-SysmonRuntimeState($State,$Options) {
   Update-SysmonEngineSummary $State
 }
 
+# The stored dump hash is the tamper baseline: only a verified apply (post-apply dump) or the first-ever
+# observation may set it; a drifted or missing dump never replaces an existing value.
+function Get-SysmonDumpHashToPersist($State) {
+  $previous = Get-SysmonPreviousDumpHash $State.PersistedState
+  if (-not $State.CurrentDumpSha256) { return $previous }
+  if ($State.ConfigAppliedThisRun -or -not $previous) { return $State.CurrentDumpSha256 }
+  return $previous
+}
+
 function Save-SysmonUpdaterState {
   param($State,$Options)
   $source = Get-SysmonConfigSourceLabel $Options
@@ -303,8 +313,9 @@ function Save-SysmonUpdaterState {
     Version=2; Time=(Get-Date).ToString('s'); Host=$env:COMPUTERNAME
     Engine=@{ Version=$engineVersion; ExePath=$State.Exe; Service=$State.ServiceName }
     Observed=@{ Path=$State.ConfigPath; DesiredSha256=$State.ConfigHash; Source=$source; Valid=$State.ConfigValid }
-    Applied=@{ Sha256=$State.LastAppliedHash }; Runtime=@{ CurrentDumpSha256=$State.CurrentDumpSha256 }
+    Applied=@{ Sha256=$State.LastAppliedHash }; Runtime=@{ CurrentDumpSha256=(Get-SysmonDumpHashToPersist $State) }
   }
+  if ($State.PreviewOnly -or [bool]$WhatIfPreference) { $State.Summary.StateWritten = $false; [void]$State.Warnings.Add('State not written in WhatIf mode.'); return }
   $written = $false
   if (-not $State.PolicyBlocked -and $Options.StatePath) { $written = Write-State -p $Options.StatePath -obj $newState }
   $State.Summary.StateWritten = [bool]$written

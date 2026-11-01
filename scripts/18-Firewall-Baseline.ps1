@@ -129,6 +129,7 @@ Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameCheck
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Set-StrictMode -Version Latest

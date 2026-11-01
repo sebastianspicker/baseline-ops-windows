@@ -9,7 +9,7 @@ ranking, and summary output functions.
 
 .NOTES
 Consolidated from 15+ duplicate implementations across scripts:
-- Get-SeverityColor / Get-StatusColor / Get-ConsoleColor
+- Get-SeverityColor / Get-StatusColor
 - Get-SeverityRank
 - Write-ConsoleSummary variants
 #>
@@ -138,23 +138,6 @@ function Get-StatusColor {
 
   $normalized = Resolve-Severity -Severity $Status
   return Get-SeverityColor -Severity $normalized
-}
-
-<#
-.SYNOPSIS
-  Gets the display color for a legacy console status token.
-.DESCRIPTION
-  Routes the constrained status vocabulary through the shared severity mapping.
-#>
-function Get-ConsoleColor {
-  [CmdletBinding()]
-  param(
-    [Parameter(Mandatory)]
-    [ValidateSet('OK', 'WARN', 'ERR', 'INFO', 'DIM', 'CRIT', 'HIGH', 'MED', 'LOW', 'DEBUG')]
-    [string]$Kind
-  )
-
-  return Get-StatusColor -Status $Kind
 }
 
 <#
@@ -462,7 +445,6 @@ function Get-FindingStats {
 $script:ConsoleExportedFunctions = @(
   'Get-SeverityColor'
   'Get-StatusColor'
-  'Get-ConsoleColor'
   'Get-SeverityRank'
   'Get-SeverityPrefix'
   'Write-HostConsoleLine'

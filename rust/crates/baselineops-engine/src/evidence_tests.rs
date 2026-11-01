@@ -242,3 +242,25 @@ fn noncanonical_manifest_is_rejected() {
         Err(EvidenceError::NonCanonicalManifest)
     ));
 }
+
+#[test]
+fn failed_write_removes_the_partial_file() {
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("partial.bin");
+    fs::write(&path, b"partial").expect("seed partial file");
+
+    let outcome = discard_partial_file(&path, Err(io::Error::other("disk full")));
+
+    assert!(matches!(outcome, Err(EvidenceError::Io(_))));
+    assert!(!path.exists());
+}
+
+#[test]
+fn successful_write_keeps_the_file() {
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("complete.bin");
+    fs::write(&path, b"complete").expect("seed file");
+
+    assert!(discard_partial_file(&path, Ok(())).is_ok());
+    assert!(path.exists());
+}

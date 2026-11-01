@@ -158,18 +158,6 @@ function Test-NoReparsePointAncestor {
     $current = $parent
   }
 }
-function Set-AdminOnlyDirectoryAcl {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Path)
-  if ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows) { return }
-  $security = New-AdminOnlyDirectorySecurity
-  $directory = New-Object System.IO.DirectoryInfo -ArgumentList $Path
-  if ($PSVersionTable.PSEdition -eq 'Desktop') {
-    [System.IO.Directory]::SetAccessControl($Path, $security)
-    return
-  }
-  [System.IO.FileSystemAclExtensions]::SetAccessControl($directory, $security)
-}
 function New-AdminOnlyDirectorySecurity {
   [CmdletBinding()]
   param()

@@ -110,6 +110,7 @@ param(
   [switch]$NoColor
 )
 . (Join-Path $PSScriptRoot '_lib/Bootstrap.ps1')
+$script:__EntryCmdlet = $PSCmdlet
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking

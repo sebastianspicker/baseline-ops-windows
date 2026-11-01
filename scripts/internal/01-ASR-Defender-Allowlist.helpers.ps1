@@ -61,7 +61,8 @@ function Get-MinimumBaselineDesiredConfig {
   # - Do not force protected folders here: Windows system folders are protected by default; forcing additional folders
   #   without context can cause app compatibility issues.
   #
-  # Preserve current lists so the default does not remove operator-managed state.
+  # Only the three Defender lists are copied from the current state; the ASR-only exclusions, CFA allowed
+  # applications and CFA protected folders below are emptied, so Remediate removes the current entries.
   $cur = Get-NullSafeDesiredFromCurrent -Preference $Preference
 
   [pscustomobject]@{

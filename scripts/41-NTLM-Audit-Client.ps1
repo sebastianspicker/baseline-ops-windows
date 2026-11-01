@@ -88,6 +88,7 @@ Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Registry.psm1') -Force -DisableNameChecking
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 
@@ -205,18 +206,11 @@ function Import-JsonConfigOrDefault {
     [Parameter(Mandatory)] [pscustomobject]$DefaultConfig
   , [hashtable]$RunState)
 
-  if ([string]::IsNullOrWhiteSpace($Path)) { return $DefaultConfig }
-  if (-not (Test-Path -LiteralPath $Path)) { return $DefaultConfig }
+  $read = Read-JsonFileWithStatus -Path $Path
+  if (-not $read.Meta.Loaded) { return $DefaultConfig }
 
   try {
-    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
-    if ([string]::IsNullOrWhiteSpace($raw)) { return $DefaultConfig }
-
-    # Use try/catch so invalid JSON produces a controlled fallback.
-    $j = $raw | ConvertFrom-Json
-    if ($null -eq $j) { return $DefaultConfig }
-
-    Merge-Config -Base $DefaultConfig -Override $j -RunState $RunState
+    Merge-Config -Base $DefaultConfig -Override $read.Data -RunState $RunState
   } catch {
     $DefaultConfig
   }

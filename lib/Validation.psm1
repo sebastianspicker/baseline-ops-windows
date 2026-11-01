@@ -28,7 +28,6 @@ function Test-PathTraversal {
 
   $normalized = $Path.Replace('/', '\')
   if ($normalized -match '(^|\\)\.\.(\\|$)') { return $true }
-  if ($normalized -match '\\.\\.\\') { return $true }
   return $false
 }
 
@@ -345,6 +344,28 @@ function Test-SafeOutputPathInput {
   return $Path -notmatch '^[\\/]{2}'
 }
 
+<#
+.SYNOPSIS
+  Resolves a file-system path against the current PowerShell location.
+.DESCRIPTION
+  Resolves relative paths the same way Test-Path does, so a path is checked
+  and used as the same file. Throws for paths of other providers such as
+  Env:, HKLM: or Variable:, which are never valid file paths.
+#>
+function Resolve-FileSystemProviderPath {
+  [CmdletBinding()]
+  [OutputType([string])]
+  param([Parameter(Mandatory)][string]$Path)
+
+  $provider = $null
+  $drive = $null
+  $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path, [ref]$provider, [ref]$drive)
+  if ($null -eq $provider -or $provider.Name -ne 'FileSystem') {
+    throw "Path must be a file-system path: $Path"
+  }
+  return $resolved
+}
+
 function Get-SafeOutputPathInfo {
   param([Parameter(Mandatory)][string]$Path)
 
@@ -621,6 +642,7 @@ Export-ModuleMember -Function `
   Test-PathContainsReparsePoint, `
   Test-SafeOutputFilePath, `
   Initialize-SafeOutputFilePath, `
+  Resolve-FileSystemProviderPath, `
   Test-WingetPrivateSourceDefinition, `
   Assert-TrustedWindowsPathAcl, `
   Get-BoundedUtf8FileContent, `

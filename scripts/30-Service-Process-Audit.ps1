@@ -153,15 +153,6 @@ function Format-Bytes {
 # -----------------------------
 # Config (defaults + JSON merge)
 # -----------------------------
-function Import-OptionalJsonConfig {
-  [CmdletBinding()]
-  param(
-    [string]$Path
-  )
-
-  Read-JsonFileWithStatus -Path $Path
-}
-
 # Defaults used when JSON is missing/unreadable/invalid
 function Apply-ServiceProcessDisplayConfiguration {
 if ($null -ne $jsonCfg.TopN) {
@@ -197,7 +188,7 @@ $Config = [ordered]@{
   ConsoleMaxServices    = 60      # prevent “wall of text” by default
 }
 
-$configLoad = Import-OptionalJsonConfig -Path $ConfigJsonPath
+$configLoad = Read-JsonFileWithStatus -Path $ConfigJsonPath
 $jsonCfg = $configLoad.Data
 $configMeta = $configLoad.Meta
 $configPathProvided = -not [string]::IsNullOrWhiteSpace($ConfigJsonPath)

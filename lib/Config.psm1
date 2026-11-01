@@ -10,6 +10,7 @@ defaults, and convert PSCustomObjects to hashtables.
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'JsonInput.psm1')
+Import-Module (Join-Path $PSScriptRoot 'Validation.psm1')
 
 <#
 .SYNOPSIS
@@ -31,7 +32,7 @@ function Sanitize-ConfigPath {
     $expanded = [Environment]::ExpandEnvironmentVariables($Path)
     if ([string]::IsNullOrWhiteSpace($expanded) -or $expanded -match '\.\.') { return $null }
     if ($MustExist -and -not (Test-Path -LiteralPath $expanded)) { return $null }
-    return [System.IO.Path]::GetFullPath($expanded)
+    return (Validation\Resolve-FileSystemProviderPath -Path $expanded)
   } catch {
     return $null
   }

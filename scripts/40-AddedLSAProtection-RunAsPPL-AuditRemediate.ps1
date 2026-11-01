@@ -59,6 +59,7 @@ ARGS (positional)
 
 .PARAMETER ConfigPath
   Path to JSON configuration file.
+  In Remediate mode a ConfigPath that cannot be loaded stops the run with FAIL before any registry write; without a ConfigPath the default TargetRunAsPPL of 1 applies.
 
 .PARAMETER OutputFormat
   Output format: Console, Json, Csv, or None.
@@ -476,11 +477,7 @@ $Findings = Get-FindingsList
 $RunState.Changes  = New-Object 'System.Collections.Generic.List[string]'
 $RunState.rebootRequired = $false
 $RunState.registryWriteFailed = $false
-
-if ($cfgResult.Meta.Error) {
-  [void](Add-Finding -FindingList $Findings -Code 'LSA-ConfigLoadFailed' -Severity 'Medium' `
-    -Message ("Config JSON could not be loaded; using parameters/defaults. Error: {0}" -f $cfgResult.Meta.Error))
-}
+$RunState.remediationBlocked = [bool](Add-LsaConfigFindings -FindingList $Findings -Mode $Mode -ConfigPath $configPath -Meta $cfgResult.Meta)
 }
 . Initialize-LsaProtectionConfiguration -EntryBoundParameters $PSBoundParameters -RunState $RunState
 
@@ -504,12 +501,8 @@ function Invoke-Capability40MainPhase01 {
     RunAsPPLBoot = Get-RegValue -Path $lsaPath -Name 'RunAsPPLBoot'
   }
 
-  if ($null -eq $current.RunAsPPL) {
-    Add-Finding -FindingList $Findings -Code 'LSA-PPL-Missing' -Severity 'High' -Message 'RunAsPPL is not set (effectively disabled).'
-  } elseif ($current.RunAsPPL -eq 0) {
-    Add-Finding -FindingList $Findings -Code 'LSA-PPL-Off' -Severity 'High' -Message 'RunAsPPL is 0 (Added LSA protection disabled).'
-  } elseif ($current.RunAsPPL -notin @(1,2)) {
-    Add-Finding -FindingList $Findings -Code 'LSA-PPL-Invalid' -Severity 'Medium' -Message ("RunAsPPL has unexpected value: {0}" -f $current.RunAsPPL)
+  foreach ($item in @(Get-LsaPplAuditFindings -Current $current -Target $RunState.TargetRunAsPPL -DisableMethod $RunState.DisableMethod -ManageBoot ([bool]$RunState.ManageBoot))) {
+    Add-Finding -FindingList $Findings -Code $item.Code -Severity $item.Severity -Message $item.Message
   }
 }
 function Invoke-Capability40MainPhase02Step01 {
@@ -527,6 +520,9 @@ function Remove-LsaRunAsPplValue {
   if (Remove-RegValueIfExists -Path $lsaPath -Name 'RunAsPPL') {
     $RunState.rebootRequired = $true
     $RunState.Changes.Add(("RunAsPPL: {0} -> <deleted>" -f (Format-Nullable $current.RunAsPPL))) | Out-Null
+  } else {
+    Add-LsaRegistryWriteFailureFinding -Path $lsaPath -Name 'RunAsPPL' -Value 0
+    $RunState.registryWriteFailed = $true
   }
 }
 function Disable-LsaRunAsPplValue {
@@ -593,7 +589,7 @@ if ($RunState.ManageBoot) {
 
 function Invoke-Capability40MainPhase02 {
   param([hashtable]$RunState)
-  if ($Mode -eq 'Remediate') {
+  if ($Mode -eq 'Remediate' -and -not $RunState.remediationBlocked) {
 
     if ($RunState.TargetRunAsPPL -eq 0) {
 
@@ -613,6 +609,10 @@ function Invoke-Capability40MainPhase03 {
   $after = [pscustomobject]@{
     RunAsPPL     = Get-RegValue -Path $lsaPath -Name 'RunAsPPL'
     RunAsPPLBoot = Get-RegValue -Path $lsaPath -Name 'RunAsPPLBoot'
+  }
+
+  if ($Mode -eq 'Remediate') {
+    Set-LsaResolvedFindings -FindingList $Findings -After $after -Target $RunState.TargetRunAsPPL -DisableMethod $RunState.DisableMethod -ManageBoot ([bool]$RunState.ManageBoot) -WriteFailed ([bool]$RunState.registryWriteFailed)
   }
 
   $verification = $null
@@ -668,8 +668,7 @@ function Invoke-Capability40Main {
 # V2 output contract
 function Get-Capability40ResultToken {
   param([hashtable]$RunState)
-  $resultToken = if ($RunState.registryWriteFailed) { 'FAIL' } elseif ($Strict -and $Findings.Count -gt 0) { 'FAIL' } elseif ($Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  return (Get-OpenFindingResultToken -Findings @($Findings) -Strict:([bool]$Strict) -Failed:([bool]($RunState.registryWriteFailed -or $RunState.remediationBlocked)))
 }
 $resultToken = Get-Capability40ResultToken -RunState $RunState
 $v2Result = Get-V2ResultObject -ScriptName '40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $Findings.ToArray()) -Summary $result.Summary -Metadata @{ Current = $result.Current; After = $result.After }

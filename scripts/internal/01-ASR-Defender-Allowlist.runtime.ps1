@@ -204,13 +204,27 @@ function Invoke-AllowlistDecision {
 
 }
 
-function Add-AllowlistDriftFindings {
+function Assert-AllowlistRemediationPreconditions {
   param($RunState)
+  if (-not $RunState.Remediate -or (Test-IsAdmin)) { return }
+  Add-Finding -FindingList $script:Findings -Code 'ASR-ElevationRequired' -Severity 'High' -Message 'Remediate requires an elevated session; no Defender setting was changed.'
+  throw 'Remediate requires an elevated session.'
+}
+
+function Assert-AllowlistJsonOrExplicitBaseline {
+  param($RunState)
+  if (-not $RunState.Remediate -or $RunState.jsonLoaded -or $RunState.BaselineExplicit) { return }
+  Add-Finding -FindingList $script:Findings -Code 'ASR-AllowlistRequiredForRemediate' -Severity 'High' -Message 'Remediate needs the allowlist JSON or an explicit -BaselineMode; no Defender setting was changed.'
+  throw 'Remediate needs the allowlist JSON or an explicit -BaselineMode.'
+}
+
+function Add-AllowlistDriftFindings {
+  param($RunState, [switch]$RejectedOnly)
   foreach ($d in $RunState.diffs) {
-    if ($d.ToAdd.Count -gt 0) {
+    if (-not $RejectedOnly -and $d.ToAdd.Count -gt 0) {
       Add-Finding -FindingList $script:Findings -Code 'ASR-Drift-Add' -Severity 'Low' -Message "ASR drift (missing): $($d.Name)" -Extra @{ Missing = $d.ToAdd }
     }
-    if ($d.ToRemove.Count -gt 0) {
+    if (-not $RejectedOnly -and $d.ToRemove.Count -gt 0) {
       Add-Finding -FindingList $script:Findings -Code 'ASR-Drift-Remove' -Severity 'Low' -Message "ASR drift (extra): $($d.Name)" -Extra @{ Extra = $d.ToRemove }
     }
     if ($d.Rejected.Count -gt 0) {
@@ -225,9 +239,11 @@ function Invoke-AllowlistRemediation {
     $RunState.results += Apply-Diff -Diff $d -Remediate:$true
   }
   $RunState.errsFlat = @($RunState.results | ForEach-Object { $_.Errors } | Where-Object { $_ -and $_.Length -gt 0 })
+  Add-AllowlistDriftFindings -RunState $RunState -RejectedOnly
 
   if ($RunState.errsFlat.Count -gt 0) {
     $RunState.resultCode = "REMEDIATION_ERRORS"
+    Add-Finding -FindingList $script:Findings -Code 'ASR-RemediationErrors' -Severity 'High' -Message 'Defender allowlist remediation reported errors.' -Extra @{ Errors = @($RunState.errsFlat) }
     $null = Write-HealthEvent -Id 3210 -Msg ("Defender/ASR allowlist sync completed with errors. add=$($RunState.totalAdd) remove=$($RunState.totalRem) rejected=$($RunState.totalBad) JSON=$($RunState.sourceJson) Audit=$($RunState.AuditPath)`r`nErrors: " + ($RunState.errsFlat -join ' | ')) -Level Error
   }
   else {
@@ -314,6 +330,7 @@ function Invoke-AllowlistRun {
       throw "Defender PowerShell module/cmdlets not available (Get-MpPreference missing)."
     }
 
+    Assert-AllowlistRemediationPreconditions -RunState $RunState
     $RunState.pref = Get-MpPreference
 
     . Initialize-AllowlistSource -RunState $RunState
@@ -324,6 +341,7 @@ function Invoke-AllowlistRun {
     $RunState.desired = $null
 
     . Read-AllowlistDesired -RunState $RunState
+    Assert-AllowlistJsonOrExplicitBaseline -RunState $RunState
     . Initialize-AllowlistFallback -RunState $RunState
     . Initialize-AllowlistDiffs -RunState $RunState
     . Invoke-AllowlistDecision -RunState $RunState
@@ -382,6 +400,7 @@ function New-AllowlistRunState {
     errsFlat = $null
     pref = $null
     notes = $null
+    BaselineExplicit = $null
     ConfigPath = $null
     ExceptionsPath = $null
     AuditPath = $null

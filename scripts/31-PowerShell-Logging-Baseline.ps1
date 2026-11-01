@@ -154,13 +154,19 @@ $ErrorActionPreference = 'Stop'
 # Ensure-Key replaced by Ensure-RegistryKey from lib/Registry.psm1
 # Set-RegString replaced by lib/Registry.psm1::Set-RegString (has full error handling and validation)
 
+# Get-ItemProperty also returns the PS* provider properties; only real registry values are module names.
+function Get-ModuleNameValueNames {
+  param($Item)
+  return @($Item | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name | Where-Object { @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider') -notcontains $_ })
+}
+
 function Get-ModuleNamesConfigured {
   param([string]$ModuleNamesKeyPath)
 
   if (-not (Test-Path -LiteralPath $ModuleNamesKeyPath)) { return $null }
 
   $obj = Get-ItemProperty -Path $ModuleNamesKeyPath
-  $props = $obj | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
+  $props = Get-ModuleNameValueNames -Item $obj
 
   $result = [ordered]@{}
   foreach ($p in $props) { $result[$p] = $obj.$p }
@@ -176,7 +182,7 @@ function Remove-AllModuleNames {
   if (-not (Test-Path -LiteralPath $ModuleNamesKeyPath)) { return }
 
   $obj = Get-ItemProperty -Path $ModuleNamesKeyPath
-  $props = $obj | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name
+  $props = Get-ModuleNameValueNames -Item $obj
   foreach ($p in $props) {
     try {
       Remove-ItemProperty -Path $ModuleNamesKeyPath -Name $p -ErrorAction Stop
@@ -567,11 +573,25 @@ function Invoke-Capability31MainPhase08 {
 . Invoke-Capability31MainPhase08Step04 -RunState $RunState
   }
 }
+# Remediate only: a drift finding whose effective value now matches the target is resolved.
+function Set-PowerShellLoggingResolvedFindings {
+  param($FindingList, $After, [bool]$WriteFailed)
+  if ($WriteFailed) { return }
+  $settingByCode = @{ 'PSLOG-TranscriptionOff' = 'Transcription_EnableTranscripting'; 'PSLOG-InvocationHeaderOff' = 'Transcription_EnableInvocationHeader'
+    'PSLOG-ScriptBlockOff' = 'ScriptBlock_EnableScriptBlockLogging'; 'PSLOG-ScriptBlockInvocationOff' = 'ScriptBlock_EnableScriptBlockInvocationLogging'
+    'PSLOG-ModuleLoggingOff' = 'Module_EnableModuleLogging' }
+  foreach ($finding in @($FindingList)) {
+    $setting = $settingByCode[[string]$finding.Code]
+    $value = if ($setting) { $After.PSObject.Properties[$setting] } else { $null }
+    if ($value -and $value.Value -eq 1) { $finding | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force }
+  }
+}
 function Invoke-Capability31MainPhase09 {
   param([hashtable]$RunState)
   $afterHKLM = Get-SettingsForBase -BasePath $hklmBase -RunState $RunState
   $afterHKCU = if ($IncludeHKCU) { Get-SettingsForBase -BasePath $hkcuBase -RunState $RunState } else { $null }
   $RunState.effectiveAfter = if ($IncludeHKCU -and $afterHKCU) { Get-EffectiveSettings -HKLM $afterHKLM -HKCU $afterHKCU } else { $afterHKLM }
+  if ($Mode -eq 'Remediate') { Set-PowerShellLoggingResolvedFindings -FindingList $RunState.Findings -After $RunState.effectiveAfter -WriteFailed ([bool]$RunState.registryWriteFailed) }
 
   $RunState.summary = [pscustomobject]@{
     ComputerName  = $env:COMPUTERNAME
@@ -645,10 +665,10 @@ function Invoke-Capability31Main {
 . Invoke-Capability31Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 
 # V2 output contract
+# Info findings and findings corrected by this run never raise the token; write failures always FAIL.
 function Get-Capability31ResultToken {
   param([hashtable]$RunState)
-  $resultToken = if ($RunState.registryWriteFailed) { 'FAIL' } elseif ($Strict -and $RunState.Findings.Count -gt 0) { 'FAIL' } elseif ($RunState.Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  return (Get-OpenFindingResultToken -Findings @($RunState.Findings) -Strict:([bool]$Strict) -Failed:([bool]$RunState.registryWriteFailed))
 }
 $resultToken = Get-Capability31ResultToken -RunState $RunState
 $v2Result = Get-V2ResultObject -ScriptName '31-PowerShell-Logging-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $RunState.Findings.ToArray()) -Summary $RunState.summary -Metadata @{ Current = [pscustomobject]@{ HKLM = [pscustomobject]@{ Before = $currentHKLM; After = $afterHKLM }; HKCU = if ($IncludeHKCU) { [pscustomobject]@{ Before = $currentHKCU; After = $afterHKCU } } else { $null }; Effective = [pscustomobject]@{ Before = $RunState.effectiveBefore; After = $RunState.effectiveAfter } } }

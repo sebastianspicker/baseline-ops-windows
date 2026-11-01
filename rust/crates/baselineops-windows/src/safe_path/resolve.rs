@@ -11,13 +11,12 @@ pub(super) enum PathKind {
 
 pub(super) fn existing(
     root: &Path,
-    allow_unc: bool,
     reject_reparse_points: bool,
     candidate: &Path,
     expected_kind: PathKind,
 ) -> Result<PathBuf, PlatformError> {
     reject_lexical_escape(candidate)?;
-    reject_unc(candidate, allow_unc)?;
+    reject_unc(candidate)?;
     let joined = joined_candidate(root, candidate);
     if reject_reparse_points {
         reject_reparse_chain(&joined)?;
@@ -33,13 +32,9 @@ fn canonical_existing(root: &Path, joined: &Path) -> Result<PathBuf, PlatformErr
     Ok(canonical)
 }
 
-pub(super) fn output(
-    root: &Path,
-    allow_unc: bool,
-    candidate: &Path,
-) -> Result<PathBuf, PlatformError> {
+pub(super) fn output(root: &Path, candidate: &Path) -> Result<PathBuf, PlatformError> {
     reject_lexical_escape(candidate)?;
-    reject_unc(candidate, allow_unc)?;
+    reject_unc(candidate)?;
     let joined = joined_candidate(root, candidate);
     let canonical_parent = canonical_output_parent(root, &joined)?;
     let name = output_name(&joined)?;
@@ -120,9 +115,9 @@ pub(super) fn reject_lexical_escape(path: &Path) -> Result<(), PlatformError> {
     Ok(())
 }
 
-pub(super) fn reject_unc(path: &Path, allow_unc: bool) -> Result<(), PlatformError> {
+pub(super) fn reject_unc(path: &Path) -> Result<(), PlatformError> {
     let text = path.as_os_str().to_string_lossy();
-    if !allow_unc && (text.starts_with("\\\\") || text.starts_with("//")) {
+    if text.starts_with("\\\\") || text.starts_with("//") {
         return Err(PlatformError::UntrustedPath {
             path: path.to_path_buf(),
             reason: "UNC paths are forbidden".into(),

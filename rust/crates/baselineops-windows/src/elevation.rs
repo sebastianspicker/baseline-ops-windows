@@ -289,9 +289,9 @@ mod platform {
                 "GetExitCodeProcess failed: {error}"
             )));
         }
-        Ok(ElevatedLaunchStatus::Exited(
-            i32::try_from(exit_code).unwrap_or(-1),
-        ))
+        Ok(ElevatedLaunchStatus::Exited(i32::from_ne_bytes(
+            exit_code.to_ne_bytes(),
+        )))
     }
 
     fn terminate_process_and_wait(

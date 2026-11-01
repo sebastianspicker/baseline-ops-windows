@@ -85,8 +85,13 @@ fn take_finished(
 ) -> Result<Option<WorkerResultV3>> {
     match results.try_recv() {
         Ok(result) => {
-            forward_progress(transport, binding, progress, deadline)?;
-            require_time(deadline)?;
+            // The result has left the channel: a deadline while flushing the last progress must
+            // not discard it. Delivery gets its own bounded deadline in `recover_finished`.
+            if let Err(error) = forward_progress(transport, binding, progress, deadline)
+                && error.downcast_ref::<DeadlineExceeded>().is_none()
+            {
+                return Err(error);
+            }
             result.map(Some)
         }
         Err(TryRecvError::Empty) => Ok(None),
@@ -147,10 +152,46 @@ fn report(
     transport.send(&message, require_time(deadline)?)
 }
 
+/// Typed so [`recover_finished`] can tell a plain deadline from a protocol failure.
+#[derive(Debug)]
+pub(super) struct DeadlineExceeded;
+
+impl std::fmt::Display for DeadlineExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("worker control session exceeded its deadline")
+    }
+}
+
+impl std::error::Error for DeadlineExceeded {}
+
+const RESULT_DELIVERY: Duration = Duration::from_secs(10);
+
+/// After the executor thread has joined, every finished apply result may use up to
+/// [`RESULT_DELIVERY`] past the session deadline for its final send. A deadline-only control
+/// failure keeps a result that already finished; every other failure, or no finished
+/// result, stays an error.
+pub(super) fn recover_finished(
+    outcome: Result<WorkerResultV3>,
+    results: &Receiver<Result<WorkerResultV3>>,
+    deadline: Instant,
+) -> Result<(WorkerResultV3, Instant)> {
+    let delivery = deadline.max(Instant::now() + RESULT_DELIVERY);
+    match outcome {
+        Ok(result) => Ok((result, delivery)),
+        Err(error) if error.downcast_ref::<DeadlineExceeded>().is_some() => {
+            match results.try_recv() {
+                Ok(Ok(result)) => Ok((result, delivery)),
+                _ => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn require_time(deadline: Instant) -> Result<Duration> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        bail!("worker control session exceeded its deadline");
+        return Err(DeadlineExceeded.into());
     }
     Ok(remaining)
 }

@@ -16,7 +16,7 @@ Optional enforcement/hardening:
   that do not support SMB encryption.
 - EnableRejectUnencryptedAccess hardens the SMB server so that clients that do not support encryption are denied access to encrypted shares.
 
-Configuration can be supplied through an optional JSON file. Parameters explicitly passed to the script always override JSON values.
+Configuration can be supplied through an optional JSON file. Parameters explicitly passed to the script always override JSON values. A JSON file can never switch the script to Remediate.
 
 Output behavior (important):
 - Pipeline output: The script emits exactly one structured object at the end (ideal for Export-Csv / ConvertTo-Json / Where-Object).
@@ -65,12 +65,12 @@ Use this for unattended execution, but prefer testing with -WhatIf first.
 Path to an optional JSON configuration file supplied with $JsonPath.
 
 Supported JSON keys:
-- Mode (string): Audit | Remediate
+- Mode (string): Audit | AuditOnly. Remediate, ServerGlobal and ShareOnly are ignored with a warning (ServerGlobal and ShareOnly still set RemediationScope); only -Mode Remediate on the command line enables remediation.
 - RemediationScope (string): ServerGlobal | ShareOnly
 - ShareName (string or array of strings)
 - ApplyClientRequireEncryption (boolean or string: true/false/yes/no/1/0)
 - EnableRejectUnencryptedAccess (boolean or string)
-- Force (boolean or string)
+- Force is ignored with a warning; only -Force on the command line skips confirmation prompts.
 
 If the JSON file is missing, empty, or invalid, the script continues with safe defaults.
 
@@ -191,6 +191,7 @@ function Initialize-Capability22Runtime {
 Import-Module (Join-Path $script:LibPath 'Output.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Common.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath 'Results.psm1') -Force
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'External.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 . (Join-Path $PSScriptRoot 'internal/22-SMB-Encryption-Enforcer.failures.ps1')
@@ -250,27 +251,20 @@ function ConvertTo-BoolOrNull {
 }
 
 function Load-JsonConfigOrDefault {
-  param([string]$Path, [hashtable]$RunState)
+  param([string]$Path)
   $defaults = Get-SmbDefaultConfig
   if ([string]::IsNullOrWhiteSpace($Path)) { return $defaults }
-  if (-not (Test-Path -LiteralPath $Path)) {
+  $read = Read-JsonFileWithStatus -Path $Path
+  if ($read.Meta.Loaded) {
+    Merge-SmbConfig -Defaults $defaults -Config $read.Data
+  } elseif ($read.Meta.Status -eq 'Missing') {
     Write-Verbose -Message ('Config JSON not found at {0}. Using defaults.' -f $Path)
-    return $defaults
+  } elseif ($read.Meta.Status -eq 'Empty') {
+    Write-Verbose -Message ('Config JSON is empty at {0}. Using defaults.' -f $Path)
+  } else {
+    Write-Warning -Message ('Failed to load/parse config JSON at {0}. Using defaults. Error: {1}' -f $Path, $read.Meta.Error)
   }
-  try {
-    $raw = Get-BoundedUtf8FileContent -Path $Path -MaximumBytes 1048576
-    if ([string]::IsNullOrWhiteSpace($raw)) {
-      Write-Verbose -Message ('Config JSON is empty at {0}. Using defaults.' -f $Path)
-      return $defaults
-    }
-    $cfg = $raw | ConvertFrom-Json
-    if ($null -eq $cfg) { return $defaults }
-    Merge-SmbConfig -Defaults $defaults -Config $cfg -RunState $RunState
-    return $defaults
-  } catch {
-    Write-Warning -Message ('Failed to load/parse config JSON at {0}. Using defaults. Error: {1}' -f $Path, $_.Exception.Message)
-    return $defaults
-  }
+  return $defaults
 }
 function Get-SmbDefaultConfig {
   return [pscustomobject]@{
@@ -283,24 +277,28 @@ function Get-SmbDefaultConfig {
   }
 }
 function Merge-SmbConfig {
-  param($Defaults, $Config, [hashtable]$RunState)
-  $RunState.mode = [string](Get-Prop -Object $Config -Name 'Mode')
-  if (@('Audit','Remediate') -contains $RunState.mode) { $Defaults.Mode = $RunState.mode }
-  elseif (@('ServerGlobal','ShareOnly') -contains $RunState.mode) {
-    $Defaults.Mode = 'Remediate'
-    $Defaults.RemediationScope = $RunState.mode
-  } elseif ($RunState.mode -eq 'AuditOnly') { $Defaults.Mode = 'Audit' }
+  param($Defaults, $Config)
+  $cfgMode = [string](Get-Prop -Object $Config -Name 'Mode')
+  # Configuration never activates remediation; only -Mode Remediate on the command line does.
+  if (@('Remediate','ServerGlobal','ShareOnly') -contains $cfgMode) {
+    Write-Warning -Message ('Config Mode ''{0}'' was ignored. Use -Mode Remediate on the command line to remediate.' -f $cfgMode)
+  }
+  if (@('ServerGlobal','ShareOnly') -contains $cfgMode) { $Defaults.RemediationScope = $cfgMode }
   $scope = [string](Get-Prop -Object $Config -Name 'RemediationScope')
   if (@('ServerGlobal','ShareOnly') -contains $scope) { $Defaults.RemediationScope = $scope }
-  $RunState.shareName = Get-Prop -Object $Config -Name 'ShareName'
-  if ($null -ne $RunState.shareName) { $Defaults.ShareName = @($RunState.shareName) }
+  $cfgShare = Get-Prop -Object $Config -Name 'ShareName'
+  if ($null -ne $cfgShare) { $Defaults.ShareName = @($cfgShare) }
   Set-SmbBooleanConfig -Defaults $Defaults -Config $Config
 }
 function Set-SmbBooleanConfig {
   param($Defaults, $Config)
-  foreach ($name in @('ApplyClientRequireEncryption','EnableRejectUnencryptedAccess','Force')) {
+  foreach ($name in @('ApplyClientRequireEncryption','EnableRejectUnencryptedAccess')) {
     $value = ConvertTo-BoolOrNull (Get-Prop -Object $Config -Name $name)
     if ($null -ne $value) { $Defaults.$name = $value }
+  }
+  # Force skips the cmdlets' confirmation prompts; only the command line may grant that.
+  if ($null -ne (Get-Prop -Object $Config -Name 'Force')) {
+    Write-Warning -Message 'Config Force was ignored. Use -Force on the command line to skip confirmation prompts.'
   }
 }
 
@@ -402,7 +400,7 @@ function Write-PrettySettingChange {
 function Invoke-Capability22MainPhase01 {
   param([hashtable]$RunState)
   $sanitized = Sanitize-Path -Path $JsonPath -MustExist
-  $cfg = Load-JsonConfigOrDefault -Path $sanitized -RunState $RunState
+  $cfg = Load-JsonConfigOrDefault -Path $sanitized
 
   if (-not $script:__EntryBoundParameters.ContainsKey('Mode')) { $RunState.Mode = $cfg.Mode }
   if (-not $script:__EntryBoundParameters.ContainsKey('RemediationScope')) { $RunState.RemediationScope = $cfg.RemediationScope }
@@ -416,9 +414,6 @@ function Invoke-Capability22MainPhase02 {
   param([hashtable]$RunState)
   if (-not $script:__EntryBoundParameters.ContainsKey('EnableRejectUnencryptedAccess') -and $cfg.EnableRejectUnencryptedAccess) {
     $RunState.EnableRejectUnencryptedAccess = $true
-  }
-  if (-not $script:__EntryBoundParameters.ContainsKey('Force') -and $cfg.Force) {
-    $RunState.Force = $true
   }
 
   # -------------------------

@@ -242,10 +242,7 @@ function Get-SysmonCurrentConfigSha256 {
     $txt = [string]$native.Output
     if ([string]::IsNullOrWhiteSpace($txt)) { return $null }
     $norm  = ($txt -replace "`r`n","`n").Trim()
-    $bytes = [Text.Encoding]::UTF8.GetBytes($norm)
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-','').ToLowerInvariant() }
-    finally { $sha.Dispose() }
+    return Get-BytesSha256 -Bytes ([Text.Encoding]::UTF8.GetBytes($norm))
   } catch {
     return $null
   }

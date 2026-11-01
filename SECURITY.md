@@ -39,7 +39,9 @@ open to ensure the write reaches the same directory it checked.
 `RequireSigned` validates an Authenticode certificate chain; it does not check
 that the signer is the BaselineOps publisher. A hash supplied by a profile is
 only as trustworthy as that profile. Verify the release provenance first, then
-use trusted signer identities or hashes set by your deployment policy.
+use trusted signer identities or hashes set by your deployment policy. An
+expected hash covers only the named script file, not the `scripts/internal/`
+helpers or `lib/` modules it loads; a protected installation guards those.
 
 The profile runner keeps a private execution lease until it finishes writing
 the result. This lease retains handles to the named runner control files and

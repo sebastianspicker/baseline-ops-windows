@@ -124,16 +124,6 @@ function Get-SysmonEngineVersion([string]$Exe){
   # merely to decide whether it is safe to execute later.
   return $null
 }
-function ConvertTo-TrustedStateSidValue {
-  param([Parameter(Mandatory)]$IdentityReference)
-  try {
-    if ($IdentityReference -is [Security.Principal.SecurityIdentifier]) { return $IdentityReference.Value }
-    if ($IdentityReference -is [string]) {
-      $IdentityReference = New-Object Security.Principal.NTAccount($IdentityReference)
-    }
-    return $IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-  } catch { throw "State ACL contains an identity that cannot be resolved to a SID: $IdentityReference" }
-}
 # Rejects state paths writable by identities other than SYSTEM or Administrators
 # so persisted hashes cannot be forged between updater runs.
 function Assert-TrustedStateAcl {

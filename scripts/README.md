@@ -143,6 +143,10 @@ $hash = (Get-FileHash .\scripts\27-Defender-Health-Audit.ps1 -Algorithm SHA256).
   -ExpectedHash "SHA256:$hash" -Mode Audit
 ```
 
+The hash covers only the named script file. The `scripts/internal/` helpers
+and `lib/` modules it loads are not hashed; a protected installation guards
+them.
+
 To validate a profile before execution:
 
 ```powershell

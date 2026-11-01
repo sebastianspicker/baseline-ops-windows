@@ -12,7 +12,6 @@ mod journal;
 mod native_execution;
 mod native_intents;
 mod native_registry;
-mod orchestrator;
 mod package;
 mod planner;
 mod registry_deriver;
@@ -74,10 +73,6 @@ pub use native_execution::{
     execute_approved_worker_apply_with_progress,
 };
 pub use native_registry::{dispatch_native, has_native_handler};
-pub use orchestrator::{
-    ApplyOutcome, ApplyService, AuditService, EngineOrchestrator, ExecutionDisposition,
-    OrchestratorError, PlanService, aggregate_disposition,
-};
 pub use package::{
     DetachedSignatureVerifier, ManifestFile, PackageError, PackageManifestV1, PackageVerification,
     SignatureVerifier, verify_package,

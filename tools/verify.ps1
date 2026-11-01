@@ -91,69 +91,13 @@ function Get-PublicSurfacePaths {
   [CmdletBinding()]
   param([Parameter(Mandatory)][string]$Path)
 
-  $gitPaths = Get-GitPublicSurfacePaths -Path $Path
-  if ($null -ne $gitPaths) { return $gitPaths }
-  return Get-FileSystemPublicSurfacePaths -Path $Path
-}
-
-<#
-.SYNOPSIS
-  Checks whether a native command completed without truncated output.
-.DESCRIPTION
-  Prevents a partial Git result from becoming a public-surface inventory.
-#>
-function Test-NativeResultComplete {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)]$Result)
-
-  if (-not $Result) { return $false }
-  if (-not $Result.Success) { return $false }
-  if ($Result.TimedOut) { return $false }
-  if ($Result.OutputTruncated) { return $false }
-  return -not $Result.StderrTruncated
-}
-
-<##
-.SYNOPSIS
-Gets Git-managed and non-ignored paths when Git produces a complete result.
-.DESCRIPTION
-Returns null when Git cannot provide a safe complete inventory.
-#>
-function Get-GitPublicSurfacePaths {
-  [CmdletBinding()]
-  param([Parameter(Mandatory)][string]$Path)
-
-  if (-not (Test-CommandExists -Name 'git')) { return $null }
-  $rootResult = Invoke-NativeCommand -Command 'git' -Arguments @('-C', $Path, 'rev-parse', '--is-inside-work-tree') -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 1048576
-  if (-not (Test-NativeResultComplete -Result $rootResult)) { return $null }
-  if ($rootResult.Stdout.Trim() -ne 'true') { return $null }
-  $filesResult = Invoke-NativeCommand -Command 'git' -Arguments @('-C', $Path, 'ls-files', '-z', '--cached', '--others', '--exclude-standard') -CaptureOutput -Quiet -TimeoutSeconds 30 -MaxOutputBytes 1048576
-  if (-not (Test-NativeResultComplete -Result $filesResult)) { return $null }
-  $rootFull = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar))
-  $verifiedPaths = New-Object System.Collections.Generic.List[string]
-  foreach ($relativePath in $filesResult.Stdout.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)) {
-    $verifiedPath = ConvertTo-VerifiedGitPath -RelativePath $relativePath -RootPath $rootFull
-    if ($null -ne $verifiedPath) { [void]$verifiedPaths.Add($verifiedPath) }
+  $gitFiles = Get-GitWorkingTreeFiles -Path $Path
+  if ($null -ne $gitFiles) {
+    $separators = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $root = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path).TrimEnd($separators)
+    return @($gitFiles | ForEach-Object { $_.Substring($root.Length).TrimStart($separators) })
   }
-  return @($verifiedPaths | Sort-Object -Unique)
-}
-
-<##
-.SYNOPSIS
-Validates a Git repository-relative path before accepting it.
-.DESCRIPTION
-Rejects path escapes and omits paths that no longer name files.
-#>
-function ConvertTo-VerifiedGitPath {
-  [CmdletBinding()]
-  param([string]$RelativePath, [string]$RootPath)
-
-  if ([System.IO.Path]::IsPathRooted($RelativePath)) { throw 'git returned an unsafe repository-relative path.' }
-  if ($RelativePath -match '[\x00-\x1F\x7F]') { throw 'git returned an unsafe repository-relative path.' }
-  $candidate = [System.IO.Path]::GetFullPath((Join-Path $RootPath $RelativePath))
-  if (-not (Test-PathUnderRoot -Path $candidate -Root $RootPath)) { throw 'git returned a path outside the requested verification root.' }
-  if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $RelativePath }
-  return $null
+  return Get-FileSystemPublicSurfacePaths -Path $Path
 }
 
 <##
@@ -492,7 +436,7 @@ function Get-VerificationAnalyzerFindings {
 
   if ($Paths.Count -eq 0) { throw 'PSScriptAnalyzer scan matched zero files.' }
   $findings = @()
-  foreach ($path in @($Paths | Sort-Object -Unique)) {
+  foreach ($path in @($Paths | Sort-Object -Unique -CaseSensitive)) {
     try {
       $items = @(Invoke-ScriptAnalyzer -Path $path -Settings $SettingsPath -ErrorAction Stop)
     } catch {

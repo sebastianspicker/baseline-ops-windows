@@ -9,7 +9,7 @@
   - A structured result object on the pipeline (for automation and reporting).
   - A JSON proof file containing the same structured results.
   - An Application event log entry summarizing compliance and actions.
-  Policy input is taken from a JSON catalog. If no catalog is provided or loading fails, the script uses built-in safe defaults.
+  Policy input is taken from a JSON catalog. If no catalog is provided or loading fails, the script uses built-in safe defaults. The built-in defaults do not enforce local group membership; that needs a catalog with EnforceGroupMembership and a non-empty AllowedGroups list.
   Guardrail areas:
   - RDP configuration (registry-based): enable/disable, NLA, security layer, encryption level, RDP port, Restricted Admin, password saving policy.
   - Windows Defender Firewall: disables local built-in “Remote Desktop” inbound rules and enforces scoped local inbound rules for RDP (TCP; optional UDP behavior).
@@ -155,8 +155,8 @@ function Get-DefaultCatalogJson {
     "MinEncryptionLevel": "High",
     "RestrictedAdmin": true,
     "DisablePasswordSaving": true,
-    "EnforceGroupMembership": true,
-    "AllowedGroups": [ "DOMAIN\\RDP-Admins" ],
+    "EnforceGroupMembership": false,
+    "AllowedGroups": [],
     "ExactMembership": true
   },
   "RemoteAssistance": {
@@ -174,12 +174,6 @@ function Get-DefaultCatalogJson {
 # ----------------------------
 # Generic helpers (no console formatting here)
 # ----------------------------
-function Test-IsElevated {
-  try {
-    return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).
-      IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  } catch { return $false }
-}
 # Ensure-DirectoryForFile imported from lib/Common.psm1
 function Normalize-Array {
   param([object]$Value)
@@ -257,18 +251,23 @@ function Remove-LocalFirewallRuleByDisplayName {
   param([string]$DisplayName)
   try {
     $r = Get-LocalFirewallRuleByDisplayName -DisplayName $DisplayName
-    if ($r -and $PSCmdlet.ShouldProcess($DisplayName, 'Remove local firewall rule')) {
-      $r | Remove-NetFirewallRule -ErrorAction Stop | Out-Null
-    }
-    return $true
-  } catch { return $false }
+    if (-not $r) { return 'Missing' }
+    if (-not $PSCmdlet.ShouldProcess($DisplayName, 'Remove local firewall rule')) { return 'Declined' }
+    $r | Remove-NetFirewallRule -ErrorAction Stop | Out-Null
+    return 'Removed'
+  } catch { return 'Failed' }
 }
 function Disable-LocalBuiltinRdpInbound {
+  [CmdletBinding(SupportsShouldProcess = $true)]
+  param([bool]$Remediate,$Actions,$Drifts)
   try {
     $rules = Get-NetFirewallRule -PolicyStore PersistentStore -DisplayGroup 'Remote Desktop' -Direction Inbound -ErrorAction Stop
-    foreach ($r in @($rules)) {
-      try { $r | Disable-NetFirewallRule -ErrorAction Stop | Out-Null } catch {
+    foreach ($r in @($rules | Where-Object { $_.Enabled -eq 'True' })) {
+      if (-not $Remediate) { $Drifts.Add("Built-in RDP rule enabled drift: $($r.DisplayName)"); continue }
+      if (-not $PSCmdlet.ShouldProcess($r.Name, 'Disable built-in RDP firewall rule')) { continue }
+      try { $r | Disable-NetFirewallRule -ErrorAction Stop | Out-Null; $Actions.Add("Disabled built-in RDP rule: $($r.DisplayName)") } catch {
         Write-Verbose ("Built-in RDP firewall rule disable failed for '{0}': {1}" -f $r.Name,$_.Exception.Message)
+        $Drifts.Add("Failed to disable built-in RDP rule: $($r.DisplayName)")
       }
     }
   } catch {
@@ -370,8 +369,9 @@ function Remove-RdpUdpOppositeRule {
     $Drifts.Add("${label}: $Name")
     return
   }
-  if (Remove-LocalFirewallRuleByDisplayName -DisplayName $Name) { $Actions.Add("Removed $Name ($Mode)") }
-  else { $Drifts.Add("Failed to remove $Name ($Mode)") }
+  $removal = Remove-LocalFirewallRuleByDisplayName -DisplayName $Name
+  if ($removal -eq 'Removed') { $Actions.Add("Removed $Name ($Mode)") }
+  elseif ($removal -eq 'Failed') { $Drifts.Add("Failed to remove $Name ($Mode)") }
 }
 function Get-RdpFirewallRuleNames {
   return [pscustomobject]@{ Tcp='Guardrails RDP TCP-In Scoped'; UdpAllow='Guardrails RDP UDP-In Scoped'; UdpBlock='Guardrails RDP UDP-In Blocked'; Group='Guardrails RDP Scoped' }
@@ -380,8 +380,9 @@ function Update-DisabledRdpFirewallRules {
   param($Names,[bool]$Remediate,$Actions,$Drifts)
   foreach ($name in @($Names.Tcp,$Names.UdpAllow,$Names.UdpBlock)) {
     if ($Remediate) {
-      if (Remove-LocalFirewallRuleByDisplayName -DisplayName $name) { $Actions.Add("Removed local rule: $name") }
-      else { $Drifts.Add("Failed to remove local rule: $name") }
+      $removal = Remove-LocalFirewallRuleByDisplayName -DisplayName $name
+      if ($removal -eq 'Removed') { $Actions.Add("Removed local rule: $name") }
+      elseif ($removal -eq 'Failed') { $Drifts.Add("Failed to remove local rule: $name") }
     } elseif (Get-LocalFirewallRuleByDisplayName -DisplayName $name) { $Drifts.Add("RDP disabled but local rule exists: $name") }
   }
 }
@@ -412,7 +413,7 @@ function Repair-RdpTcpFirewallRule {
 }
 function Update-RdpDisabledFirewallMode {
   param($Names,[bool]$Remediate,$Actions,$Drifts)
-  if ($Remediate) { Disable-LocalBuiltinRdpInbound }
+  Disable-LocalBuiltinRdpInbound $Remediate $Actions $Drifts
   Update-DisabledRdpFirewallRules $Names $Remediate $Actions $Drifts
 }
 function Ensure-RdpFirewallRules {
@@ -446,22 +447,31 @@ function Ensure-RdpGroupMembership {
   $actions = [System.Collections.Generic.List[string]]::new()
   $drifts = [System.Collections.Generic.List[string]]::new()
   if (-not [bool]$Rdp.EnforceGroupMembership) { return @() }
-  if (-not (Test-CmdletAvailable -Name 'Get-LocalGroupMember')) { return @("LocalAccounts cmdlets not available (Get-LocalGroupMember missing).") }
   $targetGroup = "Remote Desktop Users"
-  $allowed     = Normalize-Array -Value $Rdp.AllowedGroups
+  $allowed     = @(Normalize-Array -Value $Rdp.AllowedGroups)
   $exact       = [bool]$Rdp.ExactMembership
-  try {
-    $cur = Get-LocalGroupMember -Group $targetGroup -ErrorAction Stop
-    $curNames = @($cur | ForEach-Object { $_.Name })
-  } catch {
-    return @("Cannot read group '$targetGroup' - $($_.Exception.Message)")
-  }
+  if ($allowed.Count -eq 0) { return @("Missing AllowedGroups; group membership enforcement skipped.") }
+  $read = Read-RdpGroupMemberNames -Group $targetGroup
+  if ($read.Error) { return @($read.Error) }
+  $curNames = $read.Names
   Add-MissingRdpGroupMembers $targetGroup $allowed $curNames ([bool]$Remediate) $PSCmdlet $actions $drifts
   if ($exact) {
     $keep = @($allowed + "BUILTIN\Administrators") | Sort-Object -Unique
     Remove-UnexpectedRdpGroupMembers $targetGroup $keep $curNames ([bool]$Remediate) $PSCmdlet $actions $drifts
   }
   return @(@($actions) + @($drifts))
+}
+function Read-RdpGroupMemberNames {
+  param([string]$Group)
+  if (-not (Test-CmdletAvailable -Name 'Get-LocalGroupMember')) {
+    return [pscustomobject]@{ Names = @(); Error = "LocalAccounts cmdlets not available (Get-LocalGroupMember missing)." }
+  }
+  try {
+    $cur = Get-LocalGroupMember -Group $Group -ErrorAction Stop
+    return [pscustomobject]@{ Names = @($cur | ForEach-Object { $_.Name }); Error = $null }
+  } catch {
+    return [pscustomobject]@{ Names = @(); Error = "Cannot read group '$Group' - $($_.Exception.Message)" }
+  }
 }
 function Add-MissingRdpGroupMembers {
   param([string]$Group,[string[]]$Allowed,[string[]]$Current,[bool]$Remediate,$CommandContext,$Actions,$Drifts)
@@ -474,6 +484,11 @@ function Add-MissingRdpGroupMembers {
 }
 function Remove-UnexpectedRdpGroupMembers {
   param([string]$Group,[string[]]$Keep,[string[]]$Current,[bool]$Remediate,$CommandContext,$Actions,$Drifts)
+  # Never shrink the group when an allowed member could not be added in this run.
+  if (@($Drifts | Where-Object { $_ -like 'Failed to add member*' }).Count -gt 0) {
+    $Drifts.Add('Missing member add failed; exact-membership removal skipped.')
+    return
+  }
   foreach ($member in $Current) {
     if ($Keep -contains $member) { continue }
     if (-not $Remediate -or -not $CommandContext.ShouldProcess($Group, "Remove $member")) { $Drifts.Add("Unexpected member $member"); continue }
@@ -517,7 +532,7 @@ function Set-RemoteAssistancePolicyValue {
 # ----------------------------
 . (Join-Path $PSScriptRoot 'internal/14-SecureRemoteAccessGuardrails.runtime.ps1')
 $ProofPath = Get-RemoteAccessProofPath $ProofPath
-$runState = New-RemoteAccessRunState -IsElevated (Test-IsElevated)
+$runState = New-RemoteAccessRunState -IsElevated (Test-IsAdmin)
 $runOptions = [pscustomobject]@{ CatalogPath=$CatalogPath; ConfigPath=$ConfigPath; ProofPath=$ProofPath; Remediate=$Remediate; Strict=[bool]$Strict; EventSource=$eventSettings.Source; EventLog=$eventSettings.Log }
 Invoke-RemoteAccessCapability -RunState $runState -CommandContext $PSCmdlet -Options $runOptions
 Add-RemoteAccessCanonicalFindings -Drifts @($runState.Drifts)

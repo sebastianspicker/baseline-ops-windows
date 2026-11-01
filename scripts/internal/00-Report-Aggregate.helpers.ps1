@@ -60,7 +60,7 @@ function Get-ReportAggregateOutputPath {
   if ([string]::IsNullOrWhiteSpace($OutputPath)) { return $null }
   if ($null -eq $DirectoryNameCache) { $DirectoryNameCache = New-ReportAggregateDirectoryNameCache }
   if (Test-Path -LiteralPath $OutputPath -PathType Leaf) { return Get-CanonicalResultFilePath -Path $OutputPath -DirectoryNameCache $DirectoryNameCache }
-  $outputFullPath = [System.IO.Path]::GetFullPath($OutputPath)
+  $outputFullPath = Resolve-FileSystemProviderPath -Path $OutputPath
   $outputParent = Get-CanonicalResultFilePath -Path (Split-Path -Path $outputFullPath -Parent) -DirectoryNameCache $DirectoryNameCache
   return Join-Path -Path $outputParent -ChildPath (Split-Path -Path $outputFullPath -Leaf)
 }

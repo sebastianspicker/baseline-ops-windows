@@ -178,6 +178,7 @@ Import-Module (Join-Path $script:LibPath 'EventLog.psm1') -Force
 Import-Module (Join-Path $script:LibPath 'Console.psm1') -Force
 Import-Module (Join-Path $script:LibPath Serialization.psm1) -Force
 Import-Module (Join-Path $script:LibPath 'Validation.psm1')
+Import-Module (Join-Path $script:LibPath 'JsonCatalog.psm1') -Force
 
 
 $script:Quiet = [bool]$Quiet
