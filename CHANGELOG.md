@@ -26,6 +26,14 @@ Target alpha: `v2.3.0-alpha.1`.
 
 ### Changed
 
+- General verification now runs automatically only for Dependabot-authored pull
+  requests, with manual dispatch available. Security-only checks remain
+  automatic. Pages and release publication require manual default-branch
+  dispatch; releases require a validated tag at that exact commit.
+- Updated the reviewed GitHub Actions pins and Playwright browser checks.
+- Updated Rust ZIP handling to the patched 9.0.2 dependency, preserving the
+  existing guarded extraction path and explicitly rejecting filename decoding
+  errors returned by the new API.
 - The runners no longer default to `C:\install\mdm\ps1`. Without
   `-RootPath`, `00-Run-Local`, `00-Run-Profile` and `00-Run-Batch` use the
   root that contains them, and the launcher no longer falls back to that path.

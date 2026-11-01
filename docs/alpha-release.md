@@ -7,8 +7,8 @@ protected-install contract and its tests currently use that versioned directory
 name.
 
 The release workflow accepts semantic version tags such as
-`v2.3.0-alpha.1`. Dispatch it from the tag being packaged. The workflow checks
-that the event commit is the commit resolved by that tag.
+`v2.3.0-alpha.1`. Dispatch it from the default branch and supply that existing
+tag as `release_tag`. The tag must resolve to the exact dispatched commit.
 
 ## Package contents
 
@@ -89,7 +89,7 @@ $ExpectedSha256 = [string](& gh attestation verify $Asset `
   --repo sebastianspicker/baseline-ops-windows `
   --bundle "$Asset.intoto.jsonl" `
   --signer-workflow github.com/sebastianspicker/baseline-ops-windows/.github/workflows/release.yml `
-  --source-ref refs/tags/v2.3.0-alpha.1 `
+  --source-ref refs/heads/main `
   --source-digest $SourceCommit `
   --deny-self-hosted-runners `
   --format json `
@@ -301,11 +301,18 @@ terminal result.
 
 ## Maintainer release checklist
 
+The current workflow is dispatched from the default branch, so its attested
+source reference is `refs/heads/main`; the separately validated tag must point
+to that exact commit. For an older release produced by a tag-triggered workflow,
+use that release's tagged verification instructions rather than relaxing the
+source-reference or digest checks.
+
 Repository files cannot enforce settings hosted by GitHub. Before tagging,
 enable
 [immutable releases](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/prevent-release-changes),
 protect release-tag creation with a repository ruleset, and configure the
-`alpha-release` environment with required reviewer and deployment-tag controls.
+`alpha-release` environment with required reviewers and controls permitting
+reviewed manual default-branch deployments.
 The environment must also provide `RELEASE_SETTINGS_READ_TOKEN`, a fine-grained
 token scoped to this repository with read-only Administration permission. The
 publish job uses this token only to check the immutable-release setting before
@@ -315,9 +322,11 @@ creating a draft. The normal job token handles the release contents.
 2. Run the commands in [CONTRIBUTING.md](../CONTRIBUTING.md#local-checks) under PowerShell 7.6.3 and Windows PowerShell 5.1 with PSScriptAnalyzer 1.25.0. Review failures, unexpected skips, and test-discovery changes.
 3. Complete the manual launcher and endpoint remediation checks required for the release scope.
 4. Create the exact semantic prerelease tag `v2.3.0-alpha.1` at that commit and
-   push only the tag intended for publication.
-5. Confirm the `Release Package` workflow resolves that commit, passes every
-   gate, creates the draft, uploads all four immutable assets, and publishes it.
+   publish that reviewed tag only when authorized. Tag creation does not start a
+   release workflow.
+5. Manually dispatch `Release Package` on `main` with `release_tag` set to that
+   exact tag. The tag must resolve to the dispatched default-branch commit.
+   Confirm every gate passes before the draft and its immutable assets publish.
 6. Download the public assets and repeat checksum, manifest, and provenance
    verification independently.
 7. Record newly discovered limitations in the changelog and this guide before
@@ -328,8 +337,8 @@ creating a draft. The normal job token handles the release contents.
 The workflow never reuses a release. If it fails after creating an unpublished
 draft, preserve the run logs and inspect every draft asset before recovery.
 Confirm that `isDraft` is true and that the tag still points to the frozen
-commit. Then delete only that draft and rerun the workflow from the same,
-unchanged tag:
+commit. Then delete only that draft and rerun the original manual workflow run with
+the same, unchanged `release_tag` and dispatch commit:
 
 ```bash
 tag='v2.3.0-alpha.1'

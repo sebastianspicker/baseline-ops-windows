@@ -115,8 +115,9 @@ parity ledger.
 
 ## Release identity
 
-Rust releases use `rust-v*` tags and cannot trigger the legacy `v*` workflow. A release resolves the
-exact tagged commit and produces signed x64 binaries, schemas, examples, documentation, an SBOM, a
+Rust releases use `rust-v*` tags separately from PowerShell's `v*` namespace.
+Both workflows require manual default-branch dispatch and a validated tag input
+at that exact commit. A release produces signed x64 binaries, schemas, examples, documentation, an SBOM, a
 per-file manifest, and SHA-256 records. The release job refuses to replace existing assets.
 
 The committed-result reader accepts only an independently authenticated worker result as its

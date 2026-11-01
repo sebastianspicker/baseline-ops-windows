@@ -3,28 +3,7 @@ name: Rust v3 CI
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - dev
-      - 'feat/**'
-    paths:
-      - 'rust/**'
-      - 'scripts/**'
-      - 'lib/**'
-      - 'dev/quality/**'
-      - 'PSScriptAnalyzerSettings.psd1'
-      - '.github/actions/setup-pinned-pwsh-linux/**'
-      - '.github/workflows/rust-ci.yml'
   pull_request:
-    paths:
-      - 'rust/**'
-      - 'scripts/**'
-      - 'lib/**'
-      - 'dev/quality/**'
-      - 'PSScriptAnalyzerSettings.psd1'
-      - '.github/actions/setup-pinned-pwsh-linux/**'
-      - '.github/workflows/rust-ci.yml'
 
 permissions: {}
 
@@ -34,6 +13,7 @@ concurrency:
 
 jobs:
   portable:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]')
     name: Portable contracts and tooling
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -112,6 +92,7 @@ jobs:
           cargo deny check
 
   windows-x64:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]')
     name: Windows x64 compile and contract tests
     runs-on: windows-latest
     timeout-minutes: 30

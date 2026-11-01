@@ -1,0 +1,38 @@
+# Audits locked dependency metadata without building or publishing the product.
+name: Dependency security
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '41 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  rust-advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned audit tooling
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
+          rustup run 1.96.0 cargo install cargo-deny --version 0.20.2 --locked
+      - name: Check locked Rust dependency policy
+        working-directory: rust
+        run: rustup run 1.96.0 cargo deny check
+  browser-tooling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Audit browser tooling without lifecycle scripts
+        run: npm audit --prefix dev/demo --audit-level low

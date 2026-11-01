@@ -78,7 +78,10 @@ impl ArchiveValidation {
         &mut self,
         entry: &zip::read::ZipFile<'_, R>,
     ) -> Result<PathBuf, PlatformError> {
-        let relative = validate_entry_name(entry.name(), self.policy.max_depth)?;
+        let name = entry
+            .name()
+            .map_err(|error| PlatformError::ArchiveRejected(error.to_string()))?;
+        let relative = validate_entry_name(&name, self.policy.max_depth)?;
         self.reject_duplicate_or_special(entry, &relative)?;
         if !entry.is_dir() {
             self.enforce_file_quotas(entry.size(), &relative)?;

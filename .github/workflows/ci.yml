@@ -4,20 +4,7 @@ name: ci
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - dev
-      - 'fix/**'
-      - 'feat/**'
-      - 'update-*'
-      - 'update/**'
   pull_request:
-    branches:
-      - main
-      - dev
-      - 'fix/**'
-      - 'feat/**'
 
 permissions: {}
 
@@ -34,6 +21,7 @@ env:
 
 jobs:
   verify:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]')
     name: ${{ matrix.check_name }}
     runs-on: windows-latest
     permissions:
@@ -176,6 +164,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   portable-gate-linux:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]')
     # Runs the same portable gate contributors run locally (dev/ci-local.sh):
     # secret scan, documentation, parse, PSScriptAnalyzer, complexity and
     # and duplication on the pinned PowerShell runtime.

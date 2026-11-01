@@ -89,6 +89,66 @@ mod tests {
         assert_eq!(fs::read(&paths[0]).expect("read"), b"{}");
     }
 
+    fn set_unix_mode(bytes: &mut [u8], mode: u32) {
+        let central = bytes
+            .windows(4)
+            .position(|part| part == b"PK\x01\x02")
+            .expect("central header");
+        bytes[central + 5] = 3; // ZIP creator system: Unix.
+        bytes[central + 38..central + 42].copy_from_slice(&(mode << 16).to_le_bytes());
+    }
+
+    #[test]
+    fn rejects_a_symlink_member_without_touching_its_target() {
+        let mut bytes = archive_with("link", b"../outside");
+        set_unix_mode(&mut bytes, 0o120_777);
+        let root = tempfile::tempdir().expect("root");
+        let destination = root.path().join("destination");
+        let outside = root.path().join("outside");
+        fs::write(&outside, b"keep").expect("outside control");
+        assert!(
+            extract_zip_safely(Cursor::new(bytes), &destination, ArchivePolicy::default()).is_err()
+        );
+        assert!(fs::symlink_metadata(destination.join("link")).is_err());
+        assert_eq!(fs::read(outside).expect("outside unchanged"), b"keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extraction_does_not_preserve_privileged_permission_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut bytes = archive_with("regular", b"content");
+        set_unix_mode(&mut bytes, 0o107_755);
+        let root = tempfile::tempdir().expect("root");
+        let paths = extract_zip_safely(Cursor::new(bytes), root.path(), ArchivePolicy::default())
+            .expect("extract");
+        assert_eq!(
+            fs::metadata(&paths[0])
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o7_000,
+            0
+        );
+        assert_eq!(fs::read(&paths[0]).expect("read"), b"content");
+    }
+
+    #[test]
+    fn preserves_a_non_ascii_member_name() {
+        let bytes = archive_with("résumé.json", b"content");
+        let root = tempfile::tempdir().expect("root");
+        let paths = extract_zip_safely(Cursor::new(bytes), root.path(), ArchivePolicy::default())
+            .expect("extract");
+        assert_eq!(
+            paths,
+            [fs::canonicalize(root.path())
+                .expect("canonical root")
+                .join("résumé.json")]
+        );
+        assert_eq!(fs::read(&paths[0]).expect("read"), b"content");
+    }
+
     #[test]
     fn rejects_traversal_and_reserved_names() {
         for name in ["../escape", "CON.txt", "data:stream"] {

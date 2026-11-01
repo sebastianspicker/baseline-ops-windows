@@ -48,6 +48,11 @@ ships a PowerShell runtime.
 
 ## Release requirements
 
+The signed-release workflow is manual-only on the default branch. Supply an
+existing `rust-v*` tag through `release_tag`; it must resolve to the dispatched
+commit. Tag pushes do not publish a release. Signing, parity and package gates
+remain required, and no local portable check establishes Windows qualification.
+
 The v3 release requires all 52 parity-ledger entries to be complete and the signed package to pass
 verification from a protected installation. Before parsing or trusting `manifest.json`, the package
 verifier authenticates a detached PKCS#7 signature over its exact bytes. Authenticode signatures on

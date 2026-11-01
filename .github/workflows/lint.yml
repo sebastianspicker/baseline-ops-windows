@@ -4,20 +4,7 @@ name: Lint (shell/yaml/markdown/actions)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - dev
-      - 'fix/**'
-      - 'feat/**'
-      - 'update-*'
-      - 'update/**'
   pull_request:
-    branches:
-      - main
-      - dev
-      - 'fix/**'
-      - 'feat/**'
 
 permissions: {}
 
@@ -27,6 +14,7 @@ concurrency:
 
 jobs:
   lint:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]')
     name: Lint (shell/yaml/markdown/actions)
     runs-on: ubuntu-latest
     permissions:

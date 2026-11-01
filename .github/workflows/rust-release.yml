@@ -2,10 +2,12 @@
 name: Rust v3 signed release
 
 on:
-  push:
-    tags:
-      - 'rust-v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag at the dispatched default-branch commit
+        required: true
+        type: string
 
 permissions: {}
 
@@ -15,6 +17,7 @@ concurrency:
 
 jobs:
   build-sign-package:
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     name: Build, sign, and verify x64 package
     runs-on: windows-latest
     timeout-minutes: 45
@@ -38,13 +41,15 @@ jobs:
 
       - name: Resolve exact Rust release tag
         id: release
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:GITHUB_REF_TYPE -cne 'tag') {
-            throw 'Manual release runs must be dispatched from the tag being packaged.'
+          if ($env:GITHUB_REF_TYPE -cne 'branch') {
+            throw 'Manual release runs must be dispatched from the default branch.'
           }
-          $tag = $env:GITHUB_REF_NAME
+          $tag = $env:RELEASE_TAG_INPUT
           if ($tag.Length -gt 132 -or $tag -cnotmatch '^rust-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') {
             throw "Invalid Rust release tag: $tag"
           }
@@ -102,6 +107,7 @@ jobs:
 
       - name: Verify and build release binaries
         env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
           BASELINEOPS_EXPECTED_SIGNER_SUBJECT: ${{ secrets.RUST_EXPECTED_SIGNER_SUBJECT }}
           BASELINEOPS_EXPECTED_SIGNER_SPKI_SHA256: ${{ secrets.RUST_EXPECTED_SIGNER_SPKI_SHA256 }}
         working-directory: rust
@@ -117,7 +123,7 @@ jobs:
           cargo run -p xtask -- release-check `
             --expected-signer $env:BASELINEOPS_EXPECTED_SIGNER_SUBJECT `
             --expected-signer-spki-sha256 $env:BASELINEOPS_EXPECTED_SIGNER_SPKI_SHA256 `
-            --release-tag $env:GITHUB_REF_NAME
+            --release-tag $env:RELEASE_TAG
           cargo build --locked --release --target x86_64-pc-windows-msvc `
             -p baselineops-cli -p baselineops-gui -p baselineops-worker
 
@@ -177,7 +183,7 @@ jobs:
           cargo run -p xtask -- package-verify --package (Join-Path $PWD "dist\$env:RELEASE_ASSET") --expected-signer $env:EXPECTED_SIGNER_SUBJECT --expected-signer-spki-sha256 $env:EXPECTED_SIGNER_SPKI_SHA256
 
       - name: Upload immutable package candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rust-v3-release
           path: |
@@ -187,6 +193,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     name: Publish immutable Rust release
     needs: build-sign-package
     runs-on: ubuntu-latest
@@ -202,7 +209,7 @@ jobs:
           egress-policy: audit
 
       - name: Download verified package
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: rust-v3-release
           path: dist

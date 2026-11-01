@@ -178,3 +178,7 @@ implementation-notes.md
 /*_ledger.md
 # Local alpha audit and tester notes; not part of the public source.
 /ALPHA_*.md
+
+# Local design reports and uppercase task ledgers
+/docs/reports/
+/*_LEDGER.md

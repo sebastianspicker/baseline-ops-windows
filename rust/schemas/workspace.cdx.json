@@ -56,12 +56,6 @@
       "version": "1.0.103"
     },
     {
-      "name": "arbitrary",
-      "purl": "pkg:cargo/arbitrary@1.4.2",
-      "type": "library",
-      "version": "1.4.2"
-    },
-    {
       "name": "autocfg",
       "purl": "pkg:cargo/autocfg@1.5.1",
       "type": "library",
@@ -140,6 +134,12 @@
       "version": "1.0.4"
     },
     {
+      "name": "cfg_aliases",
+      "purl": "pkg:cargo/cfg_aliases@0.2.2",
+      "type": "library",
+      "version": "0.2.2"
+    },
+    {
       "name": "chrono",
       "purl": "pkg:cargo/chrono@0.4.42",
       "type": "library",
@@ -210,12 +210,6 @@
       "purl": "pkg:cargo/csv-core@0.1.13",
       "type": "library",
       "version": "0.1.13"
-    },
-    {
-      "name": "derive_arbitrary",
-      "purl": "pkg:cargo/derive_arbitrary@1.4.2",
-      "type": "library",
-      "version": "1.4.2"
     },
     {
       "name": "digest",
@@ -384,6 +378,12 @@
       "purl": "pkg:cargo/miniz_oxide@0.8.9",
       "type": "library",
       "version": "0.8.9"
+    },
+    {
+      "name": "nix",
+      "purl": "pkg:cargo/nix@0.31.3",
+      "type": "library",
+      "version": "0.31.3"
     },
     {
       "name": "nu-ansi-term",
@@ -620,6 +620,12 @@
       "version": "0.3.20"
     },
     {
+      "name": "typed-path",
+      "purl": "pkg:cargo/typed-path@0.12.4",
+      "type": "library",
+      "version": "0.12.4"
+    },
+    {
       "name": "typenum",
       "purl": "pkg:cargo/typenum@1.20.1",
       "type": "library",
@@ -771,9 +777,9 @@
     },
     {
       "name": "zip",
-      "purl": "pkg:cargo/zip@6.0.0",
+      "purl": "pkg:cargo/zip@9.0.2",
       "type": "library",
-      "version": "6.0.0"
+      "version": "9.0.2"
     },
     {
       "name": "zlib-rs",

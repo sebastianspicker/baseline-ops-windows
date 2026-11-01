@@ -25,6 +25,14 @@ focused, explain their effect on an endpoint, and test the behavior they change.
 
 Call out changes to profile parsing, dependency handling, remediation, integrity checks, privileged path validation, native process execution, evidence collection, or result serialization.
 
+General PowerShell, Rust and lint CI runs automatically only for pull requests
+whose author is `dependabot[bot]`, and remains manually dispatchable. Security-only
+CodeQL, Scorecard and dependency checks keep their separate automatic schedules.
+Pages and both release workflows require manual dispatch on the default branch.
+For a release, provide `release_tag`; it must already exist and resolve to the
+exact dispatched default-branch commit. Signed-package and publication controls
+remain additional requirements.
+
 ## Source requirements
 
 - Follow the dependency map in `docs/architecture.md`: capability policy stays

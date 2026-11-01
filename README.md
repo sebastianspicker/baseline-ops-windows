@@ -6,6 +6,15 @@ includes 52 endpoint capabilities, reusable profiles, and an optional Windows
 Forms launcher. Some capabilities can also change settings, with explicit
 remediation and confirmation controls.
 
+<details>
+<summary>Status and limitations</summary>
+
+BaselineOps is an independent experimental project for Windows endpoint auditing, diagnostic evidence and selected remediation. Developed independently alongside my main professional work. PowerShell v2 is the supported implementation; Rust v3 remains unreleased. The scripts and profiles are a starting point for review and adaptation, not a ready-to-use endpoint management product.
+
+**Disclaimer.** Results depend on the selected checks, privileges and endpoint state; they do not establish compliance or complete security coverage. Before operational use, test on disposable systems, review privileged actions and recovery, and protect collected endpoint data. Deployment and remediation decisions remain your responsibility.
+
+</details>
+
 Use it directly on Windows or through your existing device-management workflow.
 No particular MDM service, domain, or organization is required; individual
 checks depend on the Windows features they inspect.
@@ -18,6 +27,17 @@ or calls the other at runtime.
 [Get started](#get-started) · [Script catalog](scripts/README.md) ·
 [Screenshot tour](#screenshot-tour) · [Documentation](docs/README.md) ·
 [Live demo](https://sebastianspicker.github.io/baseline-ops-windows/)
+
+A profile run follows this path. Individual capabilities retain their own validation and confirmation checks.
+
+```mermaid
+flowchart LR
+    Profile["Reviewed audit or remediation profile"] --> Validate["Profile validation"]
+    Validate --> Runner["PowerShell profile runner"]
+    Runner --> Checks["Selected endpoint capabilities"]
+    Checks --> Results["Console, JSON or CSV results"]
+    Checks -. "approved remediation only" .-> Changes["Guarded Windows changes"]
+```
 
 ## Capabilities
 
