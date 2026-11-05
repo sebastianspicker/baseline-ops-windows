@@ -13,6 +13,11 @@ expected behavior. Rust v3 cannot claim parity until its capability ledger and
 Windows evidence are complete. [ADR 0001](decisions/0001-single-runtime.md)
 records this separation.
 
+New to the code? Read the overview below, then the
+[profile run](#principal-powershell-flow), [one capability run](#one-capability-run)
+and [launcher run](#launcher-run) sequences, and finish with the
+[code map](#code-map).
+
 ```mermaid
 flowchart TB
   Operator[Endpoint operator]
@@ -105,6 +110,7 @@ code. This keeps each endpoint policy visible and auditable.
 
 ```mermaid
 sequenceDiagram
+  autonumber
   actor Operator
   participant Entry as Launcher or batch
   participant Runner as 00-Run-Profile / 00-Run-Local
@@ -132,6 +138,28 @@ profile validation, one-script execution, or profile execution. When an
 operator invokes a numbered capability directly, it bypasses the orchestration
 layer and calls the shared services and Windows implementation itself.
 
+All of this runs in one PowerShell process: the profile runner calls
+`00-Run-Local.ps1` with the call operator `&`, and the local runner calls the
+capability the same way. Step 3 happens once for the profile and again in the
+local runner for each selected capability.
+
+Where in the code:
+
+- [scripts/00-Run-Batch.ps1](../scripts/00-Run-Batch.ps1): curated category to
+  temporary profile.
+- [scripts/00-Run-Profile.ps1](../scripts/00-Run-Profile.ps1): bootstrap
+  trust, execution lease, then `Invoke-RunProfile`; validation in
+  [00-Run-Profile.runtime.ps1](../scripts/internal/00-Run-Profile.runtime.ps1),
+  dependency order and per-step dispatch (`Invoke-RunProfileStep`) in
+  [00-Run-Profile.scheduler.ps1](../scripts/internal/00-Run-Profile.scheduler.ps1).
+- [scripts/00-Validate-Profile.ps1](../scripts/00-Validate-Profile.ps1): the
+  profile v2 validator the runner calls first.
+- [scripts/00-Run-Local.ps1](../scripts/00-Run-Local.ps1): root, ACL and
+  integrity checks, then `Invoke-RunLocalCapability` in
+  [00-Run-Local.runtime.ps1](../scripts/internal/00-Run-Local.runtime.ps1).
+- [lib/ProfileExecutionLease.psm1](../lib/ProfileExecutionLease.psm1): the
+  execution lease described below.
+
 Before loading its validator, the profile runner acquires a private execution
 lease. The lease keeps handles open for the runner's coordination files and for
 the complete `lib`, `scripts/_lib`, and `scripts/internal` code sets under both
@@ -146,6 +174,55 @@ acquisition.
 The local runner still performs target-file, signature, hash, ACL, and
 reparse-point checks for each selected capability. Profile data and result metadata cannot create or authorize
 a lease.
+
+### One capability run
+
+This is what happens inside a numbered capability, here
+`18-Firewall-Baseline.ps1` started directly in Remediate mode. The other
+capabilities follow the same shape with their own reads and changes.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Operator
+  participant Cap as 18-Firewall-Baseline.ps1
+  participant Helpers as internal/18-*.helpers.ps1
+  participant Lib as lib modules
+  participant Windows as Windows
+  Operator->>Cap: -Mode Remediate -OutputFormat Json
+  Cap->>Lib: Bootstrap.ps1, Import-Module
+  Cap->>Windows: Get-NetFirewallProfile, Get-NetFirewallRule
+  Windows-->>Cap: current profile and rule state
+  Cap->>Helpers: compare with baseline, build result items
+  opt Mode is Remediate and ShouldProcess approves
+    Cap->>Windows: Set-NetFirewallProfile, rule changes
+  end
+  Cap->>Lib: Write-ResultObject
+  Lib-->>Operator: v2 JSON result
+  Cap-->>Operator: exit 0, 1 or 2 via Get-V2ExitCode
+```
+
+Every capability defaults to `-Mode Audit`, so step 6 only happens when the
+trusted caller passes `-Mode Remediate`. Each change is wrapped in its own
+`ShouldProcess` call, so `-WhatIf` turns step 6 into a "skipped" result item
+instead of a change. Native executables (for example `auditpol`, `wevtutil`,
+`reg.exe`) are never started in step 3 directly; capabilities that need them
+call `Invoke-NativeCommand` or a fixed adapter from `External.psm1`. Steps 7
+to 9 use the same shared functions in every capability, which is why all
+results share the v2 fields and exit codes.
+
+Where in the code:
+
+- [scripts/18-Firewall-Baseline.ps1](../scripts/18-Firewall-Baseline.ps1) and
+  its private
+  [18-Firewall-Baseline.helpers.ps1](../scripts/internal/18-Firewall-Baseline.helpers.ps1).
+- [scripts/_lib/Bootstrap.ps1](../scripts/_lib/Bootstrap.ps1): fixed `lib`
+  location and the shared mode, output and strictness context.
+- [lib/Results.psm1](../lib/Results.psm1): findings (`Add-Finding`).
+- [lib/Serialization.psm1](../lib/Serialization.psm1): `Write-ResultObject`
+  and `Get-V2ExitCode`.
+- [lib/External.psm1](../lib/External.psm1): the only native-execution entry
+  point.
 
 ## PowerShell contracts and state
 
@@ -187,6 +264,54 @@ process creation: PowerShell and CLR initialization happen before the Job
 assignment. The guarded start therefore applies to repository code, not to the
 initial PowerShell and CLR startup.
 
+### Launcher run
+
+This is what happens when the operator presses Run in the launcher.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Operator
+  participant Gui as Launcher-GUI.ps1
+  participant Job as Job Object
+  participant Worker as Launcher-Worker.ps1
+  participant Entry as 00-Run-Local or 00-Run-Profile
+  Operator->>Gui: choose script or profile, mode, Run
+  Gui->>Gui: build manifest, lock trusted closure
+  Gui->>Worker: start pwsh, manifest in env (Base64)
+  Gui->>Job: assign worker process
+  Gui->>Worker: set start gate
+  Worker->>Worker: Assert-LauncherManifest, lock closure
+  Worker->>Entry: dispatch run-script or run-profile
+  Entry-->>Worker: output lines, exit code
+  Worker-->>Gui: stdout/stderr, exit code
+  Gui-->>Operator: log view and final state
+```
+
+The manifest (step 3) is at most 16 KiB of JSON and names only an operation
+(`validate-profile`, `run-script` or `run-profile`), a target, a mode and
+integrity options; the worker re-validates it in step 6 instead of trusting
+the GUI. The worker waits up to 15 seconds for the start gate (step 5), so no
+repository code is imported before the Job Object owns the process tree. Stop
+terminates that Job Object. Step 7 uses the same public entry points as a
+command-line run, so everything in the [profile run](#principal-powershell-flow)
+applies unchanged.
+
+Where in the code:
+
+- [tools/Launcher-GUI.ps1](../tools/Launcher-GUI.ps1) with its
+  [View](../tools/Launcher-GUI.View.ps1),
+  [Catalog](../tools/Launcher-GUI.Catalog.ps1) and
+  [App](../tools/Launcher-GUI.App.psm1) parts.
+- [tools/Launcher-GUI.Runtime.ps1](../tools/Launcher-GUI.Runtime.ps1):
+  `Invoke-LauncherProcess`, `Start-LauncherWorkerProcess`,
+  `Initialize-LauncherWorkerProcess`, `Complete-LauncherProcess`.
+- [tools/Launcher-Worker.ps1](../tools/Launcher-Worker.ps1):
+  `Invoke-LauncherWorker` and `Get-LauncherWorkerCommand`.
+- [tools/Launcher.Core.psm1](../tools/Launcher.Core.psm1): manifest
+  validation, trusted closure and the Job Object wrapper.
+- Operator view: [launcher-gui.md](launcher-gui.md).
+
 Output-path validation checks names and reparse points before a write. It does
 not retain a directory handle that binds the later write to the exact
 filesystem object that was validated. For this reason, privileged runs must use
@@ -224,6 +349,44 @@ See the [Rust architecture](https://github.com/sebastianspicker/baseline-ops-win
 
 ## Build and release boundaries
 
+This is how a PowerShell change goes from a pull request to a published
+release ZIP. Nothing is published automatically.
+
+```mermaid
+flowchart LR
+  pr[Pull request] -->|pull_request| ci["ci.yml<br/>Windows + Linux gate"]
+  pr -->|pull_request| other["lint, codeql,<br/>security, rust-ci"]
+  pr -->|merge| main[main branch]
+  main -->|"tag v*, manual dispatch"| verify["release.yml<br/>verify_package"]
+  verify -->|"ZIP, .sha256, manifest"| candidate[(Release candidate)]
+  candidate --> publish["publish job<br/>alpha-release env"]
+  publish -->|attest, draft, upload| release[GitHub release]
+  main -.->|manual dispatch| pages["pages.yml<br/>browser demo"]
+  classDef focus fill:#fde68a,stroke:#b45309,color:#1f2937
+  class verify focus
+```
+
+`verify_package` checks out the exact release tag, runs `secret-scan.ps1`,
+`Test-Documentation.ps1` and `verify.ps1`, builds the ZIP with `git archive`
+from a fixed list of paths (`README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
+`LICENSE`, `SECURITY.md`, `PSScriptAnalyzerSettings.psd1`, `docs`,
+`examples`, `lib`, `scripts`, `tools`), then extracts the ZIP and reruns the
+operator-package gates against it. The `publish` job runs in the protected
+`alpha-release` environment, re-verifies the candidate and the remote tag,
+attests provenance and only then turns a draft into a published release. Rust
+`rust-v*` packages follow the same pattern in `rust-release.yml` on a Windows
+runner.
+
+Where in the code:
+
+- [.github/workflows/ci.yml](../.github/workflows/ci.yml) and
+  [dev/ci-local.sh](../dev/ci-local.sh), the portable gate it runs.
+- [.github/workflows/release.yml](../.github/workflows/release.yml) and
+  [.github/workflows/rust-release.yml](../.github/workflows/rust-release.yml).
+- [.github/workflows/pages.yml](../.github/workflows/pages.yml) and
+  [dev/demo/](../dev/demo/).
+- Operator install steps: [alpha-release.md](alpha-release.md).
+
 PowerShell `v*` releases contain the reviewed operator files and exclude
 tests, workflows, Rust, and development-only files. Rust `rust-v*` releases have
 their own signed binaries, schemas, examples, documentation, SBOM, manifest,
@@ -246,3 +409,25 @@ behavior.
 Portable checks do not replace verification under
 Windows PowerShell 5.1, a protected workspace, LocalSystem, a signed package,
 Windows features, hardware, or the manual launcher.
+
+## Code map
+
+Files in the order a newcomer should read them. The per-module table lives in
+the [lib README](../lib/README.md), and every capability is listed in the
+[script catalog](../scripts/README.md).
+
+| Path | Responsibility |
+| --- | --- |
+| [examples/profiles/baseline-audit.json](../examples/profiles/baseline-audit.json) | A small v2 profile: what operators actually feed in |
+| [scripts/00-Run-Profile.ps1](../scripts/00-Run-Profile.ps1) | Profile entry point: trust checks, lease, validation, ordered steps |
+| [scripts/internal/00-Run-Profile.scheduler.ps1](../scripts/internal/00-Run-Profile.scheduler.ps1) | `DependsOn` order and one call per step |
+| [scripts/00-Run-Local.ps1](../scripts/00-Run-Local.ps1) | One-capability entry point: root, ACL, signature and hash checks |
+| [scripts/27-Defender-Health-Audit.ps1](../scripts/27-Defender-Health-Audit.ps1) | A read-only capability, start-to-finish in one file |
+| [scripts/18-Firewall-Baseline.ps1](../scripts/18-Firewall-Baseline.ps1) | A capability with Audit and Remediate modes and `ShouldProcess` |
+| [scripts/_lib/Bootstrap.ps1](../scripts/_lib/Bootstrap.ps1) | How every script finds `lib/` |
+| [lib/Serialization.psm1](../lib/Serialization.psm1) | v2 result output (Console, JSON, CSV) and exit codes |
+| [lib/External.psm1](../lib/External.psm1) | The only way to start native executables |
+| [lib/ProfileExecutionLease.psm1](../lib/ProfileExecutionLease.psm1) | Code-closure handles held for a whole profile run |
+| [tools/Launcher-Worker.ps1](../tools/Launcher-Worker.ps1) | What the launcher actually runs |
+| [tools/verify.ps1](../tools/verify.ps1) | Public-surface and static checks, shipped with the release |
+| [dev/ci-local.sh](../dev/ci-local.sh) | The portable gate CI runs; run it before a pull request |

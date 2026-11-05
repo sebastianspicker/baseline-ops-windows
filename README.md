@@ -6,6 +6,8 @@ includes 52 endpoint capabilities, reusable profiles, and an optional Windows
 Forms launcher. Some capabilities can also change settings, with explicit
 remediation and confirmation controls.
 
+> _Claude was used to polish and proof-read the code and documentation of this repository._
+
 <details>
 <summary>Status and limitations</summary>
 
