@@ -1,0 +1,8 @@
+---
+# Never-shipped verification scripts, fixture generators and tests.
+exclude_paths:
+  - "dev/demo/**"
+  - "dev/demo-profiles.mjs"
+  - "tests/**"
+  - "rust/**/*_tests.rs"
+  - "rust/**/tests/**"
