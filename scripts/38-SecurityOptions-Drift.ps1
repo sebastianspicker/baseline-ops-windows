@@ -7,6 +7,7 @@ Audit/drift sensor for selected "Security Options"-adjacent settings via registr
 .DESCRIPTION
 - Always runs built-in baseline checks (LmCompatibilityLevel, EnableLUA).
 - Optionally loads desired state from JSON (path or inline JSON), compares, and can remediate drift.
+- Remediate writes only to an allowlist of HKLM Security Options keys and never to values that load code (see DesiredJson); anything else is reported, never written.
 - If DesiredJson is missing/unreadable/invalid, continues with baseline checks only.
 - Pipeline output: exactly one structured object (safe for Export-Csv / ConvertTo-Json / Where-Object).
 - Console output: formatted, colorized summary via Write-UiLine / Write-Information only.
@@ -18,6 +19,12 @@ Audit | Remediate
 Either:
 1) Path to a JSON file supplied with $DesiredJson, or
 2) Inline JSON string.
+Audit compares any path. Remediate writes only to these exact HKLM keys (no subkeys): Control\Lsa, Lsa\MSV1_0,
+Lsa\FipsAlgorithmPolicy, Lsa\pku2u, Policies\System, Policies\System\Kerberos\Parameters, LanmanServer\Parameters,
+LanmanWorkstation\Parameters, Netlogon\Parameters, Services\LDAP, Winlogon, Session Manager, Session Manager\Kernel,
+Session Manager\Memory Management, and Print\Providers\LanMan Print Services\Servers. Values that name code to run
+(for example ServiceDll, Userinit, Shell, BootExecute, the Lsa package lists, MSV1_0 AuthN) are never written.
+Any other path stays an open SECOPT-Drift finding plus SECOPT-PathNotAllowed (High) and the result is FAIL; nothing is written.
 
 .PARAMETER ExportPath
 Optional base path for CSV export (suffixes will be appended).
@@ -412,14 +419,49 @@ function Invoke-SecurityOptionsDesiredValue {
   if ($isDrift) { Set-SecurityOptionDrift -Row $row }
   $script:Drift.Add($row) | Out-Null
 }
+function Get-SecurityOptionsAllowedKey {
+  return @(
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\FipsAlgorithmPolicy'
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\pku2u'
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Kerberos\Parameters'
+    'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+    'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
+    'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
+    'HKLM:\SYSTEM\CurrentControlSet\Services\LDAP'
+    'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel'
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Providers\LanMan Print Services\Servers'
+  )
+}
+function Test-SecurityOptionsRemediationPathAllowed {
+  param([string]$Path, [string]$Name, [string[]]$AllowedKey)
+  # Exact keys only (subkeys such as Session Manager\KnownDLLs load code); values that name code to run are never written.
+  $codeLoadingNames = @('ServiceDll', 'ServiceMain', 'ImagePath', 'Userinit', 'Shell', 'Taskman', 'AppSetup', 'VmApplet', 'GinaDLL',
+    'System', 'UIHost', 'BootExecute', 'BootExecuteNoPnpSync', 'SetupExecute', 'Execute', 'PlatformExecute', 'S0InitialCommand',
+    'PendingFileRenameOperations', 'PendingFileRenameOperations2', 'ExcludeFromKnownDlls', 'Authentication Packages',
+    'Security Packages', 'Notification Packages', 'AppInit_DLLs', 'LoadAppInit_DLLs', 'Debugger', 'DllName')
+  if ($codeLoadingNames -contains $Name -or $Name -match '^Auth\d+$') { return $false }
+  return [bool](@($AllowedKey | Where-Object { $_ -ieq $Path }).Count)
+}
 function Set-SecurityOptionDrift {
   param($Row)
   Add-Finding -FindingList $script:Findings -Code 'SECOPT-Drift' -Severity 'Medium' -Message ("Drift detected: {0}\{1} Current='{2}' Desired='{3}' (Type={4})." -f $Row.Path, $Row.Name, $Row.Current, $Row.Desired, $Row.Type) -Extra @{ Path = $Row.Path; Name = $Row.Name; Current = $Row.Current; Desired = $Row.Desired; Type = $Row.Type } -TimestampLocal
   if ($Mode -ne 'Remediate') { return }
+  if (-not (Test-SecurityOptionsRemediationPathAllowed -Path $Row.Path -Name $Row.Name -AllowedKey (Get-SecurityOptionsAllowedKey))) {
+    $Row.RemediateError = 'Path or value is outside the Security Options remediation allowlist.'
+    Add-Finding -FindingList $script:Findings -Code 'SECOPT-PathNotAllowed' -Severity 'High' -Message ("Remediation of {0}\{1} refused: remediation is limited to allowlisted Security Options keys and never writes values that load code." -f $Row.Path, $Row.Name) -TimestampLocal
+    return
+  }
   if (-not $script:__EntryCmdlet.ShouldProcess("$($Row.Path)\$($Row.Name)", "Set to '$($Row.Desired)' ($($Row.Type))")) { return }
   try {
     Set-Reg -Path $Row.Path -Name $Row.Name -Type $Row.Type -Value $Row.Desired
     $Row.Remediated = $true
+    $script:Findings[$script:Findings.Count - 1] | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force
   } catch {
     $Row.RemediateError = $_.Exception.Message
     Add-Finding -FindingList $script:Findings -Code 'SECOPT-RemediateFailed' -Severity 'High' -Message ("Remediation failed at {0}\{1}: {2}" -f $Row.Path, $Row.Name, $_.Exception.Message) -TimestampLocal
@@ -516,8 +558,7 @@ function Invoke-Capability38Main {
 
 # V2 output contract
 function Get-Capability38ResultToken {
-  $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  return (Get-OpenFindingResultToken -Findings $script:Findings -Strict:$Strict -Failed:(@($script:Drift | Where-Object { $_.RemediateError }).Count -gt 0))
 }
 $resultToken = Get-Capability38ResultToken
 $v2Result = Get-V2ResultObject -ScriptName '38-SecurityOptions-Drift.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ CurrentValues = [object[]]$script:CurrentValues; Drift = [object[]]$script:Drift; DesiredLoaded = $RunState.desiredLoaded }

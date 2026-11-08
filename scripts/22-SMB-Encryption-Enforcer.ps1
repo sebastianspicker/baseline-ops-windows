@@ -576,22 +576,45 @@ switch ($RunState.Mode) {
       }
 
       'Remediate' {
+        Invoke-SmbEncryptionAudit -RunState $RunState
         Invoke-SmbEncryptionRemediation -RunState $RunState
       }
     }
 }
+# Remediate raises only the drift its scope targets, so a declined or failed change stays an open finding.
+function Test-SmbEncryptDataFindingTargeted {
+  param($ServerConfig, [string]$Mode, [string]$Scope)
+  return [bool](-not $ServerConfig.EncryptData -and ($Mode -ne 'Remediate' -or $Scope -eq 'ServerGlobal'))
+}
+function Test-SmbRejectUnencryptedFindingTargeted {
+  param($ServerConfig, [bool]$Supported, [string]$Mode, [bool]$Enabled)
+  return [bool]($Supported -and -not $ServerConfig.RejectUnencryptedAccess -and ($Mode -ne 'Remediate' -or $Enabled))
+}
 function Invoke-SmbEncryptionAudit {
   param([hashtable]$RunState)
-  if (-not $RunState.serverCfgBefore.EncryptData) {
+  if (Test-SmbEncryptDataFindingTargeted -ServerConfig $RunState.serverCfgBefore -Mode $RunState.Mode -Scope $RunState.RemediationScope) {
     Add-Finding -FindingList $script:Findings -Code 'SMB-Encryption-Disabled' -Severity 'Medium' -Message 'Server-wide SMB encryption is disabled.'
   }
-  if ($RunState.hasRejectUnencryptedAccess -and -not $RunState.serverCfgBefore.RejectUnencryptedAccess) {
+  if (Test-SmbRejectUnencryptedFindingTargeted -ServerConfig $RunState.serverCfgBefore -Supported ([bool]$RunState.hasRejectUnencryptedAccess) -Mode $RunState.Mode -Enabled ([bool]$RunState.EnableRejectUnencryptedAccess)) {
     Add-Finding -FindingList $script:Findings -Code 'SMB-RejectUnencrypted-Disabled' -Severity 'Low' -Message 'SMB server RejectUnencryptedAccess is disabled.'
   }
   foreach ($share in $RunState.sharesBefore) {
     if (-not $share.EncryptData) {
       Add-Finding -FindingList $script:Findings -Code 'SMB-Share-NotEncrypted' -Severity 'Low' -Message "Share '$($share.Name)' encryption is disabled." -Extra @{ Share = $share.Name }
     }
+  }
+}
+# Remediate only: a drift finding whose setting this run changed is resolved.
+function Set-SmbEncryptionResolvedFindings {
+  param([hashtable]$RunState)
+  foreach ($finding in @($script:Findings)) {
+    $fixed = switch ([string]$finding.Code) {
+      'SMB-Encryption-Disabled'         { [bool]$RunState.changes.ServerEncryptDataChanged }
+      'SMB-RejectUnencrypted-Disabled'  { [bool]$RunState.changes.ServerRejectUnencryptedAccessChanged }
+      'SMB-Share-NotEncrypted'          { @($RunState.changes.SharesChanged) -contains $finding.Share }
+      default                           { $false }
+    }
+    if ($fixed) { $finding | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force }
   }
 }
 function Set-SmbSharesEncrypted {
@@ -663,6 +686,7 @@ function Invoke-Capability22MainPhase05 {
 
     . Invoke-Capability22MainPhase05Stage01 -RunState $RunState
 . Invoke-Capability22MainPhase05Stage02 -RunState $RunState
+    if ($RunState.Mode -eq 'Remediate') { Set-SmbEncryptionResolvedFindings -RunState $RunState }
 
   } catch {
     $RunState.changes.Status = 'FAILED'
@@ -690,8 +714,7 @@ function Invoke-Capability22Main {
 
 # V2 output contract
 function Get-Capability22ResultToken {
-  $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  return (Get-OpenFindingResultToken -Findings $script:Findings -Strict:$Strict -Failed:($RunState.changes.Status -eq 'FAILED'))
 }
 $resultToken = Get-Capability22ResultToken
 $v2Result = Get-V2ResultObject -ScriptName '22-SMB-Encryption-Enforcer.ps1' -Mode $RunState.Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $RunState.result -Metadata @{}

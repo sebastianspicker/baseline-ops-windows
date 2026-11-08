@@ -2659,7 +2659,7 @@
       },
       "Language": "Rust",
       "NormalizedContentHash": "2f1b3947d1537f33231ffcf1ab3d77a57a0ce60418eb51f3d8d9abced5af3102",
-      "Fingerprint": "ab2eb5aca9798619af882e8346b60ddb73634ac58e81e17498c98a693135bca1",
+      "Fingerprint": "bda64952e25f1352f60dc1417bb093eee7a9e01ca3023063eca081665c8353ae",
       "Rationale": "GUI audit and profile-audit workers differ in captured inputs, progress channel behavior, reports, and cancellation lifecycle. Their similar successful-spawn state update is a UI state-machine boundary.",
       "Occurrences": [
         {
@@ -2669,8 +2669,8 @@
         },
         {
           "Path": "rust/apps/baselineops-gui/src/platform.rs",
-          "StartLine": 344,
-          "EndLine": 358
+          "StartLine": 340,
+          "EndLine": 354
         }
       ],
       "Multiplicity": 2
@@ -3846,18 +3846,18 @@
       },
       "Language": "Rust",
       "NormalizedContentHash": "81d0bfa182f7de2bf2b591cdbf775398bc3311c9312d5f222d44511904f4ae38",
-      "Fingerprint": "5106041b7ed650afcfc6336930c2c2026b1751a24d88ece7757ed6a109d39cf2",
+      "Fingerprint": "a1293b6bcc427208c7abdf2e6fe82efeef2292051ba034a6da0492c299745aab",
       "Rationale": "The two hash paths have distinct preconditions despite matching metadata checks: one follows no-follow retained-file validation and the other supports its own bounded pipeline. Combining risks reopening a TOCTOU path.",
       "Occurrences": [
         {
           "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
-          "StartLine": 209,
-          "EndLine": 216
+          "StartLine": 199,
+          "EndLine": 206
         },
         {
           "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
-          "StartLine": 343,
-          "EndLine": 350
+          "StartLine": 333,
+          "EndLine": 340
         }
       ],
       "Multiplicity": 2
@@ -4344,18 +4344,18 @@
       },
       "Language": "Rust",
       "NormalizedContentHash": "4518cd1ad44c0a0c2887052d2df518886b5655f0771377606fe0ac479a65ece6",
-      "Fingerprint": "15d1e7e06d048d1fbe4f17b78d500aa655e89ed27ef87277b7524eb033be2776",
+      "Fingerprint": "da1fdcb1e866c7d228177e58bb3a8cd5b7c7940b7740a11da813ff7883ba3325",
       "Rationale": "The similarly named open_regular_file implementations are cfg-specific: Windows retains a no-reparse handle and validates final identity while the portable path cannot. One body would weaken or obscure this trust distinction.",
       "Occurrences": [
         {
           "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
-          "StartLine": 184,
-          "EndLine": 201
+          "StartLine": 174,
+          "EndLine": 191
         },
         {
           "Path": "rust/crates/baselineops-windows/src/safe_path.rs",
-          "StartLine": 264,
-          "EndLine": 281
+          "StartLine": 254,
+          "EndLine": 271
         }
       ],
       "Multiplicity": 2

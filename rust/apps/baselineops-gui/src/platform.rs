@@ -6,7 +6,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, channel},
+        mpsc::{Receiver, Sender, channel},
     },
     thread,
 };
@@ -302,24 +302,27 @@ unsafe fn start_audit(app: &mut App) {
     }
 }
 
+type ProfileJob = fn(&std::path::Path, &Arc<AtomicBool>, &Sender<WorkerMessage>) -> AuditReport;
+
 unsafe fn validate_profile(app: &mut App) {
-    let report = profile_path(app).map_or_else(invalid_profile_path_report, |path| {
-        controller::validate_profile(&path)
-    });
-    app.artifact = None;
-    view::set_artifact_visible(app.controls, false);
-    let _ = view::set_report(app.controls, &report);
+    start_profile_operation(app, |path, _, _| controller::validate_profile(path));
 }
 
 unsafe fn review_profile(app: &mut App) {
-    start_profile_operation(app, true);
+    start_profile_operation(app, |path, cancelled, _| {
+        controller::review_profile_native(path, cancelled)
+    });
 }
 
 unsafe fn start_profile_audit(app: &mut App) {
-    start_profile_operation(app, false);
+    start_profile_operation(app, |path, cancelled, sender| {
+        controller::audit_profile(path, cancelled, |progress| {
+            let _ = sender.send(WorkerMessage::Progress(progress));
+        })
+    });
 }
 
-unsafe fn start_profile_operation(app: &mut App, review: bool) {
+unsafe fn start_profile_operation(app: &mut App, job: ProfileJob) {
     if app.receiver.is_some() {
         return;
     }
@@ -333,14 +336,7 @@ unsafe fn start_profile_operation(app: &mut App, review: bool) {
     let spawn = thread::Builder::new()
         .name("baselineops-profile-audit".into())
         .spawn(move || {
-            let progress_sender = sender.clone();
-            let report = if review {
-                controller::review_profile_native(&profile_path, &worker_cancellation)
-            } else {
-                controller::audit_profile(&profile_path, &worker_cancellation, |progress| {
-                    let _ = progress_sender.send(WorkerMessage::Progress(progress));
-                })
-            };
+            let report = job(&profile_path, &worker_cancellation, &sender);
             let _ = sender.send(WorkerMessage::Finished(report));
         });
     match spawn {

@@ -777,9 +777,9 @@
     },
     {
       "name": "zip",
-      "purl": "pkg:cargo/zip@9.0.2",
+      "purl": "pkg:cargo/zip@9.0.5",
       "type": "library",
-      "version": "9.0.2"
+      "version": "9.0.5"
     },
     {
       "name": "zlib-rs",

@@ -3,7 +3,8 @@ use crate::PlatformError;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
-/// Fixed-capacity replay detector for accepted client nonces.
+/// Fixed-capacity replay detector for accepted client nonces; a full cache of
+/// unexpired nonces rejects new ones rather than evicting.
 #[derive(Debug)]
 pub struct ReplayNonceCache {
     ttl: Duration,
@@ -46,18 +47,16 @@ impl ReplayNonceCache {
         if self.seen.contains_key(nonce) {
             return Err(PlatformError::ReplayDetected);
         }
-        self.evict_capacity();
+        // Fail closed: evicting an unexpired nonce would make it replayable.
+        if self.order.len() >= self.capacity {
+            return Err(PlatformError::ProtocolRejected(
+                "replay cache is full of unexpired nonces".into(),
+            ));
+        }
         let nonce = nonce.to_owned();
         self.seen.insert(nonce.clone(), now);
         self.order.push_back(nonce);
         Ok(())
-    }
-    fn evict_capacity(&mut self) {
-        while self.order.len() >= self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.seen.remove(&oldest);
-            }
-        }
     }
     fn evict_expired(&mut self, now: Instant) {
         while let Some(nonce) = self.order.front() {

@@ -175,6 +175,7 @@ function Get-TaskInfoUnder {
   return $list
 }
 function Ensure-TasksEnabled {
+  [CmdletBinding(SupportsShouldProcess = $true)]
   param([string]$Folder,[switch]$Remediate)
   $drift   = New-Object System.Collections.ArrayList
   $actions = New-Object System.Collections.ArrayList
@@ -186,6 +187,11 @@ function Ensure-TasksEnabled {
         $ok = $false
         Add-ArrayList $drift (Get-LegacyFinding -Area ("Task:{0}{1}" -f $t.TaskPath,$t.TaskName) -Severity 'Warning' -Message 'Disabled')
         if ($Remediate) {
+          $taskTarget = '{0}{1}' -f $t.TaskPath,$t.TaskName
+          if (-not $PSCmdlet.ShouldProcess($taskTarget, 'Enable scheduled task')) {
+            Add-ArrayList $actions (Get-LegacyAction -Target $taskTarget -Operation 'EnableTask' -Result 'Skipped' -Message 'ShouldProcess declined')
+            continue
+          }
           try {
             Enable-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -ErrorAction Stop
             Add-ArrayList $actions (Get-LegacyAction -Target ("{0}{1}" -f $t.TaskPath,$t.TaskName) -Operation 'EnableTask' -Result 'Success' -Message 'Enabled')

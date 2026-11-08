@@ -3,7 +3,8 @@
 use anyhow::{Result, bail};
 use baselineops_domain::{ActionId, ExitCode, PlanId, RunId, Sha256Digest, WorkerResultV3};
 use baselineops_windows::{
-    BrokerMessage, ElevatedLaunchResult, ElevatedLaunchStatus, PlatformError,
+    BrokerBinding, BrokerMessage, ElevatedLaunchResult, ElevatedLaunchStatus, FrameCodec,
+    PROTOCOL_VERSION, PlatformError,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,11 +135,40 @@ pub(crate) fn reconcile_worker_exit(result: &WorkerResultV3, exit: ExitCode) -> 
     Ok(())
 }
 
+/// Reject a proposal payload that cannot fit one broker frame, before the
+/// elevated worker is launched. The placeholder envelope has the exact field
+/// lengths of the real one (hyphenated plan ID, simple-hex nonce and pipe name).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn ensure_proposal_fits(payload: serde_json::Value) -> Result<()> {
+    FrameCodec::encode(&BrokerMessage {
+        version: PROTOCOL_VERSION,
+        binding: BrokerBinding {
+            session_id: "0".repeat(32),
+            plan_id: "0".repeat(36),
+            plan_digest: "0".repeat(64),
+            reply_to: None,
+        },
+        nonce: "0".repeat(32),
+        kind: "plan.propose".into(),
+        payload,
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use baselineops_domain::{ResultStatus, SchemaVersion};
     use baselineops_windows::{BrokerBinding, PROTOCOL_VERSION};
+
+    #[test]
+    fn oversize_proposal_is_rejected_before_launch() {
+        let fits = serde_json::json!({"plan": {}, "profileSource": "x".repeat(1024)});
+        ensure_proposal_fits(fits).expect("normal proposal fits");
+        let too_big = serde_json::json!({"plan": {}, "profileSource": "x".repeat(2 << 20)});
+        let error = ensure_proposal_fits(too_big).expect_err("oversize proposal");
+        assert!(error.to_string().contains("frame exceeds maximum size"));
+    }
 
     fn fixture() -> (BrokerMessage, PlanId, RunId, Sha256Digest) {
         let plan_id = PlanId::new();

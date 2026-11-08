@@ -162,6 +162,21 @@ function Resolve-TrustedWindowsSystemFile {
 
 <#
 .SYNOPSIS
+  Parses the version from a DesktopAppInstaller package folder name.
+.DESCRIPTION
+  Returns 0.0 for names without a parsable version so they sort last.
+#>
+function Get-WingetFolderVersion {
+  [OutputType([version])]
+  param([Parameter(Mandatory)][string]$Name)
+
+  $parsed = $null
+  if ([version]::TryParse([string]($Name -split '_')[1], [ref]$parsed)) { return $parsed }
+  return [version]'0.0'
+}
+
+<#
+.SYNOPSIS
   Resolves an approved WinGet executable path.
 .DESCRIPTION
   Searches trusted locations and rejects paths that cross reparse points.
@@ -172,7 +187,7 @@ function Get-TrustedWingetCandidatePaths {
 
   $candidates = New-Object System.Collections.Generic.List[string]
   try {
-    foreach ($directory in @(Get-ChildItem -LiteralPath $WindowsAppsRoot -Directory -Filter 'Microsoft.DesktopAppInstaller_*__8wekyb3d8bbwe' -ErrorAction Stop | Sort-Object Name -Descending)) {
+    foreach ($directory in @(Get-ChildItem -LiteralPath $WindowsAppsRoot -Directory -Filter 'Microsoft.DesktopAppInstaller_*__8wekyb3d8bbwe' -ErrorAction Stop | Sort-Object -Property @{ Expression = { Get-WingetFolderVersion -Name $_.Name }; Descending = $true }, @{ Expression = { $_.Name }; Descending = $true })) {
       [void]$candidates.Add((Join-Path $directory.FullName 'winget.exe'))
     }
   } catch {

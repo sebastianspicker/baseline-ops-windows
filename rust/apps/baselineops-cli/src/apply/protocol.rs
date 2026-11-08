@@ -1,4 +1,4 @@
-use super::{WorkerExchange, WorkerProposal, input};
+use super::{WorkerExchange, WorkerProposal};
 use crate::protocol::ApprovalSend;
 use anyhow::{Result, anyhow, bail};
 use baselineops_domain::{ExitCode, PlanV3, Sha256Digest, WorkerResultV3, canonical_json_digest};
@@ -14,8 +14,13 @@ const CONTROL_LIFETIME: Duration = Duration::from_mins(2);
 pub(super) fn propose(
     exchange: &mut WorkerExchange,
     plan: &PlanV3,
+    profile_source: &str,
 ) -> Result<(WorkerProposal, String)> {
-    let request = proposal_request(plan, &exchange.pipe_name)?;
+    let request = proposal_request(
+        plan,
+        &exchange.pipe_name,
+        proposal_payload(plan, profile_source),
+    )?;
     send_message(&mut exchange.client, &request)?;
     receive_proposal(exchange, &request)
 }
@@ -98,8 +103,15 @@ fn start_control(
     Ok((control, cancellation, started + CONTROL_LIFETIME))
 }
 
-fn proposal_request(plan: &PlanV3, pipe_name: &str) -> Result<BrokerMessage> {
-    let profile_source = input::load_profile_source(plan)?;
+pub(super) fn proposal_payload(plan: &PlanV3, profile_source: &str) -> serde_json::Value {
+    serde_json::json!({"plan": plan, "profileSource": profile_source})
+}
+
+fn proposal_request(
+    plan: &PlanV3,
+    pipe_name: &str,
+    payload: serde_json::Value,
+) -> Result<BrokerMessage> {
     Ok(BrokerMessage {
         version: PROTOCOL_VERSION,
         binding: BrokerBinding {
@@ -110,7 +122,7 @@ fn proposal_request(plan: &PlanV3, pipe_name: &str) -> Result<BrokerMessage> {
         },
         nonce: uuid::Uuid::new_v4().simple().to_string(),
         kind: "plan.propose".into(),
-        payload: serde_json::json!({"plan": plan, "profileSource": profile_source}),
+        payload,
     })
 }
 

@@ -15,8 +15,11 @@ use std::{
 };
 
 pub(super) fn run(plan: &PlanV3, preapproved_digest: Option<&str>) -> Result<ExitCode> {
+    // Size-check the proposal before the elevation prompt, not at first send.
+    let profile_source = input::load_profile_source(plan)?;
+    crate::protocol::ensure_proposal_fits(protocol::proposal_payload(plan, &profile_source))?;
     let mut exchange = trust::start_worker(plan)?;
-    let (response, proposal_nonce) = protocol::propose(&mut exchange, plan)?;
+    let (response, proposal_nonce) = protocol::propose(&mut exchange, plan, &profile_source)?;
     super::print_json(
         &serde_json::json!({"status":"proposal","digest":response.digest,"plan":response.plan}),
     )?;

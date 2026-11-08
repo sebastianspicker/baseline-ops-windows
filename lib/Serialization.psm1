@@ -84,17 +84,42 @@ function ConvertTo-CsvSafeCellValue {
   return $Value
 }
 
+function Test-CsvNestedValue {
+  [CmdletBinding()]
+  [OutputType([bool])]
+  param([AllowNull()][object]$Value)
+
+  if ($null -eq $Value -or $Value -is [string]) { return $false }
+  return $Value -is [System.Collections.IEnumerable] -or $Value.GetType() -eq [System.Management.Automation.PSCustomObject]
+}
+
+function Get-CsvColumnUnion {
+  [CmdletBinding()]
+  [OutputType([string[]])]
+  param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$InputObject)
+
+  $columns = New-Object System.Collections.Generic.List[string]
+  $seen = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($item in @($InputObject | Where-Object { $null -ne $_ })) {
+    foreach ($property in $item.PSObject.Properties) { if ($seen.Add($property.Name)) { $columns.Add($property.Name) } }
+  }
+  return ,$columns.ToArray()
+}
+
 function ConvertTo-CsvSafeObject {
   [CmdletBinding()]
-  param([AllowNull()][object]$InputObject)
+  param([AllowNull()][object]$InputObject, [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Column)
 
   if ($null -eq $InputObject) {
     return $null
   }
 
   $safeProperties = [ordered]@{}
-  foreach ($property in $InputObject.PSObject.Properties) {
-    $safeProperties[$property.Name] = ConvertTo-CsvSafeCellValue -Value $property.Value
+  foreach ($name in $Column) {
+    $property = $InputObject.PSObject.Properties[$name]
+    $value = if ($null -eq $property) { $null } else { $property.Value }
+    if (Test-CsvNestedValue -Value $value) { $value = ConvertTo-Json -InputObject $value -Compress -Depth 8 }
+    $safeProperties[$name] = ConvertTo-CsvSafeCellValue -Value $value
   }
   return [pscustomobject]$safeProperties
 }
@@ -125,8 +150,10 @@ function Save-Csv {
     throw 'Save-Csv: Path must reference a local file without traversal, UNC/device, or reparse-point components.'
   }
 
+  # ConvertTo-Csv takes its columns from the first row, so fix the ordered union of all rows' columns first.
+  $columns = Get-CsvColumnUnion -InputObject $InputObject
   $safeInput = foreach ($item in $InputObject) {
-    ConvertTo-CsvSafeObject -InputObject $item
+    ConvertTo-CsvSafeObject -InputObject $item -Column $columns
   }
   $lines = @($safeInput | ConvertTo-Csv -NoTypeInformation)
   $csv = if ($lines.Count -gt 0) { ($lines -join "`r`n") + "`r`n" } else { '' }
@@ -188,7 +215,7 @@ function Get-V2ResultObject {
     ScriptName    = $ScriptName
     Mode          = $Mode
     ComputerName  = $env:COMPUTERNAME
-    TimestampUtc  = (Get-Date).ToUniversalTime()
+    TimestampUtc  = (Get-Date).ToUniversalTime().ToString('o')
     Result        = $Result
     Findings      = $findingArray
     Summary       = $Summary

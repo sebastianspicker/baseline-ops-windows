@@ -89,16 +89,6 @@ impl PathPolicy {
             resolve::PathKind::Directory,
         )
     }
-
-    /// Resolve a future output path while proving its parent is trusted.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the path or its parent violates containment, reparse,
-    /// UNC, or file-name policy.
-    pub fn output_file(&self, candidate: impl AsRef<Path>) -> Result<PathBuf, PlatformError> {
-        resolve::output(&self.root, candidate.as_ref())
-    }
 }
 
 /// Read bounded UTF-8 from an already validated file.
@@ -436,7 +426,7 @@ mod tests {
     fn policy_rejects_parent_traversal() {
         let root = tempfile::tempdir().expect("root");
         let policy = PathPolicy::new(root.path()).expect("policy");
-        assert!(policy.output_file("../escape.json").is_err());
+        assert!(policy.existing_file("../escape.json").is_err());
     }
 
     #[test]

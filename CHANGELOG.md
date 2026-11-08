@@ -34,6 +34,8 @@ Target alpha: `v2.3.0-alpha.1`.
 - Updated Rust ZIP handling to the patched 9.0.2 dependency, preserving the
   existing guarded extraction path and explicitly rejecting filename decoding
   errors returned by the new API.
+- Updated Rust ZIP handling to 9.0.5, which fixes CVE-2026-115905
+  (GHSA-m665-v7pm-7grj).
 - The runners no longer default to `C:\install\mdm\ps1`. Without
   `-RootPath`, `00-Run-Local`, `00-Run-Profile` and `00-Run-Batch` use the
   root that contains them, and the launcher no longer falls back to that path.
@@ -270,6 +272,10 @@ Target alpha: `v2.3.0-alpha.1`.
 - Removed silent probes for three nonexistent legacy files under a root
   `config/` directory. Supported configuration is supplied explicitly or uses
   the documented built-in defaults.
+- The v2 result field `TimestampUtc` is now an ISO 8601 string on every
+  PowerShell version (Windows PowerShell 5.1 previously serialized `/Date(...)/`).
+- `Save-Csv` writes the union of all rows' columns instead of only the first
+  row's, and stores nested objects and arrays as compact JSON.
 
 ## [2.2.0] - 2026-04-18
 

@@ -23,9 +23,18 @@ function Get-ReportAggregateDirectoryChildren {
   )
 
   if (-not $DirectoryNameCache.ContainsKey($ParentPath)) {
-    $DirectoryNameCache[$ParentPath] = @(Get-ChildItem -LiteralPath $ParentPath -Force -ErrorAction Stop)
+    # Per-directory name indexes keep canonicalization O(1) per file instead of scanning the listing.
+    $exact = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    $ignoreCase = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($child in @(Get-ChildItem -LiteralPath $ParentPath -Force -ErrorAction Stop)) {
+      foreach ($index in @($exact, $ignoreCase)) {
+        if (-not $index.ContainsKey($child.Name)) { $index[$child.Name] = [System.Collections.Generic.List[object]]::new() }
+        $index[$child.Name].Add($child)
+      }
+    }
+    $DirectoryNameCache[$ParentPath] = [pscustomobject]@{ Exact = $exact; IgnoreCase = $ignoreCase }
   }
-  return @($DirectoryNameCache[$ParentPath])
+  return $DirectoryNameCache[$ParentPath]
 }
 
 function Get-CanonicalResultFilePath {
@@ -41,9 +50,9 @@ function Get-CanonicalResultFilePath {
   $currentPath = (Get-Item -LiteralPath $rootPath -Force -ErrorAction Stop).FullName
   $segments = $fullPath.Substring($rootPath.Length).Split([char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar), [System.StringSplitOptions]::RemoveEmptyEntries)
   foreach ($segment in $segments) {
-    $children = @(Get-ReportAggregateDirectoryChildren -ParentPath $currentPath -DirectoryNameCache $DirectoryNameCache)
-    $match = @($children | Where-Object { [System.StringComparer]::Ordinal.Equals($_.Name, $segment) })
-    if ($match.Count -ne 1) { $match = @($children | Where-Object { [System.StringComparer]::OrdinalIgnoreCase.Equals($_.Name, $segment) }) }
+    $index = Get-ReportAggregateDirectoryChildren -ParentPath $currentPath -DirectoryNameCache $DirectoryNameCache
+    $match = @(if ($index.Exact.ContainsKey($segment)) { $index.Exact[$segment] })
+    if ($match.Count -ne 1) { $match = @(if ($index.IgnoreCase.ContainsKey($segment)) { $index.IgnoreCase[$segment] }) }
     if ($match.Count -ne 1) { throw "Unable to resolve one canonical filesystem path for '$Path'." }
     $currentPath = $match[0].FullName
   }

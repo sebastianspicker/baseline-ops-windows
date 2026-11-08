@@ -427,6 +427,13 @@ function Set-DesiredAuditSubcategory {
     }
   }
 }
+# Remediate only: a drift finding whose verified setting matches the desired one is resolved.
+function Set-AuditPolicyDriftResolved {
+  param([string]$Subcategory, $FindingList)
+  foreach ($drift in @($FindingList | Where-Object { $_.Code -eq 'AUD-Drift' -and $_.Subcategory -eq $Subcategory })) {
+    $drift | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force
+  }
+}
 function Confirm-DesiredAuditPolicy {
   param([hashtable]$RunState)
     try {
@@ -437,6 +444,8 @@ function Confirm-DesiredAuditPolicy {
           $verified = $RunState.policies | Where-Object { $_.Subcategory -eq $subProp.Name } | Select-Object -First 1
           if ((-not $verified) -or ([string]$verified.Setting -ne [string]$subProp.Value)) {
             Add-Finding -FindingList $script:Findings -Code 'AuditPol-PostconditionFailed' -Severity 'High' -Message ("Post-remediation policy mismatch: {0} -> {1}." -f $catProp.Name,$subProp.Name)
+          } else {
+            Set-AuditPolicyDriftResolved -Subcategory $subProp.Name -FindingList $script:Findings
           }
         }
       }
@@ -505,8 +514,8 @@ function Invoke-Capability33Main {
 # V2 output contract
 function Get-Capability33ResultToken {
   param([hashtable]$RunState)
-  $resultToken = if (-not $RunState.auditEvidenceComplete) { 'FAIL' } elseif ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  $failed = (-not $RunState.auditEvidenceComplete) -or (@($script:Findings | Where-Object { $_.Code -in @('AuditPol-SetFailed', 'AuditPol-PostconditionFailed') }).Count -gt 0)
+  return (Get-OpenFindingResultToken -Findings $script:Findings -Strict:$Strict -Failed:$failed)
 }
 $resultToken = Get-Capability33ResultToken -RunState $RunState
 $v2Result = Get-V2ResultObject -ScriptName '33-AdvancedAuditPolicy-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $summary -Metadata @{ ParsedPolicies = $RunState.policies }

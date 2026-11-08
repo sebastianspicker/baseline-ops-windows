@@ -554,6 +554,16 @@ function Invoke-Capability18MainPhase02 {
   $patterns = @((Get-ObjProp -Object $cat -Name 'DisableInboundByNameLike' -Default @()) | Where-Object { $_ -is [string] -and $_ })
   $RunState.inboundResults = Disable-InboundByNameLike -Patterns $patterns -LocalPolicyStore $RunState.LocalPolicyStore -RunState $RunState
 }
+# Remediate only: each Changed result follows the Drift result (and drift finding) it fixed, in order.
+function Set-FirewallResolvedFindings {
+  param($Results, $FindingList)
+  $driftFindings = @($FindingList | Where-Object { $_.Code -in @('FW-Profile-Drift', 'FW-InboundRule-Enabled', 'FW-EnsureRule-Drift') })
+  $index = -1
+  foreach ($r in $Results) {
+    if ($r.Status -eq 'Drift') { $index++ }
+    elseif ($r.Status -eq 'Changed' -and $index -ge 0) { $driftFindings[$index] | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force }
+  }
+}
 function Invoke-Capability18MainPhase03 {
   param([hashtable]$RunState)
   foreach ($r in $RunState.inboundResults) {
@@ -573,6 +583,7 @@ function Invoke-Capability18MainPhase03 {
         }
     }
   }
+  Set-FirewallResolvedFindings -Results $results -FindingList $script:Findings
   $RunState.duration = (New-TimeSpan -Start $RunState.start -End (Get-Date))
   $RunState.hasError = @($results | Where-Object { $_.Status -eq 'Error' }).Count -gt 0
   $RunState.hasDrift = @($results | Where-Object { $_.Status -eq 'Drift' }).Count -gt 0
@@ -638,8 +649,7 @@ function Invoke-Capability18Main {
 . Invoke-Capability18Main -EntryBoundParameters $PSBoundParameters -EntryCmdlet $PSCmdlet -EntryInvocation $MyInvocation -RunState $RunState
 # V2 output contract
 function Get-Capability18ResultToken {
-  $resultToken = if ($Strict -and $script:Findings.Count -gt 0) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  return (Get-OpenFindingResultToken -Findings $script:Findings -Strict:$Strict -Failed:([bool]$RunState.hasError))
 }
 $resultToken = Get-Capability18ResultToken
 $v2Result = Get-V2ResultObject -ScriptName '18-Firewall-Baseline.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary ([pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Mode = $Mode; Duration = $RunState.duration }) -Metadata @{ Results = $results }

@@ -177,13 +177,13 @@ function Get-ModuleNamesConfigured {
 
 function Remove-AllModuleNames {
   [CmdletBinding(SupportsShouldProcess = $true)]
-  param([string]$ModuleNamesKeyPath)
+  param([string]$ModuleNamesKeyPath, [string[]]$Keep = @())
 
   if (-not (Test-Path -LiteralPath $ModuleNamesKeyPath)) { return }
 
   $obj = Get-ItemProperty -Path $ModuleNamesKeyPath
   $props = Get-ModuleNameValueNames -Item $obj
-  foreach ($p in $props) {
+  foreach ($p in @($props | Where-Object { $Keep -notcontains $_ })) {
     try {
       Remove-ItemProperty -Path $ModuleNamesKeyPath -Name $p -ErrorAction Stop
     } catch {
@@ -553,13 +553,16 @@ if ($RunState.targetEnableModuleLogging) {
           Add-RegistryWriteFailureFinding -Path $modPath -Name 'EnableModuleLogging' -Value 1 -RunState $RunState
           $RunState.registryWriteFailed = $true
         }
-        Remove-AllModuleNames -ModuleNamesKeyPath $RunState.modNames
-
-        $i = 1
+        # Write the new names first; stale ones are removed only if no write failed.
+        $keep = @()
         foreach ($m in $targetModuleNames) {
-          $null = New-ItemProperty -Path $RunState.modNames -Name ([string]$i) -PropertyType String -Value $m -Force
-          $i++
+          $keep += [string]($keep.Count + 1)
+          if (-not (Set-RegString -Path $RunState.modNames -Name $keep[-1] -Value $m)) {
+            Add-RegistryWriteFailureFinding -Path $RunState.modNames -Name $keep[-1] -Value $m -RunState $RunState
+            $RunState.registryWriteFailed = $true
+          }
         }
+        if (-not $RunState.registryWriteFailed) { Remove-AllModuleNames -ModuleNamesKeyPath $RunState.modNames -Keep $keep }
       }
     }
 }

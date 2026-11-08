@@ -121,12 +121,17 @@ mod tests {
             cache.accept(&first, now),
             Err(PlatformError::ReplayDetected)
         ));
+        assert!(matches!(
+            cache.accept(&second, now),
+            Err(PlatformError::ProtocolRejected(_))
+        ));
+        assert!(matches!(
+            cache.accept(&first, now),
+            Err(PlatformError::ReplayDetected)
+        ));
         cache
-            .accept(&second, now)
-            .expect("capacity evicts old value");
-        cache
-            .accept(&first, now)
-            .expect("evicted nonce is accepted");
+            .accept(&second, now + Duration::from_secs(1))
+            .expect("expired entry frees capacity");
     }
 
     #[test]

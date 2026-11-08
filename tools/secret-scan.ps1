@@ -36,7 +36,7 @@ $RootPath = Resolve-ToolRepositoryRoot -RootPath $RootPath -InvocationPath $MyIn
 
 $patterns = @(
   @{ Name = 'AWS Access Key'; Regex = 'AKIA[0-9A-Z]{16}' },
-  @{ Name = 'Private Key'; Regex = '-----BEGIN (RSA|EC|OPENSSH|PRIVATE) PRIVATE KEY-----' },
+  @{ Name = 'Private Key'; Regex = '-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----' },
   @{ Name = 'GitHub Token'; Regex = 'ghp_[0-9A-Za-z]{36}' },
   @{ Name = 'Slack Token'; Regex = 'xox[baprs]-[0-9A-Za-z-]{10,48}' },
   # Generic patterns: tuned to reduce false positives while catching likely hardcoded secrets.
@@ -97,10 +97,22 @@ function Find-SecretScanMatches {
   <# .SYNOPSIS Finds configured secret patterns. .DESCRIPTION Produces metadata without echoing matched content. #>
   param([object[]]$Patterns, [string[]]$Files)
   $findings = New-Object System.Collections.Generic.List[object]
+  $unreadable = @{}
   foreach ($pattern in $Patterns) {
-    foreach ($match in @(Select-String -LiteralPath $Files -Pattern $pattern.Regex -AllMatches -ErrorAction SilentlyContinue)) {
+    $readErrors = $null
+    foreach ($match in @(Select-String -LiteralPath $Files -Pattern $pattern.Regex -AllMatches -ErrorAction SilentlyContinue -ErrorVariable readErrors)) {
       $findings.Add([pscustomobject]@{ File = $match.Path; Line = $match.LineNumber; Pattern = $pattern.Name }) | Out-Null
     }
+    foreach ($readError in @($readErrors)) {
+      # Select-String leaves TargetObject empty; recover the path from the message.
+      $message = $readError.Exception.Message
+      $path = @($Files | Where-Object { $message.Contains($_) } | Select-Object -First 1)
+      $unreadable[$(if ($path.Count) { $path[0] } else { $message })] = $true
+    }
+  }
+  # A file the scan cannot read is a finding: skipping it would hide secrets.
+  foreach ($path in @($unreadable.Keys | Sort-Object)) {
+    $findings.Add([pscustomobject]@{ File = $path; Line = 0; Pattern = 'Unreadable file' }) | Out-Null
   }
   return ,$findings
 }

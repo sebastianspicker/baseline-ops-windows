@@ -259,6 +259,7 @@ fn start_journal_failure_stops_all_subsequent_io() {
     assert_failure(&outcome, FailurePhase::Journal, false, false);
     assert!(outcome.receipt.is_none());
     assert_eq!(port.calls, [Call::Observe, Call::Recovery, Call::Start]);
+    assert!(port.writes.is_empty(), "no mutation after a failed start");
 }
 
 #[test]

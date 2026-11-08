@@ -20,6 +20,7 @@ if ([string]::IsNullOrWhiteSpace($RootPath)) {
   $RootPath = Split-Path -Parent $PSScriptRoot
 }
 $RootPath = (Resolve-Path -LiteralPath $RootPath).Path
+Import-Module (Join-Path $PSScriptRoot '../lib/External.psm1') -Force -DisableNameChecking
 $rootPrefix = $RootPath.TrimEnd([char[]]@(
     [System.IO.Path]::DirectorySeparatorChar,
     [System.IO.Path]::AltDirectorySeparatorChar
@@ -136,15 +137,9 @@ function Get-DocumentationCheckFiles {
   if ($RequestedFiles.Count -gt 0) { return $RequestedFiles }
   $gitMetadataPath = Join-Path $RootPath '.git'
   if (Test-Path -LiteralPath $gitMetadataPath) {
-    $git = Get-Command -Name git -ErrorAction SilentlyContinue
-    if (-not $git) {
-      throw 'git is required for Markdown discovery when .git metadata is present.'
-    }
-
-    # Discover the whole public working set, then inspect only supported source
-    # formats. This keeps path filtering in one deterministic code path.
-    $files = @(& $git.Source -C $RootPath ls-files --cached --others --exclude-standard)
-    if ($LASTEXITCODE -ne 0) {
+    # NUL-delimited discovery keeps non-ASCII file names intact.
+    $files = Get-GitWorkingTreeFiles -Path $RootPath
+    if ($null -eq $files) {
       throw 'git ls-files failed while discovering Markdown files from a repository root.'
     }
     return $files
@@ -398,7 +393,7 @@ function Invoke-DocumentationCheck {
 
   $isScopedRun = $RequestedFiles.Count -gt 0
   $state = New-DocumentationCheckState
-  foreach ($file in @(Get-DocumentationCheckFiles -RequestedFiles $RequestedFiles | Sort-Object -Unique)) {
+  foreach ($file in @(Get-DocumentationCheckFiles -RequestedFiles $RequestedFiles | Sort-Object -Unique -CaseSensitive)) {
     if ([string]::IsNullOrWhiteSpace($file)) { continue }
     $candidatePath = Get-DocumentationCandidatePath -File $file -State $state
     if ($null -eq $candidatePath) { continue }

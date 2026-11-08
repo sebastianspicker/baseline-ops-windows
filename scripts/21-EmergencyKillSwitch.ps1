@@ -27,7 +27,7 @@
   A human-readable reason that is written to the registry and included in the event message, for auditing and automation.
 
 .PARAMETER DisableAdapters
-  If set, disables all network adapters that are currently in "Up" state.
+  If set, disables all network adapters that are currently in "Up" state. JSON DisableAdapters is ignored.
   This is extremely disruptive and should only be used when losing remote connectivity is acceptable.
 
 .PARAMETER BreakGlassRemoteAddress
@@ -343,10 +343,9 @@ function Invoke-Capability21MainPhase03 {
     [void](Add-Finding -FindingList $RunState.Findings -Code 'KS-InvalidTaskName' -Severity 'High' -Message $message -TimeUtc)
   }
 
-  # Apply JSON defaults only if caller did not provide explicit values
-  if (-not $DisableAdapters.IsPresent) {
-    $fromJson = [bool](Get-ConfigValue -Config $RunState.config -Name 'DisableAdapters' -Default $RunState.Defaults.DisableAdapters)
-    if ($fromJson) { $DisableAdapters = $true }
+  # Disabling adapters is destructive: only the explicit switch enables it, never JSON.
+  if (-not $DisableAdapters.IsPresent -and [bool](Get-ConfigValue -Config $RunState.config -Name 'DisableAdapters' -Default $RunState.Defaults.DisableAdapters)) {
+    Write-Warning 'JSON DisableAdapters is ignored; pass -DisableAdapters to disable network adapters.'
   }
 }
 function Invoke-Capability21MainPhase04 {

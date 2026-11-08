@@ -76,7 +76,7 @@ script. A script may offer additional behavior when invoked directly.
 | `35-Storage-Reliability-Audit.ps1` | Report physical disks and available reliability counters. |
 | `36-Backup-Readiness-Audit.ps1` | Report built-in backup and restore readiness indicators. |
 | `37-Remote-Surface-Audit.ps1` | Report WinRM, SSH, RDP, and SMB exposure. |
-| `38-SecurityOptions-Drift.ps1` | Compare selected security-related registry settings with desired state. |
+| `38-SecurityOptions-Drift.ps1` | Compare selected security-related registry settings with desired state; Remediate writes only to allowlisted Security Options HKLM keys and never to values that load code. |
 | `39-CredentialGuard-VBS-AuditRemediate.ps1` | Audit and optionally set Credential Guard and VBS policy. |
 | `40-AddedLSAProtection-RunAsPPL-AuditRemediate.ps1` | Audit and optionally set LSA protection policy. |
 | `41-NTLM-Audit-Client.ps1` | Report LAN Manager authentication-level policy. |

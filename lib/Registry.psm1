@@ -48,6 +48,28 @@ function Get-RegValue {
 
 <#
 .SYNOPSIS
+  Gets the registry value kind, returning $null if it cannot be determined.
+.PARAMETER Path
+  Registry key path.
+.PARAMETER Name
+  Value name to inspect.
+#>
+function Get-RegValueKind {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Name
+  )
+
+  try {
+    return (Get-Item -LiteralPath $Path -ErrorAction Stop).GetValueKind($Name)
+  } catch {
+    return $null
+  }
+}
+
+<#
+.SYNOPSIS
   Sets a registry value with an explicit registry value kind.
 .DESCRIPTION
   Centralizes key creation and ShouldProcess-protected typed value writes.
@@ -204,14 +226,9 @@ function Get-RegDword {
     [int]$DefaultValue = 0
   )
 
-  $value = Get-RegValue -Path $Path -Name $Name
+  $value = Get-RegDwordOrNull -Path $Path -Name $Name
   if ($null -eq $value) { return $DefaultValue }
-  
-  try {
-    return [int]$value
-  } catch {
-    return $DefaultValue
-  }
+  return $value
 }
 
 <#
@@ -230,6 +247,9 @@ function Get-RegDwordOrNull {
   )
   $value = Get-RegValue -Path $Path -Name $Name
   if ($null -eq $value) { return $null }
+  # Windows ignores wrongly typed policy values, so a REG_SZ "1" is not a DWORD 1.
+  $kind = Get-RegValueKind -Path $Path -Name $Name
+  if ($null -ne $kind -and "$kind" -ne 'DWord') { return $null }
   try {
     return [int]$value
   } catch {

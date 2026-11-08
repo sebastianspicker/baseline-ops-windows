@@ -27,7 +27,10 @@ Override desired dropped logging. Values: true/false/1/0/yes/no/on/off.
 Override desired allowed logging. Values: true/false/1/0/yes/no/on/off.
 
 .PARAMETER LogFileName
-Override desired firewall log file path.
+Override desired firewall log file path. In Remediate mode it must, after environment-variable expansion, be a local drive-rooted
+absolute path (for example C:\...\pfirewall.log) ending in a file name, with no '..' segment, no UNC or device (\\?\, \\.\) form,
+and no environment variable other than %SystemRoot% or %windir%;
+otherwise FW-LogPathNotAllowed (High) is reported, no log directory is created, no profile LogFileName is changed, and the result is FAIL.
 
 .PARAMETER LogMaxSizeKB
 Override desired log max size KB (1..32767).
@@ -304,11 +307,20 @@ function Get-ProfileSnapshot {
     Select-Object Name, Enabled, LogFileName, LogMaxSizeKilobytes, LogAllowed, LogBlocked
 }
 
+function Test-FirewallLogPathAllowed {
+  param([string]$Path)
+  # The firewall service expands the stored string with its own environment, so only machine-fixed variables are allowed.
+  if (($Path -replace '%(systemroot|windir)%', '') -match '%') { return $false }
+  $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+  # drive-rooted local path; a further ':' (stream), wildcard or '..' segment, or a trailing separator is refused
+  if ($expanded -notmatch '^[A-Za-z]:\\[^:<>"|?*]*[^\\/:<>"|?*]$') { return $false }
+  return ($expanded.Replace('/', '\') -notmatch '(^|\\)\.\.?(\\|$)')
+}
 function Set-ProfileLoggingIfNeededSection01 {
   param([hashtable]$RunState)
 $current = Get-NetFirewallProfile -Name $RunState.ProfileName
 
-  if ($current.LogFileName -ne $RunState.DesiredLogFileName) {
+  if (-not $RunState['LogPathRejected'] -and $current.LogFileName -ne $RunState.DesiredLogFileName) {
     if ($PSCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall log file to $($RunState.DesiredLogFileName)")) {
       Set-NetFirewallProfile -Name $RunState.ProfileName -LogFileName $RunState.DesiredLogFileName
     }
@@ -322,12 +334,12 @@ $current = Get-NetFirewallProfile -Name $RunState.ProfileName
 
 function Set-ProfileLoggingIfNeededSection02 {
   param([hashtable]$RunState)
-if ([bool]$current.LogBlocked -ne $RunState.DesiredLogBlocked) {
+if (([string]$current.LogBlocked -eq 'True') -ne $RunState.DesiredLogBlocked) {
     if ($PSCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall blocked logging to $($RunState.DesiredLogBlocked)")) {
       Set-NetFirewallProfile -Name $RunState.ProfileName -LogBlocked $RunState.DesiredLogBlocked
     }
   }
-  if ([bool]$current.LogAllowed -ne $RunState.DesiredLogAllowed) {
+  if (([string]$current.LogAllowed -eq 'True') -ne $RunState.DesiredLogAllowed) {
     if ($PSCmdlet.ShouldProcess($RunState.ProfileName, "Set firewall allowed logging to $($RunState.DesiredLogAllowed)")) {
       Set-NetFirewallProfile -Name $RunState.ProfileName -LogAllowed $RunState.DesiredLogAllowed
     }
@@ -505,11 +517,11 @@ if ($p.Enabled -ne $true) {
 
 function Invoke-Capability32MainPhase02Step02 {
   param([hashtable]$RunState)
-if ([bool]$p.LogBlocked -ne [bool]$RunState.desired.EnableDropped) {
+if (([string]$p.LogBlocked -eq 'True') -ne [bool]$RunState.desired.EnableDropped) {
       Add-Finding -FindingList $script:Findings -Code 'FW-LogBlockedMismatch' -Severity 'Low' -Message ("Firewall profile '" + $p.Name + "' LogBlocked=" + $p.LogBlocked + ", desired=" + $RunState.desired.EnableDropped + ".") -Extra @{ Profile = $p.Name; Current = $p.LogBlocked; Desired = $RunState.desired.EnableDropped } -TimeUtc
     }
 
-    if ([bool]$p.LogAllowed -ne [bool]$RunState.desired.EnableAllowed) {
+    if (([string]$p.LogAllowed -eq 'True') -ne [bool]$RunState.desired.EnableAllowed) {
       Add-Finding -FindingList $script:Findings -Code 'FW-LogAllowedMismatch' -Severity 'Low' -Message ("Firewall profile '" + $p.Name + "' LogAllowed=" + $p.LogAllowed + ", desired=" + $RunState.desired.EnableAllowed + ".") -Extra @{ Profile = $p.Name; Current = $p.LogAllowed; Desired = $RunState.desired.EnableAllowed } -TimeUtc
     }
 }
@@ -522,16 +534,24 @@ function Invoke-Capability32MainPhase02 {
 . Invoke-Capability32MainPhase02Step02 -RunState $RunState
   }
 }
+function Initialize-FirewallLogPath {
+  param([hashtable]$RunState)
+  $RunState.LogPathRejected = -not (Test-FirewallLogPathAllowed -Path $RunState.desired.LogFileName)
+  if ($RunState.LogPathRejected) {
+    Add-Finding -FindingList $script:Findings -Code 'FW-LogPathNotAllowed' -Severity 'High' -Message ("Desired LogFileName '{0}' is not a local absolute file path; the log path was not changed." -f $RunState.desired.LogFileName) -TimeUtc
+    return
+  }
+  $logDir = Split-Path -Path ([Environment]::ExpandEnvironmentVariables($RunState.desired.LogFileName)) -Parent
+  if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+    if ($script:__EntryCmdlet.ShouldProcess($logDir, 'Create firewall log directory')) {
+      [void](Ensure-Directory -Path $logDir)
+    }
+  }
+}
 function Invoke-Capability32MainPhase03 {
   param([hashtable]$RunState)
   if ($Mode -eq 'Remediate') {
-
-    $logDir = Split-Path -Path $RunState.desired.LogFileName -Parent
-    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
-      if ($script:__EntryCmdlet.ShouldProcess($logDir, 'Create firewall log directory')) {
-        [void](Ensure-Directory -Path $logDir)
-      }
-    }
+    Initialize-FirewallLogPath -RunState $RunState
 
     if ($script:__EntryCmdlet.ShouldProcess($env:COMPUTERNAME, 'Configure Windows Firewall logging (per profile)')) {
       foreach ($profileName in @('Domain','Private','Public')) {
@@ -544,9 +564,31 @@ function Invoke-Capability32MainPhase03 {
     }
   }
 }
+# Remediate only: a logging finding whose after-state now matches the desired setting is resolved.
+function Test-FirewallLoggingFindingFixed {
+  param([string]$Code, $Row, $Desired)
+  switch ($Code) {
+    'FW-LogPathEmpty'       { return ($Row.LogFileName -eq $Desired.LogFileName) }
+    'FW-LogPathMismatch'    { return ($Row.LogFileName -eq $Desired.LogFileName) }
+    'FW-LogSizeTooSmall'    { return ([int]$Row.LogMaxSizeKilobytes -ge 20480) }
+    'FW-LogBlockedMismatch' { return (([string]$Row.LogBlocked -eq 'True') -eq [bool]$Desired.EnableDropped) }
+    'FW-LogAllowedMismatch' { return (([string]$Row.LogAllowed -eq 'True') -eq [bool]$Desired.EnableAllowed) }
+  }
+  return $false
+}
+function Set-FirewallLoggingResolvedFindings {
+  param($FindingList, $After, $Desired)
+  foreach ($finding in @($FindingList | Where-Object { $_.PSObject.Properties['Profile'] })) {
+    $row = @($After | Where-Object { $_.Name -eq $finding.Profile }) | Select-Object -First 1
+    if ($row -and (Test-FirewallLoggingFindingFixed -Code ([string]$finding.Code) -Row $row -Desired $Desired)) {
+      $finding | Add-Member -NotePropertyName Resolved -NotePropertyValue $true -Force
+    }
+  }
+}
 function Invoke-Capability32MainPhase04 {
   param([hashtable]$RunState)
   $after = Get-ProfileSnapshot
+  if ($Mode -eq 'Remediate') { Set-FirewallLoggingResolvedFindings -FindingList $script:Findings -After $after -Desired $RunState.desired }
 
   $RunState.result = [pscustomobject]@{
     Summary        = [pscustomobject]@{
@@ -608,8 +650,7 @@ function Invoke-Capability32Main {
 # V2 output contract
 function Get-Capability32ResultToken {
   param([hashtable]$RunState)
-  $resultToken = if (($Strict -and $script:Findings.Count -gt 0) -or ($FailOnHigh -and $RunState.highCount -gt 0)) { 'FAIL' } elseif ($script:Findings.Count -gt 0) { 'WARN' } else { 'OK' }
-  return $resultToken
+  return (Get-OpenFindingResultToken -Findings $script:Findings -Strict:$Strict -Failed:([bool](($FailOnHigh -and $RunState.highCount -gt 0) -or $RunState['LogPathRejected'])))
 }
 $resultToken = Get-Capability32ResultToken -RunState $RunState
 $v2Result = Get-V2ResultObject -ScriptName '32-Firewall-Logging-Audit.ps1' -Mode $Mode -Result $resultToken -Findings (ConvertTo-ObjectArray -InputObject $script:Findings) -Summary $RunState.result.Summary -Metadata @{ Desired = $RunState.result.Desired; ProfilesBefore = $RunState.result.ProfilesBefore; ProfilesAfter = $RunState.result.ProfilesAfter }

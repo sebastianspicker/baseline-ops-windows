@@ -1,5 +1,4 @@
 use crate::PlatformError;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -32,55 +31,12 @@ fn canonical_existing(root: &Path, joined: &Path) -> Result<PathBuf, PlatformErr
     Ok(canonical)
 }
 
-pub(super) fn output(root: &Path, candidate: &Path) -> Result<PathBuf, PlatformError> {
-    reject_lexical_escape(candidate)?;
-    reject_unc(candidate)?;
-    let joined = joined_candidate(root, candidate);
-    let canonical_parent = canonical_output_parent(root, &joined)?;
-    let name = output_name(&joined)?;
-    Ok(canonical_parent.join(name))
-}
-
 fn joined_candidate(root: &Path, candidate: &Path) -> PathBuf {
     if candidate.is_absolute() {
         candidate.to_path_buf()
     } else {
         root.join(candidate)
     }
-}
-
-fn canonical_output_parent(root: &Path, joined: &Path) -> Result<PathBuf, PlatformError> {
-    let parent = joined
-        .parent()
-        .ok_or_else(|| PlatformError::UntrustedPath {
-            path: joined.to_path_buf(),
-            reason: "output has no parent directory".into(),
-        })?;
-    reject_reparse_chain(parent)?;
-    let canonical_parent = fs::canonicalize(parent)?;
-    if !canonical_parent.starts_with(root) {
-        return Err(PlatformError::UntrustedPath {
-            path: joined.to_path_buf(),
-            reason: "output parent escaped the trusted root".into(),
-        });
-    }
-    Ok(canonical_parent)
-}
-
-fn output_name(joined: &Path) -> Result<&OsStr, PlatformError> {
-    let name = joined
-        .file_name()
-        .ok_or_else(|| PlatformError::UntrustedPath {
-            path: joined.to_path_buf(),
-            reason: "output has no file name".into(),
-        })?;
-    if name == OsStr::new(".") || name == OsStr::new("..") {
-        return Err(PlatformError::UntrustedPath {
-            path: joined.to_path_buf(),
-            reason: "invalid output file name".into(),
-        });
-    }
-    Ok(name)
 }
 
 pub(super) fn reject_reparse_chain(path: &Path) -> Result<(), PlatformError> {
