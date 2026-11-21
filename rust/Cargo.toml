@@ -25,7 +25,7 @@ baselineops-capabilities = { version = "=3.0.0-alpha.1", path = "crates/baseline
 baselineops-domain = { version = "=3.0.0-alpha.1", path = "crates/baselineops-domain" }
 baselineops-engine = { version = "=3.0.0-alpha.1", path = "crates/baselineops-engine" }
 baselineops-windows = { version = "=3.0.0-alpha.1", path = "crates/baselineops-windows" }
-chrono = { version = "=0.4.42", default-features = false, features = ["clock", "serde", "std"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde", "std"] }
 clap = { version = "=4.5.51", features = ["derive"] }
 csv = "=1.4.0"
 hex = "=0.4.3"
